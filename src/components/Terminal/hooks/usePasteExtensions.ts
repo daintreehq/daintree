@@ -7,8 +7,12 @@ import {
   createPlainPasteKeymap,
 } from "../inputEditorExtensions";
 import { formatAtFileTokenForCwd } from "../hybridInputParsing";
+import { materializeTransferSources } from "@/lib/transferSources";
+import { materialize } from "@/services/materialize";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { trackUpload } from "../uploads/pendingUploads";
 
-export function usePasteExtensions(cwd: string) {
+export function usePasteExtensions(cwd: string, uploadSurface?: string) {
   // `useEditorFactory` reads these extensions once, while building the initial
   // `EditorState`, under an effect keyed on `terminalId` alone — and no
   // compartment wraps them. A memo that rebuilt the extension when `cwd`
@@ -20,23 +24,50 @@ export function usePasteExtensions(cwd: string) {
   // installed-once handlers.
   "use no memo";
   const cwdRef = useRef(cwd);
+  const uploadSurfaceRef = useRef(uploadSurface);
   useEffect(() => {
     cwdRef.current = cwd;
-  }, [cwd]);
+    uploadSurfaceRef.current = uploadSurface;
+  }, [cwd, uploadSurface]);
 
   const imagePasteExtension = useMemo(
     () =>
       createImagePasteHandler(async (view) => {
         try {
-          const { filePath, thumbnailDataUrl } = await window.electron.clipboard.saveImage();
+          // Tracked in a remote window, so sending waits for the image to reach the host.
+          const surface = uploadSurfaceRef.current;
+          const { hostPath: filePath, thumbnail } =
+            surface !== undefined && isRemoteWindow()
+              ? await trackUpload(surface, "Pasted image", (options) =>
+                  materialize({ kind: "clipboard-image" }, options)
+                )
+              : await materialize({ kind: "clipboard-image" });
+          // The caret is read after the save, never before: typing may have
+          // moved it. A view destroyed meanwhile takes the dispatch silently.
           const cursor = view.state.selection.main.head;
+          if (!thumbnail) {
+            // No preview to put behind an image chip, so reference it the way
+            // any other file is referenced.
+            const token = formatAtFileTokenForCwd(filePath, cwdRef.current);
+            view.dispatch({
+              changes: { from: cursor, insert: token + " " },
+              effects: addFileDropChip.of({
+                from: cursor,
+                to: cursor + token.length,
+                filePath,
+                fileName: filePath.split(/[/\\]/).filter(Boolean).pop() || filePath,
+              }),
+              selection: { anchor: cursor + token.length + 1 },
+            });
+            return;
+          }
           view.dispatch({
             changes: { from: cursor, insert: filePath + " " },
             effects: addImageChip.of({
               from: cursor,
               to: cursor + filePath.length,
               filePath,
-              thumbnailUrl: thumbnailDataUrl,
+              thumbnailUrl: thumbnail,
             }),
             selection: { anchor: cursor + filePath.length + 1 },
           });
@@ -49,12 +80,28 @@ export function usePasteExtensions(cwd: string) {
 
   const filePasteExtension = useMemo(
     () =>
-      createFilePasteHandler((view, files) => {
+      createFilePasteHandler(async (view, files) => {
+        const surface = uploadSurfaceRef.current;
+        const materialized = await materializeTransferSources(
+          files.map((file) => ({ kind: "local", path: file.path })),
+          surface !== undefined && isRemoteWindow()
+            ? (source, run) =>
+                trackUpload(
+                  surface,
+                  files.find((file) => file.path === source.path)?.name ?? source.path,
+                  run
+                )
+            : undefined
+        );
+        // Caret and cwd are read after the await, like the image paste, so
+        // typing or a `cd` in between lands the paste where the user now is.
         const cursor = view.state.selection.main.head;
         const effects: ReturnType<typeof addFileDropChip.of>[] = [];
         let insertText = "";
-        for (const file of files) {
-          const token = formatAtFileTokenForCwd(file.path, cwdRef.current);
+        files.forEach((file, index) => {
+          const filePath = materialized[index]?.hostPath;
+          if (!filePath) return;
+          const token = formatAtFileTokenForCwd(filePath, cwdRef.current);
           const from = cursor + insertText.length;
           insertText += token + " ";
           effects.push(
@@ -62,17 +109,22 @@ export function usePasteExtensions(cwd: string) {
               from,
               to: from + token.length,
               // Absolute on purpose — see the matching note in `useDragDrop`.
-              filePath: file.path,
+              filePath,
               fileName: file.name,
               fileSize: file.size,
             })
           );
-        }
-        view.dispatch({
-          changes: { from: cursor, insert: insertText },
-          effects,
-          selection: { anchor: cursor + insertText.length },
         });
+        if (insertText === "") return;
+        try {
+          view.dispatch({
+            changes: { from: cursor, insert: insertText },
+            effects,
+            selection: { anchor: cursor + insertText.length },
+          });
+        } catch {
+          // Editor destroyed while the paths resolved — nothing to do.
+        }
       }),
     []
   );

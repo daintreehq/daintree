@@ -11,6 +11,7 @@ import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
 import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMessage";
 import { FleetCountChip } from "./FleetCountChip";
+import { FleetHostComposer } from "./FleetHostComposer";
 import { fleetExitChordLabel } from "./fleetKeys";
 import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
@@ -20,6 +21,7 @@ import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
 import {
   useFleetArmingStore,
+  selectFleetMemberCount,
   computeArmByStateIds,
   collectEligibleIds,
   type FleetArmStatePreset,
@@ -28,7 +30,12 @@ import {
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
-import { useFleetRunStore, summarizeFleetRun, type FleetRun } from "@/store/fleetRunStore";
+import {
+  useFleetRunStore,
+  summarizeFleetRun,
+  isAwaitingHost,
+  type FleetRun,
+} from "@/store/fleetRunStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -85,6 +92,16 @@ function deriveRunStatus(run: FleetRun | null, progressActive: boolean): RunStat
 function buildRunCountSegments(run: FleetRun): RunCountSegment[] {
   const counts = summarizeFleetRun(run);
   const segments: RunCountSegment[] = [];
+  // What was seen for an agent on another host is only that it was sent; its
+  // host has not reported on it since, so it is neither working nor done.
+  const sentByHost = new Map<string, number>();
+  for (const t of run.targets) {
+    if (!t.host || !isAwaitingHost(t)) continue;
+    sentByHost.set(t.host.hostName, (sentByHost.get(t.host.hostName) ?? 0) + 1);
+  }
+  for (const [hostName, count] of sentByHost) {
+    segments.push({ label: `${count} sent to ${hostName}`, tone: "neutral" });
+  }
   if (counts.working > 0) segments.push({ label: `${counts.working} working`, tone: "neutral" });
   if (counts.waiting > 0) segments.push({ label: `${counts.waiting} waiting`, tone: "neutral" });
   if (counts.done > 0) segments.push({ label: `${counts.done} done`, tone: "neutral" });
@@ -145,7 +162,10 @@ function FleetRunStatusLine({
 }
 
 export function FleetArmingRibbon(): ReactElement | null {
-  const armedCount = useFleetArmingStore((s) => s.armedIds.size);
+  // Every member counts: a fleet may be this view's panes, agents on other
+  // hosts, or both. Only saving a snapshot is about this view's panes alone.
+  const armedCount = useFleetArmingStore(selectFleetMemberCount);
+  const localArmedCount = useFleetArmingStore((s) => s.armedIds.size);
   const clear = useFleetArmingStore((s) => s.clear);
   const armByState = useFleetArmingStore((s) => s.armByState);
   const armAll = useFleetArmingStore((s) => s.armAll);
@@ -440,7 +460,7 @@ export function FleetArmingRibbon(): ReactElement | null {
       <SaveFleetDialog
         isOpen={saveDialogOpen}
         onClose={() => setSaveDialogOpen(false)}
-        armedCount={armedCount}
+        armedCount={localArmedCount}
         restoreFocusTo={selectionTriggerRef}
       />
       <SavedFleetsDialog
@@ -720,6 +740,9 @@ export function FleetArmingRibbon(): ReactElement | null {
               )}
               {runStatus !== null && (
                 <FleetRunStatusLine status={runStatus} onDismiss={dismissRun} />
+              )}
+              {localArmedCount === 0 && !progressActive && (
+                <FleetHostComposer memberCount={armedCount} />
               )}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">

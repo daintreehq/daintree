@@ -5,12 +5,22 @@ import { usePanelStore } from "@/store/panelStore";
 import { isMac } from "@/lib/platform";
 import { logError } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
+import { remoteHostOfView, resolveTerminalLinkForView } from "./remoteLoopbackLinks";
 
 export class TerminalLinkHandler {
   openLink(url: string, terminalId: string, event?: MouseEvent): void {
-    const mac = isMac();
-    const isModifierPressed = event ? (mac ? event.metaKey : event.ctrlKey) : false;
+    const isModifierPressed = event ? (isMac() ? event.metaKey : event.ctrlKey) : false;
+    if (remoteHostOfView() === null) {
+      this.openResolvedLink(url, terminalId, isModifierPressed);
+      return;
+    }
+    resolveTerminalLinkForView(url).then(
+      (resolved) => this.openResolvedLink(resolved, terminalId, isModifierPressed),
+      (error: unknown) => logError("[TerminalLinkHandler] Failed to forward the link's port", error)
+    );
+  }
 
+  private openResolvedLink(url: string, terminalId: string, isModifierPressed: boolean): void {
     const normalized = normalizeBrowserUrl(url);
 
     if (isModifierPressed && normalized.url && isLocalhostUrl(normalized.url)) {

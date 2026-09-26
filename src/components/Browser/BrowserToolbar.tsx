@@ -23,6 +23,7 @@ import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
 import type { NormalizeResult } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
 import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistoryStore";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -271,7 +272,7 @@ export function BrowserToolbar({
   const listboxId = useId();
 
   const projectEntries = useUrlHistoryStore(
-    (state) => (projectId ? state.entries[projectId] : undefined) ?? EMPTY_ENTRIES
+    (state) => (projectId ? state.entries[hostScopedKey(projectId)] : undefined) ?? EMPTY_ENTRIES
   );
 
   // Matched against the address people see and type, never the URL underneath:

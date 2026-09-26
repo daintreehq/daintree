@@ -2,6 +2,8 @@ import { Puzzle } from "lucide-react";
 import { toPersistedPanelKindRef } from "@shared/config/panelKindRegistry";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
+import { PluginNotOnHostPlaceholder } from "@/components/Plugin/PluginNotOnHostPlaceholder";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 
 export interface PluginMissingPanelProps {
   /**
@@ -41,6 +43,12 @@ function displayNameFor(kind: string, pluginId: string | undefined): string {
  */
 export function PluginMissingPanel({ pluginId, kind, onRemove }: PluginMissingPanelProps) {
   const displayName = displayNameFor(kind, pluginId);
+
+  // In a window on another machine the plugin is the host's to have: offer to
+  // install this machine's copy there instead of asking to re-enable it.
+  if (pluginViewHostId() !== null) {
+    return <PluginNotOnHostPlaceholder pluginId={displayName} kind={kind} onRemove={onRemove} />;
+  }
 
   return (
     <div

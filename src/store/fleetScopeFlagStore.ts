@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
+import { sendHostOwnedWrite } from "@/store/persistence/hostOwnedWrites";
 
 export type FleetScopeMode = "legacy" | "scoped";
 
@@ -30,7 +31,11 @@ export const useFleetScopeFlagStore = create<FleetScopeFlagState>()((set, get) =
 async function persistMode(mode: FleetScopeMode): Promise<void> {
   try {
     const { appClient } = await import("@/clients");
-    await appClient.setState({ fleetScopeMode: mode });
+    await sendHostOwnedWrite(
+      "app-state:fleetScopeMode",
+      () => appClient.setState({ fleetScopeMode: mode }),
+      () => void persistMode(mode)
+    );
   } catch (error) {
     logError("Failed to persist fleet scope mode", error);
   }

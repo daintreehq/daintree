@@ -36,6 +36,7 @@ export function FleetCountChip({
   onOpenChange,
 }: FleetCountChipProps): ReactElement {
   const armOrder = useFleetArmingStore((s) => s.armOrder);
+  const crossHostTargets = useFleetArmingStore((s) => s.crossHostTargets);
   const disarmId = useFleetArmingStore((s) => s.disarmId);
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
   // Supervised-run submission failures per pane (#10930): the armed list is
@@ -226,7 +227,7 @@ export function FleetCountChip({
               Fleet terminals
             </div>
             <ul className="flex flex-col overflow-y-auto">
-              {armOrder.length === 0 ? (
+              {armOrder.length === 0 && crossHostTargets.length === 0 ? (
                 <li className="px-2 py-1 text-xs leading-[inherit] text-text-secondary">None</li>
               ) : (
                 armOrder.map((id) => {
@@ -302,6 +303,43 @@ export function FleetCountChip({
                   );
                 })
               )}
+              {crossHostTargets.map((target) => {
+                const label = `${target.title} · ${target.hostName}`;
+                const sendFailed = run?.targets.some(
+                  (t) => t.terminalId === target.key && t.submission === "failed"
+                );
+                return (
+                  // Another host's agent has no pane here to focus, so its row
+                  // only names it and lets it leave the fleet.
+                  <li
+                    key={target.key}
+                    className="flex items-center gap-2 rounded-[var(--radius-md)] hover:bg-tint/[0.08]"
+                    data-testid={`fleet-row-host-${target.key}`}
+                  >
+                    <span
+                      className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-xs leading-[inherit] text-text-primary"
+                      title={label}
+                    >
+                      <span className="truncate">{target.title}</span>
+                      <span className="shrink-0 text-text-secondary">on {target.hostName}</span>
+                    </span>
+                    {sendFailed && (
+                      <span className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-primary">
+                        <AlertCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
+                        Send failed
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => disarmId(target.key)}
+                      aria-label={`Remove ${target.title} on ${target.hostName} from the fleet`}
+                      className={cn(FLEET_RIBBON_ICON_BUTTON_CLASS, "mr-0.5")}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
             <button
               type="button"

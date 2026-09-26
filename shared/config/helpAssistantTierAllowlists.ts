@@ -305,6 +305,14 @@ export const SYSTEM_TIER_ADDONS = [
 
   "copyTree.generateAndCopyFile",
 
+  // Remote Hosts (#11158): which machine a window runs on, and taking its
+  // project to another host through the switch dialog. Both change what the
+  // person at this screen is looking at, so only a `system` session asks; a
+  // host switch is confirm-gated for any agent, and every push or clone in the
+  // switch dialog is confirmed there. Registered only where Remote Hosts is.
+  "host.switch",
+  "project.openOnHost",
+
   "git.stageFile",
   "git.unstageFile",
   "git.stageAll",

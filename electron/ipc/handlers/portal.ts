@@ -175,8 +175,9 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
           if (!win || win.isDestroyed()) return;
 
           const sendAction = (action: PortalNewTabMenuAction) => {
-            if (ctx.event.sender.isDestroyed()) return;
-            ctx.event.sender.send(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, action);
+            const sender = ctx.event?.sender;
+            if (!sender || sender.isDestroyed()) return;
+            sender.send(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, action);
           };
 
           const menu = Menu.buildFromTemplate([

@@ -23,6 +23,7 @@ import {
   relaunchResumeAsAssignedSession,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
+  agentClipboardDirectory,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
 import { escapeShellArg } from "../../utils/shellEscape.js";
@@ -1732,5 +1733,21 @@ describe("decorative effects (registry capabilities.decorations)", () => {
       presetArgs: [...OFF, "--verbose"],
     });
     expect(kept).not.toContain("tui.whimsy=false");
+  });
+});
+
+describe("agentClipboardDirectory", () => {
+  it("keeps this machine's clipboard folder for a local window", () => {
+    expect(agentClipboardDirectory("/var/folders/tmp", false)).toBe(
+      "/var/folders/tmp/daintree-clipboard"
+    );
+  });
+
+  it("points a remote window's Gemini at the host inbox", () => {
+    const dir = agentClipboardDirectory("/tmp", true);
+    expect(dir).toBe("/tmp/daintree-inbox");
+    expect(
+      buildLaunchCommandFromFlags("gemini", "gemini", [], { clipboardDirectory: dir })
+    ).toContain(`--include-directories ${escapeShellArg("/tmp/daintree-inbox")}`);
   });
 });

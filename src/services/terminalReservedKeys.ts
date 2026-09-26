@@ -69,6 +69,23 @@ export function isTerminalClipboardPasteKey(event: KeyboardEvent): boolean {
   );
 }
 
+/**
+ * Plain Ctrl+V — the agent CLI's own clipboard paste ("literal next" in a
+ * shell), never Ctrl+Shift+V, which is the terminal's paste. In an agent
+ * terminal of a remote window it is intercepted when this machine's clipboard
+ * holds an image (see `ctrlVImagePaste.ts`); everywhere else it goes to the
+ * PTY untouched.
+ */
+export function isCtrlVKey(event: KeyboardEvent): boolean {
+  return (
+    event.ctrlKey &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    (event.key === "v" || event.key === "V" || event.code === "KeyV")
+  );
+}
+
 /** Any key the terminal owns outright while focused — checked by the window
  *  capture handler before global shortcut resolution. */
 export function isTerminalReservedKey(event: KeyboardEvent): boolean {

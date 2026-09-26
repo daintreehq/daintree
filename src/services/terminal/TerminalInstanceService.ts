@@ -64,7 +64,11 @@ import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackControl
 import { hasUsableRenderer } from "./xtermRendererProbe";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
-import { isUsableTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
+import {
+  isUsableTerminalGeometry,
+  type SerializedTerminalSnapshot,
+  type TerminalGeometry,
+} from "@shared/types/terminal";
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
@@ -200,6 +204,7 @@ class TerminalInstanceService {
   private workerIngestController: TerminalWorkerIngestController;
   private revealController: TerminalRevealController;
   private unsubTierChanged: (() => void) | null = null;
+  private unsubReset: (() => void) | null = null;
   private unsubResizeResult: (() => void) | null = null;
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
@@ -257,7 +262,8 @@ class TerminalInstanceService {
 
     this.restoreController = new TerminalRestoreController({
       getInstance: (id) => this.instances.get(id),
-      writeData: (id, data, chunkCount, range) => this.writeToTerminal(id, data, chunkCount, range),
+      writeData: (id, data, chunkCount, range, ackGeneration) =>
+        this.writeToTerminal(id, data, chunkCount, range, ackGeneration),
     });
 
     this.burstController = new TerminalBurstController({
@@ -284,8 +290,9 @@ class TerminalInstanceService {
 
     this.writeController = new TerminalWriteController({
       getInstance: (id) => this.instances.get(id),
-      acknowledgePortData: (id, bytes, chunkCount) =>
-        terminalClient.acknowledgePortData(id, bytes, chunkCount),
+      acknowledgePortData: (id, bytes, chunkCount, generation) =>
+        terminalClient.acknowledgePortData(id, bytes, chunkCount, generation),
+      getPortAckGeneration: (id) => terminalClient.getPortAckGeneration(id),
       acknowledgeData: (id, bytes) => terminalClient.acknowledgeData(id, bytes),
       notifyWriteComplete: (id, bytes) => this.dataBuffer.notifyWriteComplete(id, bytes),
       incrementUnseen: (id, isScrolledBack, count) =>
@@ -555,6 +562,39 @@ class TerminalInstanceService {
     this.unsubTierChanged = terminalClient.onTierChanged((id, tier) => {
       this.rendererPolicy.initializeBackendTier(id, tier);
     });
+    // Only a remote host's relayed port ever resets; subscribing takes the
+    // repaint off terminalClient's raw data path and onto the geometry-aware
+    // restore, which a local view never reaches.
+    this.unsubReset = terminalClient.onReset((id, snapshot) => this.applyRemoteReset(id, snapshot));
+  }
+
+  /**
+   * Repaint a terminal the remote host could not replay. terminalClient has
+   * already retired the pending acks and bumped the port-ack generation, so
+   * everything still held here from before the reset is output the snapshot
+   * covers: the ingest queue is dropped (its chunks would otherwise be written
+   * on top of the snapshot) and so are deferred chunks of older generations.
+   * Deferred chunks that arrived after the reset keep their charges and are
+   * replayed when the restore closes its window.
+   */
+  private applyRemoteReset(id: string, snapshot: SerializedTerminalSnapshot | null): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    this.dataBuffer.resetForTerminal(id);
+    const generation = terminalClient.getPortAckGeneration(id);
+    if (managed.deferredOutput.length > 0) {
+      managed.deferredOutput = managed.deferredOutput.filter(
+        (entry) => (entry.ackGeneration ?? 0) === generation
+      );
+    }
+    // A null snapshot (no mirror, or too large to send) and an empty one both
+    // mean a cleared screen followed by live output; either way the reset must
+    // supersede any restore still in flight.
+    void this.restoreController.applyReset(
+      id,
+      snapshot?.data ?? null,
+      snapshot ? { cols: snapshot.cols, rows: snapshot.rows } : undefined
+    );
   }
 
   setGPUHardwareAvailable(available: boolean): void {
@@ -835,9 +875,12 @@ class TerminalInstanceService {
     id: string,
     data: string | Uint8Array,
     chunkCount = 1,
-    range?: StreamRange
+    range?: StreamRange,
+    ackGeneration?: number
   ): void {
-    if (range) this.writeController.write(id, data, chunkCount, range);
+    if (ackGeneration !== undefined)
+      this.writeController.write(id, data, chunkCount, range, ackGeneration);
+    else if (range) this.writeController.write(id, data, chunkCount, range);
     else this.writeController.write(id, data, chunkCount);
   }
 
@@ -3692,6 +3735,8 @@ class TerminalInstanceService {
     this.stopPolling();
     this.unsubTierChanged?.();
     this.unsubTierChanged = null;
+    this.unsubReset?.();
+    this.unsubReset = null;
     this.unsubResizeResult?.();
     this.unsubResizeResult = null;
     this.workerIngestController.dispose();

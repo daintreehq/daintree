@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -12,17 +13,41 @@ const isProd = process.env.NODE_ENV === "production";
 const buildReadyFile = path.join(root, "dist-electron/.build-ready.js");
 let buildReadyTimer = null;
 
-const external = [
-  "electron",
-  "@parcel/watcher", // Native N-API module (FSEvents)
-  "node-pty", // Native module
-  "better-sqlite3", // Native module
-  "win-job-object", // Native module — Windows-only help-session Job Object (#7526)
-  "posix-pty-reaper", // Native module — macOS/Linux help-session PTY supervisor (#8769)
-  "copytree", // Externalize to preserve file structure (config files)
-  "onnxruntime-node", // Native module — ONNX runtime for Silero VAD (#9177)
-  "avr-vad", // Silero VAD wrapper; loads its bundled .onnx via fs from its own dir (#9177)
-];
+const external = MAIN_EXTERNAL;
+
+// Remote Hosts is macOS/Linux only. A Windows build compiles the gate to
+// `false`, so every `if (__DAINTREE_REMOTE_HOSTS__) { await import(...) }`
+// site drops the link and host-server modules from the bundle entirely.
+// DAINTREE_BUILD_TARGET_PLATFORM lets a cross-build name its target.
+const buildTargetPlatform = process.env.DAINTREE_BUILD_TARGET_PLATFORM || process.platform;
+const remoteHostsEnabled = buildTargetPlatform !== "win32";
+
+// Client and host must run the same source commit, so the commit is baked in.
+function resolveBuildCommit() {
+  if (process.env.DAINTREE_BUILD_COMMIT) return process.env.DAINTREE_BUILD_COMMIT;
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : "unknown";
+}
+const buildCommit = resolveBuildCommit();
+
+/**
+ * The build's version and commit as a marker file packed into the app. A
+ * client probing a machine over SSH reads it straight out of the archive
+ * (the bytes are stored uncompressed), so it can tell which build is
+ * installed there without launching it. Keys and order are fixed: the probe
+ * matches this exact shape.
+ */
+export function formatBuildInfo(version, commit) {
+  return JSON.stringify({ daintreeBuildInfo: 1, version, commit });
+}
+
+function writeBuildInfo() {
+  const { version } = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const target = path.join(root, "dist-electron/build-info.json");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, formatBuildInfo(version, buildCommit), "utf8");
+}
 
 const common = {
   bundle: true,
@@ -36,6 +61,8 @@ const common = {
   pure: isProd ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
   define: {
     "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
+    __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHostsEnabled),
+    __DAINTREE_BUILD_COMMIT__: JSON.stringify(buildCommit),
     // Strip E2E test backdoors from production builds (#9148). Replacing these
     // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to
     // false and dead-code-eliminate the `contextBridge.exposeInMainWorld` blocks
@@ -87,21 +114,6 @@ function scheduleBuildReadyMarker() {
     writeBuildReadyMarker();
     buildReadyTimer = null;
   }, 100);
-}
-
-/**
- * Discover each built-in plugin's main entry (`plugins/builtin/<name>/main/index.ts`)
- * so adding a new built-in plugin needs no build-config edit. Mirrors
- * `copyBuiltInPluginManifests`, which auto-discovers the same directories.
- */
-function discoverBuiltInPluginMainEntries() {
-  const pluginsRoot = path.join(root, "plugins/builtin");
-  if (!fs.existsSync(pluginsRoot)) return [];
-  const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => `plugins/builtin/${entry.name}/main/index.ts`)
-    .filter((rel) => fs.existsSync(path.join(root, rel)));
 }
 
 /**
@@ -218,23 +230,6 @@ export function guestRuntimeBuildConfig(asset, options = {}) {
     footer: { js: "})();" },
     ...(options.absWorkingDir ? { absWorkingDir: options.absWorkingDir } : {}),
   };
-}
-
-/**
- * Discover each sample plugin's main entry (`plugins/sample/<name>/main/index.ts`)
- * so adding a new sample plugin needs no build-config edit. Mirrors
- * `discoverBuiltInPluginMainEntries` and `copySamplePluginManifests`. A
- * manifest-only sample dir (no `main/index.ts`) is skipped here but still has its
- * manifest validated and copied by the manifest steps.
- */
-function discoverSamplePluginMainEntries() {
-  const pluginsRoot = path.join(root, "plugins/sample");
-  if (!fs.existsSync(pluginsRoot)) return [];
-  const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => `plugins/sample/${entry.name}/main/index.ts`)
-    .filter((rel) => fs.existsSync(path.join(root, rel)));
 }
 
 /**
@@ -684,38 +679,7 @@ async function run() {
   // shims and the plugin entry that `PluginService` loads at runtime.
   const esmConfig = {
     ...common,
-    entryPoints: [
-      "electron/bootstrap.ts",
-      "electron/main.ts",
-      "electron/pty-host.ts",
-      "electron/pty-host-bootstrap.ts",
-      "electron/workspace-host.ts",
-      "electron/workspace-host-bootstrap.ts",
-      "electron/watchdog-host.ts",
-      "electron/watchdog-host-bootstrap.ts",
-      // Plugin dev-mode hot-reload worker (#9304): runs a dev-symlinked plugin's
-      // code in a utilityProcess.fork child and respawns on each Vite rebuild.
-      "electron/plugin-dev-worker.ts",
-      "electron/plugin-dev-worker-bootstrap.ts",
-      // VAD side-chain for OpenAI transcription (#9177). Forked as a
-      // utilityProcess by openaiVadProcess (#12577); needs its own entry so
-      // esbuild emits a standalone bundle at the resolved path.
-      "electron/services/voice/openaiVadWorker.ts",
-      // Multi-threading workers: per-terminal analysis (headless xterm +
-      // activity detection) inside pty-host, SQLite maintenance off the main
-      // event loop, and copytree generation inside workspace-host. Each is
-      // loaded via `new Worker()` and needs a standalone bundle at its
-      // resolved worker path.
-      "electron/pty-host/analysisWorker.ts",
-      "electron/services/persistence/dbMaintenanceWorker.ts",
-      "electron/workspace-host/copytreeWorker.ts",
-      ...discoverBuiltInPluginMainEntries(),
-      // Sample plugins compiled for the host-contract e2e harness (#9286, #9592).
-      // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod because
-      // no `pluginsRoot` defaults to this directory. Auto-discovered so adding a
-      // new sample plugin needs no build-config edit (#10564).
-      ...discoverSamplePluginMainEntries(),
-    ],
+    entryPoints: mainEsmEntryPoints(root),
     outdir: "dist-electron",
     outbase: ".",
     format: "esm",
@@ -730,7 +694,7 @@ async function run() {
   // Config for CJS file (Preload)
   const cjsConfig = {
     ...common,
-    entryPoints: ["electron/preload.cts"],
+    entryPoints: [MAIN_PRELOAD_ENTRY],
     outdir: "dist-electron/electron",
     format: "cjs",
     outExtension: { ".js": ".cjs" },
@@ -763,6 +727,7 @@ async function run() {
       console.log("[Build] Watching for changes...");
     } else {
       await Promise.all([build(esmConfig), build(cjsConfig), ...guestConfigs.map(build)]);
+      writeBuildInfo();
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();

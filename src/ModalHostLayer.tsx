@@ -30,6 +30,9 @@ import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { PostHydrationListeners } from "./components/PostHydrationListeners";
+import { HostFilePickerMount } from "./components/HostFilePicker/HostFilePickerMount";
+import { HostSwitchMount } from "./components/HostSwitch/HostSwitchMount";
+import { HostsOverviewMount } from "./components/Hosts/Overview/HostsOverviewMount";
 import { PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
 import { actionService } from "./services/ActionService";
@@ -871,6 +874,10 @@ export function ModalHostLayer({
           </Suspense>
         </ErrorBoundary>
       )}
+
+      {isStateLoaded && <HostFilePickerMount />}
+      {isStateLoaded && <HostSwitchMount />}
+      {isStateLoaded && <HostsOverviewMount />}
 
       {isStateLoaded && (
         <ErrorBoundary

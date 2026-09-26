@@ -7,10 +7,27 @@ import {
 } from "../../services/pty/ptyPoolEnvHash.js";
 import { markPerformance } from "../../utils/performance.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
+import type { PtyHostDriveLease } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 function batchDataToString(data: Uint8Array): string {
   return Buffer.from(data).toString("utf8");
+}
+
+/** The lease a remote endpoint's bridge checked a message against, when it stamped one. */
+function leaseStamp(portMsg: { leaseId?: unknown }): number | undefined {
+  return Number.isSafeInteger(portMsg.leaseId) ? (portMsg.leaseId as number) : undefined;
+}
+
+function isDriveLease(value: unknown): value is PtyHostDriveLease {
+  if (!value || typeof value !== "object") return false;
+  const lease = value as Record<string, unknown>;
+  return (
+    typeof lease.projectId === "string" &&
+    lease.projectId !== "" &&
+    Number.isSafeInteger(lease.leaseId) &&
+    (lease.holderConnection === null || Number.isSafeInteger(lease.holderConnection))
+  );
 }
 
 export function createConnectionHandlers(ctx: HostContext): HandlerMap {
@@ -126,6 +143,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             typeof portMsg.id === "string" &&
             typeof portMsg.data === "string"
           ) {
+            if (!ptyManager.mayDriveFrom(portMsg.id, windowId, leaseStamp(portMsg))) return;
             ptyManager.write(portMsg.id, portMsg.data, portMsg.traceId);
             // PERF-120 T2 attribution mark (no-op unless DAINTREE_PERF_CAPTURE):
             // paired with terminal_interactive_echo_dispatched to expose the
@@ -140,6 +158,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             typeof portMsg.cols === "number" &&
             typeof portMsg.rows === "number"
           ) {
+            if (!ptyManager.mayDriveFrom(portMsg.id, windowId, leaseStamp(portMsg))) return;
             ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows, "renderer-message-port");
           } else if (
             portMsg.type === "ack" &&
@@ -164,6 +183,42 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
                 `[PtyHost] worker-ingest-engage without a dedicated port for terminal ${portMsg.id} (window ${windowId})`
               );
             }
+          } else if (
+            portMsg.type === "serialize-fence" &&
+            typeof portMsg.id === "string" &&
+            typeof portMsg.requestId === "number"
+          ) {
+            // A remote endpoint's reset needs a snapshot and a stream position
+            // that agree exactly. Flush what the batcher holds and post the
+            // fence FIFO behind it, then start the serialize in the same turn:
+            // the mirror is fed in the same step output reaches the batcher,
+            // so every byte before the fence is in the snapshot and every
+            // byte after it is not.
+            const { id, requestId } = portMsg;
+            // Only a remote endpoint's synthetic connection (a negative id) ever
+            // resets, and only for terminals of the project it is scoped to. A
+            // local renderer port has no business asking for another window's
+            // snapshot; the bridge times out an unanswered fence on its own.
+            const connectionProject = windowId < 0 ? windowProjectMap.get(windowId) : undefined;
+            if (!connectionProject || ptyManager.getTerminal(id)?.projectId !== connectionProject) {
+              console.warn(
+                `[PtyHost] Ignoring serialize-fence for terminal ${id} on connection ${windowId}`
+              );
+              return;
+            }
+            perWindowBatcher.flushTerminal(id);
+            receivedPort.postMessage({ type: "serialize-fence", id, requestId });
+            const answer = (state: unknown) => {
+              try {
+                receivedPort.postMessage({ type: "serialized-state", id, requestId, state });
+              } catch {
+                // Port closed meanwhile; the bridge abandons the fence with it.
+              }
+            };
+            ptyManager.getSerializedStateAsync(id).then(answer, (error: unknown) => {
+              console.error(`[PtyHost] Failed to serialize terminal ${id} for a fence:`, error);
+              answer(null);
+            });
           } else if (
             portMsg.type === "worker-ingest-release" &&
             typeof portMsg.id === "string" &&
@@ -359,6 +414,20 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       }
       fallbackEligibleProjects.clear();
       for (const projectId of projectIds as string[]) fallbackEligibleProjects.add(projectId);
+    },
+
+    // Authoritative replace from Main's drive lease; validated before it is applied.
+    "set-drive-leases": (msg) => {
+      const leases: unknown = msg.leases;
+      if (
+        !Array.isArray(leases) ||
+        leases.length !== Object.keys(leases).length ||
+        !leases.every(isDriveLease)
+      ) {
+        console.warn("[PtyHost] set-drive-leases payload is not a list of drive leases");
+        return;
+      }
+      ptyManager.setDriveLeases(leases);
     },
 
     "disconnect-port": (msg) => {

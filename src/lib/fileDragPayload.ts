@@ -1,4 +1,5 @@
 import { isAbsolute } from "@shared/utils/path";
+import { LOCAL_HOST_ID, isValidRemoteHostId, type HostId } from "@shared/types/remoteHosts";
 
 /**
  * The `dataTransfer` type an in-app file drag carries (#11576).
@@ -29,8 +30,17 @@ export const FILE_DRAG_MIME = "application/x-daintree-file-paths";
  * multi-select is the obvious follow-up, and widening the payload later would
  * mean a second format both drop sites have to understand.
  */
-export function encodeFileDragPaths(paths: readonly string[]): string {
-  return JSON.stringify(paths);
+export function encodeFileDragPaths(paths: readonly string[], hostId?: HostId): string {
+  // A drag from this machine keeps the original bare-array spelling, so a
+  // payload written by a local window is byte-for-byte what it always was.
+  if (hostId === undefined || hostId === LOCAL_HOST_ID) return JSON.stringify(paths);
+  return JSON.stringify({ hostId, paths });
+}
+
+/** The dragged paths and the host they live on. */
+export interface FileDragPayload {
+  hostId: HostId;
+  paths: string[];
 }
 
 /**
@@ -75,11 +85,27 @@ function hasControlCharacter(path: string): boolean {
  * not ours at all.
  */
 export function decodeFileDragPaths(serialized: string): string[] | null {
+  return decodeFileDrag(serialized)?.paths ?? null;
+}
+
+/**
+ * {@link decodeFileDragPaths} with the host the paths belong to. A payload
+ * without one (the bare array every local window writes) is this machine's; a
+ * host id that isn't a valid remote id rejects the payload.
+ */
+export function decodeFileDrag(serialized: string): FileDragPayload | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(serialized);
   } catch {
     return null;
+  }
+  let hostId: HostId = LOCAL_HOST_ID;
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const record = parsed as { hostId?: unknown; paths?: unknown };
+    if (typeof record.hostId !== "string" || !isValidRemoteHostId(record.hostId)) return null;
+    hostId = record.hostId;
+    parsed = record.paths;
   }
   if (!Array.isArray(parsed) || parsed.length === 0) return null;
   const paths: string[] = [];
@@ -88,7 +114,7 @@ export function decodeFileDragPaths(serialized: string): string[] | null {
     if (hasControlCharacter(entry)) return null;
     paths.push(entry);
   }
-  return paths;
+  return { hostId, paths };
 }
 
 /** Is this an in-app file drag? Safe during `dragover` — reads types only. */

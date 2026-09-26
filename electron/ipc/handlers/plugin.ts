@@ -75,6 +75,7 @@ import type { FileDecoration } from "../../../shared/types/forge.js";
 import { isTrustedRendererUrl } from "../../../shared/utils/trustedRenderer.js";
 import type {
   LoadedPluginInfo,
+  PluginInvokeOrigin,
   PluginIpcContext,
   PluginActionContribution,
   PluginActionDescriptor,
@@ -113,6 +114,15 @@ import type {
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
+import { getIpcDispatcher } from "../dispatcher.js";
+import { isRemoteEndpointHandle } from "../endpoint.js";
+import { getLocalEndpoint } from "../localEndpoint.js";
+import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import {
+  isPluginFrontendRoutingEnabled,
+  runInPluginInvocation,
+} from "../../services/plugin/pluginFrontendRouting.js";
+import { resolveActiveWorktreeIdForProject } from "../../services/plugin/pluginInvokeContext.js";
 import {
   getProjectForWebContents,
   getWindowForWebContents,
@@ -344,7 +354,7 @@ function isAbortLikeError(err: unknown): boolean {
 /**
  * Install a plugin from a path produced by a drag-and-drop onto the Plugin
  * settings tab (#9295). The renderer resolves the native path via the
- * plugin-scoped `getDroppedFilePath` bridge and hands it here; main owns every
+ * `files.getDroppedFilePaths` bridge and hands it here; main owns every
  * trust gate via {@link validateDntrArchivePath} because the renderer can't be
  * trusted to validate before #9292 runs. All failures come back as structured
  * `{ status: "failed" }` data (never thrown) so the tab can render an inline
@@ -856,6 +866,33 @@ async function handleProjectSurfaceChoiceSet(
  * main-built path, or `undefined` when none applies (no recovery requested,
  * unknown kind, PTY panel, or no matching view contribution).
  */
+/**
+ * A call that arrived over a link from a window on another machine. Read from
+ * the context's own fields so a local call never builds its endpoint.
+ */
+function isRemoteCaller(ctx: IpcContext): boolean {
+  return ctx.event === null && isRemoteEndpointHandle(ctx.webContentsId);
+}
+
+/**
+ * The plugin declared `"remote": "unsupported"`. `hostId` is this host from
+ * its own point of view; the window that shows the placeholder names the host
+ * the way its person knows it.
+ */
+function remoteUnsupportedError(pluginId: string): AppError {
+  return new AppError({
+    code: "PLUGIN_INCOMPATIBLE",
+    message: `Plugin "${pluginId}" only works for a person sitting at the machine it runs on`,
+    userMessage: "This plugin only works on the machine it runs on.",
+    details: {
+      code: "PLUGIN_INCOMPATIBLE",
+      pluginId,
+      hostId: LOCAL_HOST_ID,
+      reason: { kind: "remote-unsupported" },
+    },
+  });
+}
+
 async function handleActivateForView(
   ctx: IpcContext,
   panelKindId: string,
@@ -882,9 +919,17 @@ async function handleActivateForView(
       userMessage: "That panel belongs to a different project.",
     });
   }
-  const result: PluginActivationResult = await (
-    await getPluginService()
-  ).activatePluginForView(panelKindId, requestRecoveryPath === true);
+  const service = await getPluginService();
+  // Only a window on another machine carries the gate; a local call is
+  // exactly the call it always was.
+  const result: PluginActivationResult = isRemoteCaller(ctx)
+    ? await service.activatePluginForView(panelKindId, requestRecoveryPath === true, {
+        remoteFrontend: true,
+      })
+    : await service.activatePluginForView(panelKindId, requestRecoveryPath === true);
+  if (!result.ok && result.remoteUnsupported) {
+    throw remoteUnsupportedError(result.remoteUnsupported.pluginId);
+  }
   if (!result.ok) {
     throw new AppError({
       code: "PLUGIN_ACTIVATION_FAILED",
@@ -995,7 +1040,7 @@ async function handleReportPanelLifecycle(
   (await getPluginService()).ingestPanelLifecycleEvents(
     ctx.webContentsId,
     events,
-    ctx.event.sender
+    ctx.event?.sender
   );
 }
 
@@ -1008,7 +1053,7 @@ async function handleReportPanelInventory(
   (await getPluginService()).ingestPanelInventory(
     ctx.webContentsId,
     nonPluginPanelIds,
-    ctx.event.sender
+    ctx.event?.sender
   );
 }
 
@@ -1327,7 +1372,7 @@ async function handleGetAuditConfig(): Promise<PluginAuditConfig> {
  * mirroring the `plugin:invoke` trust check.
  */
 async function handleClearAuditLog(ctx: IpcContext): Promise<void> {
-  const senderUrl = ctx.event.senderFrame?.url;
+  const senderUrl = ctx.event?.senderFrame?.url;
   if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
     const safeUrl = senderUrl
       ? scrubSecrets(senderUrl.slice(0, UNTRUSTED_URL_MAX_CHARS))
@@ -1973,13 +2018,106 @@ export const pluginNamespace = defineIpcNamespace({
   },
 });
 
+interface PluginInvokeSource {
+  projectId: string | null;
+  webContentsId: number;
+  start: number;
+  origin?: PluginInvokeOrigin;
+  resolveWorktreeId: (service: PluginServiceSingleton) => Promise<string | null>;
+}
+
+/**
+ * The transport-independent half of `plugin:invoke`: the project ownership
+ * check, the dispatch, and its audit. The caller has already established who
+ * is calling — a trusted local frame, or an endpoint the host itself bound.
+ */
+async function runPluginInvoke(
+  source: PluginInvokeSource,
+  pluginId: string,
+  channel: string,
+  args: unknown[]
+): Promise<unknown> {
+  const { start } = source;
+  // A project plugin answers only to its own project's renderers. The
+  // instance key names its project and is not a secret, so without this a
+  // renderer for project B could invoke project A's plugin handler and make
+  // it act on A — with A's host binding, A's capabilities and A's files.
+  // Checked against the sender's own registration, never a supplied id.
+  const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (boundProjectId !== null && boundProjectId !== source.projectId) {
+    safeAppend({
+      pluginId,
+      actionId: channel,
+      recordType: "ipc-invoke",
+      channel: CHANNELS.PLUGIN_INVOKE,
+      result: "restricted",
+      errorMessage: "sender belongs to a different project",
+      argsHash: "",
+      durationMs: Date.now() - start,
+    });
+    throw new Error("plugin:invoke rejected: plugin belongs to a different project");
+  }
+
+  try {
+    const service = await getPluginService();
+    const worktreeId = await source.resolveWorktreeId(service);
+    const ctx: PluginIpcContext = {
+      projectId: source.projectId,
+      worktreeId,
+      webContentsId: source.webContentsId,
+      pluginId,
+      ...(source.origin ? { origin: source.origin } : {}),
+    };
+    return await service.dispatchHandler(pluginId, channel, ctx, args);
+  } catch (err) {
+    // A throwing plugin handler is already audited at the dispatch
+    // boundary (#10463); recording it again here would double-count the
+    // failure. Errors that never reach a handler — schema/permission/
+    // no-handler — aren't marked, so the IPC boundary still owns them.
+    if (!isAuditedHandlerFailure(err)) {
+      // `stableArgsSha256` content-discriminates without persisting any
+      // arg bytes — two structurally identical failed invokes hash the
+      // same, but distinct args produce distinct hashes. (A summary-based
+      // hash via `summarizeMcpArgs` collapses arrays to a constant, which
+      // would defeat forensic grouping.)
+      let argsHash = "";
+      try {
+        argsHash = stableArgsSha256(args);
+      } catch {
+        // Hashing is best-effort — a serialization throw here must not
+        // mask the original handler error.
+      }
+      // An ownership rejection (#10462) is a denied invocation, not a
+      // handler failure — record it as "restricted" so it groups with the
+      // untrusted-sender rejection above rather than with genuine dispatch
+      // errors. The sender already passed its trust check, so the args are
+      // from a trusted caller and the forensic `argsHash` is still useful.
+      // An ownership error is thrown before any handler runs, so it is never
+      // marked as an audited handler failure and always reaches this block.
+      safeAppend({
+        pluginId,
+        actionId: channel,
+        recordType: "ipc-invoke",
+        channel: CHANNELS.PLUGIN_INVOKE,
+        result: isPluginInvokeOwnershipError(err) ? "restricted" : "error",
+        errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
+        argsHash,
+        durationMs: Date.now() - start,
+      });
+    }
+    throw err;
+  }
+}
+
 export function registerPluginHandlers(): () => void {
   const cleanups: Array<() => void> = [pluginNamespace.register()];
 
-  // plugin:invoke intentionally stays on raw ipcMain.handle: its variadic
-  // `...args: unknown[]` signature and senderFrame.url trust check can't be
-  // expressed through IpcInvokeMap without widening types to `unknown[]`,
-  // which would silently defeat the compile-time safety the migration is for.
+  // plugin:invoke intentionally stays on raw ipcMain.handle for local views:
+  // its variadic `...args: unknown[]` signature and senderFrame.url trust check
+  // can't be expressed through IpcInvokeMap without widening types to
+  // `unknown[]`, which would silently defeat the compile-time safety the
+  // migration is for. Calls from a window on another machine arrive over the
+  // link instead, through the dispatcher registration below.
   assertIpcSecurityReady(CHANNELS.PLUGIN_INVOKE);
   ipcMain.handle(
     CHANNELS.PLUGIN_INVOKE,
@@ -2027,97 +2165,107 @@ export function registerPluginHandlers(): () => void {
         });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
-      // A project plugin answers only to its own project's renderers. The
-      // instance key names its project and is not a secret, so without this a
-      // renderer for project B could invoke project A's plugin handler and make
-      // it act on A — with A's host binding, A's capabilities and A's files.
-      // Checked against the sender's own registration, never a supplied id.
-      const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
-      if (boundProjectId !== null && boundProjectId !== senderProjectId) {
-        safeAppend({
+      const invoke = () =>
+        runPluginInvoke(
+          {
+            projectId: senderProjectId,
+            webContentsId: senderWebContentsId,
+            start,
+            resolveWorktreeId: async (service) => {
+              // No trustworthy window means no worktree — short-circuit rather
+              // than query, so the invariant holds here regardless of what the
+              // service would answer.
+              if (senderWindowId === undefined) return null;
+              // Resolving the worktree needs a round-trip to the workspace host,
+              // so it can't be pinned synchronously like the ids above.
+              // `getActiveWorktreeIdForWindow` swallows its own failures — a
+              // wedged workspace host degrades the context rather than failing
+              // the invocation it sits in front of.
+              const worktreeId = await service.getActiveWorktreeIdForWindow(senderWindowId);
+              // The window id survives a project switch, so a rebind during the
+              // await would pair the sender's projectId with the *replacement*
+              // project's worktree. Snapshots carry no project id to filter on, so
+              // re-check the binding instead and drop to null on a mismatch: a null
+              // worktree is honest, a cross-project one is the bug this fixes.
+              return getProjectForWebContents(senderWebContentsId) !== senderProjectId
+                ? null
+                : worktreeId;
+            },
+          },
           pluginId,
-          actionId: channel,
-          recordType: "ipc-invoke",
-          channel: CHANNELS.PLUGIN_INVOKE,
-          result: "restricted",
-          errorMessage: "sender belongs to a different project",
-          argsHash: "",
-          durationMs: Date.now() - start,
-        });
-        throw new Error("plugin:invoke rejected: plugin belongs to a different project");
-      }
+          channel,
+          args
+        );
+      // With Host-mode routing on, the call carries who made it, so an
+      // app-global plugin's prompt finds this person. Off, no endpoint is
+      // ever built here.
+      return isPluginFrontendRoutingEnabled()
+        ? runInPluginInvocation(pluginId, getLocalEndpoint(event.sender), invoke)
+        : invoke();
+    }
+  );
+  cleanups.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));
 
-      try {
+  // A window on another machine calls a plugin running here over the link.
+  // Its project comes from the endpoint the host itself bound, never from the
+  // call; its worktree is the project's current one on this host.
+  cleanups.push(
+    getIpcDispatcher().registerInvoke(CHANNELS.PLUGIN_INVOKE, async (ctx, ...raw) => {
+      const start = Date.now();
+      const [pluginId, channel, ...args] = raw;
+      if (typeof pluginId !== "string" || typeof channel !== "string") {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "plugin:invoke rejected: plugin id and channel must be strings",
+        });
+      }
+      const projectId = ctx.projectId;
+      const endpoint = ctx.endpoint;
+      const remote = endpoint.kind === "remote-view";
+      if (remote) {
         const service = await getPluginService();
-        // No trustworthy window means no worktree — short-circuit rather than
-        // query, so the invariant holds here regardless of what the service
-        // would answer.
-        let worktreeId: string | null = null;
-        if (senderWindowId !== undefined) {
-          // Resolving the worktree needs a round-trip to the workspace host, so
-          // it can't be pinned synchronously like the ids above.
-          // `getActiveWorktreeIdForWindow` swallows its own failures — a wedged
-          // workspace host degrades the context rather than failing the
-          // invocation it sits in front of.
-          worktreeId = await service.getActiveWorktreeIdForWindow(senderWindowId);
-          // The window id survives a project switch, so a rebind during the
-          // await would pair the sender's projectId with the *replacement*
-          // project's worktree. Snapshots carry no project id to filter on, so
-          // re-check the binding instead and drop to null on a mismatch: a null
-          // worktree is honest, a cross-project one is the bug this fixes.
-          if (getProjectForWebContents(senderWebContentsId) !== senderProjectId) {
-            worktreeId = null;
-          }
-        }
-        const ctx: PluginIpcContext = {
-          projectId: senderProjectId,
-          worktreeId,
-          webContentsId: senderWebContentsId,
-          pluginId,
-        };
-        return await service.dispatchHandler(pluginId, channel, ctx, args);
-      } catch (err) {
-        // A throwing plugin handler is already audited at the dispatch
-        // boundary (#10463); recording it again here would double-count the
-        // failure. Errors that never reach a handler — schema/permission/
-        // no-handler — aren't marked, so the IPC boundary still owns them.
-        if (!isAuditedHandlerFailure(err)) {
-          // `stableArgsSha256` content-discriminates without persisting any
-          // arg bytes — two structurally identical failed invokes hash the
-          // same, but distinct args produce distinct hashes. (A summary-based
-          // hash via `summarizeMcpArgs` collapses arrays to a constant, which
-          // would defeat forensic grouping.)
-          let argsHash = "";
-          try {
-            argsHash = stableArgsSha256(args);
-          } catch {
-            // Hashing is best-effort — a serialization throw here must not
-            // mask the original handler error.
-          }
-          // An ownership rejection (#10462) is a denied invocation, not a
-          // handler failure — record it as "restricted" so it groups with the
-          // untrusted-sender rejection above rather than with genuine dispatch
-          // errors. The sender already passed `isTrustedRendererUrl`, so the
-          // args are from a trusted frame and the forensic `argsHash` is still
-          // useful. An ownership error is thrown before any handler runs, so it
-          // is never marked as an audited handler failure and always reaches
-          // this block.
+        if (service.isRemoteUnsupported(pluginId)) {
+          console.warn(
+            `[Plugin] Refused a call to "${pluginId}" from a window on another machine: the plugin declares "remote": "unsupported"`
+          );
           safeAppend({
             pluginId,
             actionId: channel,
             recordType: "ipc-invoke",
             channel: CHANNELS.PLUGIN_INVOKE,
-            result: isPluginInvokeOwnershipError(err) ? "restricted" : "error",
-            errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
-            argsHash,
+            result: "restricted",
+            errorMessage: "plugin does not support windows on another machine",
+            argsHash: "",
             durationMs: Date.now() - start,
           });
+          throw remoteUnsupportedError(pluginId);
         }
-        throw err;
       }
-    }
+      return runInPluginInvocation(pluginId, endpoint, () =>
+        runPluginInvoke(
+          {
+            projectId,
+            webContentsId: ctx.webContentsId,
+            start,
+            origin: {
+              kind: remote ? "remote" : "local",
+              clientId: endpoint.clientId,
+              endpointId: endpoint.endpointId,
+            },
+            resolveWorktreeId: async () => {
+              if (projectId === null) return null;
+              const worktreeId = await resolveActiveWorktreeIdForProject(projectId);
+              // The endpoint may have been rebound to another project meanwhile.
+              return endpoint.projectId === projectId ? worktreeId : null;
+            },
+          },
+          pluginId,
+          channel,
+          args
+        )
+      );
+    })
   );
-  cleanups.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));
 
   return () => cleanups.forEach((cleanup) => cleanup());
 }

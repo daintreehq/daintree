@@ -5,6 +5,7 @@ import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirm
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import type { PluginCapabilityConsentDecision } from "@shared/types/pluginCapabilityConsent";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
+import { useHostConnection } from "@/hooks/useHostConnection";
 
 /**
  * Singleton dialog driven by the just-in-time capability consent queue (#10524).
@@ -18,6 +19,11 @@ export function PluginCapabilityConfirmDialog() {
   const current = usePluginCapabilityConfirmStore((state) => state.current);
   const resolveCurrent = usePluginCapabilityConfirmStore((state) => state.resolveCurrent);
   const resetKey = current?.requestId ?? "null";
+  // A window attached to another machine asks on that host's behalf: the
+  // capability is used there, so the question names it.
+  const { hostId, hostName } = useHostConnection();
+  const hostLabel = hostId === null ? null : (hostName ?? hostId);
+  const onHost = hostLabel === null ? "" : ` on ${hostLabel}`;
 
   const handledRequestIdRef = useRef<string | null>(null);
   const resolveOnce = useCallback(
@@ -47,6 +53,10 @@ export function PluginCapabilityConfirmDialog() {
     );
   }
 
+  // A host's plugin reaching this computer's clipboard is the one question
+  // about this machine rather than the host, so the host names the plugin.
+  const forThisComputer = hostLabel !== null && reachesThisComputer(current.capability);
+
   return (
     <ErrorBoundary
       variant="component"
@@ -56,8 +66,16 @@ export function PluginCapabilityConfirmDialog() {
       <ConfirmDialog
         isOpen={true}
         onClose={() => resolveOnce(current.requestId, "rejected")}
-        title={titleFor(current.pluginDisplayName, current.capability)}
-        description={`'${current.pluginDisplayName}' is asking to ${capabilityAction(current.capability)} for the first time. Allowing remembers this for the plugin until you uninstall or revoke it.`}
+        title={titleFor(
+          current.pluginDisplayName,
+          current.capability,
+          forThisComputer ? hostLabel : null
+        )}
+        description={
+          forThisComputer
+            ? `A plugin running on ${hostLabel} is asking to ${capabilityAction(current.capability)}. Your answer is remembered on this computer for this plugin on ${hostLabel}.`
+            : `'${current.pluginDisplayName}' is asking to ${capabilityAction(current.capability)}${onHost} for the first time. Allowing remembers this for the plugin until you uninstall or revoke it.`
+        }
         confirmLabel="Allow and remember"
         cancelLabel="Deny"
         onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
@@ -70,7 +88,9 @@ export function PluginCapabilityConfirmDialog() {
         // the accessible description; this is the visual scan path.
         hint={
           <span className="min-w-0 leading-tight">
-            Remembered until you uninstall or revoke the plugin
+            {forThisComputer
+              ? "Remembered on this computer"
+              : "Remembered until you uninstall or revoke the plugin"}
           </span>
         }
       >
@@ -103,13 +123,27 @@ export function PluginCapabilityConfirmDialog() {
 }
 
 /** Dialog title — sentence case, no trailing period (UI microcopy rules). Exported for tests. */
-export function titleFor(pluginDisplayName: string, capability: BuiltInPluginCapability): string {
-  return `Allow '${pluginDisplayName}' to ${capabilityAction(capability)}?`;
+export function titleFor(
+  pluginDisplayName: string,
+  capability: BuiltInPluginCapability,
+  onHost: string | null = null
+): string {
+  const who = onHost === null ? `'${pluginDisplayName}'` : `'${pluginDisplayName}' on ${onHost}`;
+  return `Allow ${who} to ${capabilityAction(capability)}?`;
+}
+
+/** Capabilities a host's plugin asks of this computer rather than the host. Exported for tests. */
+export function reachesThisComputer(capability: BuiltInPluginCapability): boolean {
+  return capability === "clipboard:read" || capability === "clipboard:write";
 }
 
 /** Short verb phrase for the title/description. Exported for tests. */
 export function capabilityAction(capability: BuiltInPluginCapability): string {
   switch (capability) {
+    case "clipboard:read":
+      return "read this computer's clipboard";
+    case "clipboard:write":
+      return "write to this computer's clipboard";
     case "shell:exec":
       return "run commands";
     case "fs:project-write":

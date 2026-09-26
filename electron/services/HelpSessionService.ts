@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
+import { isRemoteEndpointHandle } from "../ipc/endpoint.js";
 import { store } from "../store.js";
 import { getHelpFolderPath } from "./HelpService.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
@@ -1428,6 +1429,12 @@ export class HelpSessionService {
    * revokes (renderer IPC) leave the option off so "+ New session" /
    * explicit close discards the transcript as the user intended.
    */
+  /** The project a live session was provisioned for; null for an unknown or revoked one. */
+  getSessionProjectId(sessionId: string): string | null {
+    const record = this.sessionsById.get(sessionId);
+    return record && !record.revoked ? record.projectId : null;
+  }
+
   async revokeSession(sessionId: string, opts?: { captureHibernation?: boolean }): Promise<void> {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked) return;
@@ -2068,11 +2075,20 @@ export class HelpSessionService {
     if (!path.isAbsolute(input.projectPath)) {
       throw new Error("projectPath must be absolute");
     }
-    if (!Number.isInteger(input.windowId) || input.windowId < 0) {
-      throw new Error("windowId must be a non-negative integer");
-    }
-    if (!Number.isInteger(input.projectViewWebContentsId) || input.projectViewWebContentsId < 0) {
-      throw new Error("projectViewWebContentsId must be a non-negative integer");
+    // A view on another machine has neither a window nor a WebContents here:
+    // its endpoint's negative handle stands in for both, and is the only
+    // negative value either may carry.
+    const remoteHandle =
+      Number.isInteger(input.projectViewWebContentsId) &&
+      isRemoteEndpointHandle(input.projectViewWebContentsId) &&
+      input.windowId === input.projectViewWebContentsId;
+    if (!remoteHandle) {
+      if (!Number.isInteger(input.windowId) || input.windowId < 0) {
+        throw new Error("windowId must be a non-negative integer");
+      }
+      if (!Number.isInteger(input.projectViewWebContentsId) || input.projectViewWebContentsId < 0) {
+        throw new Error("projectViewWebContentsId must be a non-negative integer");
+      }
     }
     if (typeof input.agentId !== "string" || !input.agentId.trim()) {
       throw new Error("agentId is required");

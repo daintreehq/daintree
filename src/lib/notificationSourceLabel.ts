@@ -29,11 +29,17 @@ export const APP_SOURCE_LABEL = "Daintree";
 /**
  * Joins the resolved parts with the separator the row's metadata line uses. A
  * main worktree is named after the folder, which is usually the project's own
- * name, so it isn't repeated.
+ * name, so it isn't repeated. A notification from another host leads with
+ * that host's name: its project is one this machine may not know.
  */
-export function formatNotificationSource(project?: string, worktree?: string): string | null {
+export function formatNotificationSource(
+  project?: string,
+  worktree?: string,
+  hostName?: string
+): string | null {
+  const h = hostName?.trim();
   const p = project?.trim();
   const w = worktree?.trim();
-  const parts = [p, w && w !== p ? w : undefined].filter((x): x is string => !!x);
+  const parts = [h, p, w && w !== p ? w : undefined].filter((x): x is string => !!x);
   return parts.length > 0 ? parts.join(" · ") : null;
 }

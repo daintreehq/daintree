@@ -185,6 +185,7 @@ vi.mock("../SystemSleepService.js", () => ({
 }));
 
 import { McpServerService } from "../McpServerService.js";
+import { setMcpDriveTargetResolver } from "../mcp-server/driveTarget.js";
 
 /**
  * Workspace ids shaped the way the real id spaces are — 64 hex for a project
@@ -1747,7 +1748,8 @@ describe("McpServerService", () => {
       expect(names).not.toContain("recipe.run");
 
       // Dispatch is still fail-closed — it must not have landed in window A,
-      // whose manifest returns "from-window-A".
+      // whose manifest returns "from-window-A". Without Host mode nothing runs
+      // viewless, so the route is reported lost exactly as before Remote Hosts.
       const beforeOpen = await client.callTool({ name: "terminal.list", arguments: {} });
       expect(beforeOpen.isError).toBe(true);
       const failure = JSON.parse(getTextResult(beforeOpen).content[0].text as string) as {
@@ -1786,6 +1788,29 @@ describe("McpServerService", () => {
 
       const afterOpen = await client.callTool({ name: "terminal.list", arguments: {} });
       expect(getTextResult(afterOpen).content[0].text).toBe('"from-closed-workspace"');
+    });
+
+    it("reports no frontend attached for a viewless workspace when Host-mode routing is on", async () => {
+      // Host mode installs the drive-lease resolver, which is what lets the
+      // host run actions alone. A vacant lease with no view falls through to
+      // the viewless executor, which has no form of `terminal.list` and says so.
+      const offResolver = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+      try {
+        const winA = boundWindow(REF_A, "from-window-A");
+        await service.start(winA.window);
+
+        const client = await connectBound(service.currentPort!, CLOSED_PROJECT_ID);
+        const result = await client.callTool({ name: "terminal.list", arguments: {} });
+        expect(result.isError).toBe(true);
+        const failure = JSON.parse(getTextResult(result).content[0].text as string) as {
+          code: string;
+          retriable: boolean;
+        };
+        expect(failure.code).toBe("NO_FRONTEND_ATTACHED");
+        expect(failure.retriable).toBe(true);
+      } finally {
+        offResolver();
+      }
     });
 
     it("connects to an ambiguous workspace and recovers when the duplicate closes (#12082)", async () => {

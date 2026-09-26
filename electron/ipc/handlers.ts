@@ -78,6 +78,18 @@ import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.js";
 import { registerWebviewCaptureHandlers } from "./handlers/webviewCapture.js";
+import { registerRemoteHostsHandlers } from "./handlers/remoteHosts.js";
+import { registerHostModeHandlers } from "./handlers/hostMode.js";
+import { registerDriveLeaseHandlers } from "./handlers/driveLease.js";
+import { registerOperationsHandlers } from "./handlers/operations.js";
+import { registerHostFilesHandlers } from "./handlers/hostFiles.js";
+import { registerFileTransferHandlers } from "./handlers/fileTransfer.js";
+import { registerHostSwitchHandlers } from "./handlers/hostSwitch.js";
+import { registerProjectMatchHandlers } from "./handlers/projectMatch.js";
+import { registerHostMetricsHandlers } from "./handlers/hostMetrics.js";
+import { registerPortForwardsHandlers } from "./handlers/portForwards.js";
+import { registerPluginParityHandlers } from "./handlers/pluginParity.js";
+import { isEitherRemoteRoleSupported } from "../remote/buildGate.js";
 import { registerSitePreviewHandlers } from "./handlers/sitePreview.js";
 import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
@@ -243,6 +255,21 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerConnectivityHandlers());
     register(() => registerProjectPresenceHandlers(deps));
     register(() => registerScratchHandlers(deps));
+
+    // Remote Hosts: macOS and Linux only. Windows builds register none of it.
+    if (isEitherRemoteRoleSupported()) {
+      register(() => registerRemoteHostsHandlers());
+      register(() => registerHostModeHandlers());
+      register(() => registerDriveLeaseHandlers());
+      register(() => registerOperationsHandlers());
+      register(() => registerHostFilesHandlers());
+      register(() => registerFileTransferHandlers());
+      register(() => registerHostSwitchHandlers());
+      register(() => registerProjectMatchHandlers());
+      register(() => registerHostMetricsHandlers());
+      register(() => registerPortForwardsHandlers());
+      register(() => registerPluginParityHandlers());
+    }
   } catch (error) {
     runCleanups(cleanupFunctions);
     throw error;

@@ -5,21 +5,22 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { CopyableCommand } from "@/components/Setup/CopyableCommand";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { getAgentConfig } from "@/config/agents";
-import { isMac, isLinux } from "@/lib/platform";
+import { isHostLinux, isHostMac } from "@/hooks/useHostPlatform";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { AgentCliDetail, AgentAvailabilityState } from "@shared/types/ipc";
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 
+// The CLI installs on the project's host, so its instructions follow that machine.
 function getOsKey(): "macos" | "windows" | "linux" {
-  if (isMac()) return "macos";
-  if (isLinux()) return "linux";
+  if (isHostMac()) return "macos";
+  if (isHostLinux()) return "linux";
   return "windows";
 }
 
 function getOsLabel(): string {
-  if (isMac()) return "macOS";
-  if (isLinux()) return "Linux";
+  if (isHostMac()) return "macOS";
+  if (isHostLinux()) return "Linux";
   return "Windows";
 }
 

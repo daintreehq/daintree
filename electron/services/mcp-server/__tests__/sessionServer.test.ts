@@ -34,6 +34,7 @@ import {
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
   SESSION_GONE,
+  NO_FRONTEND_ATTACHED_CODE,
   CONFIRMATION_REQUIRED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
@@ -62,7 +63,9 @@ import {
   SessionBindingError,
   WorkspaceBindingError,
   RendererBridgeUnavailableError,
+  NoFrontendAttachedError,
 } from "../rendererBridge.js";
+import { setMcpDriveTargetResolver } from "../driveTarget.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
@@ -2343,6 +2346,31 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
     expect(parsed.retriable).toBe(true);
     expect(parsed.message).toContain("No Daintree window is open");
+  });
+
+  it("answers NO_FRONTEND_ATTACHED instead when Host-mode routing is on", async () => {
+    const restore = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    try {
+      const deps = fakeDeps({
+        sessionStore: fakeSessionStore("action"),
+        getCachedManifest: vi.fn(() => null),
+        requestManifest: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+        dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+      });
+      const server = createSessionServer("s-host-mode-no-channel", deps);
+      await server.connect(makeMockTransport());
+
+      const result = (await callTool(server, {
+        name: "recipe.run",
+        arguments: {},
+      })) as { isError: boolean; content: { type: string; text: string }[] };
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.code).toBe(NO_FRONTEND_ATTACHED_CODE);
+      expect(parsed.retriable).toBe(true);
+    } finally {
+      restore();
+    }
   });
 
   it("cold-cache confirm tool with no renderer stays a retriable EXECUTION_ERROR — danger is unknowable without a manifest (#10640)", async () => {
@@ -9841,5 +9869,103 @@ describe("agent-pane approval (#12692)", () => {
     expect(plainNames).not.toContain("git.push");
     pane.sessionStore.grantCache.dispose();
     plain.sessionStore.grantCache.dispose();
+  });
+});
+
+describe("no frontend attached to a bound workspace", () => {
+  const SESSION = "headless-session";
+  const WORKSPACE = "ws-headless";
+
+  function headlessDeps(
+    tier: "external" | "action",
+    overrides?: Partial<SessionServerDeps>
+  ): SessionServerDeps {
+    const sessionStore = fakeSessionStore(tier);
+    sessionStore.sessionWorkspaceMap.set(SESSION, WORKSPACE);
+    return fakeDeps({
+      sessionStore,
+      workspaceBinding: { kind: "project", workspaceId: WORKSPACE, workspacePath: "/tmp/h" },
+      getCachedManifest: vi.fn(() => null),
+      requestManifest: vi.fn().mockRejectedValue(new NoFrontendAttachedError(WORKSPACE)),
+      ...overrides,
+    });
+  }
+
+  it("lets a bound external session reach a host-runnable action instead of refusing the route", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({
+      result: { ok: true, result: { terminalId: "t-headless" } },
+    });
+    const server = createSessionServer(SESSION, headlessDeps("external", { dispatchAction }));
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "terminal.new", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    expect(dispatchAction).toHaveBeenCalledWith("terminal.new", {}, false);
+    expect(JSON.stringify(result.content)).toContain("t-headless");
+  });
+
+  it("still refuses a launch argument that would need a confirmation nobody can give", async () => {
+    const dispatchAction = vi.fn();
+    const server = createSessionServer(SESSION, headlessDeps("external", { dispatchAction }));
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.new",
+      arguments: { command: "rm -rf build" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe(CONFIRMATION_REQUIRED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("answers NO_FRONTEND_ATTACHED, retriably, for an action only a frontend can run", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new NoFrontendAttachedError(WORKSPACE, "terminal.moveToDock"));
+    const server = createSessionServer(SESSION, headlessDeps("action", { dispatchAction }));
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.moveToDock",
+      arguments: { terminalId: "t-1" },
+    });
+
+    expect(result.isError).toBe(true);
+    const payload = toolErrorPayload(result);
+    expect(payload.code).toBe(NO_FRONTEND_ATTACHED_CODE);
+    expect(payload.retriable).toBe(true);
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps SESSION_BINDING_GONE for a route that was lost rather than never attached", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found"));
+    const server = createSessionServer(
+      SESSION,
+      headlessDeps("action", {
+        dispatchAction,
+        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.moveToDock")]),
+      })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.moveToDock",
+      arguments: { terminalId: "t-1" },
+    });
+
+    expect(toolErrorPayload(result).code).toBe(SESSION_BINDING_GONE);
+  });
+
+  it("serves the host base surface at discovery when nothing is attached", async () => {
+    const server = createSessionServer(SESSION, headlessDeps("external"));
+    await server.connect(makeMockTransport());
+
+    const names = (await listTools(server)).tools.map((t) => t.name);
+
+    expect(names).toContain("terminal.new");
   });
 });

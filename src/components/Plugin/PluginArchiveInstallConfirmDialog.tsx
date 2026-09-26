@@ -10,6 +10,7 @@ import { BUILT_IN_PLUGIN_CAPABILITIES } from "@shared/types/plugin";
 import type { BuiltInPluginCapability, PluginAuthor } from "@shared/types/plugin";
 import { CAPABILITY_META, CapabilityRow, type CapabilitySeverity } from "./capabilityMeta";
 import { PluginGlyphTile, pluginIconForIdentity } from "./pluginIcons";
+import { useRemoteTrustSentence } from "./remotePluginTrust";
 
 // Read-time gate: a double-clicked archive opens this dialog without the user
 // asking for it, so the primary button stays disabled long enough that a click
@@ -21,6 +22,9 @@ const CONFIRM_COOLDOWN_MS = 1_200;
 // clips against the title edge). The identity card carries the full plugin ID,
 // so the title only needs a recognisable prefix.
 const TITLE_LABEL_MAX = 60;
+
+const INSTALL_DESCRIPTION =
+  "Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. Plugins run with full Node.js privileges — there's no sandbox and no signature check.";
 
 /**
  * Confirmation gate for a `.dntr` archive the user double-clicked (#11280).
@@ -51,6 +55,9 @@ export function PluginArchiveInstallConfirmDialog() {
   // flight: without it a double-click would resolve the current intent and
   // immediately approve whichever archive the queue promotes next.
   const inFlightRef = useRef(false);
+  const remoteTrust = useRemoteTrustSentence(
+    current ? `'${current.manifest.displayName || current.manifest.name}'` : "it"
+  );
 
   // Always resolve by id, never "whatever is current". An install that settles
   // after this component remounted (ErrorBoundary reset) would otherwise
@@ -137,7 +144,7 @@ export function PluginArchiveInstallConfirmDialog() {
       // attacker-controlled run would otherwise refuse to shrink and clip
       // against the dialog edge; the clamp above bounds the wrapped height.
       title={<span className="min-w-0 break-words">{`Install '${titleLabel}'?`}</span>}
-      description="Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. Plugins run with full Node.js privileges — there's no sandbox and no signature check."
+      description={remoteTrust ? `${INSTALL_DESCRIPTION} ${remoteTrust}` : INSTALL_DESCRIPTION}
       confirmLabel="Install plugin"
       cancelLabel="Cancel"
       onConfirm={() => void handleConfirm()}

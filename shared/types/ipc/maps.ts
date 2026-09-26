@@ -10,7 +10,7 @@ import type {
   TerminalRecipe,
 } from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
-import type { PushProgressEvent } from "./gitPush.js";
+import type { GitPushPayload, PushProgressEvent } from "./gitPush.js";
 import type { AgentSettings } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
@@ -50,6 +50,7 @@ import type {
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
   SystemOpenInEditorPayload,
+  SystemOpenInEditorFallback,
   SystemWakePayload,
   SystemMemoryPressurePayload,
   CliAvailability,
@@ -311,7 +312,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "system:open-in-editor": {
     args: [payload: SystemOpenInEditorPayload];
-    result: void;
+    result: SystemOpenInEditorFallback | void;
   };
   "system:check-command": {
     args: [command: string];
@@ -840,7 +841,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { hash: string; summary: string };
   };
   "git:push": {
-    args: [payload: { cwd: string; setUpstream?: boolean }];
+    args: [payload: GitPushPayload];
     /**
      * Resolves on success. Throws `GitOperationError` on failure — the renderer
      * reads `caught.gitReason` to surface a classified recovery hint.
@@ -1395,6 +1396,15 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
  * IPC Event Contract Map
  */
 export interface IpcEventMap {
+  // Remote Hosts namespaces: one push channel each, carrying a discriminated union.
+  "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
+  "host-mode:event": import("./hostMode.js").HostModeEvent;
+  "drive-lease:event": import("./driveLease.js").DriveLeaseEvent;
+  "operations:event": import("./operations.js").OperationsEvent;
+  "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;
+  "host-metrics:event": import("./hostMetrics.js").HostMetricsEvent;
+  "port-forwards:event": import("./portForwards.js").PortForwardsEvent;
+
   // Worktree events
   "worktree:remove": { worktreeId: string };
   "worktree:activated": { worktreeId: string };

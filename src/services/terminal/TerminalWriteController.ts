@@ -98,7 +98,12 @@ export interface WriteControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   // chunkCount: how many host-sent chunks this write coalesced — each maps to
   // one pending port-ack FIFO entry, so the ack must settle all of them.
-  acknowledgePortData: (id: string, bytes: number, chunkCount: number) => void;
+  // generation: the port-ack generation the chunk was queued under; a remote
+  // reset since then retired its FIFO entries (see terminalClient).
+  acknowledgePortData: (id: string, bytes: number, chunkCount: number, generation: number) => void;
+  // The terminal's current port-ack generation. Absent (tests, local-only
+  // wiring) reads as 0, which never changes for a local view.
+  getPortAckGeneration?: (id: string) => number;
   acknowledgeData: (id: string, bytes: number) => void;
   notifyWriteComplete: (id: string, bytes: number) => void;
   incrementUnseen: (id: string, isScrolledBack: boolean, count?: number) => void;
@@ -213,9 +218,20 @@ export class TerminalWriteController {
     }
   }
 
-  write(id: string, data: string | Uint8Array, chunkCount = 1, range?: StreamRange): void {
+  /**
+   * `ackGeneration` is passed only when replaying a deferred chunk, which keeps
+   * the generation it was deferred under; a fresh chunk takes the current one.
+   */
+  write(
+    id: string,
+    data: string | Uint8Array,
+    chunkCount = 1,
+    range?: StreamRange,
+    ackGeneration?: number
+  ): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
+    const generation = ackGeneration ?? this.deps.getPortAckGeneration?.(id) ?? 0;
 
     // Stamped before the deferral branch on purpose: a chunk held behind a
     // restore window has still reached this pane, and missing-output recovery
@@ -237,7 +253,7 @@ export class TerminalWriteController {
       // while the restore runs, so a flooding agent can no longer grow
       // deferredOutput without bound — the transport backpressure IS the cap,
       // and no bytes are dropped to enforce it.
-      managed.deferredOutput.push({ data, chunkCount, range });
+      managed.deferredOutput.push({ data, chunkCount, range, ackGeneration: generation });
       return;
     }
 
@@ -313,7 +329,7 @@ export class TerminalWriteController {
       // that must land on the far side of that snapshot (#12398).
       this.deps.incrementUnseen(id, managed.isUserScrolledBack, chunkCount);
 
-      this.deps.acknowledgePortData(id, renderedBytes, chunkCount);
+      this.deps.acknowledgePortData(id, renderedBytes, chunkCount, generation);
       if (ackBytes !== null) {
         this.deps.acknowledgeData(id, ackBytes);
       }

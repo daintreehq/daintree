@@ -38,6 +38,7 @@ import { getBuildChannelLabel } from "@shared/config/distribution";
 import { logError } from "@/utils/logger";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { useDistributionStore } from "@/store/distributionStore";
+import { useRemoteHostName, useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "overview", label: "Overview" },
@@ -154,6 +155,11 @@ export function GeneralTab({
   // Build provenance from the running version — stable builds get no channel
   // badge. Distinct from the user-selected update-feed `updateChannel`.
   const buildChannelLabel = getBuildChannelLabel(appVersion);
+  // This page holds both machines' settings in a remote window, so each section says whose.
+  const ownerMarker = useSettingsOwnerMarker();
+  // Agent detection runs on the host, so a remote window names it rather than "this machine".
+  const remoteHostName = useRemoteHostName();
+  const agentMachine = remoteHostName ?? "this machine";
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [showReadyAgents, setShowReadyAgents] = useState(false);
@@ -232,10 +238,10 @@ export function GeneralTab({
    * keyed only on availability let the two disagree.
    */
   const systemStatusSummary = (() => {
-    if (cliCheckFailed) return "Which agents are installed on this machine";
-    if (!cliAvailability) return "Checking which agents are installed on this machine";
+    if (cliCheckFailed) return `Which agents are installed on ${agentMachine}`;
+    if (!cliAvailability) return `Checking which agents are installed on ${agentMachine}`;
     const installed = getAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
-    if (installed.length === 0) return "Which agents are installed on this machine";
+    if (installed.length === 0) return `Which agents are installed on ${agentMachine}`;
     const attention = installed.filter((id) => !isAgentReady(cliAvailability[id]));
     if (attention.length === 0) {
       return installed.length === 1
@@ -796,6 +802,7 @@ export function GeneralTab({
           <>
             <SettingsSection
               title="System status"
+              badge={ownerMarker("host")}
               description={<span role="status">{systemStatusSummary}</span>}
               id="general-system-status"
             >
@@ -859,7 +866,7 @@ export function GeneralTab({
                             </div>
                           }
                         >
-                          No agent CLIs found on this machine — install one and Daintree picks it up
+                          {`No agent CLIs found on ${agentMachine} — install one and Daintree picks it up`}
                         </SettingsEmptyRow>
                       </SettingsGroup>
                     );
@@ -1034,6 +1041,7 @@ export function GeneralTab({
                 save over a value the user never saw. */}
             <SettingsSection
               title="Startup"
+              badge={ownerMarker("host")}
               description="What comes back when Daintree restarts"
               id="general-session-restore"
             >
@@ -1067,6 +1075,7 @@ export function GeneralTab({
             {updatesManagedByStore ? (
               <SettingsSection
                 title="Updates"
+                badge={ownerMarker("device")}
                 description="Updates are managed by the Microsoft Store on Windows"
                 id="general-update-channel"
               >
@@ -1082,7 +1091,11 @@ export function GeneralTab({
                 </SettingsGroup>
               </SettingsSection>
             ) : (
-              <SettingsSection title="Updates" id="general-update-channel">
+              <SettingsSection
+                title="Updates"
+                badge={ownerMarker("device")}
+                id="general-update-channel"
+              >
                 {updateChannelLoadFailed && (
                   <SettingsLoadErrorBanner
                     message="Couldn't load the update channel"
@@ -1109,6 +1122,7 @@ export function GeneralTab({
 
             <SettingsSection
               title="Quick reference"
+              badge={ownerMarker("device")}
               description="Common keyboard shortcuts"
               action={
                 <Button
@@ -1231,6 +1245,7 @@ export function GeneralTab({
                 were a section of their own whose only row repeated its heading. */}
             <SettingsSection
               title="Background projects"
+              badge={ownerMarker("host")}
               description="What happens to projects you haven't used in a while — the active project is never touched"
             >
               {sectionErrors.idleNotify && (
@@ -1370,6 +1385,7 @@ export function GeneralTab({
         {effectiveSubtab === "display" && (
           <SettingsSection
             title="Interface elements"
+            badge={ownerMarker("device")}
             description="What Daintree shows while you work"
             id="general-project-pulse"
           >

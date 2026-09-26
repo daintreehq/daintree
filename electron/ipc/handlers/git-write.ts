@@ -6,9 +6,21 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { checkRateLimit, typedHandle, typedHandleWithContext, sendToRenderer } from "../utils.js";
+import {
+  checkRateLimit,
+  typedHandle,
+  typedHandleWithContext,
+  sendToRendererContext,
+} from "../utils.js";
+import {
+  getOperationRegistry,
+  normalizeOperationId,
+  untrackedOperationHandle,
+  type OperationHandle,
+} from "../../services/operations/index.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
-import type { PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
+import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
+import type { GitPushPayload, PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
   GitBaseIntegrationCommitPreview,
@@ -59,7 +71,7 @@ import type {
 } from "../../../shared/types/ipc/git.js";
 import { classifyGitError } from "../../../shared/utils/gitOperationErrors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { GitOperationError } from "../../utils/errorTypes.js";
+import { AppError, GitOperationError } from "../../utils/errorTypes.js";
 import {
   resolveGitPushDestination,
   resolveGitUpstream,
@@ -163,51 +175,6 @@ async function refExists(
     return out.trim().length > 0;
   } catch {
     return false;
-  }
-}
-
-/** Upper bound on the one network read the push preview is allowed to make. */
-const PUSH_PREVIEW_LS_REMOTE_TIMEOUT_MS = 4000;
-
-/**
- * The destination branch's tip according to the REMOTE, or `undefined` when the
- * remote could not be asked.
- *
- * `null` is a real answer — the remote replied and has no such branch — and is
- * what lets the preview say a push creates a branch instead of guessing from the
- * absence of a local ref. `undefined` is "no answer", which the caller must
- * treat as unverified rather than as absence.
- *
- * Bounded and swallowed on purpose. This runs while a confirm dialog is waiting,
- * so a slow or unreachable remote must degrade the preview's precision, never
- * hold the dialog open — the local approximation is still shown, labelled.
- */
-async function readRemoteBranchTip(
-  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
-  remote: string,
-  branch: string
-): Promise<string | null | undefined> {
-  try {
-    const out = await Promise.race([
-      // `--` before the remote so a remote whose name survived the argv guard
-      // still cannot be read as an option, and the ref given in full.
-      git.raw(["ls-remote", "--heads", "--", remote, `refs/heads/${branch}`]),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("ls-remote timed out")),
-          PUSH_PREVIEW_LS_REMOTE_TIMEOUT_MS
-        )
-      ),
-    ]);
-    const line = out
-      .split("\n")
-      .map((l) => l.trim())
-      .find((l) => l.length > 0);
-    if (!line) return null;
-    const sha = line.split(/\s+/)[0] ?? "";
-    return /^[0-9a-f]{40,64}$/i.test(sha) ? sha : undefined;
-  } catch {
-    return undefined;
   }
 }
 
@@ -1132,25 +1099,71 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
   const pushingCwds = new Set<string>();
 
-  const handlePush = async (
-    ctx: IpcContext,
-    payload: { cwd: string; setUpstream?: boolean }
-  ): Promise<void> => {
-    if (pushingCwds.has(payload.cwd)) return;
+  const handlePush = async (ctx: IpcContext, payload: GitPushPayload): Promise<void> => {
+    const rawOpId = payload?.opId;
+    const opId = normalizeOperationId(rawOpId);
+    if (rawOpId !== undefined && opId === null) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
+    }
+    // Only a caller that names its operation (a remote view) is recorded,
+    // published and joinable. Without an opId the push runs exactly as it
+    // always has, and one already in flight for the cwd is a silent no-op.
+    const input = opId
+      ? {
+          opId,
+          kind: "git-push" as const,
+          projectId: ctx.projectId,
+          dedupKey: `git-push:${payload.cwd}`,
+          fingerprint: JSON.stringify({ setUpstream: Boolean(payload.setUpstream) }),
+        }
+      : null;
+    // Reached only for a named push, so a local push never constructs the
+    // registry.
+    const joined = input ? getOperationRegistry().join<void>(input) : null;
+    if (joined) return joined;
+    if (pushingCwds.has(payload.cwd)) {
+      if (!input) return;
+      // An unnamed local push owns this cwd and has no record to join. Treating
+      // this as the silent no-op a local caller gets would report success for
+      // an opId that never resolves, so the named caller is told instead.
+      throw new AppError({
+        code: "VALIDATION",
+        message: "A push is already running for this worktree",
+        userMessage: "A push is already running for this worktree. Try again when it finishes.",
+      });
+    }
 
     checkRateLimit(CHANNELS.GIT_PUSH, 5, 10_000);
     validateCwd(payload?.cwd);
 
     pushingCwds.add(payload.cwd);
+    try {
+      if (input) {
+        await getOperationRegistry().run(input, (op) => runPush(ctx, payload, op));
+      } else {
+        await runPush(ctx, payload, untrackedOperationHandle());
+      }
+    } finally {
+      pushingCwds.delete(payload.cwd);
+    }
+  };
+
+  const runPush = async (
+    ctx: IpcContext,
+    payload: { cwd: string; setUpstream?: boolean },
+    op: OperationHandle
+  ): Promise<void> => {
     const git = await createAuthenticatedGit(payload.cwd);
     let branchName: string | undefined;
     let destination: ResolvedGitPushDestination | undefined;
-    const senderWindow = ctx.senderWindow;
 
     const sendProgress = (event: PushProgressEvent) => {
-      if (senderWindow && !senderWindow.isDestroyed()) {
-        sendToRenderer(senderWindow, CHANNELS.GIT_PUSH_PROGRESS, event);
-      }
+      sendToRendererContext(ctx, CHANNELS.GIT_PUSH_PROGRESS, event);
+      op.progress({
+        fraction: event.progress === null ? null : event.progress / 100,
+        stage: event.stage,
+        message: event.targetBranch ?? null,
+      });
     };
 
     try {
@@ -1253,8 +1266,6 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
           branchName,
         }
       );
-    } finally {
-      pushingCwds.delete(payload.cwd);
     }
   };
   handlers.push(typedHandleWithContext(CHANNELS.GIT_PUSH, handlePush));

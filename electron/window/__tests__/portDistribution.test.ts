@@ -42,9 +42,17 @@ vi.mock("electron", () => ({
 import {
   distributePortsToView,
   distributeTerminalWorkerPortToView,
+  postTerminalPortToView,
+  getRemoteViewHooks,
   releaseTerminalWorkerPort,
+  setRemoteViewHooks,
+  setTerminalPortOverride,
 } from "../portDistribution.js";
-import { getPortHolderWebContentsId } from "../webContentsRegistry.js";
+import {
+  getPortHolderWebContentsId,
+  registerCachedViewWebContents,
+  unregisterCachedViewWebContents,
+} from "../webContentsRegistry.js";
 import type { WindowContext } from "../WindowRegistry.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type { BrowserWindow } from "electron";
@@ -69,6 +77,7 @@ function makeMockPtyClient() {
     connectMessagePort: vi.fn(),
     connectTerminalMessagePort: vi.fn(),
     disconnectTerminalMessagePort: vi.fn(),
+    disconnectMessagePort: vi.fn(),
   };
 }
 
@@ -370,5 +379,111 @@ describe("releaseTerminalWorkerPort", () => {
 
     releaseTerminalWorkerPort(ctx, asPty(pty), "term-1");
     expect(pty.disconnectTerminalMessagePort).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("relayed terminal ports", () => {
+  it("lets an override claim a view before any local pair is minted", () => {
+    const ctx = makeCtx();
+    const claimed = makeMockWc();
+    const local = makeMockWc();
+    const pty = makeMockPtyClient();
+    const override = vi.fn((wc: Electron.WebContents) => wc.id === claimed.id);
+    const uninstall = setTerminalPortOverride(override);
+    try {
+      distributePortsToView(makeMockWin(), ctx, asWc(claimed), asPty(pty));
+      expect(madeChannels).toHaveLength(0);
+      expect(pty.connectMessagePort).not.toHaveBeenCalled();
+      expect(claimed.postMessage).not.toHaveBeenCalled();
+
+      // A view the override does not claim is served locally as before.
+      distributePortsToView(makeMockWin(), ctx, asWc(local), asPty(pty));
+      expect(pty.connectMessagePort).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+
+    distributePortsToView(makeMockWin(), ctx, asWc(claimed), asPty(pty));
+    expect(pty.connectMessagePort).toHaveBeenCalledTimes(2);
+  });
+
+  it("posts the token then the port and returns the other end", () => {
+    const wc = makeMockWc();
+    const port = postTerminalPortToView(asWc(wc));
+
+    const { port1, port2 } = madeChannels[0];
+    expect(port).toBe(port2);
+    const [first, second] = wc.postMessage.mock.calls;
+    expect(first[0]).toBe("terminal-port-token");
+    expect(second[0]).toBe("terminal-port");
+    expect(second[2]).toEqual([port1]);
+    expect((first[1] as { token: string }).token).toBe((second[1] as { token: string }).token);
+  });
+
+  it("closes both ends and returns null when the view cannot take the port", () => {
+    const wc = makeMockWc();
+    wc.postMessage.mockImplementation(() => {
+      throw new Error("frame disposed");
+    });
+
+    expect(postTerminalPortToView(asWc(wc))).toBeNull();
+    const { port1, port2 } = madeChannels[0];
+    expect(port1.close).toHaveBeenCalled();
+    expect(port2.close).toHaveBeenCalled();
+    expect(postTerminalPortToView(asWc(makeMockWc(true)))).toBeNull();
+  });
+
+  it("retires the window's local pair when a claimed remote view is the one being shown", () => {
+    const ctx = makeCtx(9);
+    const local = makeMockWc();
+    const remote = makeMockWc();
+    const pty = makeMockPtyClient();
+    distributePortsToView(makeMockWin(), ctx, asWc(local), asPty(pty));
+    const { port1, port2 } = madeChannels[0];
+    expect(getPortHolderWebContentsId(9)).toBe(local.id);
+
+    const uninstall = setTerminalPortOverride((wc) => wc.id === remote.id);
+    try {
+      distributePortsToView(makeMockWin(), ctx, asWc(remote), asPty(pty));
+    } finally {
+      uninstall();
+    }
+
+    expect(port1.close).toHaveBeenCalled();
+    expect(port2.close).toHaveBeenCalled();
+    expect(ctx.services.activeRendererPort).toBeUndefined();
+    expect(ctx.services.activePtyHostPort).toBeUndefined();
+    expect(pty.disconnectMessagePort).toHaveBeenCalledWith(9);
+    expect(getPortHolderWebContentsId(9)).toBeUndefined();
+  });
+
+  it("leaves the active local view's pair alone when a cached remote view reloads", () => {
+    const ctx = makeCtx(10);
+    const local = makeMockWc();
+    const cachedRemote = makeMockWc();
+    const pty = makeMockPtyClient();
+    distributePortsToView(makeMockWin(), ctx, asWc(local), asPty(pty));
+    registerCachedViewWebContents(asWc(cachedRemote));
+
+    const uninstall = setTerminalPortOverride((wc) => wc.id === cachedRemote.id);
+    try {
+      distributePortsToView(makeMockWin(), ctx, asWc(cachedRemote), asPty(pty));
+    } finally {
+      uninstall();
+      unregisterCachedViewWebContents(cachedRemote.id);
+    }
+
+    expect(madeChannels[0].port1.close).not.toHaveBeenCalled();
+    expect(pty.disconnectMessagePort).not.toHaveBeenCalled();
+    expect(getPortHolderWebContentsId(10)).toBe(local.id);
+  });
+
+  it("has no remote view hooks until Remote Hosts installs them", () => {
+    expect(getRemoteViewHooks()).toBeNull();
+    const hooks = { isRemoteView: () => true, redeliverWorktreePort: () => {} };
+    const uninstall = setRemoteViewHooks(hooks);
+    expect(getRemoteViewHooks()).toBe(hooks);
+    uninstall();
+    expect(getRemoteViewHooks()).toBeNull();
   });
 });

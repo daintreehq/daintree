@@ -54,6 +54,18 @@ import {
   formatWithBracketedPaste,
 } from "@shared/utils/terminalInputProtocol.js";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
+import { setRemoteMaterializer } from "@/services/materialize";
+import {
+  _resetComposerDropTargetsForTests,
+  registerComposerDropTarget,
+} from "../uploads/composerRouting";
+import {
+  _resetPendingUploadsForTests,
+  hasPendingUploads,
+  terminalUploadSurface,
+} from "../uploads/pendingUploads";
+import { _resetCtrlVImagePasteForTests, getClipboardImagePaster } from "../uploads/ctrlVImagePaste";
+import type { MaterializeResult, MaterializeSource } from "@shared/types/remoteHosts";
 
 /** What `clipboard.saveImage` resolves to, taken from the IPC surface itself. */
 type SavedImage = Awaited<ReturnType<typeof window.electron.clipboard.saveImage>>;
@@ -114,15 +126,16 @@ describe("useTerminalFileTransfer hook", () => {
         }),
         thumbnailFromPath: vi.fn(),
       },
-      webUtils: {
-        getPathForFile: vi.fn((file: File) => {
-          return (file as unknown as { _testPath?: string })._testPath ?? "";
-        }),
+      files: {
+        getDroppedFilePaths: vi.fn((files: readonly File[]) =>
+          files.map((file) => (file as unknown as { _testPath?: string })._testPath ?? "")
+        ),
       },
     };
   });
 
   afterEach(() => {
+    setRemoteMaterializer(null);
     cleanup();
     if (container.parentNode) document.body.removeChild(container);
     (window as unknown as Record<string, unknown>).electron = originalElectron;
@@ -207,10 +220,19 @@ describe("useTerminalFileTransfer hook", () => {
     return { event, dataTransfer };
   }
 
-  function dropFiles(files: File[]): DragEvent {
+  /**
+   * A drop resolves its paths through `materialize` before writing, so the
+   * write lands a few microtasks after the event; this settles them.
+   */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  }
+
+  async function dropFiles(files: File[]): Promise<DragEvent> {
     const event = makeDropEvent(files);
-    act(() => {
+    await act(async () => {
       container.dispatchEvent(event);
+      await settle();
     });
     return event;
   }
@@ -232,10 +254,11 @@ describe("useTerminalFileTransfer hook", () => {
     return event;
   }
 
-  function dropInternalPaths(paths: string[]): Event {
+  async function dropInternalPaths(paths: string[]): Promise<Event> {
     const event = makeInternalDropEvent(encodeFileDragPaths(paths));
-    act(() => {
+    await act(async () => {
       container.dispatchEvent(event);
+      await settle();
     });
     return event;
   }
@@ -244,8 +267,7 @@ describe("useTerminalFileTransfer hook", () => {
     const event = makePasteEvent(true);
     await act(async () => {
       container.dispatchEvent(event);
-      await Promise.resolve();
-      await Promise.resolve();
+      await settle();
     });
     return event;
   }
@@ -356,8 +378,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     await act(async () => {
       releaseSave({ filePath: "/tmp/late.png", thumbnailDataUrl: "" });
-      await Promise.resolve();
-      await Promise.resolve();
+      await settle();
     });
 
     expect(terminalClient.write).not.toHaveBeenCalled();
@@ -384,8 +405,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     await act(async () => {
       releaseSave({ filePath: "/tmp/shot.png", thumbnailDataUrl: "" });
-      await Promise.resolve();
-      await Promise.resolve();
+      await settle();
     });
 
     expect(lastWrittenPayload()).toBe(`${formatAtFileToken("/tmp/shot.png")} `);
@@ -409,8 +429,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     await act(async () => {
       releaseSave({ filePath: "/tmp/late.png", thumbnailDataUrl: "" });
-      await Promise.resolve();
-      await Promise.resolve();
+      await settle();
     });
 
     expect(terminalClient.write).not.toHaveBeenCalled();
@@ -419,10 +438,10 @@ describe("useTerminalFileTransfer hook", () => {
 
   // --- File drop tests ---
 
-  it("file drop resolves paths and writes them to terminal", () => {
+  it("file drop resolves paths and writes them to terminal", async () => {
     renderFileTransferHook();
 
-    const event = dropFiles([
+    const event = await dropFiles([
       fileAt("document.pdf", "/Users/test/document.pdf"),
       fileAt("script.sh", "/Users/test/script.sh"),
     ]);
@@ -435,9 +454,9 @@ describe("useTerminalFileTransfer hook", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("file drop escapes paths with spaces", () => {
+  it("file drop escapes paths with spaces", async () => {
     renderFileTransferHook();
-    dropFiles([fileAt("my file.pdf", "/Users/test/my file.pdf")]);
+    await dropFiles([fileAt("my file.pdf", "/Users/test/my file.pdf")]);
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
@@ -445,9 +464,9 @@ describe("useTerminalFileTransfer hook", () => {
     );
   });
 
-  it("file drop with unresolved path skips that file", () => {
+  it("file drop with unresolved path skips that file", async () => {
     renderFileTransferHook();
-    dropFiles([fileAt("resolved.pdf", "/Users/test/resolved.pdf"), fileAt("unresolved.pdf")]);
+    await dropFiles([fileAt("resolved.pdf", "/Users/test/resolved.pdf"), fileAt("unresolved.pdf")]);
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
@@ -455,24 +474,24 @@ describe("useTerminalFileTransfer hook", () => {
     );
   });
 
-  it("file drop with all unresolved paths does not write to terminal", () => {
+  it("file drop with all unresolved paths does not write to terminal", async () => {
     renderFileTransferHook();
-    dropFiles([fileAt("unresolved.pdf")]);
+    await dropFiles([fileAt("unresolved.pdf")]);
 
     expect(terminalClient.write).not.toHaveBeenCalled();
   });
 
-  it("file drop is blocked when isInputLocked is true", () => {
+  it("file drop is blocked when isInputLocked is true", async () => {
     renderFileTransferHook({ isInputLocked: true });
-    dropFiles([fileAt("file.pdf", "/Users/test/file.pdf")]);
+    await dropFiles([fileAt("file.pdf", "/Users/test/file.pdf")]);
 
     expect(terminalClient.write).not.toHaveBeenCalled();
   });
 
-  it("file drop calls onInput with the joined paths", () => {
+  it("file drop calls onInput with the joined paths", async () => {
     const onInput = vi.fn();
     renderFileTransferHook({ onInput });
-    dropFiles([fileAt("file.ts", "/Users/test/file.ts")]);
+    await dropFiles([fileAt("file.ts", "/Users/test/file.ts")]);
 
     expect(onInput).toHaveBeenCalledWith(`${escapeShellArgOptional("/Users/test/file.ts")} `);
   });
@@ -488,24 +507,27 @@ describe("useTerminalFileTransfer hook", () => {
     ],
   ];
 
-  it.each(AGENT_IDENTITIES)("formats dropped paths as @ tokens for %s", (_label, identity) => {
-    renderFileTransferHook(identity);
-    dropFiles([fileAt("App.tsx", "/Users/test/src/App.tsx")]);
+  it.each(AGENT_IDENTITIES)(
+    "formats dropped paths as @ tokens for %s",
+    async (_label, identity) => {
+      renderFileTransferHook(identity);
+      await dropFiles([fileAt("App.tsx", "/Users/test/src/App.tsx")]);
 
-    expect(terminalClient.write).toHaveBeenCalledWith(
-      "term-1",
-      `${formatAtFileToken("/Users/test/src/App.tsx")} `
-    );
-  });
+      expect(terminalClient.write).toHaveBeenCalledWith(
+        "term-1",
+        `${formatAtFileToken("/Users/test/src/App.tsx")} `
+      );
+    }
+  );
 
   const SHELL_IDENTITIES: Array<[string, HookProps]> = [
     ["a plain shell", {}],
     ["a launched agent that has since exited", { launchAgentId: "claude", agentState: "exited" }],
   ];
 
-  it.each(SHELL_IDENTITIES)("shell-escapes dropped paths for %s", (_label, identity) => {
+  it.each(SHELL_IDENTITIES)("shell-escapes dropped paths for %s", async (_label, identity) => {
     renderFileTransferHook(identity);
-    dropFiles([fileAt("App.tsx", "/Users/test/src/App.tsx")]);
+    await dropFiles([fileAt("App.tsx", "/Users/test/src/App.tsx")]);
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
@@ -513,9 +535,9 @@ describe("useTerminalFileTransfer hook", () => {
     );
   });
 
-  it("quotes @ tokens for paths containing whitespace", () => {
+  it("quotes @ tokens for paths containing whitespace", async () => {
     renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-    dropFiles([fileAt("my notes.md", `${CWD}/my notes.md`)]);
+    await dropFiles([fileAt("my notes.md", `${CWD}/my notes.md`)]);
 
     // Pinned to the literal wire format an agent CLI has to parse, rather than
     // re-deriving it from the same formatter the hook calls — an unquoted space
@@ -523,9 +545,9 @@ describe("useTerminalFileTransfer hook", () => {
     expect(lastWrittenPayload()).toBe('@"my notes.md" ');
   });
 
-  it("writes the plain @ wire format for a path needing no quoting", () => {
+  it("writes the plain @ wire format for a path needing no quoting", async () => {
     renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-    dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+    await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
     expect(lastWrittenPayload()).toBe("@src/App.tsx ");
   });
@@ -571,7 +593,7 @@ describe("useTerminalFileTransfer hook", () => {
   it("spells a dropped file exactly as the hybrid input bar does", async () => {
     const absolute = `${CWD}/src/App.tsx`;
     renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-    dropFiles([fileAt("App.tsx", absolute)]);
+    await dropFiles([fileAt("App.tsx", absolute)]);
 
     const terminalToken = lastWrittenPayload().trimEnd();
     expect(terminalToken).toBe(await hybridInputBarToken("App.tsx", absolute, CWD));
@@ -582,7 +604,7 @@ describe("useTerminalFileTransfer hook", () => {
   it("spells a whitespace-bearing path exactly as the hybrid input bar does", async () => {
     const absolute = `${CWD}/src/my notes.md`;
     renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-    dropFiles([fileAt("my notes.md", absolute)]);
+    await dropFiles([fileAt("my notes.md", absolute)]);
 
     expect(lastWrittenPayload().trimEnd()).toBe(
       await hybridInputBarToken("my notes.md", absolute, CWD)
@@ -592,7 +614,7 @@ describe("useTerminalFileTransfer hook", () => {
   it("keeps a file dropped from outside the worktree absolute, like the input bar", async () => {
     const outside = "/etc/hosts.ts";
     renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-    dropFiles([fileAt("hosts.ts", outside)]);
+    await dropFiles([fileAt("hosts.ts", outside)]);
 
     const terminalToken = lastWrittenPayload().trimEnd();
     expect(terminalToken).toBe(await hybridInputBarToken("hosts.ts", outside, CWD));
@@ -611,17 +633,17 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     rerender({ detectedAgentId: "claude", cwdProvider: () => CWD });
-    dropFiles([fileAt("App.tsx", absolute)]);
+    await dropFiles([fileAt("App.tsx", absolute)]);
 
     expect(lastWrittenPayload().trimEnd()).toBe(
       await hybridInputBarToken("App.tsx", absolute, CWD)
     );
   });
 
-  it("leaves the shell form absolute even for a file inside the cwd", () => {
+  it("leaves the shell form absolute even for a file inside the cwd", async () => {
     const absolute = `${CWD}/src/App.tsx`;
     renderFileTransferHook({ cwdProvider: () => CWD });
-    dropFiles([fileAt("App.tsx", absolute)]);
+    await dropFiles([fileAt("App.tsx", absolute)]);
 
     // A shell resolves a relative path against its own cwd, which the pane only
     // observes — it has no way to know the two still agree.
@@ -640,17 +662,17 @@ describe("useTerminalFileTransfer hook", () => {
     expect(lastWrittenPayload()).toBe("@.daintree/clipboard/shot.png ");
   });
 
-  it("switches format when the detected agent changes, without re-registering listeners", () => {
+  it("switches format when the detected agent changes, without re-registering listeners", async () => {
     const addSpy = vi.spyOn(container, "addEventListener");
     const { rerender } = renderFileTransferHook({});
     const registrationsAfterMount = addSpy.mock.calls.length;
 
-    dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+    await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
     expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/Users/test/a.ts")} `);
 
     rerender({ detectedAgentId: "claude" });
 
-    dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+    await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
     expect(lastWrittenPayload()).toBe(`${formatAtFileToken("/Users/test/a.ts")} `);
 
     expect(addSpy.mock.calls.length).toBe(registrationsAfterMount);
@@ -659,11 +681,11 @@ describe("useTerminalFileTransfer hook", () => {
 
   // --- Bracketed paste decides the delivery (#11574) ---
 
-  it("wraps the whole batch once when the program has bracketed paste on", () => {
+  it("wraps the whole batch once when the program has bracketed paste on", async () => {
     instanceState.bracketedPasteMode = true;
     renderFileTransferHook({ detectedAgentId: "claude" });
 
-    dropFiles([
+    await dropFiles([
       fileAt("a.ts", "/Users/test/a.ts"),
       fileAt("b.ts", "/Users/test/b.ts"),
       fileAt("c.ts", "/Users/test/c.ts"),
@@ -678,10 +700,10 @@ describe("useTerminalFileTransfer hook", () => {
     expect(payload.split(BRACKETED_PASTE_END).length - 1).toBe(1);
   });
 
-  it("does not wrap when the program has bracketed paste off", () => {
+  it("does not wrap when the program has bracketed paste off", async () => {
     instanceState.bracketedPasteMode = false;
     renderFileTransferHook({ detectedAgentId: "claude" });
-    dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+    await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
     const payload = lastWrittenPayload();
     expect(payload).toBe(`${formatAtFileToken("/Users/test/a.ts")} `);
@@ -690,20 +712,20 @@ describe("useTerminalFileTransfer hook", () => {
 
   // The renderer instance is created asynchronously, so a live PTY can exist
   // while `get()` still returns null. "Unknown" must not be read as "on".
-  it("falls back to wrapping for an agent when no managed instance exists", () => {
+  it("falls back to wrapping for an agent when no managed instance exists", async () => {
     instanceState.hasManagedInstance = false;
     renderFileTransferHook({ detectedAgentId: "claude" });
-    dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+    await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
     expect(lastWrittenPayload()).toBe(
       formatWithBracketedPaste(`${formatAtFileToken("/Users/test/a.ts")} `)
     );
   });
 
-  it("falls back to raw text for a shell when no managed instance exists", () => {
+  it("falls back to raw text for a shell when no managed instance exists", async () => {
     instanceState.hasManagedInstance = false;
     renderFileTransferHook();
-    dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+    await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
     const payload = lastWrittenPayload();
     expect(payload).toBe(`${escapeShellArgOptional("/Users/test/a.ts")} `);
@@ -715,31 +737,31 @@ describe("useTerminalFileTransfer hook", () => {
     ["carriage return", "\r"],
     ["newline", "\n"],
     ["escape", String.fromCharCode(27)],
-  ])("skips a path containing a %s rather than risk submitting it", (_label, char) => {
+  ])("skips a path containing a %s rather than risk submitting it", async (_label, char) => {
     // Bracketed paste off is the dangerous case: the program reads CR as Enter.
     instanceState.bracketedPasteMode = false;
     renderFileTransferHook({ detectedAgentId: "claude" });
 
-    dropFiles([fileAt("bad", `/tmp/we${char}ird.ts`), fileAt("good", "/tmp/fine.ts")]);
+    await dropFiles([fileAt("bad", `/tmp/we${char}ird.ts`), fileAt("good", "/tmp/fine.ts")]);
 
     // The safe sibling still lands; the unsafe path is dropped like an
     // unresolved one, and nothing that could submit reaches the PTY.
     expect(lastWrittenPayload()).toBe(`${formatAtFileToken("/tmp/fine.ts")} `);
   });
 
-  it("writes nothing when every dropped path carries a control character", () => {
+  it("writes nothing when every dropped path carries a control character", async () => {
     renderFileTransferHook({ detectedAgentId: "claude" });
-    dropFiles([fileAt("bad", "/tmp/we\rird.ts")]);
+    await dropFiles([fileAt("bad", "/tmp/we\rird.ts")]);
 
     expect(terminalClient.write).not.toHaveBeenCalled();
   });
 
-  it("hands onInput the logical text, never the bracket markers", () => {
+  it("hands onInput the logical text, never the bracket markers", async () => {
     instanceState.bracketedPasteMode = true;
     const onInput = vi.fn<(data: string) => void>();
     renderFileTransferHook({ onInput, detectedAgentId: "claude" });
 
-    dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+    await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
     const forwarded = onInput.mock.calls[0]![0];
     expect(forwarded).toBe(`${formatAtFileToken("/Users/test/a.ts")} `);
@@ -747,20 +769,20 @@ describe("useTerminalFileTransfer hook", () => {
     expect(forwarded).not.toContain(BRACKETED_PASTE_END);
   });
 
-  it("never submits the insertion", () => {
+  it("never submits the insertion", async () => {
     instanceState.bracketedPasteMode = true;
     renderFileTransferHook({ detectedAgentId: "claude" });
-    dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+    await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
     const payload = lastWrittenPayload();
     expect(payload).not.toContain("\r");
     expect(payload).not.toContain("\n");
   });
 
-  it("writes a mixed image/non-image drop as one ordered batch", () => {
+  it("writes a mixed image/non-image drop as one ordered batch", async () => {
     renderFileTransferHook({ detectedAgentId: "claude" });
 
-    dropFiles([
+    await dropFiles([
       fileAt("notes.md", "/Users/test/notes.md"),
       fileAt("shot.png", "/Users/test/shot.png"),
       fileAt("missing.txt"),
@@ -795,7 +817,7 @@ describe("useTerminalFileTransfer hook", () => {
       async (agentId) => {
         renderFileTransferHook({ detectedAgentId: agentId });
 
-        dropFiles([
+        await dropFiles([
           fileAt("notes.md", "/Users/test/notes.md"),
           fileAt("Screen Shot.png", "/Users/test/Screen Shot.png"),
           fileAt("b.jpg", "/Users/test/b.jpg"),
@@ -817,7 +839,7 @@ describe("useTerminalFileTransfer hook", () => {
     it("spaces the pastes rather than writing them in one tick", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
 
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -846,7 +868,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("keeps the @ token for an agent without a verified image protocol", async () => {
       renderFileTransferHook({ detectedAgentId: "gemini" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -859,9 +881,9 @@ describe("useTerminalFileTransfer hook", () => {
     it("keeps the @ token when bracketed-paste mode is off or unknown", async () => {
       instanceState.bracketedPasteMode = false;
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
       instanceState.hasManagedInstance = false;
-      dropFiles([fileAt("b.png", "/Users/test/b.png")]);
+      await dropFiles([fileAt("b.png", "/Users/test/b.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -874,7 +896,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("keeps a remote-share image as a text reference", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "//server/share/a.png")]);
+      await dropFiles([fileAt("a.png", "//server/share/a.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -886,8 +908,8 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("queues a second drop behind images still being paced", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
-      dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -901,8 +923,8 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("waits a gap before a queued image drop's first paste", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
-      dropFiles([fileAt("b.png", "/Users/test/b.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("b.png", "/Users/test/b.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(200);
       });
@@ -920,13 +942,13 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("keeps three queued drops in order across a plain-file drop", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
-      dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(250);
       });
       // a.png has finished pacing; b.ts is still waiting its gap.
-      dropFiles([fileAt("c.png", "/Users/test/c.png")]);
+      await dropFiles([fileAt("c.png", "/Users/test/c.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2000);
       });
@@ -942,7 +964,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("drops the rest of a paced drop once input locks, even if it unlocks again", async () => {
       const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -957,7 +979,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("stops pacing once the pane unmounts", async () => {
       const { unmount } = renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -1034,13 +1056,13 @@ describe("useTerminalFileTransfer hook", () => {
     expect(result.current).toBe(false);
   });
 
-  it("clears drag-over state on drop even when nothing resolved", () => {
+  it("clears drag-over state on drop even when nothing resolved", async () => {
     const { result } = renderFileTransferHook();
 
     dispatchDrag("dragenter");
     expect(result.current).toBe(true);
 
-    dropFiles([fileAt("unresolved.pdf")]);
+    await dropFiles([fileAt("unresolved.pdf")]);
 
     expect(result.current).toBe(false);
     expect(terminalClient.write).not.toHaveBeenCalled();
@@ -1099,42 +1121,42 @@ describe("useTerminalFileTransfer hook", () => {
   // independently, so the matrix below is the point of this block.
 
   describe("in-app file drag", () => {
-    it("writes the agent's @token for a dragged file", () => {
+    it("writes the agent's @token for a dragged file", async () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
     });
 
     // The invariant the whole feature is measured against: a dragged row and
     // an OS drop of the same file cannot disagree about what reaches the PTY.
-    it("writes exactly what an OS drop of the same file writes", () => {
+    it("writes exactly what an OS drop of the same file writes", async () => {
       const absolute = `${CWD}/src/App.tsx`;
       const { unmount } = renderFileTransferHook({
         detectedAgentId: "claude",
         cwdProvider: () => CWD,
       });
-      dropFiles([fileAt("App.tsx", absolute)]);
+      await dropFiles([fileAt("App.tsx", absolute)]);
       const fromOs = lastWrittenPayload();
       unmount();
 
       vi.mocked(terminalClient.write).mockClear();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([absolute]);
+      await dropInternalPaths([absolute]);
 
       expect(lastWrittenPayload()).toBe(fromOs);
     });
 
     // Content follows identity, not provenance: a shell cannot consume an
     // `@token`, and a relative path only resolves if its cwd still matches.
-    it("keeps a shell's absolute escaped path", () => {
+    it("keeps a shell's absolute escaped path", async () => {
       renderFileTransferHook({ cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/my notes.md`]);
+      await dropInternalPaths([`${CWD}/src/my notes.md`]);
 
       expect(lastWrittenPayload().trimEnd()).toBe(escapeShellArgOptional(`${CWD}/src/my notes.md`));
     });
 
-    it("relativizes against the cwd read at drop time", () => {
+    it("relativizes against the cwd read at drop time", async () => {
       const { rerender } = renderFileTransferHook({
         detectedAgentId: "claude",
         cwdProvider: () => "/somewhere/else",
@@ -1142,24 +1164,24 @@ describe("useTerminalFileTransfer hook", () => {
       act(() => {
         rerender({ detectedAgentId: "claude", cwdProvider: () => CWD });
       });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
     });
 
     // Delivery is the other axis and answers to the live xterm mode alone.
-    it("wraps in bracketed paste when the foreground program asked for it", () => {
+    it("wraps in bracketed paste when the foreground program asked for it", async () => {
       instanceState.bracketedPasteMode = true;
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(lastWrittenPayload()).toBe(formatWithBracketedPaste("@src/App.tsx "));
     });
 
-    it("leaves the write unwrapped when it did not", () => {
+    it("leaves the write unwrapped when it did not", async () => {
       instanceState.bracketedPasteMode = false;
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(lastWrittenPayload()).toBe("@src/App.tsx ");
     });
@@ -1167,11 +1189,11 @@ describe("useTerminalFileTransfer hook", () => {
     // The mode is read at drop time, not captured when the listeners were
     // registered: a program that enables bracketed paste after the pane
     // mounted must still get a wrapped batch.
-    it("reads the bracketed-paste mode live, not at mount", () => {
+    it("reads the bracketed-paste mode live, not at mount", async () => {
       instanceState.bracketedPasteMode = false;
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       instanceState.bracketedPasteMode = true;
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(lastWrittenPayload()).toBe(formatWithBracketedPaste("@src/App.tsx "));
     });
@@ -1179,10 +1201,10 @@ describe("useTerminalFileTransfer hook", () => {
     // Content and delivery are independent. A shell in bracketed-paste mode —
     // readline enables it — must get a wrapped ABSOLUTE path, so an
     // implementation that folded the two axes into one flag fails here.
-    it("wraps a shell's absolute path when the shell asked for bracketed paste", () => {
+    it("wraps a shell's absolute path when the shell asked for bracketed paste", async () => {
       instanceState.bracketedPasteMode = true;
       renderFileTransferHook({ cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(lastWrittenPayload()).toBe(
         formatWithBracketedPaste(`${escapeShellArgOptional(`${CWD}/src/App.tsx`)} `)
@@ -1192,13 +1214,13 @@ describe("useTerminalFileTransfer hook", () => {
     // With no managed instance the mode is unknown, so identity decides: an
     // agent must never be fed raw `@` keystrokes, a shell must never see the
     // delimiters as literal input.
-    it("falls back to identity when no managed instance answers", () => {
+    it("falls back to identity when no managed instance answers", async () => {
       instanceState.hasManagedInstance = false;
       const { rerender } = renderFileTransferHook({
         detectedAgentId: "claude",
         cwdProvider: () => CWD,
       });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
       expect(lastWrittenPayload()).toBe(formatWithBracketedPaste("@src/App.tsx "));
 
       // Drops the agent identity on the same hook rather than rendering a
@@ -1206,31 +1228,31 @@ describe("useTerminalFileTransfer hook", () => {
       // drop below, and reading only the last payload would hide it.
       vi.mocked(terminalClient.write).mockClear();
       rerender({ cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
       expect(vi.mocked(terminalClient.write)).toHaveBeenCalledTimes(1);
       expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional(`${CWD}/src/App.tsx`)} `);
     });
 
-    it("references a dragged folder", () => {
+    it("references a dragged folder", async () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/components`]);
+      await dropInternalPaths([`${CWD}/src/components`]);
 
       expect(lastWrittenPayload().trimEnd()).toBe("@src/components");
     });
 
-    it("writes several dragged paths as one insertion", () => {
+    it("writes several dragged paths as one insertion", async () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/a.ts`, `${CWD}/b.ts`]);
+      await dropInternalPaths([`${CWD}/a.ts`, `${CWD}/b.ts`]);
 
       expect(vi.mocked(terminalClient.write)).toHaveBeenCalledTimes(1);
       expect(lastWrittenPayload().trimEnd()).toBe("@a.ts @b.ts");
     });
 
-    it("reports the unwrapped text to input tracking", () => {
+    it("reports the unwrapped text to input tracking", async () => {
       instanceState.bracketedPasteMode = true;
       const onInput = vi.fn();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onInput });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(onInput).toHaveBeenCalledWith("@src/App.tsx ");
     });
@@ -1240,47 +1262,48 @@ describe("useTerminalFileTransfer hook", () => {
     // writable by anything that can start a drag, so a control character is
     // evidence the payload is not ours and the whole batch is refused — the
     // terminal never gets the chance to write the "good" half of a forgery.
-    it("writes nothing when any path carries a terminal control character", () => {
+    it("writes nothing when any path carries a terminal control character", async () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/we${String.fromCharCode(10)}ird.ts`, `${CWD}/fine.ts`]);
+      await dropInternalPaths([`${CWD}/we${String.fromCharCode(10)}ird.ts`, `${CWD}/fine.ts`]);
 
       expect(terminalClient.write).not.toHaveBeenCalled();
     });
 
     // ETX is the one that matters most: the line discipline raises SIGINT
     // before any shell parses the argument, so shell-escaping cannot defuse it.
-    it("writes nothing for a path carrying ETX", () => {
+    it("writes nothing for a path carrying ETX", async () => {
       renderFileTransferHook({ cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/a${String.fromCharCode(3)}b.ts`]);
+      await dropInternalPaths([`${CWD}/a${String.fromCharCode(3)}b.ts`]);
 
       expect(terminalClient.write).not.toHaveBeenCalled();
     });
 
-    it("writes nothing while input is locked", () => {
+    it("writes nothing while input is locked", async () => {
       renderFileTransferHook({ isInputLocked: true, detectedAgentId: "claude" });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(terminalClient.write).not.toHaveBeenCalled();
     });
 
-    it("writes nothing for a malformed payload", () => {
+    it("writes nothing for a malformed payload", async () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      act(() => {
+      await act(async () => {
         container.dispatchEvent(makeInternalDropEvent("not json"));
+        await settle();
       });
 
       expect(terminalClient.write).not.toHaveBeenCalled();
     });
 
-    it("never asks the OS to resolve a path it was handed", () => {
+    it("never asks the OS to resolve a path it was handed", async () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
-      expect(window.electron.webUtils.getPathForFile).not.toHaveBeenCalled();
+      expect(window.electron.files.getDroppedFilePaths).not.toHaveBeenCalled();
     });
 
     // Draining both sources would write every reference twice.
-    it("prefers the in-app payload when files ride along too", () => {
+    it("prefers the in-app payload when files ride along too", async () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       const event = new Event("drop", { bubbles: true, cancelable: true });
       Object.defineProperty(event, "dataTransfer", {
@@ -1291,8 +1314,9 @@ describe("useTerminalFileTransfer hook", () => {
           getData: () => encodeFileDragPaths([`${CWD}/src/App.tsx`]),
         },
       });
-      act(() => {
+      await act(async () => {
         container.dispatchEvent(event);
+        await settle();
       });
 
       expect(vi.mocked(terminalClient.write)).toHaveBeenCalledTimes(1);
@@ -1337,6 +1361,355 @@ describe("useTerminalFileTransfer hook", () => {
     });
   });
 
+  // --- Every path goes through materialize before it is written ---
+  describe("materialize seam", () => {
+    /** Records each source and holds every call until the test releases it. */
+    function holdMaterialize(hostPathFor: (source: MaterializeSource) => string = pathOf) {
+      const seen: MaterializeSource[] = [];
+      const waiting: Array<() => void> = [];
+      setRemoteMaterializer(
+        (source) =>
+          new Promise<MaterializeResult>((resolve) => {
+            seen.push(source);
+            waiting.push(() =>
+              resolve({ hostPath: hostPathFor(source), displayName: "x", bytes: null })
+            );
+          })
+      );
+      const release = async () => {
+        await act(async () => {
+          for (const resolve of waiting.splice(0)) resolve();
+          await settle();
+        });
+      };
+      return { seen, release };
+    }
+
+    function pathOf(source: MaterializeSource): string {
+      return "path" in source ? source.path : "/tmp/daintree-clipboard/clip.png";
+    }
+
+    it("hands an OS drop over as local files", async () => {
+      const { seen, release } = holdMaterialize();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+      await release();
+
+      expect(seen).toEqual([{ kind: "local-file", path: `${CWD}/src/App.tsx` }]);
+      expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
+    });
+
+    it("hands a file-browser drag over as host files", async () => {
+      const { seen, release } = holdMaterialize();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await release();
+
+      expect(seen).toEqual([{ kind: "host-file", path: `${CWD}/src/App.tsx`, hostId: "local" }]);
+    });
+
+    it("writes the path materialize returns, not the one that was dropped", async () => {
+      const { release } = holdMaterialize(() => "/host/inbox/files/App.tsx");
+      renderFileTransferHook({});
+      await dropFiles([fileAt("App.tsx", "/Users/me/App.tsx")]);
+      await release();
+
+      expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/host/inbox/files/App.tsx")} `);
+    });
+
+    it("pastes an image through materialize rather than saving it directly", async () => {
+      const { seen, release } = holdMaterialize();
+      renderFileTransferHook({});
+      await pasteImage();
+      await release();
+
+      expect(seen).toEqual([{ kind: "clipboard-image" }]);
+      expect(window.electron.clipboard.saveImage).not.toHaveBeenCalled();
+      expect(lastWrittenPayload()).toBe(
+        `${escapeShellArgOptional("/tmp/daintree-clipboard/clip.png")} `
+      );
+    });
+
+    it("skips a file that fails to materialize and writes the rest", async () => {
+      setRemoteMaterializer(async (source) => {
+        if ("path" in source && source.path.endsWith("bad.ts")) throw new Error("refused");
+        return { hostPath: pathOf(source), displayName: "x", bytes: null };
+      });
+      renderFileTransferHook({});
+      await dropFiles([fileAt("bad.ts", "/Users/me/bad.ts"), fileAt("ok.ts", "/Users/me/ok.ts")]);
+
+      expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/Users/me/ok.ts")} `);
+    });
+
+    it("writes nothing when the input locks while the drop resolves", async () => {
+      const { release } = holdMaterialize();
+      const { rerender } = renderFileTransferHook({ isInputLocked: false });
+      await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+
+      rerender({ isInputLocked: true });
+      await release();
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when the input locks and unlocks again while the drop resolves", async () => {
+      const { release } = holdMaterialize();
+      const { rerender } = renderFileTransferHook({ isInputLocked: false });
+      await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+
+      rerender({ isInputLocked: true });
+      rerender({ isInputLocked: false });
+      await release();
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when the pane unmounts while the drop resolves", async () => {
+      const { release } = holdMaterialize();
+      const onDropSelect = vi.fn();
+      const { unmount } = renderFileTransferHook({ onDropSelect });
+      await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+
+      unmount();
+      await release();
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(onDropSelect).not.toHaveBeenCalled();
+    });
+
+    /** Holds each source until the test resolves that path by name. */
+    function holdEachMaterialize() {
+      const waiting = new Map<string, () => void>();
+      setRemoteMaterializer(
+        (source) =>
+          new Promise<MaterializeResult>((resolve) => {
+            const path = pathOf(source);
+            waiting.set(path, () => resolve({ hostPath: path, displayName: "x", bytes: null }));
+          })
+      );
+      return async (path: string) => {
+        await act(async () => {
+          waiting.get(path)!();
+          await settle();
+        });
+      };
+    }
+
+    it("writes drops in the order they were made, not the order they resolve", async () => {
+      const resolvePath = holdEachMaterialize();
+      renderFileTransferHook();
+      await dropFiles([fileAt("big.bin", "/Users/test/big.bin")]);
+      await dropFiles([fileAt("small.txt", "/Users/test/small.txt")]);
+
+      await resolvePath("/Users/test/small.txt");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+
+      await resolvePath("/Users/test/big.bin");
+      expect(vi.mocked(terminalClient.write).mock.calls.map(([, data]) => data)).toEqual([
+        `${escapeShellArgOptional("/Users/test/big.bin")} `,
+        `${escapeShellArgOptional("/Users/test/small.txt")} `,
+      ]);
+    });
+
+    it("does not wait on an earlier drop the guards discarded", async () => {
+      const resolvePath = holdEachMaterialize();
+      const { rerender } = renderFileTransferHook({ isInputLocked: false });
+      await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+      rerender({ isInputLocked: true });
+      await resolvePath("/Users/test/a.ts");
+
+      rerender({ isInputLocked: false });
+      await dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await resolvePath("/Users/test/b.ts");
+
+      expect(vi.mocked(terminalClient.write).mock.calls.map(([, data]) => data)).toEqual([
+        `${escapeShellArgOptional("/Users/test/b.ts")} `,
+      ]);
+    });
+
+    it("drops a queued drop when a lock comes and goes while it waits its turn", async () => {
+      const resolvePath = holdEachMaterialize();
+      const { rerender } = renderFileTransferHook({ isInputLocked: false });
+      await dropFiles([fileAt("big.bin", "/Users/test/big.bin")]);
+      await dropFiles([fileAt("small.txt", "/Users/test/small.txt")]);
+      await resolvePath("/Users/test/small.txt");
+
+      rerender({ isInputLocked: true });
+      rerender({ isInputLocked: false });
+      await resolvePath("/Users/test/big.bin");
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("leaves focus where the user moved it while the drop resolved", async () => {
+      const { release } = holdMaterialize();
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ onDropSelect });
+      const elsewhere = document.createElement("input");
+      document.body.appendChild(elsewhere);
+      try {
+        await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+        elsewhere.focus();
+        await release();
+
+        // The paths still land where they were dropped; only the keyboard stays.
+        expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/Users/test/a.ts")} `);
+        expect(onDropSelect).not.toHaveBeenCalled();
+        expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+        expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+      } finally {
+        elsewhere.remove();
+      }
+    });
+
+    it("formats for the program running when the drop lands, not when it started", async () => {
+      const { release } = holdMaterialize();
+      const { rerender } = renderFileTransferHook({ cwdProvider: () => CWD });
+      await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+      rerender({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await release();
+
+      expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
+    });
+  });
+
+  describe("in a window attached to a remote host", () => {
+    beforeEach(() => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    });
+
+    afterEach(() => {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetComposerDropTargetsForTests();
+      _resetPendingUploadsForTests();
+      _resetCtrlVImagePasteForTests();
+    });
+
+    function holdUploads(hostPathFor: (source: MaterializeSource) => string) {
+      const waiting: Array<() => void> = [];
+      const failing: Array<() => void> = [];
+      setRemoteMaterializer(
+        (source) =>
+          new Promise<MaterializeResult>((resolve, reject) => {
+            waiting.push(() =>
+              resolve({ hostPath: hostPathFor(source), displayName: "x", bytes: null })
+            );
+            failing.push(() => reject(new Error("Not connected to studio-01.")));
+          })
+      );
+      const finish = async (ok = true) => {
+        await act(async () => {
+          for (const settleOne of (ok ? waiting : failing).splice(0)) settleOne();
+          await settle();
+        });
+      };
+      return finish;
+    }
+
+    it("routes a drop on an agent terminal into the pane's composer", async () => {
+      const materializer = vi.fn();
+      setRemoteMaterializer(materializer);
+      const composer = vi.fn();
+      registerComposerDropTarget("term-1", composer);
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", onDropSelect });
+      await dropFiles([fileAt("a.png", "/Users/me/a.png")]);
+
+      expect(composer).toHaveBeenCalledWith([
+        { kind: "local", path: "/Users/me/a.png", name: "a.png", size: 0 },
+      ]);
+      expect(onDropSelect).toHaveBeenCalled();
+      expect(materializer).not.toHaveBeenCalled();
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("writes a plain shell's path only once its upload completes, tracked meanwhile", async () => {
+      const finish = holdUploads(() => "/tmp/daintree-inbox/files/x/a.txt");
+      registerComposerDropTarget("term-1", vi.fn());
+      renderFileTransferHook({});
+      await dropFiles([fileAt("a.txt", "/Users/me/a.txt")]);
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(true);
+      await finish();
+
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+      expect(lastWrittenPayload()).toBe(
+        `${escapeShellArgOptional("/tmp/daintree-inbox/files/x/a.txt")} `
+      );
+    });
+
+    it("inserts nothing when the upload fails", async () => {
+      const finish = holdUploads(() => "/unused");
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropFiles([fileAt("a.txt", "/Users/me/a.txt")]);
+      await finish(false);
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+    });
+
+    it("formats against the cwd the terminal is in once the upload lands", async () => {
+      const finish = holdUploads(() => "/srv/proj/docs/a.md");
+      let cwd = "/srv/elsewhere";
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => cwd });
+      await dropFiles([fileAt("a.md", "/Users/me/a.md")]);
+      cwd = "/srv/proj";
+      await finish();
+
+      expect(lastWrittenPayload().trimEnd()).toContain("@docs/a.md");
+    });
+
+    it("keeps the host a tree drag names", async () => {
+      const seen: MaterializeSource[] = [];
+      setRemoteMaterializer(async (source) => {
+        seen.push(source);
+        throw new Error("That file is on studio-02; this window is studio-01.");
+      });
+      renderFileTransferHook({});
+      const event = makeInternalDropEvent(encodeFileDragPaths(["/srv/a.ts"], "studio-02"));
+      await act(async () => {
+        container.dispatchEvent(event);
+        await settle();
+      });
+
+      expect(seen).toEqual([{ kind: "host-file", path: "/srv/a.ts", hostId: "studio-02" }]);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("offers Ctrl+V a clipboard-image paster that reports an empty clipboard", async () => {
+      setRemoteMaterializer(async () => {
+        throw Object.assign(new Error("No image in clipboard"), { code: "CLIPBOARD_EMPTY" });
+      });
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      const paster = getClipboardImagePaster("term-1");
+      expect(paster).not.toBeNull();
+      await expect(paster!()).resolves.toBe("empty");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("pastes the uploaded clipboard image path on Ctrl+V", async () => {
+      setRemoteMaterializer(async () => ({
+        hostPath: "/tmp/daintree-inbox/clipboard/clipboard-1.png",
+        displayName: "clipboard-1.png",
+        bytes: null,
+      }));
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await act(async () => {
+        await expect(getClipboardImagePaster("term-1")!()).resolves.toBe("inserted");
+      });
+      expect(lastWrittenPayload()).toContain("/tmp/daintree-inbox/clipboard/clipboard-1.png");
+    });
+  });
+
+  it("registers no Ctrl+V image paster in a window on this machine", () => {
+    renderFileTransferHook({ detectedAgentId: "claude" });
+    expect(getClipboardImagePaster("term-1")).toBeNull();
+  });
+
   // --- Cleanup test ---
 
   it("removes event listeners on unmount", () => {
@@ -1353,7 +1726,7 @@ describe("useTerminalFileTransfer hook", () => {
 
   // The paste case above cannot see the four drag listeners, so dropping every
   // drag cleanup would still pass it.
-  it("removes the drag listeners on unmount", () => {
+  it("removes the drag listeners on unmount", async () => {
     const { unmount } = renderFileTransferHook({ detectedAgentId: "claude" });
     unmount();
 
@@ -1361,6 +1734,7 @@ describe("useTerminalFileTransfer hook", () => {
     dataTransfer.dropEffect = "copy";
     container.dispatchEvent(over);
     container.dispatchEvent(makeInternalDropEvent(encodeFileDragPaths([`${CWD}/src/App.tsx`])));
+    await settle();
 
     expect(over.defaultPrevented).toBe(false);
     expect(dataTransfer.dropEffect).toBe("copy");
@@ -1369,10 +1743,10 @@ describe("useTerminalFileTransfer hook", () => {
 
   // --- The drop leaves the pane selected and ready to type into (#11809) ---
   describe("selection", () => {
-    it("records the surface, selects the pane, then focuses the xterm", () => {
+    it("records the surface, selects the pane, then focuses the xterm", async () => {
       const onDropSelect = vi.fn();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
-      dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+      await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
       // The order is load-bearing, not incidental: the pane's focus effect reads
       // the preference to route the keyboard when selection lands, so leaving it
@@ -1394,19 +1768,19 @@ describe("useTerminalFileTransfer hook", () => {
     // The gesture is one drop however many files rode on it, so the pane is
     // selected once — not once per path, which would be invisible here but real
     // in the wake and MRU stamping `setFocused` drives.
-    it("selects once per drop, not once per path", () => {
+    it("selects once per drop, not once per path", async () => {
       const onDropSelect = vi.fn();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
-      dropInternalPaths([`${CWD}/a.ts`, `${CWD}/b.ts`, `${CWD}/c.ts`]);
+      await dropInternalPaths([`${CWD}/a.ts`, `${CWD}/b.ts`, `${CWD}/c.ts`]);
 
       expect(terminalClient.write).toHaveBeenCalledTimes(1);
       expect(onDropSelect).toHaveBeenCalledTimes(1);
     });
 
-    it("selects the pane for an in-app drag exactly as it does for an OS drop", () => {
+    it("selects the pane for an in-app drag exactly as it does for an OS drop", async () => {
       const onDropSelect = vi.fn();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
       expect(onDropSelect).toHaveBeenCalledTimes(1);
@@ -1419,21 +1793,24 @@ describe("useTerminalFileTransfer hook", () => {
      * never selects anything. Renders its own hook per call: the hook binds to
      * the shared container, so two live at once would both answer one drop.
      */
-    function expectRejectedThenAcceptedDrop(
+    async function expectRejectedThenAcceptedDrop(
       options: HookProps,
-      rejectedDrop: () => void,
-      accept: (hook: ReturnType<typeof renderFileTransferHook>, onDropSelect: () => void) => void
+      rejectedDrop: () => Promise<unknown>,
+      accept: (
+        hook: ReturnType<typeof renderFileTransferHook>,
+        onDropSelect: () => void
+      ) => Promise<unknown>
     ) {
       const onDropSelect = vi.fn();
       const hook = renderFileTransferHook({ cwdProvider: () => CWD, onDropSelect, ...options });
-      rejectedDrop();
+      await rejectedDrop();
 
       expect(terminalClient.write).not.toHaveBeenCalled();
       expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
       expect(onDropSelect).not.toHaveBeenCalled();
       expect(terminalInstanceService.focus).not.toHaveBeenCalled();
 
-      accept(hook, onDropSelect);
+      await accept(hook, onDropSelect);
 
       expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
       expect(onDropSelect).toHaveBeenCalledTimes(1);
@@ -1442,22 +1819,22 @@ describe("useTerminalFileTransfer hook", () => {
 
     // A terminal that took nothing has not been pointed at in any sense that
     // should move the selection off whatever the user was already typing into.
-    it("selects nothing while the input is locked", () => {
-      expectRejectedThenAcceptedDrop(
+    it("selects nothing while the input is locked", async () => {
+      await expectRejectedThenAcceptedDrop(
         { isInputLocked: true },
         () => dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]),
-        (hook, onDropSelect) => {
+        async (hook, onDropSelect) => {
           // Unlocking reuses the same hook rather than rendering a second one,
           // which would leave two listener sets answering the one drop below.
           hook.rerender({ cwdProvider: () => CWD, onDropSelect, isInputLocked: false });
-          dropInternalPaths([`${CWD}/src/App.tsx`]);
+          await dropInternalPaths([`${CWD}/src/App.tsx`]);
         }
       );
     });
 
     // The OS declined to resolve a path, so there is nothing referenceable.
-    it("selects nothing when no dropped file resolves to a path", () => {
-      expectRejectedThenAcceptedDrop(
+    it("selects nothing when no dropped file resolves to a path", async () => {
+      await expectRejectedThenAcceptedDrop(
         { detectedAgentId: "claude" },
         () => dropFiles([fileAt("no-path.txt")]),
         () => dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)])
@@ -1466,8 +1843,8 @@ describe("useTerminalFileTransfer hook", () => {
 
     // A relative path names nothing the agent could open, so the whole payload
     // is rejected rather than partially delivered.
-    it("selects nothing when the in-app payload is rejected", () => {
-      expectRejectedThenAcceptedDrop(
+    it("selects nothing when the in-app payload is rejected", async () => {
+      await expectRejectedThenAcceptedDrop(
         { detectedAgentId: "claude" },
         () => dropInternalPaths(["relative/App.tsx"]),
         () => dropInternalPaths([`${CWD}/src/App.tsx`])
@@ -1487,7 +1864,7 @@ describe("useTerminalFileTransfer hook", () => {
       expect(terminalInstanceService.focus).not.toHaveBeenCalled();
 
       // The same hook, now given a gesture that did point somewhere.
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(onDropSelect).toHaveBeenCalledTimes(1);
       expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
@@ -1496,7 +1873,7 @@ describe("useTerminalFileTransfer hook", () => {
     // The owning pane rebuilds this callback every render. Reading it through a
     // ref is what lets the listeners stay registered across those renders, so a
     // stale capture would only ever show up after one.
-    it("calls the callback the latest render supplied", () => {
+    it("calls the callback the latest render supplied", async () => {
       const stale = vi.fn();
       const fresh = vi.fn();
       const { rerender } = renderFileTransferHook({
@@ -1505,7 +1882,7 @@ describe("useTerminalFileTransfer hook", () => {
         onDropSelect: stale,
       });
       rerender({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect: fresh });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(stale).not.toHaveBeenCalled();
       expect(fresh).toHaveBeenCalledTimes(1);
@@ -1515,9 +1892,9 @@ describe("useTerminalFileTransfer hook", () => {
     // a PTY that owns no selectable pane, so they pass no callback. Their own
     // surface still takes the keyboard; what they must never do is reach for a
     // panel id they don't have.
-    it("still focuses the xterm when no pane owns the terminal", () => {
+    it("still focuses the xterm when no pane owns the terminal", async () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(terminalClient.write).toHaveBeenCalledTimes(1);
       expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");

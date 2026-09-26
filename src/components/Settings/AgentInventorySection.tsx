@@ -7,6 +7,7 @@ import type { AgentAvailabilityState } from "@shared/types";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { getAgentHealth } from "./agentHealth";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 export interface InventoryAgent {
   id: string;
@@ -53,6 +54,9 @@ export function AgentInventorySection({
 }: AgentInventorySectionProps) {
   const [showReady, setShowReady] = useState(false);
   const [showMissing, setShowMissing] = useState(false);
+  // Detection runs where the agents run, so a remote window names that host.
+  const remoteHostName = useRemoteHostName();
+  const machine = remoteHostName === null ? "this machine" : remoteHostName;
 
   const known = availability !== null && Object.keys(availability).length > 0;
   const withHealth = agents.map((agent) => ({
@@ -69,10 +73,10 @@ export function AgentInventorySection({
 
   const summary = !known
     ? isLoading
-      ? "Checking which agents are installed on this machine"
-      : "Which agents are installed on this machine"
+      ? `Checking which agents are installed on ${machine}`
+      : `Which agents are installed on ${machine}`
     : installed === 0
-      ? "No agent CLIs found on this machine"
+      ? `No agent CLIs found on ${machine}`
       : attention.length === 0
         ? `${installed} installed and ready to use`
         : `${ready.length} of ${installed} installed agents ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention`;

@@ -5,6 +5,11 @@ import {
 } from "../terminalCommandQueueSlice";
 import { terminalClient } from "@/clients";
 import type { PtyPanelData } from "@shared/types/panel";
+import {
+  _resetTerminalInputGateForTesting,
+  setHostInputBlock,
+  setLeaseInputBlock,
+} from "@/services/terminal/inputGate";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -54,6 +59,7 @@ describe("TerminalCommandQueueSlice", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetTerminalInputGateForTesting();
     mockTerminal.agentState = "working";
     state = {
       commandQueue: [],
@@ -205,6 +211,75 @@ describe("TerminalCommandQueueSlice", () => {
       state.queueCommand("test-terminal", "cmd2", "desc2");
       expect(state.getQueueCount("test-terminal")).toBe(2);
       expect(state.getQueueCount("nonexistent")).toBe(0);
+    });
+  });
+
+  describe("while terminal input is blocked", () => {
+    it("queues ready automation instead of writing it into a dropped link", () => {
+      mockTerminal.agentState = "idle";
+      setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+      state.queueCommand("test-terminal", "cmd", "desc");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(state.getQueueCount("test-terminal")).toBe(1);
+    });
+
+    it("keeps the queue until input is allowed again", () => {
+      state.queueCommand("test-terminal", "cmd", "desc");
+      mockTerminal.agentState = "idle";
+      setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+      state.processQueue("test-terminal");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(state.commandQueue).toHaveLength(1);
+
+      setHostInputBlock(null);
+      state.processQueue("test-terminal");
+      expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "cmd");
+      expect(state.commandQueue).toHaveLength(0);
+    });
+    it("sends the next queued command once input opens, with no new agent event", () => {
+      mockTerminal.agentState = "idle";
+      setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "greg-mbp" });
+      state.queueCommand("test-terminal", "cmd1", "desc1");
+      state.queueCommand("test-terminal", "cmd2", "desc2");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+
+      setLeaseInputBlock(null);
+
+      expect(terminalClient.write).toHaveBeenCalledTimes(1);
+      expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "cmd1");
+      expect(state.getQueueCount("test-terminal")).toBe(1);
+    });
+
+    it("holds the queue when one block lifts but another remains", () => {
+      mockTerminal.agentState = "idle";
+      setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+      setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "greg-mbp" });
+      state.queueCommand("test-terminal", "cmd", "desc");
+
+      setHostInputBlock(null);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+
+      setLeaseInputBlock(null);
+      expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "cmd");
+    });
+
+    it("leaves a busy agent's command queued and drops one whose terminal is gone", () => {
+      setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+      state.queueCommand("test-terminal", "busy", "desc");
+      state.queueCommand("terminal-b", "gone", "desc");
+      const original = getTerminal.getMockImplementation()!;
+      getTerminal.mockImplementation((id: string) =>
+        id === "test-terminal" ? { ...mockTerminal, id } : undefined
+      );
+      try {
+        setHostInputBlock(null);
+      } finally {
+        getTerminal.mockImplementation(original);
+      }
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(state.getQueueCount("test-terminal")).toBe(1);
+      expect(state.getQueueCount("terminal-b")).toBe(0);
     });
   });
 });

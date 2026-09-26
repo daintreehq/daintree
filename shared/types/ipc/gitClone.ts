@@ -3,6 +3,17 @@ export interface CloneRepoOptions {
   parentPath: string;
   folderName: string;
   shallowClone?: boolean;
+  /**
+   * Client-minted operation id. A retry with the same id, or a second clone
+   * of the same remote into the same destination, joins the running clone
+   * instead of starting another; absent means the Host mints its own.
+   */
+  opId?: string;
+}
+
+export interface CloneCancelPayload {
+  /** Cancel only this clone. Absent cancels every in-flight clone. */
+  opId?: string;
 }
 
 /**
@@ -17,6 +28,8 @@ export type CloneRepoStage =
   "starting" | "complete" | "cancelled" | "error" | "cleanup-failed" | (string & {});
 
 export interface CloneRepoProgressEvent {
+  /** The clone this event belongs to. */
+  opId?: string;
   stage: CloneRepoStage;
   progress: number;
   message: string;

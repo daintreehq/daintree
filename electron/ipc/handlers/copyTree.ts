@@ -10,9 +10,17 @@ import {
   broadcastToRenderer,
   checkRateLimit,
   sendToRenderer,
+  sendToRendererContext,
   typedHandle,
   typedHandleWithContext,
 } from "../utils.js";
+import {
+  getOperationRegistry,
+  untrackedOperationHandle,
+  type OperationHandle,
+} from "../../services/operations/index.js";
+import type { ClientEndpoint } from "../endpoint.js";
+import { getRemoteService } from "../../remote/runtime.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
@@ -100,6 +108,7 @@ import {
   CopyTreeCancelPayloadSchema,
   CopyTreeTestConfigPayloadSchema,
 } from "../../schemas/ipc.js";
+import { AppError } from "../../utils/errorTypes.js";
 import type {
   CopyTreeCancelPayload,
   CopyTreeTestConfigOptions,
@@ -375,6 +384,115 @@ async function loadCopyTreeProjectSettings(
   }
 }
 
+const INJECTION_CANCELLED = "Injection cancelled";
+
+/**
+ * Progress goes to the caller on the existing channel and to the operation,
+ * whose events reach every client of the project. A remote caller has no
+ * window, so it is answered through its endpoint rather than a broadcast that
+ * would land in every other client too.
+ */
+function reportCopyTreeProgress(
+  ctx: IpcContext,
+  op: OperationHandle,
+  progress: CopyTreeProgress
+): void {
+  const senderWindow = ctx.senderWindow;
+  if (senderWindow && !senderWindow.isDestroyed()) {
+    sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progress);
+  } else if ((ctx.endpoint as ClientEndpoint | undefined)?.kind === "remote-view") {
+    sendToRendererContext(ctx, CHANNELS.COPYTREE_PROGRESS, progress);
+  } else {
+    broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progress);
+  }
+  op.progress({ fraction: progress.progress, stage: progress.stage, message: progress.message });
+}
+
+/** The operation-stamped progress event; an unnamed run's events carry no opId, as before. */
+function stampProgress(
+  progress: CopyTreeProgress,
+  traceId: string,
+  op: OperationHandle
+): CopyTreeProgress {
+  return op.tracked ? { ...progress, traceId, opId: op.opId } : { ...progress, traceId };
+}
+
+/**
+ * Runs a copytree call as an operation when the caller named one. A retry
+ * carrying the same opId joins the first run instead of generating (or
+ * injecting) twice, and the retained record keeps a summary, never the bundle
+ * content. A call with no opId runs exactly as it did before operations.
+ *
+ * The opId is validated first, through the channel's own schema, so a
+ * malformed one is refused before any work rather than read as "no id".
+ */
+async function runCopyTreeOperation(
+  channel: string,
+  schema: { shape: { opId: z.ZodType<string | undefined> } },
+  ctx: IpcContext,
+  payload: unknown,
+  work: (op: OperationHandle) => Promise<CopyTreeResult>
+): Promise<CopyTreeResult> {
+  const rawOpId =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>).opId : undefined;
+  const parsed = schema.shape.opId.safeParse(rawOpId);
+  if (!parsed.success) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
+  }
+  const opId = parsed.data;
+  if (opId === undefined) return work(untrackedOperationHandle());
+  return getOperationRegistry().run(
+    {
+      opId,
+      kind: "copytree",
+      scope: channel,
+      projectId: ctx.projectId,
+    },
+    work,
+    {
+      failureOf: (result) => result.error ?? null,
+      cancelledBy: (result) => result.error === INJECTION_CANCELLED,
+      recordResult: (result) => ({
+        fileCount: result.fileCount,
+        filePath: result.filePath ?? null,
+        outputBytes: result.outputBytes ?? null,
+      }),
+    }
+  );
+}
+
+/**
+ * Put a file on this machine's clipboard as a file (not its text), the way a
+ * file manager's Copy does. A remote window's copy-as-file lands here too,
+ * with the bundle already downloaded from its host.
+ */
+export function copyFileToClipboard(filePath: string): void {
+  if (process.platform === "darwin") {
+    // Electron's `clipboard.writeBuffer` maps to Chromium's
+    // `WritePortableAndPlatformRepresentations`, which calls
+    // `[NSPasteboard clearContents]` on each invocation, so sequential
+    // `writeBuffer` calls cannot install multiple custom UTIs in one
+    // pasteboard session. Keep the legacy `NSFilenamesPboardType` plist
+    // (Finder reads it natively) with the path XML-escaped so a
+    // hostile `TMPDIR` cannot break out of the <string> element.
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+    <string>${escapeXml(filePath)}</string>
+</array>
+</plist>`;
+    clipboard.writeBuffer("NSFilenamesPboardType", Buffer.from(plist, "utf8"));
+  } else if (process.platform === "win32") {
+    clipboard.writeText(filePath);
+  } else {
+    clipboard.writeBuffer(
+      "text/uri-list",
+      Buffer.from(pathToFileURL(filePath).href + "\r\n", "utf8")
+    );
+  }
+}
+
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
   // copyTree progress is broadcast to all windows
   const handlers: Array<() => void> = [];
@@ -430,12 +548,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   };
 
   const handleCopyTreeGenerate = async (
-    ctx: import("../types.js").IpcContext,
-    payload: CopyTreeGeneratePayload
+    ctx: IpcContext,
+    payload: CopyTreeGeneratePayload,
+    op: OperationHandle
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = ctx.senderWindow;
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(`[${traceId}] CopyTree generate started for worktree ${requestedWorktreeId}`);
 
@@ -477,12 +595,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      const progressPayload = { ...progress, traceId };
-      if (senderWindow && !senderWindow.isDestroyed()) {
-        sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
-      } else {
-        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
-      }
+      reportCopyTreeProgress(ctx, op, stampProgress(progress, traceId, op));
     };
 
     // Merge project settings with runtime options
@@ -495,6 +608,16 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     await recordCompletedCopyTreeRun(sender.projectId, validated, result);
+
+    // A remote Shell downloads the bundle it just asked for (copy-as-file). The
+    // host serves that one file to that one endpoint, and only because it was
+    // generated for it here; the rest of the shared context folder stays shut.
+    // Only a link call has no event, so a local call never materialises its
+    // lazily-built endpoint just to be told it is local.
+    const endpoint = ctx.event ? undefined : (ctx.endpoint as ClientEndpoint | undefined);
+    if (endpoint?.kind === "remote-view" && result.filePath) {
+      getRemoteService("hostFileService")?.recordBundle(endpoint, result.filePath);
+    }
 
     if (!result.filePath || !validated.includeContent) {
       return result;
@@ -517,15 +640,25 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return result;
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_GENERATE, handleCopyTreeGenerate));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.COPYTREE_GENERATE, (ctx, payload) =>
+      runCopyTreeOperation(
+        CHANNELS.COPYTREE_GENERATE,
+        CopyTreeGeneratePayloadSchema,
+        ctx,
+        payload,
+        (op) => handleCopyTreeGenerate(ctx, payload, op)
+      )
+    )
+  );
 
   const handleCopyTreeGenerateAndCopyFile = async (
-    ctx: import("../types.js").IpcContext,
-    payload: CopyTreeGenerateAndCopyFilePayload
+    ctx: IpcContext,
+    payload: CopyTreeGenerateAndCopyFilePayload,
+    op: OperationHandle
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = ctx.senderWindow;
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
       `[${traceId}] CopyTree generate-and-copy-file started for worktree ${requestedWorktreeId}`
@@ -569,12 +702,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      const progressPayload = { ...progress, traceId };
-      if (senderWindow && !senderWindow.isDestroyed()) {
-        sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
-      } else {
-        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
-      }
+      reportCopyTreeProgress(ctx, op, stampProgress(progress, traceId, op));
     };
 
     // Merge project settings with runtime options
@@ -599,30 +727,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const filePath = result.filePath;
 
     try {
-      if (process.platform === "darwin") {
-        // Electron's `clipboard.writeBuffer` maps to Chromium's
-        // `WritePortableAndPlatformRepresentations`, which calls
-        // `[NSPasteboard clearContents]` on each invocation, so sequential
-        // `writeBuffer` calls cannot install multiple custom UTIs in one
-        // pasteboard session. Keep the legacy `NSFilenamesPboardType` plist
-        // (Finder reads it natively) with the path XML-escaped so a
-        // hostile `TMPDIR` cannot break out of the <string> element.
-        const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<array>
-    <string>${escapeXml(filePath)}</string>
-</array>
-</plist>`;
-        clipboard.writeBuffer("NSFilenamesPboardType", Buffer.from(plist, "utf8"));
-      } else if (process.platform === "win32") {
-        clipboard.writeText(filePath);
-      } else {
-        clipboard.writeBuffer(
-          "text/uri-list",
-          Buffer.from(pathToFileURL(filePath).href + "\r\n", "utf8")
-        );
-      }
+      copyFileToClipboard(filePath);
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
 
@@ -651,19 +756,24 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
   };
   handlers.push(
-    typedHandleWithContext(
-      CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
-      handleCopyTreeGenerateAndCopyFile
+    typedHandleWithContext(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, (ctx, payload) =>
+      runCopyTreeOperation(
+        CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
+        CopyTreeGenerateAndCopyFilePayloadSchema,
+        ctx,
+        payload,
+        (op) => handleCopyTreeGenerateAndCopyFile(ctx, payload, op)
+      )
     )
   );
 
   const handleCopyTreeInject = async (
-    ctx: import("../types.js").IpcContext,
-    payload: CopyTreeInjectPayload
+    ctx: IpcContext,
+    payload: CopyTreeInjectPayload,
+    op: OperationHandle
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_INJECT, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = ctx.senderWindow;
     const requestedTerminalId = getStringField(payload, "terminalId") ?? "unknown";
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
@@ -707,6 +817,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const sender = resolveCopyTreeSender(ctx, deps);
 
     contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
+    op.onCancel(() => contextInjectionTracker.markCancelled(injectionId));
 
     try {
       const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
@@ -728,12 +839,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       const onProgress = (progress: CopyTreeProgress) => {
-        const progressPayload = { ...progress, traceId };
-        if (senderWindow && !senderWindow.isDestroyed()) {
-          sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
-        } else {
-          broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
-        }
+        reportCopyTreeProgress(ctx, op, stampProgress(progress, traceId, op));
       };
 
       // Merge project settings with runtime options
@@ -761,7 +867,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         for (let i = 0; i < source.length;) {
           if (contextInjectionTracker.isCancelled(injectionId)) {
             console.log(`[${traceId}] CopyTree inject cancelled by user`);
-            return "Injection cancelled";
+            return INJECTION_CANCELLED;
           }
 
           if (!deps.ptyClient!.hasTerminal(validated.terminalId)) {
@@ -807,7 +913,17 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_INJECT, handleCopyTreeInject));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.COPYTREE_INJECT, (ctx, payload) =>
+      runCopyTreeOperation(
+        CHANNELS.COPYTREE_INJECT,
+        CopyTreeInjectPayloadSchema,
+        ctx,
+        payload,
+        (op) => handleCopyTreeInject(ctx, payload, op)
+      )
+    )
+  );
 
   const handleCopyTreeAvailable = async (): Promise<boolean> => {
     return !!deps.worktreeService && deps.worktreeService.isReady();

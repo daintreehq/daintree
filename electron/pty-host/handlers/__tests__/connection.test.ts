@@ -13,6 +13,9 @@ function makeCtx(stateRef: {
     setSabMode: vi.fn(),
     isSabMode: vi.fn(() => true),
     resize: vi.fn(),
+    write: vi.fn(),
+    mayDriveFrom: vi.fn(() => true),
+    setDriveLeases: vi.fn(),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -724,6 +727,67 @@ describe("worker-ingest dedicated ports (#10960)", () => {
     expect(h.dedicatedPort.posted).toContainEqual({ type: "ingest-detached", drainId: 3 });
   });
 
+  it("a serialize fence flushes held output ahead of the marker, then answers with the snapshot", async () => {
+    const h = makeWorkerIngestHarness();
+    const snapshot = { data: "SNAP", cols: 90, rows: 30 };
+    let serializedAfter: number | null = null;
+    (h.ctx.ptyManager as unknown as { getSerializedStateAsync: unknown }).getSerializedStateAsync =
+      vi.fn(async () => {
+        serializedAfter = h.windowPort.posted.length;
+        return snapshot;
+      });
+    (h.ctx.ptyManager as unknown as { getTerminal: unknown }).getTerminal = vi.fn(() => ({
+      projectId: "proj-a",
+    }));
+    h.ctx.windowProjectMap.set(-7, "proj-a");
+    h.handlers["connect-port"]({ windowId: -7 }, [h.windowPort] as never);
+    const bytes = new TextEncoder().encode("held");
+    h.ctx.rendererConnections.get(-7)!.batcher.write("term-1", bytes, bytes.byteLength);
+    expect(h.windowPort.posted).toEqual([]);
+
+    h.windowPort.emit("message", {
+      data: { type: "serialize-fence", id: "term-1", requestId: 5 },
+    });
+
+    expect(h.windowPort.posted.map((m) => m.type)).toEqual(["data", "serialize-fence"]);
+    // Serialized in the same turn as the fence, before anything else could be posted.
+    expect(serializedAfter).toBe(2);
+    await vi.waitFor(() => expect(h.windowPort.posted).toHaveLength(3));
+    expect(h.windowPort.posted[2]).toEqual({
+      type: "serialized-state",
+      id: "term-1",
+      requestId: 5,
+      state: snapshot,
+    });
+  });
+
+  it.each([
+    { label: "an ordinary local renderer port", windowId: 1, project: "proj-a" },
+    { label: "a remote connection scoped to another project", windowId: -7, project: "proj-b" },
+    { label: "a remote connection with no project", windowId: -7, project: null },
+  ])("ignores a serialize fence from $label", async ({ windowId, project }) => {
+    const h = makeWorkerIngestHarness();
+    const serialize = vi.fn(async () => ({ data: "SECRET", cols: 80, rows: 24 }));
+    const flushTerminal = vi.fn();
+    Object.assign(h.ctx.ptyManager, {
+      getSerializedStateAsync: serialize,
+      getTerminal: vi.fn(() => ({ projectId: "proj-a" })),
+    });
+    h.ctx.windowProjectMap.set(windowId, project);
+    h.handlers["connect-port"]({ windowId }, [h.windowPort] as never);
+    const batcher = h.ctx.rendererConnections.get(windowId)!.batcher;
+    vi.spyOn(batcher, "flushTerminal").mockImplementation(flushTerminal);
+
+    h.windowPort.emit("message", {
+      data: { type: "serialize-fence", id: "term-1", requestId: 5 },
+    });
+    await Promise.resolve();
+
+    expect(serialize).not.toHaveBeenCalled();
+    expect(flushTerminal).not.toHaveBeenCalled();
+    expect(h.windowPort.posted).toEqual([]);
+  });
+
   it("engage without a dedicated connection never posts the marker", () => {
     const h = makeWorkerIngestHarness();
     h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);
@@ -820,5 +884,71 @@ describe("resize transport attribution (#12442)", () => {
     port.emit("message", { data: { type: "resize", id: "term-1", cols: 100, rows: 30 } });
 
     expect(ctx.ptyManager.resize).toHaveBeenCalledWith("term-1", 100, 30, "renderer-message-port");
+  });
+
+  function makeResizeCtx() {
+    const ctx = makeCtx(makeStateRef());
+    vi.mocked(ctx.createPortQueueManager).mockReturnValue({
+      removeBytes: vi.fn(),
+      tryResume: vi.fn(),
+      dispose: vi.fn(),
+    } as unknown as ReturnType<HostContext["createPortQueueManager"]>);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    return ctx;
+  }
+
+  it("asks the drive lease about every port's input and resize, with the bridge's stamp", () => {
+    const ctx = makeResizeCtx();
+    // Only the remote holder's connection drives.
+    vi.mocked(ctx.ptyManager.mayDriveFrom).mockImplementation(
+      (_id, connectionId) => connectionId === -3
+    );
+    const handlers = createConnectionHandlers(ctx);
+    const local = makeNodePort();
+    const remote = makeNodePort();
+
+    handlers["connect-port"]({ windowId: 1 }, [local] as never);
+    handlers["connect-port"]({ windowId: -3 }, [remote] as never);
+    local.emit("message", { data: { type: "resize", id: "term-1", cols: 100, rows: 30 } });
+    local.emit("message", { data: { type: "write", id: "term-1", data: "ls\r" } });
+    expect(ctx.ptyManager.resize).not.toHaveBeenCalled();
+    expect(ctx.ptyManager.write).not.toHaveBeenCalled();
+    expect(ctx.ptyManager.mayDriveFrom).toHaveBeenCalledWith("term-1", 1, undefined);
+
+    remote.emit("message", {
+      data: { type: "resize", id: "term-1", cols: 90, rows: 20, leaseId: 4 },
+    });
+    remote.emit("message", { data: { type: "write", id: "term-1", data: "x", leaseId: 4 } });
+    expect(ctx.ptyManager.mayDriveFrom).toHaveBeenCalledWith("term-1", -3, 4);
+    expect(ctx.ptyManager.resize).toHaveBeenCalledWith("term-1", 90, 20, "renderer-message-port");
+    expect(ctx.ptyManager.write).toHaveBeenCalledWith("term-1", "x", undefined);
+
+    // A stamp that is not a lease id is no stamp at all.
+    remote.emit("message", { data: { type: "write", id: "term-1", data: "y", leaseId: "4" } });
+    expect(ctx.ptyManager.mayDriveFrom).toHaveBeenLastCalledWith("term-1", -3, undefined);
+  });
+
+  it("applies the lease table from Main and refuses a malformed one", () => {
+    const ctx = makeResizeCtx();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const handlers = createConnectionHandlers(ctx);
+    const leases = [
+      { projectId: "p1", leaseId: 3, holderConnection: -4 },
+      { projectId: "p2", leaseId: 5, holderConnection: null },
+    ];
+
+    handlers["set-drive-leases"]({ leases }, undefined as never);
+    expect(ctx.ptyManager.setDriveLeases).toHaveBeenCalledWith(leases);
+
+    handlers["set-drive-leases"](
+      { leases: [{ projectId: "p1", leaseId: "3", holderConnection: -4 }] },
+      undefined as never
+    );
+    handlers["set-drive-leases"](
+      { leases: [{ projectId: "", leaseId: 3, holderConnection: null }] },
+      undefined as never
+    );
+    handlers["set-drive-leases"]({ leases: "p1" }, undefined as never);
+    expect(ctx.ptyManager.setDriveLeases).toHaveBeenCalledTimes(1);
   });
 });

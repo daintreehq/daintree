@@ -52,6 +52,25 @@ import { terminalInstanceService } from "@/services/terminal/TerminalInstanceSer
 import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 import { FileDocumentCloseGuardHost } from "@/panels/file/FileDocumentCloseGuardHost";
+import { sendHostOwnedWrite } from "@/store/persistence/hostOwnedWrites";
+
+/** Focus mode is the project's, held on its host: saved only while this view drives it. */
+async function persistProjectFocusMode(
+  workspaceId: string,
+  focusMode: boolean,
+  panelState: PanelState | undefined,
+  failureMessage: string
+): Promise<void> {
+  try {
+    await sendHostOwnedWrite(
+      `project-focus-mode:${workspaceId}`,
+      () => window.electron.project.setFocusMode(workspaceId, focusMode, panelState),
+      () => void persistProjectFocusMode(workspaceId, focusMode, panelState, failureMessage)
+    );
+  } catch (error) {
+    logError(failureMessage, error);
+  }
+}
 
 function preloadGlobalBannerCoordinator() {
   return import("../Recovery/GlobalBannerCoordinator");
@@ -466,15 +485,12 @@ export function AppLayout({
         return;
       }
 
-      try {
-        await window.electron.project.setFocusMode(
-          workspaceId,
-          persistedFocusMode,
-          layout.savedPanelState as PanelState | undefined
-        );
-      } catch (error) {
-        logError("Failed to persist focus mode to project state", error);
-      }
+      await persistProjectFocusMode(
+        workspaceId,
+        persistedFocusMode,
+        layout.savedPanelState as PanelState | undefined,
+        "Failed to persist focus mode to project state"
+      );
     };
 
     const timer = setTimeout(persistFocusMode, 100);
@@ -510,11 +526,12 @@ export function AppLayout({
       }
       // Persist to per-workspace state
       if (workspaceId) {
-        try {
-          await window.electron.project.setFocusMode(workspaceId, false, undefined);
-        } catch (error) {
-          logError("Failed to clear focus panel state", error);
-        }
+        await persistProjectFocusMode(
+          workspaceId,
+          false,
+          undefined,
+          "Failed to clear focus panel state"
+        );
       } else {
         // Fall back to global state only when there is no workspace at all
         try {
@@ -547,11 +564,12 @@ export function AppLayout({
       const persistFocusMode = useFocusStore.getState().isFocusMode || showSidebar || showAssistant;
       if (!persistFocusMode) return;
       if (workspaceId) {
-        try {
-          await window.electron.project.setFocusMode(workspaceId, true, currentPanelState);
-        } catch (error) {
-          logError("Failed to persist focus panel state", error);
-        }
+        await persistProjectFocusMode(
+          workspaceId,
+          true,
+          currentPanelState,
+          "Failed to persist focus panel state"
+        );
       } else {
         // Fall back to global state only when there is no workspace at all
         try {

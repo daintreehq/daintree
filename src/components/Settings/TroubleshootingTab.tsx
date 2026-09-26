@@ -14,6 +14,12 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
+import {
+  deviceOwnerPhrase,
+  useRemoteHostName,
+  useSettingsOwnerMarker,
+  useSettingsRowOwnerNote,
+} from "@/hooks/useSettingsOwner";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -22,6 +28,7 @@ import { ClearLogsConfirmDialog } from "@/components/Diagnostics/ClearLogsConfir
 const PROFILE_UPDATE_INTERVAL_MS = 250;
 
 function SystemHealthSection() {
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
@@ -66,7 +73,10 @@ function SystemHealthSection() {
       <SettingsRow
         id="troubleshooting-health"
         label="System health check"
-        description="Checks that the command-line tools Daintree relies on are installed and on your PATH"
+        description={rowOwnerNote(
+          "Checks that the command-line tools Daintree relies on are installed and on your PATH",
+          "host"
+        )}
         error={checkError}
         control={
           <Button variant="outline" size="sm" onClick={() => void runCheck()} disabled={isChecking}>
@@ -235,6 +245,11 @@ function RendererCpuProfileSection() {
 }
 
 function HardwareAccelerationSection() {
+  const rowOwnerNote = useSettingsRowOwnerNote();
+  const subtitle = rowOwnerNote(
+    "Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change.",
+    "device"
+  );
   const [disabled, setDisabled] = useState<boolean | null>(null);
   const [angleFallback, setAngleFallback] = useState<boolean>(false);
   const [readFailed, setReadFailed] = useState(false);
@@ -270,7 +285,7 @@ function HardwareAccelerationSection() {
         <SettingsSwitchCard
           id="troubleshooting-gpu-acceleration"
           title="Hardware acceleration"
-          subtitle="Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change."
+          subtitle={subtitle}
           isEnabled={false}
           onChange={() => {}}
           disabled
@@ -296,7 +311,7 @@ function HardwareAccelerationSection() {
       <SettingsSwitchCard
         id="troubleshooting-gpu-acceleration"
         title="Hardware acceleration"
-        subtitle="Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change."
+        subtitle={subtitle}
         isEnabled={!disabled}
         onChange={handleToggle}
       />
@@ -360,6 +375,13 @@ export function ClearLogsRow() {
 }
 
 export function TroubleshootingTab() {
+  // System mixes the two machines, so its rows say whose; the rest is this screen's.
+  const ownerMarker = useSettingsOwnerMarker();
+  // Log levels are set on both machines at once and read back from the host.
+  const remoteHostName = useRemoteHostName();
+  const logLevelsDescription =
+    "Override the log level for one module, or a process-wide wildcard. Overrides persist across restarts." +
+    (remoteHostName === null ? "" : ` Set on ${deviceOwnerPhrase()} and ${remoteHostName}.`);
   const [developerMode, setDeveloperMode] = useState(false);
   // The switches show defaults until main answers; they stay disabled until then
   // so a fallback never reads as the saved setting.
@@ -590,14 +612,14 @@ export function TroubleshootingTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Diagnostics">
+      <SettingsSection title="Diagnostics" badge={ownerMarker("device")}>
         <SettingsGroup>
           <DownloadDiagnosticsSection />
           <RendererCpuProfileSection />
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Logging">
+      <SettingsSection title="Logging" badge={ownerMarker("device")}>
         <SettingsGroup>
           <ApplicationLogsSection />
           <SettingsSwitchCard
@@ -635,7 +657,7 @@ export function TroubleshootingTab() {
         <SettingsGroup label="Log levels">
           <SettingsRow
             label="Per-module log levels"
-            description="Override the log level for one module, or a process-wide wildcard. Overrides persist across restarts."
+            description={logLevelsDescription}
             control={
               <Button variant="outline" size="sm" onClick={handleOpenLogLevelPalette}>
                 Set log level…
@@ -678,7 +700,7 @@ export function TroubleshootingTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Developer tools">
+      <SettingsSection title="Developer tools" badge={ownerMarker("device")}>
         <SettingsGroup>
           <SettingsSwitchCard
             id="troubleshooting-devmode"

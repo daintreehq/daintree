@@ -253,6 +253,14 @@ export const LazyDiagnosticsReviewDialogHost = lazy(() =>
   preloadDiagnosticsReviewDialogHost().then((m) => ({ default: m.DiagnosticsReviewDialogHost }))
 );
 
+// Direct file import so the host picker's chunk is loaded only where remote hosts exist.
+export function preloadHostFilePickerHost() {
+  return import("./components/HostFilePicker/HostFilePickerHost");
+}
+export const LazyHostFilePickerHost = lazy(() =>
+  preloadHostFilePickerHost().then((m) => ({ default: m.HostFilePickerHost }))
+);
+
 export function preloadGitPushConfirmDialog() {
   return import("./components/Git/GitPushConfirmDialog");
 }

@@ -225,6 +225,19 @@ export type PluginPtyHostEvent =
  * Requests sent from Main → Host.
  * Each request is a discriminated union type for compile-time safety.
  */
+/**
+ * One project's drive lease as the pty-host enforces it. `holderConnection` is
+ * the port connection id of the remote endpoint that drives, or null when this
+ * machine's own windows do (they arbitrate among themselves exactly as before).
+ * `leaseId` rises with every grant, so a message stamped with an older one is
+ * stale work from a driver that has since been replaced.
+ */
+export interface PtyHostDriveLease {
+  projectId: string;
+  leaseId: number;
+  holderConnection: number | null;
+}
+
 export type PtyHostRequest =
   | PluginPtyHostRequest
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
@@ -303,6 +316,10 @@ export type PtyHostRequest =
   // `windowProjectMap` holds one active project per window and says nothing
   // about the views behind it. Main owns the answer and pushes it on change.
   | { type: "set-fallback-eligible-projects"; projectIds: string[] }
+  // The drive leases a remote client is party to. Input and resizes from any
+  // port other than the holder's are dropped for their terminals. Main owns
+  // the lease and replaces the whole table on change.
+  | { type: "set-drive-leases"; leases: PtyHostDriveLease[] }
   | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
@@ -1457,7 +1474,13 @@ export type RendererToPtyHostMessage =
   // and posts the `ingest-detached` sentinel (carrying `drainId`) on the
   // dedicated port, FIFO behind the final worker-routed chunk.
   | { type: "worker-ingest-engage"; id: string }
-  | { type: "worker-ingest-release"; id: string; drainId: number };
+  | { type: "worker-ingest-release"; id: string; drainId: number }
+  // Snapshot fence (Remote Hosts: a remote endpoint's stream bridge in main,
+  // never a renderer). The host flushes what the port batcher holds for the
+  // terminal, posts `serialize-fence` back FIFO behind it, and only then takes
+  // the snapshot it answers with in `serialized-state`: every byte before the
+  // fence is in the snapshot, every byte after it is not.
+  | { type: "serialize-fence"; id: string; requestId: number };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
@@ -1509,6 +1532,23 @@ export type PtyHostToRendererMessage =
       /** Byte count discarded — only set when status is "data-loss". */
       droppedBytes?: number;
       timestamp: number;
+    }
+  // Only from a remote host's relayed port: output the view is missing cannot
+  // be replayed (the host's replay ring moved past it, or the PTY restarted),
+  // so discard what the terminal shows and repaint from `snapshot` — or leave
+  // it cleared when null. Output after the reset follows on the same port.
+  | {
+      type: "reset";
+      id: string;
+      snapshot: SerializedTerminalSnapshot | null;
+    }
+  // Answers to a `serialize-fence` (see RendererToPtyHostMessage); main only.
+  | { type: "serialize-fence"; id: string; requestId: number }
+  | {
+      type: "serialized-state";
+      id: string;
+      requestId: number;
+      state: SerializedTerminalSnapshot | null;
     };
 
 /** Per-process resource breakdown entry */

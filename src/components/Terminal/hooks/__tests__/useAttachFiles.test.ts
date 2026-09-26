@@ -13,6 +13,7 @@ const logError = vi.hoisted(() => vi.fn());
 vi.mock("@/utils/logger", () => ({ logError }));
 
 const { useAttachFiles } = await import("../useAttachFiles");
+const { setRemoteMaterializer } = await import("@/services/materialize");
 const { getAllAtFileTokens } = await import("../../hybridInputParsing");
 
 const CWD = "/Users/greg/Projects/daintree";
@@ -88,6 +89,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setRemoteMaterializer(null);
   vi.restoreAllMocks();
   Reflect.deleteProperty(window, "electron");
 });
@@ -334,5 +336,29 @@ describe("useAttachFiles", () => {
       await result.current();
     });
     expect(pickAttachments).toHaveBeenCalledTimes(2);
+  });
+
+  // The picker is this machine's native dialog, so what it returns are local
+  // files; the insertion uses whatever path materialize hands back.
+  it("materializes picked files as local files before inserting them", async () => {
+    const seen: unknown[] = [];
+    setRemoteMaterializer(async (source) => {
+      seen.push(source);
+      return { hostPath: "/host/inbox/notes.txt", displayName: "notes.txt", bytes: 1 };
+    });
+    pickAttachments.mockResolvedValue(["/Users/me/notes.txt"]);
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useAttachFiles(ref, CWD));
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(seen).toEqual([{ kind: "local-file", path: "/Users/me/notes.txt" }]);
+    expect(insertedText(dispatch)).toBe("@/host/inbox/notes.txt ");
+    expect(effectValues(dispatch)[0]).toMatchObject({
+      filePath: "/host/inbox/notes.txt",
+      fileName: "notes.txt",
+    });
   });
 });

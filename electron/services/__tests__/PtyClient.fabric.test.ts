@@ -601,6 +601,58 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("scopes a remote endpoint's synthetic connection to its project's shard", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      shardA.child.postMessage.mockClear();
+
+      client.registerAuxConnectionContext(-5, "project-a");
+      client.connectMessagePort(-5, createMockPort() as never, -5);
+
+      expect(messagesOfType(shardA.child, "connect-port")).toEqual([
+        { type: "connect-port", windowId: -5, holderWebContentsId: -5 },
+      ]);
+      expect(messagesOfType(shardA.child, "set-active-project")).toEqual([
+        { type: "set-active-project", windowId: -5, projectId: "project-a" },
+      ]);
+      // The active project the window paths track is not the endpoint's to move.
+      expect(client.getActiveProjectId()).toBeNull();
+      client.dispose();
+    });
+
+    it("refreshes a synthetic connection through its own callback after its shard crashes", async () => {
+      const client = createFabricClient();
+      const windowRefresh = vi.fn();
+      const endpointRefresh = vi.fn();
+      client.setPortRefreshCallback(windowRefresh);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      client.registerAuxConnectionContext(-5, "project-a");
+      client.setAuxConnectionRefresh(-5, endpointRefresh);
+      client.connectMessagePort(-5, createMockPort() as never, -5);
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const restarted = forks[forks.length - 1];
+      restarted.child.emit("message", { type: "ready" });
+
+      expect(endpointRefresh).toHaveBeenCalledTimes(1);
+      expect(windowRefresh).not.toHaveBeenCalled();
+
+      // Unregistered, the id falls back to the window callback like any other.
+      client.setAuxConnectionRefresh(-5, null);
+      client.connectMessagePort(-5, createMockPort() as never, -5);
+      restarted.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      forks[forks.length - 1].child.emit("message", { type: "ready" });
+      expect(endpointRefresh).toHaveBeenCalledTimes(1);
+      expect(windowRefresh).toHaveBeenCalledWith(-5);
+      client.dispose();
+    });
+
     it("sends the pool-warming projectPath only to the owning shard on context resync", () => {
       const client = createFabricClient();
       client.setActiveProject(1, "project-a", "/projects/a");
@@ -1001,6 +1053,25 @@ describe("PtyClient fabric", () => {
       shardA.child.emit("message", { type: "ready" });
 
       expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toHaveLength(0);
+      client.dispose();
+    });
+
+    it("replays the drive lease table to a fresh shard", () => {
+      const client = createFabricClient();
+      const leases = [{ projectId: "project-a", leaseId: 2, holderConnection: -5 }];
+      client.setDriveLeases(leases);
+      expect(messagesOfType(defaultShard().child, "set-drive-leases")).toEqual([
+        { type: "set-drive-leases", leases },
+      ]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-drive-leases")).toEqual([
+        { type: "set-drive-leases", leases },
+      ]);
       client.dispose();
     });
 

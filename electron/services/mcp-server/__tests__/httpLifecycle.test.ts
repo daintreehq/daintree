@@ -34,7 +34,11 @@ vi.mock("electron", () => ({
 import http from "node:http";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { HttpLifecycle, sessionCredentialDigest } from "../httpLifecycle.js";
+import { HttpLifecycle, sendToPinnedView, sessionCredentialDigest } from "../httpLifecycle.js";
+import {
+  getEndpointRegistry,
+  _resetEndpointRegistryForTesting,
+} from "../../../ipc/endpointRegistry.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
@@ -3312,5 +3316,46 @@ describe("HttpLifecycle", () => {
         expect(wc.send).toHaveBeenCalledTimes(1);
       });
     });
+  });
+});
+
+describe("sendToPinnedView", () => {
+  beforeEach(() => {
+    mockWebContentsById.clear();
+    _resetEndpointRegistryForTesting();
+  });
+
+  it("sends to a live local view by its WebContents id", () => {
+    const wc = { isDestroyed: () => false, send: vi.fn() };
+    mockWebContentsById.set(7, wc);
+
+    expect(sendToPinnedView(7, "mcp:x", () => ({ a: 1 }), "x")).toBe(true);
+    expect(wc.send).toHaveBeenCalledWith("mcp:x", { a: 1 });
+  });
+
+  it("reports a dead or missing local view as not sent", () => {
+    mockWebContentsById.set(7, { isDestroyed: () => true, send: vi.fn() });
+
+    expect(sendToPinnedView(7, "mcp:x", () => ({}), "x")).toBe(false);
+    expect(sendToPinnedView(8, "mcp:x", () => ({}), "x")).toBe(false);
+  });
+
+  it("reaches a view attached over a link through its endpoint", () => {
+    const send = vi.fn();
+    getEndpointRegistry().add({
+      endpointId: "remote:-4",
+      clientId: "client-b",
+      projectId: "proj-1",
+      kind: "remote-view",
+      handle: -4,
+      send,
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    });
+
+    expect(sendToPinnedView(-4, "mcp:x", () => ({ a: 1 }), "x")).toBe(true);
+    expect(send).toHaveBeenCalledWith({ type: "event", channel: "mcp:x", args: [{ a: 1 }] });
+    expect(sendToPinnedView(-5, "mcp:x", () => ({}), "x")).toBe(false);
   });
 });

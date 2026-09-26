@@ -11,6 +11,14 @@ import type {
 } from "../../services/plugin-capability/PluginCapabilityConsentService.js";
 import { getMainWindow } from "../../window/windowRef.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import type { ClientEndpoint } from "../endpoint.js";
+import { resolvePluginFrontend } from "../../services/plugin/pluginFrontendRouting.js";
+import {
+  PluginConsentOutcomeSchema,
+  PluginFrontendMethod,
+} from "../../services/plugin/pluginFrontendRequests.js";
+import { projectIdFromPluginInstanceKey } from "../../services/plugin/projectPluginIdentity.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
   PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS,
@@ -89,7 +97,27 @@ function settleConsent(requestId: string, outcome: PluginCapabilityConsentOutcom
   pending.resolve(outcome);
 }
 
+/**
+ * Where a first-use consent question goes. Without Host-mode routing it is the
+ * focused window, as it always was. With it, the frontend that drives the
+ * plugin's project answers — on another machine, through its Shell — and with
+ * nobody attached the question cannot be asked, which fails closed as a
+ * denial rather than waiting for someone who may never come.
+ */
 const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityConsentRequest) => {
+  const frontend = resolvePluginFrontend(
+    projectIdFromPluginInstanceKey(request.pluginId),
+    request.pluginId
+  );
+  if (frontend.kind === "remote") {
+    return requestRemoteConsent(frontend.endpoint, frontend.leaseId, request);
+  }
+  if (frontend.kind === "none") {
+    console.warn(
+      `[plugin-capability] Nobody is attached to answer the consent prompt for plugin "${request.pluginId}" capability "${request.capability}" — denying it`
+    );
+    return Promise.resolve("undeliverable");
+  }
   const win = resolvePromptWindow();
   // The app renderer is the window's registered WebContentsView, not the
   // BrowserWindow shell — see the note above (#11708).
@@ -99,6 +127,66 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
     // is not the same as a user refusing.
     return Promise.resolve("undeliverable");
   }
+  return requestConsentInWebContents(wc, request);
+};
+
+/**
+ * Ask a remote driving frontend. Its Shell shows the dialog and runs the same
+ * delivery receipt and decision clock as a local one; this side only bounds
+ * the whole exchange so a Shell that never answers still fails closed.
+ */
+async function requestRemoteConsent(
+  endpoint: ClientEndpoint,
+  leaseId: number | undefined,
+  request: PluginCapabilityConsentRequest
+): Promise<PluginCapabilityConsentOutcome> {
+  try {
+    const answer = await endpoint.request(
+      PluginFrontendMethod.CONSENT,
+      {
+        pluginId: request.pluginId,
+        pluginDisplayName: request.pluginDisplayName,
+        capability: request.capability,
+        declaredCapabilities: [...request.declaredCapabilities],
+      },
+      {
+        timeoutMs:
+          PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS + PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+      }
+    );
+    const parsed = PluginConsentOutcomeSchema.safeParse(answer);
+    if (!parsed.success) return "undeliverable";
+    // An approval only counts from whoever still drives the project: a window
+    // that lost the lease while its dialog was open no longer speaks for it.
+    if (parsed.data === "approved-once" || parsed.data === "approved-and-pin") {
+      const now = resolvePluginFrontend(
+        projectIdFromPluginInstanceKey(request.pluginId),
+        request.pluginId
+      );
+      if (now.kind !== "remote" || now.endpoint !== endpoint || now.leaseId !== leaseId) {
+        return "undeliverable";
+      }
+    }
+    return parsed.data;
+  } catch (error) {
+    console.warn(
+      `[plugin-capability] The driving frontend did not answer the consent prompt for plugin "${request.pluginId}" capability "${request.capability}":`,
+      formatErrorMessage(error, "request failed")
+    );
+    return "undeliverable";
+  }
+}
+
+/**
+ * Show one consent prompt in a known renderer and settle with its outcome.
+ * The local path of the bridge, and how a Shell puts a host's consent question
+ * in front of the view that drives it.
+ */
+export function requestConsentInWebContents(
+  wc: Electron.WebContents,
+  request: PluginCapabilityConsentRequest
+): Promise<PluginCapabilityConsentOutcome> {
+  if (wc.isDestroyed()) return Promise.resolve("undeliverable");
   return new Promise<PluginCapabilityConsentOutcome>((resolve) => {
     const requestId = randomUUID();
     // A renderer that goes away can no longer show or answer the prompt. Before
@@ -170,7 +258,7 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
       settleConsent(requestId, "undeliverable");
     }
   });
-};
+}
 
 /** Install the consent bridge once, lazily — keeps an unused boot path bridge-free. */
 function ensureConsentBridge(): void {

@@ -1110,6 +1110,20 @@ export interface PluginManifest {
    * decision is the project folder, not this field.
    */
   scope?: "project";
+  /**
+   * `"unsupported"` for a plugin that only works on the machine the person is
+   * sitting at — a view that assumes the renderer's `localhost` is the
+   * project's machine, or code that relies on local OS behaviour. It is then
+   * not activated for a window attached from another machine, which shows a
+   * placeholder instead. Absent means `"supported"`.
+   */
+  remote?: "supported" | "unsupported";
+  /**
+   * The operating systems (Node `process.platform` names) the package has a
+   * build for. Absent means any; only a plugin shipping native modules for one
+   * OS needs it, and installing it on another machine is refused up front.
+   */
+  platforms?: Array<"darwin" | "linux" | "win32">;
   capabilities?: PluginCapability[];
   /**
    * Per-capability scope bindings that attenuate the compound-capability
@@ -1410,6 +1424,22 @@ export interface PluginHostCallOptions {
 }
 
 /**
+ * Call options for {@link PluginHostApi.showQuickPick},
+ * {@link PluginHostApi.showInputBox} and {@link PluginHostApi.showConfirm}.
+ *
+ * `whenNoFrontend` decides what happens when the project lives on a host that
+ * nobody is attached to (agents often run overnight with no window open).
+ * `"fail"`, the default, rejects with a `NO_FRONTEND_ATTACHED:` error — never
+ * the dismiss value, so "nobody was there" can't be mistaken for "the person
+ * said no". `"queue"` waits until a frontend attaches and shows the prompt
+ * there, marked with the host and the time it was asked; aborting `signal`
+ * still settles it with the dismiss value.
+ */
+export interface PluginPromptCallOptions extends PluginHostCallOptions {
+  whenNoFrontend?: "fail" | "queue";
+}
+
+/**
  * Options accepted by high-frequency event subscriptions (today
  * {@link PluginActivationApi.onDidChangeWorktrees}). `debounceMs` coalesces a
  * burst of change events into a single trailing callback fired `debounceMs`
@@ -1673,7 +1703,16 @@ export type PluginActivationResult =
        */
       recoveryComponentPath?: string;
     }
-  | { ok: false; error: string; stack?: string };
+  | {
+      ok: false;
+      error: string;
+      stack?: string;
+      /**
+       * The plugin declares `"remote": "unsupported"` and the caller is a
+       * window attached from another machine: it was deliberately not started.
+       */
+      remoteUnsupported?: { pluginId: string };
+    };
 
 /**
  * Wire envelope for every push over the `plugin:{pluginId}:{channel}` transport
@@ -1966,8 +2005,28 @@ export interface LoadedPluginInfo {
 export interface PluginIpcContext {
   projectId: string | null;
   worktreeId: string | null;
+  /**
+   * Opaque per-caller handle. A view on this machine has its renderer's id
+   * (positive); a view on another machine attached to this host has a negative
+   * handle that names no local renderer.
+   */
   webContentsId: number;
   pluginId: string;
+  /**
+   * Set when the call reached this host over a link: which attached frontend
+   * made it (`"remote"` for a window on another machine). Absent for a window
+   * on this machine.
+   */
+  origin?: PluginInvokeOrigin;
+}
+
+/** The frontend behind one {@link PluginIpcContext}. */
+export interface PluginInvokeOrigin {
+  kind: "local" | "remote";
+  /** Stable id of the attached machine; `"local"` for this one. */
+  clientId: string;
+  /** Stable id of the calling view for as long as it stays attached. */
+  endpointId: string;
 }
 
 export type PluginIpcHandler = (
@@ -3555,16 +3614,20 @@ export interface PluginHostApi extends PluginActivationApi {
    * `undefined` rather than rejecting — a cancelled prompt is a dismissal, not a
    * failure, so the never-throws contract above still holds (#12279). This is
    * the one place {@link PluginHostCallOptions} settles instead of rejecting.
+   *
+   * The one rejection a well-formed prompt can meet is `NO_FRONTEND_ATTACHED:`,
+   * when the project is on a host nobody is attached to; see
+   * {@link PluginPromptCallOptions.whenNoFrontend}.
    */
   showQuickPick(
     items: PluginQuickPickItem[],
     options: PluginQuickPickOptions & { canSelectMany: true },
-    callOptions?: PluginHostCallOptions
+    callOptions?: PluginPromptCallOptions
   ): Promise<PluginQuickPickItem[] | undefined>;
   showQuickPick(
     items: PluginQuickPickItem[],
     options?: PluginQuickPickOptions,
-    callOptions?: PluginHostCallOptions
+    callOptions?: PluginPromptCallOptions
   ): Promise<PluginQuickPickItem | undefined>;
   /**
    * Imperatively prompt the user for a line of text, rendered through the app's
@@ -3578,7 +3641,7 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   showInputBox(
     options?: PluginInputBoxOptions,
-    callOptions?: PluginHostCallOptions
+    callOptions?: PluginPromptCallOptions
   ): Promise<string | undefined>;
   /**
    * Imperatively ask the user to confirm an action, rendered through the app's
@@ -3590,7 +3653,10 @@ export interface PluginHostApi extends PluginActivationApi {
    * For an irreversible action set {@link PluginConfirmOptions.destructive} and
    * use a verb-noun `confirmLabel`.
    */
-  showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
+  showConfirm(
+    options: PluginConfirmOptions,
+    callOptions?: PluginPromptCallOptions
+  ): Promise<boolean>;
   /**
    * Persistent, plugin-scoped key/value settings. JSON storage with `chmod 0o600`
    * on POSIX; declared secrets are encrypted through the OS keychain. See

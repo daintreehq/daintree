@@ -7,6 +7,8 @@ import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient, systemClient } from "@/clients";
+import { mintRemoteOperationId } from "@/clients/operationsClient";
+import { runHostOperation } from "@/hooks/useHostConnection";
 import { actionService } from "@/services/ActionService";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -31,7 +33,7 @@ import {
 import { join as joinPath } from "@shared/utils/path";
 import { matchProviderForRemoteUrl } from "@shared/utils/forgeHostnames";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
-import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
+import type { CloneRepoProgressEvent, CloneRepoResult } from "@shared/types/ipc/gitClone";
 import type { ProjectCreationIdentity } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
@@ -152,6 +154,18 @@ function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
   return checkCloneUrl(url, shorthandHost) === "ok";
 }
 
+/** A clone whose answer was lost but that succeeded on the host: its recorded result. */
+function clonedPathFromOutcome(result: unknown): CloneRepoResult {
+  const clonedPath =
+    typeof result === "object" && result !== null && "clonedPath" in result
+      ? result.clonedPath
+      : undefined;
+  if (typeof clonedPath !== "string" || clonedPath.length === 0) {
+    throw new Error("The host finished the clone but didn't report where it went");
+  }
+  return { clonedPath };
+}
+
 const URL_PROBLEM_COPY: Record<Exclude<CloneUrlCheck, "ok">, string> = {
   empty: "Paste a repository URL to continue",
   "unsupported-scheme": "Use an https:// or git@ address",
@@ -211,6 +225,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const footerActionRef = useRef<HTMLButtonElement>(null);
   const previousModeRef = useRef<"configure" | "running" | "failed" | "complete">("configure");
   const hasFinalizedRef = useRef(false);
+  // The running clone's operation id, so Stop cancels this clone and no other.
+  const cloneOpIdRef = useRef<string | null>(null);
 
   const suggestedEmoji = useMemo(() => {
     const trimmed = folderName.trim();
@@ -352,14 +368,23 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     setStrandedPath(joinPath(parentPath, targetFolder));
     setLaunchedDestination(destination);
     hasFinalizedRef.current = false;
+    // Named only in a remote-bound view; a local clone runs untracked, as before.
+    const opId = mintRemoteOperationId() ?? null;
+    cloneOpIdRef.current = opId;
 
     try {
-      const { clonedPath: resultPath } = await projectClient.cloneRepo({
-        url: normalizeCloneUrl(url, shorthandHost),
-        parentPath,
-        folderName: targetFolder,
-        shallowClone,
-      });
+      const { clonedPath: resultPath } = await runHostOperation(
+        opId ?? undefined,
+        () =>
+          projectClient.cloneRepo({
+            url: normalizeCloneUrl(url, shorthandHost),
+            parentPath,
+            folderName: targetFolder,
+            shallowClone,
+            ...(opId ? { opId } : {}),
+          }),
+        { fromResult: clonedPathFromOutcome }
+      );
 
       setClonedPath(resultPath);
       setIsComplete(true);
@@ -387,6 +412,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
         });
       }
     } finally {
+      if (opId && cloneOpIdRef.current === opId) cloneOpIdRef.current = null;
       setIsCloning(false);
       setIsStopping(false);
       // Drop the live phase whatever the outcome. Success and failure have
@@ -400,7 +426,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
   const stopClone = () => {
     setIsStopping(true);
-    void projectClient.cancelClone();
+    const opId = cloneOpIdRef.current;
+    void (opId ? projectClient.cancelClone(opId) : projectClient.cancelClone());
   };
 
   /**

@@ -1094,6 +1094,17 @@ describe("McpServerService", () => {
         description: "Write generated context to the OS clipboard",
       }),
       createManifestEntry({
+        id: "host.switch" as ActionId,
+        title: "Switch host…",
+        description: "Move this window to another machine running Daintree",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "project.openOnHost" as ActionId,
+        title: "Open project on host…",
+        description: "Open this window's project on another host through git",
+      }),
+      createManifestEntry({
         id: "agent.terminal" as ActionId,
         title: "Agent Terminal",
         description: "Drive a running agent",

@@ -66,7 +66,7 @@ import {
   Workflow,
 } from "@/components/icons";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
-import { fileManagerRevealLabel } from "@/lib/platform";
+import { hostFileManagerRevealLabel, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
@@ -406,9 +406,9 @@ export function WorktreeMenuItems({
           <Code className={ICON} />
           Open in editor
         </C.Item>
-        <C.Item onSelect={onRevealInFinder}>
+        <C.Item onSelect={isRemoteWindow() ? onCopyPath : onRevealInFinder}>
           <FolderOpen className={ICON} />
-          {fileManagerRevealLabel()}
+          {hostFileManagerRevealLabel()}
         </C.Item>
       </C.SubContent>
     </C.Sub>

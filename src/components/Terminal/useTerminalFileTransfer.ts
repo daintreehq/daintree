@@ -4,16 +4,16 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { escapeShellArgOptional } from "@shared/utils/shellEscape.js";
+import { hostShellDialect } from "@/hooks/useHostPlatform";
 import {
   formatWithBracketedPaste,
   neutralizeControlCharacters,
 } from "@shared/utils/terminalInputProtocol.js";
-import {
-  FILE_DRAG_MIME,
-  decodeFileDragPaths,
-  hasFileDrag,
-  hasInternalFileDrag,
-} from "@/lib/fileDragPayload";
+import { hasFileDrag } from "@/lib/fileDragPayload";
+import { materializeTransferSources, resolveTransferSources } from "@/lib/transferSources";
+import { materialize } from "@/services/materialize";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { basename } from "@shared/utils/path";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { usePanelStore } from "@/store/panelStore";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -22,6 +22,9 @@ import {
   isImageAttachmentPath,
   type ImageInputSegment,
 } from "@shared/utils/imageAttachmentInput";
+import { terminalUploadSurface, trackUpload } from "./uploads/pendingUploads";
+import { routeDropToComposer } from "./uploads/composerRouting";
+import { registerClipboardImagePaster } from "./uploads/ctrlVImagePaste";
 
 export { IMAGE_EXTENSIONS };
 
@@ -81,6 +84,15 @@ function isDeliverablePath(filePath: string): boolean {
   return true;
 }
 
+/**
+ * The last not-yet-written drop per terminal id. Module scope rather than per
+ * hook: a pane that remounts under the same PTY must still queue behind a drop
+ * its previous mount accepted.
+ */
+const pendingDropWrites = new Map<string, Promise<void>>();
+
+const noop = (): void => {};
+
 interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
   terminalId: string;
   isInputLocked?: boolean;
@@ -107,10 +119,10 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  * Attaches paste and drag-and-drop handlers to the xterm container element.
  *
  * - **Image paste:** Intercepts in capture phase before xterm processes the event.
- *   Calls `clipboard.saveImage()` and writes the resulting file path into the terminal.
+ *   Materializes the clipboard image and writes the resulting path into the terminal.
  * - **Text paste:** Passes through to xterm's native handler (bracketed paste, etc.).
- * - **File drop:** Resolves file paths via `webUtils.getPathForFile()` and writes them
- *   into the terminal as text. Works for both image and non-image files.
+ * - **File drop:** Resolves the dropped paths, runs each through `materialize`, and
+ *   writes the results into the terminal as text. Works for image and non-image files.
  * - **Images to an agent that attaches them** (#12792): when the agent declares
  *   `imageInput: "bracketed-path"` and xterm reports bracketed-paste mode, each
  *   image is pasted on its own as its raw absolute path — the only form the
@@ -212,7 +224,7 @@ export function useTerminalFileTransfer(
     const formatPath = (filePath: string, isAgent: boolean): string =>
       isAgent
         ? formatAtFileTokenForCwd(filePath, cwdProviderRef.current?.() ?? "")
-        : escapeShellArgOptional(filePath);
+        : escapeShellArgOptional(filePath, hostShellDialect());
 
     /**
      * Writes one already-formatted batch as a single insertion, wrapping it in
@@ -341,6 +353,32 @@ export function useTerminalFileTransfer(
         });
     };
 
+    // Ctrl+V in an agent terminal of a remote window: this machine's clipboard
+    // image, uploaded to the host and typed as its path. "empty" lets the
+    // caller hand the key to the agent untouched.
+    const pasteClipboardImageForCtrlV = async (): Promise<"inserted" | "empty" | "failed"> => {
+      const lockEpoch = lockEpochRef.current;
+      try {
+        const { hostPath: filePath } = await materialize({ kind: "clipboard-image" });
+        if (cancelled || !isMountedRef.current || isInputLockedRef.current) return "failed";
+        if (lockEpochRef.current !== lockEpoch) return "failed";
+        if (!filePath || !isDeliverablePath(filePath)) return "failed";
+        const isAgent = isAgentTerminal();
+        writeSegments(buildSegments([filePath], isAgent), isAgent, lockEpoch);
+        return "inserted";
+      } catch (error) {
+        const empty =
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "CLIPBOARD_EMPTY";
+        return empty ? "empty" : "failed";
+      }
+    };
+    const unregisterImagePaster = isRemoteWindow()
+      ? registerClipboardImagePaster(terminalId, pasteClipboardImageForCtrlV)
+      : noop;
+
     const handlePaste = async (event: ClipboardEvent) => {
       if (isInputLockedRef.current) return;
       if (!hasImageClipboardItem(event)) return;
@@ -353,7 +391,7 @@ export function useTerminalFileTransfer(
       const lockEpoch = lockEpochRef.current;
 
       try {
-        const { filePath } = await window.electron.clipboard.saveImage();
+        const { hostPath: filePath } = await materialize({ kind: "clipboard-image" });
         // Re-check after the await: the pane may have unmounted or locked, and
         // the running agent may have changed, while the image was being saved.
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
@@ -390,7 +428,7 @@ export function useTerminalFileTransfer(
       }
     };
 
-    const handleDrop = (e: DragEvent) => {
+    const handleDrop = async (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
       dragDepthRef.current = 0;
@@ -403,40 +441,88 @@ export function useTerminalFileTransfer(
       // A drag out of the file browser (#11576) carries paths where the OS
       // hands over `File` objects. Only the source of the paths differs —
       // both axes below stay exactly as an OS drop drives them, so the two
-      // gestures cannot produce different bytes for the same file. The
-      // internal type wins when both are present, so nothing is written twice.
-      const paths = hasInternalFileDrag(transfer.types)
-        ? (decodeFileDragPaths(transfer.getData(FILE_DRAG_MIME)) ?? [])
-        : Array.from(transfer.files).map((file) => window.electron.webUtils.getPathForFile(file));
+      // gestures cannot produce different bytes for the same file. Read now:
+      // the transfer is blank once this handler yields.
+      const sources = resolveTransferSources(transfer);
+      if (sources.length === 0) return;
 
-      const isAgent = isAgentTerminal();
-      const deliverable = paths.filter(
-        (filePath): filePath is string => !!filePath && isDeliverablePath(filePath)
+      // In a remote window an agent pane's composer takes the drop: the upload
+      // shows its progress there, and the path can't collide with typing.
+      const remote = isRemoteWindow();
+      if (remote && isAgentTerminal() && routeDropToComposer(terminalId, sources)) {
+        onDropSelectRef.current?.();
+        return;
+      }
+
+      // What held the keyboard when the pointer let go. A remote host can take
+      // a while to resolve the paths; if the user has moved on to another
+      // surface by then, the late landing must not pull focus back to here.
+      const focusAtGesture = document.activeElement;
+      // Taken at the gesture, as the image paste does: a lock that comes and
+      // goes while the paths resolve, or while an earlier drop is still
+      // landing, still cancels this one.
+      const lockEpoch = lockEpochRef.current;
+      // Resolution starts now so drops still resolve concurrently, but each
+      // one writes only after the one before it on this terminal has: a small
+      // drop made second must not insert ahead of a large one made first.
+      // A plain shell has no composer, so a slow upload shows on the terminal itself.
+      const materializing = materializeTransferSources(
+        sources,
+        remote
+          ? (source, run) =>
+              trackUpload(terminalUploadSurface(terminalId), basename(source.path), run)
+          : undefined
       );
+      const previous = pendingDropWrites.get(terminalId);
 
-      if (deliverable.length === 0) return;
+      const landing = (async () => {
+        const materialized = await materializing;
+        if (previous) await previous;
+        // Same re-checks as the image paste: the pane may have unmounted or
+        // locked, and the running agent changed, while the paths resolved.
+        if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+        if (lockEpochRef.current !== lockEpoch) return;
+        const paths = materialized.map((result) => result?.hostPath ?? "");
 
-      // Trailing space terminates the last token and leaves the caret ready for
-      // the next argument or prompt word, matching the hybrid input's drop.
-      writeSegments(buildSegments(deliverable, isAgent), isAgent);
+        const isAgent = isAgentTerminal();
+        const deliverable = paths.filter(
+          (filePath): filePath is string => !!filePath && isDeliverablePath(filePath)
+        );
 
-      // The gesture already pointed at this terminal, so it ends the same way a
-      // click on it does: pane selected, keyboard here, ready to type about the
-      // paths that just landed (#11809). Once per accepted batch, and never for
-      // a drop the guards above discarded.
-      //
-      // Order matters. The preference is what `TerminalPane`'s focus effect
-      // reads to decide which sub-surface the newly selected pane hands the
-      // keyboard to, so leaving it on "hybridInput" would route the keyboard to
-      // the input bar even though the paths went to the PTY.
-      //
-      // xterm is focused directly rather than through the panel focus registry:
-      // the drop proves this wrapper is mounted, the target is unambiguously
-      // xterm, and the Assistant and Dev Preview consoles have no registry
-      // entry under their PTY id to route through in the first place.
-      usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
-      onDropSelectRef.current?.();
-      terminalInstanceService.focus(terminalId);
+        if (deliverable.length === 0) return;
+
+        // Trailing space terminates the last token and leaves the caret ready for
+        // the next argument or prompt word, matching the hybrid input's drop.
+        writeSegments(buildSegments(deliverable, isAgent), isAgent, lockEpoch);
+
+        const activeNow = document.activeElement;
+        if (activeNow !== focusAtGesture && activeNow && !container.contains(activeNow)) return;
+
+        // The gesture already pointed at this terminal, so it ends the same way a
+        // click on it does: pane selected, keyboard here, ready to type about the
+        // paths that just landed (#11809). Once per accepted batch, and never for
+        // a drop the guards above discarded.
+        //
+        // Order matters. The preference is what `TerminalPane`'s focus effect
+        // reads to decide which sub-surface the newly selected pane hands the
+        // keyboard to, so leaving it on "hybridInput" would route the keyboard to
+        // the input bar even though the paths went to the PTY.
+        //
+        // xterm is focused directly rather than through the panel focus registry:
+        // the drop proves this wrapper is mounted, the target is unambiguously
+        // xterm, and the Assistant and Dev Preview consoles have no registry
+        // entry under their PTY id to route through in the first place.
+        usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
+        onDropSelectRef.current?.();
+        terminalInstanceService.focus(terminalId);
+      })();
+
+      const settled = landing.then(noop, noop);
+      pendingDropWrites.set(terminalId, settled);
+      void settled.then(() => {
+        if (pendingDropWrites.get(terminalId) === settled) pendingDropWrites.delete(terminalId);
+      });
+      await settled;
     };
 
     // Use capture phase for paste so we intercept before xterm's own handler
@@ -448,6 +534,7 @@ export function useTerminalFileTransfer(
 
     return () => {
       cancelled = true;
+      unregisterImagePaster();
       container.removeEventListener("paste", handlePaste, true);
       container.removeEventListener("dragenter", handleDragEnter);
       container.removeEventListener("dragover", handleDragOver);

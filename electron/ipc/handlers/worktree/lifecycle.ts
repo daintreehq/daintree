@@ -29,6 +29,14 @@ import {
   WORKTREE_RATE_LIMIT_BURST,
 } from "./constants.js";
 import { shouldPlayUiFeedbackSound } from "../../../utils/uiFeedbackSound.js";
+import { WORKTREE_PORT_REDELIVER_METHOD, type ClientEndpoint } from "../../endpoint.js";
+import { AppError } from "../../../utils/errorTypes.js";
+import {
+  getOperationRegistry,
+  normalizeOperationId,
+  untrackedOperationHandle,
+  type OperationHandle,
+} from "../../../services/operations/index.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
@@ -74,6 +82,53 @@ function getWorktreeCreateRequestKey(
     sourcePrNumber: payload.options.sourcePrNumber ?? null,
     sourcePrLinkedIssueNumber: payload.options.sourcePrLinkedIssueNumber ?? null,
   });
+}
+
+/**
+ * The view on another machine a call came from, or null for a call from a
+ * window here. A local window's context never reaches for its endpoint, so the
+ * local paths below run exactly as they always have.
+ */
+function remoteViewEndpoint(ctx: IpcContext): ClientEndpoint | null {
+  if (ctx.senderWindow !== null) return null;
+  return ctx.endpoint?.kind === "remote-view" ? ctx.endpoint : null;
+}
+
+/**
+ * Retry for a view on a remote Shell: reload the endpoint's project here (the
+ * same host activation its switch ran, so the view holds the project
+ * resident), connect the endpoint to the reloaded workspace host, then ask the
+ * view's Shell to post it a fresh relayed port and wait for the renderer's
+ * receipt, as the local path does. Any shortfall throws so the banner stays.
+ */
+async function retryProjectLoadForRemoteView(
+  deps: HandlerDependencies,
+  endpoint: ClientEndpoint
+): Promise<void> {
+  const worktreeService = deps.worktreeService!;
+  const project = endpoint.projectId ? projectStore.getProjectById(endpoint.projectId) : null;
+  if (!project) {
+    throw new Error("No active project to reload");
+  }
+  try {
+    // Loaded here: only a view on another machine takes this path.
+    const { activateProjectOnHost } = await import("../../../services/ProjectSwitchService.js");
+    await activateProjectOnHost(worktreeService, project, endpoint.handle);
+    const host = worktreeService.getHostForProject(project.path);
+    const broker = deps.worktreePortBroker;
+    const connected =
+      host !== undefined &&
+      broker !== undefined &&
+      broker.connectEndpointPort(host, endpoint.handle) &&
+      (await endpoint.request(WORKTREE_PORT_REDELIVER_METHOD, null, {
+        timeoutMs: RETRY_PORT_CONFIRM_TIMEOUT_MS,
+      })) === true;
+    if (!connected) {
+      throw new Error("Reloaded the project but couldn't connect to the worktree service");
+    }
+  } catch (error) {
+    throw new Error(formatErrorMessage(error, "Failed to load worktrees"), { cause: error });
+  }
 }
 
 export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): () => void {
@@ -159,6 +214,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
   };
 
   const handleWorktreeCreate = async (
+    ctx: IpcContext,
     payload: z.output<typeof WorktreeCreatePayloadSchema>
   ): Promise<WorktreeCreateResult> => {
     // Semantic guard: rootPath flows into createHardenedGit at the service
@@ -176,12 +232,40 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(branchValidation.error ?? "Invalid branch name");
     }
     const createKey = getWorktreeCreateRequestKey(payload);
+    if (payload.opId === undefined) {
+      return createCoalesced(payload, createKey, untrackedOperationHandle());
+    }
+    const opId = normalizeOperationId(payload.opId);
+    if (opId === null) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
+    }
+    // Only a caller that names its operation (a remote view) is recorded: a
+    // retry after a lost answer lands on the same record, and a status query
+    // by id answers what became of it. An unnamed create runs as it always has.
+    return getOperationRegistry().run(
+      {
+        opId,
+        kind: "worktree-create",
+        projectId: ctx.projectId,
+        dedupKey: `worktree-create:${createKey}`,
+        fingerprint: createKey,
+      },
+      (op) => createCoalesced(payload, createKey, op)
+    );
+  };
+
+  const createCoalesced = (
+    payload: z.output<typeof WorktreeCreatePayloadSchema>,
+    createKey: string,
+    op: OperationHandle
+  ): Promise<WorktreeCreateResult> => {
     const existingCreate = inFlightWorktreeCreateRequests.get(createKey);
     if (existingCreate) {
       return existingCreate;
     }
 
     const createPromise = (async (): Promise<WorktreeCreateResult> => {
+      op.progress({ fraction: null, stage: "queued", message: "Waiting to start" });
       await waitForBurstRateLimitSlot(
         WORKTREE_RATE_LIMIT_KEY,
         WORKTREE_RATE_LIMIT_INTERVAL_MS,
@@ -190,6 +274,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       if (!deps.worktreeService) {
         throw new Error("Workspace client not initialized");
       }
+      op.progress({ fraction: null, stage: "creating", message: "Creating the worktree" });
       const created = await deps.worktreeService.createWorktree(payload.rootPath, payload.options);
       const { worktreeId } = created;
       try {
@@ -221,6 +306,19 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleWorktreeRestartService = async (ctx: IpcContext): Promise<void> => {
     if (!deps.worktreeService) return;
+    const remote = remoteViewEndpoint(ctx);
+    if (remote) {
+      // A view on another machine has no window here: the workspace host to
+      // restart is its own project's, which the endpoint names.
+      const project = remote.projectId ? projectStore.getProjectById(remote.projectId) : null;
+      const host = project ? deps.worktreeService.getHostForProject(project.path) : undefined;
+      if (!host) {
+        console.warn("[worktree.restart-service] No workspace host for the remote view's project");
+        return;
+      }
+      host.manualRestart();
+      return;
+    }
     const windowId = ctx.senderWindow?.id;
     if (windowId === undefined) {
       console.warn(
@@ -238,6 +336,11 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
   const handleWorktreeRetryProjectLoad = async (ctx: IpcContext): Promise<void> => {
     if (!deps.worktreeService) {
       throw new Error("Workspace service is not available");
+    }
+    const remote = remoteViewEndpoint(ctx);
+    if (remote) {
+      await retryProjectLoadForRemoteView(deps, remote);
+      return;
     }
     const windowId = ctx.senderWindow?.id;
     if (windowId === undefined) {
@@ -261,8 +364,8 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       // renderer's receipt, because a posted port is not a delivered one. Any
       // shortfall throws so the error banner stays and Retry remains available,
       // rather than clearing the banner over a sidebar with no port (#12576).
-      const sender = ctx.event.sender;
-      if (!sender.isDestroyed()) {
+      const sender = ctx.event?.sender;
+      if (sender && !sender.isDestroyed()) {
         deps.worktreeService.attachDirectPort(windowId, sender);
         const host = deps.worktreeService.getHostForProject(project.path);
         const broker = deps.worktreePortBroker;
@@ -360,7 +463,8 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       create: opValidated(
         CHANNELS.WORKTREE_CREATE,
         WorktreeCreatePayloadSchema,
-        handleWorktreeCreate
+        handleWorktreeCreate,
+        { withContext: true }
       ),
       restartService: op(CHANNELS.WORKTREE_RESTART_SERVICE, handleWorktreeRestartService, {
         withContext: true,

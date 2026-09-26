@@ -339,6 +339,25 @@ export function getGitCommonDir(
 }
 
 /**
+ * Uncached `--git-common-dir` that keeps the failure kind: `definitive` is
+ * git's own "not a repository", `transient` is every failure to look (timeout,
+ * spawn error, any other fatal), for a caller that must not read the second as
+ * the first.
+ */
+export function probeGitCommonDir(
+  worktreePath: string,
+  timeout: number
+): Promise<{ path: string } | { path: null; failure: "definitive" | "transient" }> {
+  return resolveGitPath(
+    "--git-common-dir",
+    worktreePath,
+    timeout,
+    false,
+    "Failed to resolve git common directory"
+  );
+}
+
+/**
  * Resolve the currently checked-out branch name for a worktree. Returns `null`
  * for a detached HEAD (git emits the literal "HEAD") or on any failure. Not
  * cached: unlike the git dir, the branch is mutable over a worktree's life.

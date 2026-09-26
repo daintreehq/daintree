@@ -1,4 +1,4 @@
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetRunStore } from "@/store/fleetRunStore";
@@ -61,7 +61,8 @@ export async function runManagedFleetBroadcast(
       draft,
       targetIds,
       perTargetOverrides,
-      controller.signal
+      controller.signal,
+      { retry: opts?.isRetry === true }
     );
     if (runId !== null) {
       useFleetRunStore.getState().applySubmissionResult(runId, result);
@@ -135,6 +136,96 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
 }
 
 /**
+ * What a structured broadcast's outcome does to the fleet: dead targets are
+ * disarmed, retryable ones get the failure chip, delivered ones lose any old
+ * failure dot, and the result is announced.
+ */
+function applyFleetBroadcastOutcome(
+  text: string,
+  eligibleTargets: string[],
+  result: FleetExecutionResult
+): void {
+  if (result.failureCount > 0) {
+    logWarn("[fleetEnterBroadcast] broadcast had rejections", {
+      failureCount: result.failureCount,
+      failedIds: result.failedIds,
+      permanentlyFailedIds: result.permanentlyFailedIds,
+      transientlyFailedIds: result.transientlyFailedIds,
+    });
+    if (result.permanentlyFailedIds.length > 0) {
+      // Mirror the raw-input path (`applyFleetBroadcastResult`): a dead
+      // PTY can't take the broadcast, so disarm it rather than leave the
+      // user typing into a gone pane. The failure chip is intentionally
+      // NOT recorded for these — `fleetFailureStore`'s `armedIds`
+      // subscription would auto-dismiss it the moment we disarm, so the
+      // chip would never appear and we'd just thrash the store.
+      const arming = useFleetArmingStore.getState();
+      for (const id of result.permanentlyFailedIds) {
+        // Another host's agent leaves by the same call.
+        arming.disarmId(id);
+        // `executeFleetBroadcast` already calls `clearDirectingState` on
+        // every rejected target, so we don't repeat it here.
+        useFleetFailureStore.getState().dismissId(id);
+      }
+    }
+    if (result.transientlyFailedIds.length > 0) {
+      // The disarm count rides along so the banner can describe THIS
+      // broadcast's permanent casualties without consulting the run store
+      // (whose run may be superseded by the time the banner renders).
+      useFleetFailureStore
+        .getState()
+        .recordFailure(text, result.transientlyFailedIds, result.permanentlyFailedIds.length);
+    }
+    // Successful targets in a partial-failure run still clear their
+    // stale failure dots — same logic as the all-success branch below.
+    for (const t of result.perTarget) {
+      if (t.status === "fulfilled") {
+        useFleetFailureStore.getState().dismissId(t.terminalId);
+      }
+    }
+  } else if (!result.cancelled) {
+    // A successful broadcast clears any stale failure dot on these
+    // targets — the partial-failure state from a prior attempt is
+    // now resolved.
+    for (const id of eligibleTargets) useFleetFailureStore.getState().dismissId(id);
+    // Fire the ribbon's one-shot commit flash, matching the raw-input
+    // path (`broadcastFleetRawInput`). The structured path's analog of
+    // "committed bytes" is a non-cancelled, fully-successful fan-out.
+    useFleetArmingStore.getState().noteBroadcastCommit();
+  } else if (result.successCount > 0) {
+    // Partial cancel — dispatched batches that succeeded should clear
+    // their old failure dots; targets in skipped batches stay as-is.
+    for (const t of result.perTarget) {
+      if (t.status === "fulfilled") {
+        useFleetFailureStore.getState().dismissId(t.terminalId);
+      }
+    }
+  }
+  useAnnouncerStore.getState().announce(buildBroadcastAnnouncement(result), "polite");
+  // Subtle audio confirmation that the prompt fanned out. Reuses the
+  // existing context-injected sound — semantically a fleet broadcast
+  // IS injecting the same context into N agents. SoundService handles
+  // dampening/throttling and respects the user's UI-feedback toggle.
+  // Skip the chirp on cancel: the announcement is the feedback channel.
+  if (!result.cancelled) {
+    window.electron?.notification?.playUiEvent("context-injected").catch(() => {});
+  }
+}
+
+/**
+ * Send a draft to the whole fleet from outside any pane's composer — the
+ * ribbon's own field, which is the only place to type when every member is
+ * an agent on another host. True when something was dispatched.
+ */
+export async function sendDraftToFleet(text: string): Promise<boolean> {
+  const targets = filterEligibleIds(resolveFleetBroadcastTargetIds());
+  if (text.length === 0 || targets.length < 2) return false;
+  const result = await runManagedFleetBroadcast(text, targets);
+  applyFleetBroadcastOutcome(text, targets, result);
+  return true;
+}
+
+/**
  * Enter from a focused armed pane fans the draft out to every armed peer
  * (the "broadcast by default" model). Returns true when the broadcast was
  * either dispatched or absorbed because every armed target was
@@ -164,8 +255,8 @@ export function tryFleetBroadcastFromEditor(
   text: string,
   onSent: () => void
 ): boolean {
-  const armed = useFleetArmingStore.getState().armedIds;
-  if (!armed.has(terminalId) || armed.size < 2) return false;
+  const arming = useFleetArmingStore.getState();
+  if (!arming.armedIds.has(terminalId) || selectFleetMemberCount(arming) < 2) return false;
 
   const targets = resolveFleetBroadcastTargetIds();
   if (targets.length === 0) return false;
@@ -234,70 +325,7 @@ export function tryFleetBroadcastFromEditor(
       // Run-history recording now happens when the supervised run finalizes
       // (fleetRunStore), so the record carries watch-phase outcomes too.
       const result = await runManagedFleetBroadcast(text, eligibleTargets, overridesArg);
-      if (result.failureCount > 0) {
-        logWarn("[fleetEnterBroadcast] broadcast had rejections", {
-          failureCount: result.failureCount,
-          failedIds: result.failedIds,
-          permanentlyFailedIds: result.permanentlyFailedIds,
-          transientlyFailedIds: result.transientlyFailedIds,
-        });
-        if (result.permanentlyFailedIds.length > 0) {
-          // Mirror the raw-input path (`applyFleetBroadcastResult`): a dead
-          // PTY can't take the broadcast, so disarm it rather than leave the
-          // user typing into a gone pane. The failure chip is intentionally
-          // NOT recorded for these — `fleetFailureStore`'s `armedIds`
-          // subscription would auto-dismiss it the moment we disarm, so the
-          // chip would never appear and we'd just thrash the store.
-          const arming = useFleetArmingStore.getState();
-          for (const id of result.permanentlyFailedIds) {
-            arming.disarmId(id);
-            // `executeFleetBroadcast` already calls `clearDirectingState` on
-            // every rejected target, so we don't repeat it here.
-            useFleetFailureStore.getState().dismissId(id);
-          }
-        }
-        if (result.transientlyFailedIds.length > 0) {
-          // The disarm count rides along so the banner can describe THIS
-          // broadcast's permanent casualties without consulting the run store
-          // (whose run may be superseded by the time the banner renders).
-          useFleetFailureStore
-            .getState()
-            .recordFailure(text, result.transientlyFailedIds, result.permanentlyFailedIds.length);
-        }
-        // Successful targets in a partial-failure run still clear their
-        // stale failure dots — same logic as the all-success branch below.
-        for (const t of result.perTarget) {
-          if (t.status === "fulfilled") {
-            useFleetFailureStore.getState().dismissId(t.terminalId);
-          }
-        }
-      } else if (!result.cancelled) {
-        // A successful broadcast clears any stale failure dot on these
-        // targets — the partial-failure state from a prior attempt is
-        // now resolved.
-        for (const id of eligibleTargets) useFleetFailureStore.getState().dismissId(id);
-        // Fire the ribbon's one-shot commit flash, matching the raw-input
-        // path (`broadcastFleetRawInput`). The structured path's analog of
-        // "committed bytes" is a non-cancelled, fully-successful fan-out.
-        useFleetArmingStore.getState().noteBroadcastCommit();
-      } else if (result.successCount > 0) {
-        // Partial cancel — dispatched batches that succeeded should clear
-        // their old failure dots; targets in skipped batches stay as-is.
-        for (const t of result.perTarget) {
-          if (t.status === "fulfilled") {
-            useFleetFailureStore.getState().dismissId(t.terminalId);
-          }
-        }
-      }
-      useAnnouncerStore.getState().announce(buildBroadcastAnnouncement(result), "polite");
-      // Subtle audio confirmation that the prompt fanned out. Reuses the
-      // existing context-injected sound — semantically a fleet broadcast
-      // IS injecting the same context into N agents. SoundService handles
-      // dampening/throttling and respects the user's UI-feedback toggle.
-      // Skip the chirp on cancel: the announcement is the feedback channel.
-      if (!result.cancelled) {
-        window.electron?.notification?.playUiEvent("context-injected").catch(() => {});
-      }
+      applyFleetBroadcastOutcome(text, eligibleTargets, result);
     } finally {
       // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
       // Clear them so the next broadcast starts from the resolved defaults.

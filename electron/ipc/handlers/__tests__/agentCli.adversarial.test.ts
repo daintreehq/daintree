@@ -29,6 +29,14 @@ vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => 
 
 vi.mock("../../utils.js", () => ({
   sendToRenderer: sendToRendererMock,
+  // Mirrors the real helper: a local sender with no window gets nothing.
+  sendToRendererContext: (
+    ctx: { senderWindow: Electron.BrowserWindow | null },
+    channel: string,
+    ...args: unknown[]
+  ) => {
+    if (ctx.senderWindow) sendToRendererMock(ctx.senderWindow, channel, ...args);
+  },
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)

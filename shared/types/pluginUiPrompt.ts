@@ -16,11 +16,30 @@ import type {
 /** Discriminant for the three imperative prompt kinds. */
 export type PluginUiPromptKind = "quickPick" | "inputBox" | "confirm";
 
+/**
+ * Set on a prompt that waited for someone to attach before it could be shown:
+ * the host it came from and when the plugin asked. The dialog says so, since
+ * the question may be hours old.
+ */
+export interface PluginUiPromptWaited {
+  hostName: string;
+  /** Epoch ms. */
+  askedAt: number;
+}
+
 /** Kind-tagged parameters for one prompt request. */
-export type PluginUiPromptParams =
+export type PluginUiPromptParams = (
   | { kind: "quickPick"; items: PluginQuickPickItem[]; options: PluginQuickPickOptions }
   | { kind: "inputBox"; options: PluginInputBoxOptions }
-  | { kind: "confirm"; options: PluginConfirmOptions };
+  | { kind: "confirm"; options: PluginConfirmOptions }
+) & { waited?: PluginUiPromptWaited };
+
+/**
+ * What a prompt does when nobody is attached to answer it: fail with
+ * `NO_FRONTEND_ATTACHED` (the default), or wait and show on the next frontend
+ * that attaches.
+ */
+export type PluginUiPromptWhenNoFrontend = "fail" | "queue";
 
 /**
  * One prompt request sent main → renderer. `promptId` correlates the eventual

@@ -57,6 +57,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import {
   APP_SOURCE_LABEL,
   UNKNOWN_PROJECT_LABEL,
+  formatNotificationSource,
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
 
@@ -110,13 +111,17 @@ function isAskingGroup(group: ThreadGroup): boolean {
 }
 
 function getGroupContextKey(group: ThreadGroup): string {
+  // Another host's ids can collide with nothing here, but its rows still
+  // belong under that host's name, not this machine's projects.
+  const host = group.entries.find((e) => e.context?.hostName)?.context?.hostName;
+  const prefix = host ? `host:${host}\0` : "";
   for (const e of group.entries) {
     const wt = e.context?.worktreeId;
-    if (wt) return `wt:${wt}`;
+    if (wt) return `${prefix}wt:${wt}`;
     const proj = e.context?.projectId;
-    if (proj) return `proj:${proj}`;
+    if (proj) return `${prefix}proj:${proj}`;
   }
-  return CONTEXT_NONE_KEY;
+  return host ? `${prefix}none` : CONTEXT_NONE_KEY;
 }
 
 interface NotificationCenterProps {
@@ -134,6 +139,7 @@ interface ContextSection {
   key: string;
   worktreeId?: string;
   projectId?: string;
+  hostName?: string;
   groups: ThreadGroup[];
 }
 
@@ -198,6 +204,7 @@ function partitionByContext(groups: ThreadGroup[]): ContextSection[] {
         key,
         worktreeId: first?.context?.worktreeId,
         projectId: first?.context?.projectId,
+        hostName: g.entries.find((e) => e.context?.hostName)?.context?.hostName,
         groups: [],
       });
       order.push(key);
@@ -1761,6 +1768,7 @@ function ChronoSection({
           labelId={headerLabelId}
           worktreeId={section.worktreeId}
           projectId={section.projectId}
+          hostName={section.hostName}
           count={section.groups.length}
           newCount={
             lastClosedAt > 0
@@ -1969,6 +1977,7 @@ interface RowMenuHandlers {
 function ContextSectionHeader({
   worktreeId,
   projectId,
+  hostName,
   count,
   newCount,
   unreadIds,
@@ -1979,6 +1988,8 @@ function ContextSectionHeader({
   labelId: string;
   worktreeId?: string;
   projectId?: string;
+  /** The other host the section's rows came from, which then leads its name. */
+  hostName?: string;
   count: number;
   /**
    * Rows here newer than the last look. Grouped, there's no single divider to
@@ -2005,7 +2016,8 @@ function ContextSectionHeader({
     : undefined;
   // A main worktree is named after its folder, usually the project's own name.
   const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
-  const label = [project, worktree].filter(Boolean).join(" · ") || APP_SOURCE_LABEL;
+  const host = hostName?.trim() || undefined;
+  const label = formatNotificationSource(project, worktree, host) ?? APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
   return (
     // Sticky, so the place a row belongs to stays on screen while you read
@@ -2035,6 +2047,12 @@ function ContextSectionHeader({
             className="flex min-w-0 items-baseline text-text-primary"
             title={label}
           >
+            {host ? <span className="shrink-0 truncate">{host}</span> : null}
+            {host && (project || worktree) ? (
+              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
+                ·
+              </span>
+            ) : null}
             {project ? <span className="min-w-0 truncate">{project}</span> : null}
             {project && worktree ? (
               <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
@@ -2042,7 +2060,9 @@ function ContextSectionHeader({
               </span>
             ) : null}
             {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
-            {!project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
+            {!host && !project && !worktree ? (
+              <span className="truncate">{APP_SOURCE_LABEL}</span>
+            ) : null}
           </span>
           {/* Beside the name it counts, not beside the button — at the far end
             it read as part of "Mark read". */}

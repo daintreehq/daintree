@@ -146,6 +146,53 @@ export function isLocalhostUrl(url: string): boolean {
   }
 }
 
+/** A loopback address and port a forward actually holds on this machine. */
+export interface BoundLoopbackEndpoint {
+  /** `127.0.0.1` or `::1`. */
+  address: string;
+  port: number;
+}
+
+const DEFAULT_PORTS: Record<string, number> = {
+  "http:": 80,
+  "https:": 443,
+  "ws:": 80,
+  "wss:": 443,
+};
+
+/**
+ * True for an http(s)/ws(s) URL that connects to one of `bound`: in a window
+ * bound to a remote host, the addresses its forwards hold are the host's
+ * localhost, and every other loopback address and port is this machine's.
+ * Narrower than {@link isLoopbackHostname} on purpose: `127.0.0.2` is loopback
+ * but no forward binds it. `localhost` counts as `127.0.0.1`, which every
+ * forward holds; IPv4-mapped IPv6 counts as the IPv4 address it maps.
+ */
+export function isBoundLoopbackUrl(
+  url: string,
+  bound: ReadonlyArray<BoundLoopbackEndpoint>
+): boolean {
+  if (bound.length === 0) return false;
+  try {
+    const parsed = new URL(url);
+    const defaultPort = DEFAULT_PORTS[parsed.protocol];
+    if (defaultPort === undefined) return false;
+    if (parsed.username || parsed.password) return false;
+    const host = stripBrackets(parsed.hostname.toLowerCase().replace(/\.$/, ""));
+    let address: string;
+    if (host === "localhost") {
+      address = "127.0.0.1";
+    } else {
+      if (!ipaddr.isValid(host)) return false;
+      address = ipaddr.process(host).toString();
+    }
+    const port = parsed.port ? Number(parsed.port) : defaultPort;
+    return bound.some((endpoint) => endpoint.port === port && endpoint.address === address);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * True for the stable dev-preview proxy origin: an `http://*.localhost` subdomain (#9100).
  * Chromium maps every `*.localhost` host to loopback as a Secure Context, so these never reach

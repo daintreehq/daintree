@@ -63,6 +63,9 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
 // contribution wired to one is a dead button — reject it at parse time (#10580).
 const DENY_PLUGIN_DISPATCH_SET: ReadonlySet<string> = new Set(DENY_PLUGIN_DISPATCH_ACTION_IDS);
 
+/** Values of a manifest's `platforms`: Node's `process.platform` names. */
+export const PLUGIN_PLATFORMS = ["darwin", "linux", "win32"] as const;
+
 /**
  * The unrefined object base — exported so the field-consumer contract test
  * (`manifestContributionConsumers.test.ts`) can enumerate `.shape` without
@@ -1887,6 +1890,20 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // here — whether it is required, optional-but-rejected, or absent is a
       // function of the discovering `origin`, enforced in `superRefine`.
       scope: z.literal("project").optional(),
+      // Whether a window attached from another machine may use the plugin.
+      // Absent means supported: plugin main code runs on the host either way.
+      remote: z.enum(["supported", "unsupported"]).optional(),
+      // The operating systems the package has a build for. Absent means any:
+      // only a plugin shipping native modules for one OS needs to say so, and
+      // installing it on another machine is refused before anything is copied.
+      platforms: z
+        .array(z.enum(PLUGIN_PLATFORMS))
+        .min(1)
+        .max(PLUGIN_PLATFORMS.length)
+        .refine((list) => new Set(list).size === list.length, {
+          message: "platforms must not repeat an entry",
+        })
+        .optional(),
       capabilities: z.array(PluginCapabilitySchema).default([]),
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),

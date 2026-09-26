@@ -9,3 +9,8 @@ declare global {
       }
     | undefined;
 }
+
+/** False in Windows builds; see electron/types/buildDefines.d.ts. */
+declare global {
+  const __DAINTREE_REMOTE_HOSTS__: boolean;
+}

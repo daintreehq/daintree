@@ -362,6 +362,23 @@ export const SEL = {
     mutedPill: '[data-testid="notification-muted-pill"]',
     mutedEmptyState: '[data-testid="notification-muted-empty-state"]',
   },
+  remoteHosts: {
+    hostChip: '[data-testid="host-chip"]',
+    /** A row of the host chip's menu; "local" is this machine. */
+    hostMenuRow: (hostId: string) => `[role="menuitem"][data-host-id="${hostId}"]`,
+    settingsTab: '[role="tab"][data-tab="hosts"]',
+    addHostDialog: '[data-testid="add-host-dialog"]',
+    /** The recovery banner for the window's link to its host (every variant). */
+    connectionBanner:
+      '[role="status"]:has-text("Reconnecting…"), [role="status"]:has-text("Connecting to"), [role="alert"]:has-text("is unreachable"), [role="status"]:has-text("runs a different build")',
+    /** Another frontend drives the host project this view shows. */
+    drivenElsewhereBanner: '[role="status"]:has-text("is being driven from")',
+    /** On the host's own screen, once a Shell has taken its project over. */
+    takenFromHostBanner: '[role="status"]:has-text("Being driven from")',
+    switchDialogJustSwitch: '[role="dialog"] button:has-text("Just switch host")',
+    projectPickerOption: (projectName: string) =>
+      `[role="option"][id^="host-project-picker-"]:has-text("${projectName}")`,
+  },
   actionPalette: {
     dialog: '[role="dialog"][aria-label="Command palette"]',
     searchInput: '[aria-label="Search actions"]',

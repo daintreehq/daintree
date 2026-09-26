@@ -9,6 +9,10 @@ import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
 
 export default defineConfig({
   plugins: [pluginStyleContract()],
+  define: {
+    __DAINTREE_REMOTE_HOSTS__: "true",
+    __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

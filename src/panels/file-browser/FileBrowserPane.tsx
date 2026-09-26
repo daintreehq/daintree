@@ -34,6 +34,15 @@ import { useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { FileTreeView } from "./FileTreeView";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { materialize } from "@/services/materialize";
+import type { TransferSource } from "@/lib/transferSources";
+import {
+  fileBrowserUploadSurface,
+  trackUpload,
+} from "@/components/Terminal/uploads/pendingUploads";
+import { PendingUploadChips } from "@/components/Terminal/uploads/PendingUploadChips";
+import { LazyUploadConfirmHost } from "@/components/Terminal/uploads/LazyUploadConfirmHost";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { buildFileBrowserGitStatusIndex, isReadableRelativePath } from "./fileBrowserGitStatus";
@@ -699,6 +708,27 @@ export function FileBrowserPane({
   const handleRefresh = useCallback(() => {
     refreshAll({ manual: true });
   }, [refreshAll]);
+
+  // Add to project, in a window attached to a remote host: files from this
+  // machine dropped with Option held are uploaded into the folder they were
+  // dropped on. The only way a dropped file lands in the repository.
+  const isRemote = isRemoteWindow();
+  const uploadSurface = fileBrowserUploadSurface(id);
+  const handleAddFilesToProject = useCallback(
+    (sources: Extract<TransferSource, { kind: "local" }>[], directory: string) => {
+      void Promise.allSettled(
+        sources.map((source) =>
+          trackUpload(uploadSurface, source.name || basename(source.path), (progress) =>
+            materialize(
+              { kind: "local-file", path: source.path },
+              { ...progress, destination: { kind: "worktree", directory } }
+            )
+          )
+        )
+      ).then(() => refreshAll());
+    },
+    [uploadSurface, refreshAll]
+  );
 
   // Returning to a project the user left. A view swap is not a page load and
   // `document.visibilityState` never moves for a cached child WebContentsView
@@ -1564,7 +1594,19 @@ export function FileBrowserPane({
           // worktree root or three folders down inside it.
           label={rootPath === "" ? `Files in ${title}` : `Files in ${title}/${rootPath}`}
           gitStatusIndex={gitStatusIndex}
+          {...(isRemote && isWorktreeSource
+            ? { onAddFilesToProject: handleAddFilesToProject }
+            : {})}
         />
+        {isRemote && (
+          <>
+            <PendingUploadChips
+              surface={uploadSurface}
+              className="shrink-0 border-t border-border-default p-2"
+            />
+            <LazyUploadConfirmHost />
+          </>
+        )}
         {/* A root failure with a tree on screen: the banner joins the rows
             rather than replacing them, so the last-known files stay usable
             while the error is visible and retryable. Below the rows, like the

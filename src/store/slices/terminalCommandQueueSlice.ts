@@ -3,6 +3,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 import { terminalClient } from "@/clients";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { isTerminalInputBlocked, onTerminalInputUnblocked } from "@/services/terminal/inputGate";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -39,93 +40,116 @@ export const createTerminalCommandQueueSlice =
   (
     getTerminal: (id: string) => CarrierPanel | undefined
   ): StateCreator<TerminalCommandQueueSlice, [], [], TerminalCommandQueueSlice> =>
-  (set, get) => ({
-    commandQueue: [],
-    commandQueueCountById: {},
-
-    queueCommand: (terminalId, payload, description, origin = "automation") => {
-      const terminal = getTerminal(terminalId);
-
-      if (!terminal) {
-        console.warn(`Cannot queue command: terminal ${terminalId} not found`);
-        return;
+  (set, get) => {
+    // An agent that was already idle when input was blocked emits no further
+    // state change once it opens again, so the gate itself restarts the queue.
+    onTerminalInputUnblocked(() => {
+      const terminalIds = new Set(get().commandQueue.map((c) => c.terminalId));
+      for (const terminalId of terminalIds) {
+        if (isTerminalInputBlocked()) return;
+        const terminal = getTerminal(terminalId);
+        if (!terminal) {
+          // Closed (or replaced) while blocked: nothing is there to receive it.
+          get().clearQueue(terminalId);
+          continue;
+        }
+        const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
+        if (isAgentReady(agentState)) get().processQueue(terminalId);
       }
+    });
 
-      if (origin === "user") {
-        terminalClient.write(terminalId, payload);
-        return;
-      }
+    return {
+      commandQueue: [],
+      commandQueueCountById: {},
 
-      const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
-      if (isAgentReady(agentState)) {
-        terminalClient.write(terminalId, payload);
-        return;
-      }
+      queueCommand: (terminalId, payload, description, origin = "automation") => {
+        const terminal = getTerminal(terminalId);
 
-      const id = crypto.randomUUID();
-      set((state) => ({
-        commandQueue: [
-          ...state.commandQueue,
-          { id, terminalId, payload, description, queuedAt: Date.now(), origin },
-        ],
-        commandQueueCountById: {
-          ...state.commandQueueCountById,
-          [terminalId]: (state.commandQueueCountById[terminalId] ?? 0) + 1,
-        },
-      }));
-    },
-
-    processQueue: (terminalId) => {
-      const terminal = getTerminal(terminalId);
-      const agentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
-      if (!terminal || !isAgentReady(agentState)) {
-        console.warn(
-          `Cannot process queue: terminal ${terminalId} is not ready (state: ${agentState})`
-        );
-        return;
-      }
-
-      set((state) => {
-        const forTerminal = state.commandQueue.filter((c) => c.terminalId === terminalId);
-        const remaining = state.commandQueue.filter((c) => c.terminalId !== terminalId);
-
-        if (forTerminal.length > 0) {
-          const cmd = forTerminal[0]!;
-          terminalClient.write(cmd.terminalId, cmd.payload);
-
-          const nextCount = Math.max(0, (state.commandQueueCountById[terminalId] ?? 0) - 1);
-          const newCountById = { ...state.commandQueueCountById };
-          if (nextCount === 0) {
-            delete newCountById[terminalId];
-          } else {
-            newCountById[terminalId] = nextCount;
-          }
-
-          return {
-            commandQueue: [...remaining, ...forTerminal.slice(1)],
-            commandQueueCountById: newCountById,
-          };
+        if (!terminal) {
+          console.warn(`Cannot queue command: terminal ${terminalId} not found`);
+          return;
         }
 
-        return state;
-      });
-    },
+        if (origin === "user") {
+          terminalClient.write(terminalId, payload);
+          return;
+        }
 
-    clearQueue: (terminalId) => {
-      set((state) => {
-        const newCountById = { ...state.commandQueueCountById };
-        delete newCountById[terminalId];
-        return {
-          commandQueue: state.commandQueue.filter((c) => c.terminalId !== terminalId),
-          commandQueueCountById: newCountById,
-        };
-      });
-    },
+        const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
+        // A blocked write is dropped, not delivered, so automation waits in the
+        // queue instead of being counted as sent.
+        if (isAgentReady(agentState) && !isTerminalInputBlocked()) {
+          terminalClient.write(terminalId, payload);
+          return;
+        }
 
-    getQueueCount: (terminalId) => {
-      return get().commandQueueCountById[terminalId] ?? 0;
-    },
-  });
+        const id = crypto.randomUUID();
+        set((state) => ({
+          commandQueue: [
+            ...state.commandQueue,
+            { id, terminalId, payload, description, queuedAt: Date.now(), origin },
+          ],
+          commandQueueCountById: {
+            ...state.commandQueueCountById,
+            [terminalId]: (state.commandQueueCountById[terminalId] ?? 0) + 1,
+          },
+        }));
+      },
+
+      processQueue: (terminalId) => {
+        // Keep the command until the host link is back or this view drives again.
+        if (isTerminalInputBlocked()) return;
+        const terminal = getTerminal(terminalId);
+        const agentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
+        if (!terminal || !isAgentReady(agentState)) {
+          console.warn(
+            `Cannot process queue: terminal ${terminalId} is not ready (state: ${agentState})`
+          );
+          return;
+        }
+
+        set((state) => {
+          const forTerminal = state.commandQueue.filter((c) => c.terminalId === terminalId);
+          const remaining = state.commandQueue.filter((c) => c.terminalId !== terminalId);
+
+          if (forTerminal.length > 0) {
+            const cmd = forTerminal[0]!;
+            terminalClient.write(cmd.terminalId, cmd.payload);
+
+            const nextCount = Math.max(0, (state.commandQueueCountById[terminalId] ?? 0) - 1);
+            const newCountById = { ...state.commandQueueCountById };
+            if (nextCount === 0) {
+              delete newCountById[terminalId];
+            } else {
+              newCountById[terminalId] = nextCount;
+            }
+
+            return {
+              commandQueue: [...remaining, ...forTerminal.slice(1)],
+              commandQueueCountById: newCountById,
+            };
+          }
+
+          return state;
+        });
+      },
+
+      clearQueue: (terminalId) => {
+        set((state) => {
+          const newCountById = { ...state.commandQueueCountById };
+          delete newCountById[terminalId];
+          return {
+            commandQueue: state.commandQueue.filter((c) => c.terminalId !== terminalId),
+            commandQueueCountById: newCountById,
+          };
+        });
+      },
+
+      getQueueCount: (terminalId) => {
+        return get().commandQueueCountById[terminalId] ?? 0;
+      },
+    };
+  };
 
 /**
  * Determines if the agent is ready to receive automation input.

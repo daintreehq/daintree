@@ -38,6 +38,9 @@ export function useActiveGlobalCause(): GlobalBannerSlot {
  *  without classifying it here is a compile error (TS2741) — the suppression
  *  domain can never silently widen to a new advisory slot. */
 const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
+  // The window's host is out of reach: a pane's spawn/reconnect error can't be
+  // acted on until the link is back.
+  "host-connection": true,
   "host-crash": true,
   "watchdog-disabled": true,
   "safe-mode": true,
@@ -45,6 +48,9 @@ const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
   // Advisory: a memory pause slows output but the backend stays connected, so
   // a pane's spawn/reconnect errors are still worth acting on.
   "host-memory-stall": false,
+  // Advisory: another machine drives the project, but the backend is fine and
+  // a pane's own errors are still worth acting on once it is taken back.
+  "drive-lease": false,
   // Advisory: the backend is connected and a pane's own spawn/reconnect errors
   // stay actionable — a missing Git doesn't make them un-fixable.
   "missing-prerequisite": false,

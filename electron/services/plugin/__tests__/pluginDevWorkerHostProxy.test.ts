@@ -1024,3 +1024,45 @@ describe("PluginDevWorkerHostProxy reloadPanel (#12610)", () => {
     await expect(promise).resolves.toBe("unavailable");
   });
 });
+
+describe("PluginDevWorkerHostProxy invocation id", () => {
+  it("stamps each host call with the invocation whose handler made it", async () => {
+    const { proxy, sent } = makeProxy();
+    let releaseA!: () => void;
+    const aWaits = new Promise<void>((resolve) => (releaseA = resolve));
+    proxy.host.registerHandler("go", async (_ctx: unknown, which: unknown) => {
+      if (which === "a") await aWaits;
+      void proxy.host.showConfirm({ title: String(which) });
+      return null;
+    });
+    // A timer or subscription outside any invocation.
+    void proxy.host.showConfirm({ title: "background" });
+
+    const ctx = { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.demo" };
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i1",
+      kind: "handler",
+      channel: "go",
+      ctx,
+      args: ["a"],
+    });
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i2",
+      kind: "handler",
+      channel: "go",
+      ctx,
+      args: ["b"],
+    });
+    await flush();
+    releaseA();
+    await flush();
+
+    const calls = sent.filter((m) => m.type === "host-call" && m.method === "showConfirm");
+    const byTitle = Object.fromEntries(
+      calls.map((m) => [m.params.options.title, m.invocationId ?? null])
+    );
+    expect(byTitle).toEqual({ background: null, a: "i1", b: "i2" });
+  });
+});

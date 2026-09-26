@@ -8,6 +8,7 @@ import {
   eventForCombo,
   FULL_CONTEXT,
   getSharedCatalog,
+  isHostGatedActionId,
   loadActionModules,
   makeKeyEvent,
   PROBE_CONFIRM_ID,
@@ -347,7 +348,8 @@ export const actionDispatchScenarios: PerfScenario[] = [
       let enablementMisses = 0;
       const fullIds = new Set(fullEntries.map((entry) => entry.id));
       for (const id of mods.BUILT_IN_ACTION_IDS) {
-        if (!fullIds.has(id)) enablementMisses += 1;
+        // A host-gated action listed with no host is as wrong as a missing one.
+        if (fullIds.has(id) === isHostGatedActionId(id)) enablementMisses += 1;
       }
       const gatedFull = fullEntries.find((entry) => entry.id === PROBE_GATED_ID);
       const gatedEmpty = emptyEntries.find((entry) => entry.id === PROBE_GATED_ID);
@@ -454,7 +456,8 @@ export const actionDispatchScenarios: PerfScenario[] = [
       // Grading is outside the timed bracket: it is oracle work, not projection
       // work, and the advertised payload is what this scenario prices.
 
-      // The listing owes back every action that was registered. Read against
+      // The listing owes back every action that was registered, bar the
+      // host-gated ones a window with no host must not list. Read against
       // the ids that went INTO register(), never against the listing itself —
       // an expectation derived from `list()` makes an empty listing vacuously
       // correct, and an empty listing is the smallest payload and the fastest
@@ -462,7 +465,7 @@ export const actionDispatchScenarios: PerfScenario[] = [
       let surfaceMisses = 0;
       const entryById = new Map(manifest.map((entry) => [entry.id, entry]));
       for (const id of catalog.registeredIds) {
-        if (!entryById.has(id)) surfaceMisses += 1;
+        if (entryById.has(id) === isHostGatedActionId(id)) surfaceMisses += 1;
       }
 
       let toolSchemaMisses = 0;
@@ -484,9 +487,11 @@ export const actionDispatchScenarios: PerfScenario[] = [
         const expected = new Set<string>();
         for (const id of permitted) {
           const entry = entryById.get(id);
-          // An id the allowlist advertises that the catalog never produced.
+          // An id the allowlist advertises that the catalog never produced —
+          // bar a host-gated one, which a window with no host leaves out of
+          // the listing by design (checked against the registration above).
           if (!entry) {
-            surfaceMisses += 1;
+            if (!isHostGatedActionId(id)) surfaceMisses += 1;
             continue;
           }
           if (entry.danger !== "restricted" && entry.mcpVisibility !== "hidden") expected.add(id);
@@ -765,19 +770,19 @@ export const actionDispatchScenarios: PerfScenario[] = [
       // listing: it returns a constant number of rows at every scale, which is
       // the flattest and best-looking slope available. Each scale therefore owes
       // back the FULL projected set — every id that was registered into that
-      // catalog, clones included.
+      // catalog, clones included, and none of the host-gated ones.
       let scalingMisses = 0;
       for (const { size, catalog } of scales) {
         const ids = new Set((projectedBySize.get(size) ?? []).map((entry) => entry.id));
         for (const id of catalog.registeredIds) {
-          if (!ids.has(id)) scalingMisses += 1;
+          if (ids.has(id) === isHostGatedActionId(id)) scalingMisses += 1;
         }
       }
 
       const largest = scales[scales.length - 1]!.size;
       const worstLargeMs = sweepBySize.get(largest) ?? 0;
       const expectedEntries = scales.reduce(
-        (sum, scale) => sum + scale.catalog.registeredIds.length,
+        (sum, scale) => sum + scale.catalog.listedIds.length,
         0
       );
 

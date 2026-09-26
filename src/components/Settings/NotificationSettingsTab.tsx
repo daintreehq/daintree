@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
+import { useSettingsOwnerMarker, useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
@@ -206,6 +207,10 @@ interface SaveFailure {
 }
 
 export function NotificationSettingsTab() {
+  // The host decides when its agents notify; how a notification reaches this person
+  // (sound, the flash) is this screen's. A remote window names the owner of each part.
+  const ownerMarker = useSettingsOwnerMarker();
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [loadNonce, setLoadNonce] = useState(0);
@@ -370,7 +375,7 @@ export function NotificationSettingsTab() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="Agent notifications">
+      <SettingsSection title="Agent notifications" badge={ownerMarker("host")}>
         {loadFailed && (
           <SettingsLoadErrorBanner
             title="Notification settings didn't load"
@@ -439,7 +444,10 @@ export function NotificationSettingsTab() {
             <SwitchRow
               id="notif-all-clear-flash"
               label="Flash when agents stop working"
-              description="Briefly flash the window, with or without sound, once two or more agents were working and none still is. An agent waiting for input counts as stopped."
+              description={rowOwnerNote(
+                "Briefly flash the window, with or without sound, once two or more agents were working and none still is. An agent waiting for input counts as stopped.",
+                "device"
+              )}
               checked={settings.flashEnabled}
               onChange={(v) => update({ flashEnabled: v })}
               {...reset("flashEnabled")}
@@ -448,7 +456,7 @@ export function NotificationSettingsTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Sound">
+      <SettingsSection title="Sound" badge={ownerMarker("device")}>
         {saveError("sound")}
         <SettingsGroup>
           <SettingsSwitchCard
@@ -477,7 +485,7 @@ export function NotificationSettingsTab() {
             <SwitchRow
               id="notif-working-pulse"
               label={NOTIFICATION_COPY.workingPulse.label}
-              description={NOTIFICATION_COPY.workingPulse.description}
+              description={rowOwnerNote(NOTIFICATION_COPY.workingPulse.description, "host")}
               checked={settings.workingPulseEnabled}
               onChange={(v) => update({ workingPulseEnabled: v })}
               {...reset("workingPulseEnabled")}
@@ -505,6 +513,7 @@ export function NotificationSettingsTab() {
 
       <SettingsSection
         title="Quiet hours"
+        badge={ownerMarker("host")}
         description="History still records everything, and agents waiting for input always get through"
       >
         {saveError("quiet")}

@@ -23,6 +23,8 @@ import {
   buildAgentLaunchFlagsForRuntimeSettings,
   resolveAgentRuntimeSettings,
 } from "@/utils/agentRuntimeSettings";
+import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
+import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
 /**
  * Ownership rung for a duplicated panel's title. A duplicate keeps an
@@ -67,7 +69,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
       try {
         const [agentSettings, tmpDir] = await Promise.all([
           agentSettingsClient.get(),
-          systemClient.getTmpDir().catch(() => ""),
+          resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
         ]);
         const entry = agentSettings?.agents?.[panel.launchAgentId] ?? {};
         const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[panel.launchAgentId];
@@ -83,7 +85,9 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         const { preset, presetWasStale, effectiveEntry } = runtimeSettings;
         const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
         const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
-        const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+        const clipboardDirectory = tmpDir
+          ? agentClipboardDirectory(tmpDir, isRemoteWindow())
+          : undefined;
         // A duplicate is a NEW conversation, so it mints its own id (#11782).
         // Inheriting the source pane's would aim both panes at one conversation
         // and the CLI would reject the second launch outright.

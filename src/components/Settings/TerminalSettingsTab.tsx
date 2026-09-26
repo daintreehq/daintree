@@ -2,6 +2,7 @@ import { Fragment, useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { joinBadges, useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
@@ -46,6 +47,57 @@ import {
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 import { computeDefaultCachedViews } from "@shared/config/cachedProjectViews";
 import type { HardwareInfo } from "@shared/types/ipc/system";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
+import {
+  refreshUploadPreferences,
+  setInterceptCtrlVImages,
+  shouldInterceptCtrlVImages,
+} from "@/components/Terminal/uploads/ctrlVImagePaste";
+
+/**
+ * Ctrl+V in an agent terminal of a window attached to a remote host sends this
+ * machine's clipboard image. Shown only once remote hosts are in use.
+ */
+function RemoteClipboardImagesRow() {
+  const [inUse, setInUse] = useState(false);
+  const [enabled, setEnabled] = useState(shouldInterceptCtrlVImages);
+  useEffect(() => {
+    if (!isRemoteShellSupported()) return;
+    let cancelled = false;
+    const check = async () => {
+      if (!(await window.electron.remoteHosts.isInUse()) || cancelled) return;
+      await refreshUploadPreferences();
+      if (cancelled) return;
+      setEnabled(shouldInterceptCtrlVImages());
+      setInUse(true);
+    };
+    check().catch((error: unknown) =>
+      logWarn("[TerminalSettings] Remote hosts check failed", { error })
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (!inUse) return null;
+  const update = (next: boolean) => {
+    setEnabled(next);
+    setInterceptCtrlVImages(next).catch((error: unknown) => {
+      setEnabled(!next);
+      logError("[TerminalSettings] Failed to save the Ctrl+V image setting", error);
+    });
+  };
+  return (
+    <SettingsSwitchCard
+      id="terminal-remote-clipboard-images"
+      title="Send my clipboard images to remote agents on Ctrl+V"
+      subtitle="In a window attached to another machine, an agent's Ctrl+V gets the image on this computer's clipboard instead of the host's. With no image on the clipboard, Ctrl+V goes to the agent unchanged."
+      isEnabled={enabled}
+      onChange={() => update(!enabled)}
+      isModified={!enabled}
+      onReset={() => update(true)}
+    />
+  );
+}
 
 const STRATEGIES: Array<{
   id: PanelLayoutStrategy;
@@ -132,6 +184,9 @@ interface TerminalSettingsTabProps {
 }
 
 export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSettingsTabProps) {
+  // Terminal behaviour runs where the terminals do; limits, cached views and assistive
+  // settings belong to this screen. A remote window says whose on each section.
+  const ownerMarker = useSettingsOwnerMarker();
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
 
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
@@ -374,7 +429,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
       <div {...subtabPanelProps("terminal", effectiveSubtab)} className="space-y-8">
         {effectiveSubtab === "performance" && (
-          <SettingsSection title="Terminal resources">
+          <SettingsSection title="Terminal resources" badge={ownerMarker("host")}>
             {saveError("resources")}
             <SettingsGroup>
               <SettingsSwitchCard
@@ -461,6 +516,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         {effectiveSubtab === "performance" && (
           <SettingsSection
             title="Panel limits"
+            badge={ownerMarker("device")}
             id="terminal-panel-limits"
             description="When warnings appear as you open more panels. Limits are detected from your hardware on first launch."
           >
@@ -552,7 +608,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "performance" && (
-          <SettingsSection title="Project views">
+          <SettingsSection title="Project views" badge={ownerMarker("device")}>
             {saveError("project-views")}
             <SettingsGroup>
               <SettingsPresetGroup
@@ -579,7 +635,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "input" && (
-          <SettingsSection title="Agent input">
+          <SettingsSection title="Agent input" badge={ownerMarker("host")}>
             {saveError("input")}
             <SettingsGroup>
               <SettingsSwitchCard
@@ -606,13 +662,18 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   onReset={() => void setHybridInputAutoFocus(true)}
                 />
               </SettingsDependents>
+              <RemoteClipboardImagesRow />
             </SettingsGroup>
           </SettingsSection>
         )}
 
         {effectiveSubtab === "layout" && (
           <>
-            <SettingsSection title="Two-pane split" id="terminal-two-pane-split">
+            <SettingsSection
+              title="Two-pane split"
+              id="terminal-two-pane-split"
+              badge={ownerMarker("device")}
+            >
               <SettingsGroup>
                 <SettingsSwitchCard
                   title="Split two panels with a divider"
@@ -693,6 +754,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <SettingsSection
               title="Grid layout"
+              badge={ownerMarker("host")}
               id="terminal-grid-layout"
               description="How panels arrange in the grid as you add more"
             >
@@ -761,7 +823,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             title="Scrollback history"
             id="terminal-scrollback"
             description="Background terminals may temporarily reduce scrollback under memory pressure"
-            badge="New terminals"
+            badge={joinBadges("New terminals", ownerMarker("host"))}
           >
             {saveError("scrollback")}
             <SettingsGroup>
@@ -809,7 +871,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "accessibility" && (
-          <SettingsSection title="Assistive technology">
+          <SettingsSection title="Assistive technology" badge={ownerMarker("device")}>
             {saveError("accessibility")}
             <SettingsGroup>
               <SettingsPresetGroup

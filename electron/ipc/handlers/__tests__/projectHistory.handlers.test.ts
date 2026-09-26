@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 
 const ipcHandlers = vi.hoisted(() => new Map<string, unknown>());
 const ipcMainMock = vi.hoisted(() => ({
@@ -52,6 +53,8 @@ import {
   resetProjectHistory,
 } from "../../../services/ProjectHistoryService.js";
 import type { HandlerDependencies } from "../../types.js";
+import { getIpcDispatcher } from "../../dispatcher.js";
+import type { ClientEndpoint } from "../../endpoint.js";
 
 const WINDOW_ID = 41;
 
@@ -389,5 +392,40 @@ describe("projectHistory IPC", () => {
     expect(lookups(SCRATCH_ONE)).toBe(1);
     expect(lookups(SCRATCH_TWO)).toBe(1);
     expect(lookups(PROJECT_A)).toBe(1);
+  });
+  it("never borrows this machine's primary window for a view attached over a link", async () => {
+    existingProjectIds.add(PROJECT_A);
+    inProject(PROJECT_B);
+    getProjectHistory(WINDOW_ID).record(PROJECT_A);
+    const endpoint: ClientEndpoint = {
+      endpointId: "remote:-3",
+      clientId: "client-b",
+      projectId: PROJECT_B,
+      kind: "remote-view",
+      handle: -3,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    };
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) =>
+      wrapSuccess(await call())
+    );
+    try {
+      // The history lives on the Shell's window, so the channel is shell-local
+      // and a link call is refused before any handler here could run.
+      await expect(
+        getIpcDispatcher().invokeForEndpoint(
+          {
+            endpoint,
+            client: { clientId: "client-b", clientName: "b", platform: "darwin", kind: "remote" },
+          },
+          "project-history:peek",
+          []
+        )
+      ).rejects.toMatchObject({ code: "CHANNEL_NOT_REMOTABLE" });
+    } finally {
+      getIpcDispatcher().setInvokeEnveloper(null);
+    }
   });
 });

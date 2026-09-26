@@ -85,6 +85,26 @@
       "type": "string",
       "const": "project"
     },
+    "remote": {
+      "type": "string",
+      "enum": [
+        "supported",
+        "unsupported"
+      ]
+    },
+    "platforms": {
+      "minItems": 1,
+      "maxItems": 3,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      }
+    },
     "capabilities": {
       "default": [],
       "type": "array",

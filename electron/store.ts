@@ -11,6 +11,8 @@ import type {
   AppAgentConfig,
 } from "../shared/types/index.js";
 import type { PendingUpdateInstallStage } from "./utils/updateInstallStages.js";
+import type { TerminalConfig } from "../shared/types/ipc/config.js";
+import type { HostDescriptor } from "../shared/types/remoteHosts.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -55,11 +57,11 @@ interface WindowStateEntry {
   isFullScreen?: boolean;
 }
 
-interface WindowStatesStoreSchema {
+export interface WindowStatesStoreSchema {
   windowStates: Record<string, WindowStateEntry>;
 }
 
-interface AuditLogsStoreSchema {
+export interface AuditLogsStoreSchema {
   mcpAuditLog: McpLogRecord[];
   mcpTurnOutcomeLog: AssistantTurnRecord[];
   pluginAuditLog: PluginActionAuditRecord[];
@@ -88,6 +90,13 @@ export interface StoreSchema {
     memoryLeakDetectionEnabled?: boolean;
     memoryLeakAutoRestartThresholdMb?: number;
     cachedProjectViews?: number;
+    // Appearance fields written by the terminal-config handlers. Declared so
+    // the device/host split in storeOwnership.ts covers them.
+    fontSize?: TerminalConfig["fontSize"];
+    fontFamily?: TerminalConfig["fontFamily"];
+    colorSchemeId?: TerminalConfig["colorSchemeId"];
+    customSchemes?: TerminalConfig["customSchemes"];
+    recentSchemeIds?: TerminalConfig["recentSchemeIds"];
   };
   hibernation: {
     enabled: boolean;
@@ -666,6 +675,22 @@ export interface StoreSchema {
    * a stale entry for a deleted workspace grants nothing.
    */
   workspaceKeepResident?: Record<string, true>;
+  /** Hosts this client can attach to. Device-owned: never synced between machines. */
+  remoteHosts?: { hosts: HostDescriptor[] };
+  /** This machine as a host: whether it listens for Shells and starts at login. */
+  hostMode?: { enabled: boolean; startAtLogin: boolean };
+  /** Client-side behaviour while a window is attached to a remote host. */
+  remoteHostsPreferences?: { interceptCtrlVImages: boolean };
+  /**
+   * The person's answers, on this machine, about a host's plugin reading or
+   * writing this machine's clipboard: host id → plugin instance id → access →
+   * decision. Additive key with no numbered migration; a missing entry means
+   * the question has not been asked.
+   */
+  remoteHostPluginClipboardGrants?: Record<
+    string,
+    Record<string, Partial<Record<"read" | "write", "allow" | "deny">>>
+  >;
 }
 
 const storeOptions = {

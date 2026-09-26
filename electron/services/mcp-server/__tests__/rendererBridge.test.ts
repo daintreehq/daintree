@@ -223,6 +223,31 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sentPayload?.context).toEqual(boundContext);
   });
 
+  it("threads a host's approval options into the pinned dispatch payload", async () => {
+    const wc = makeWebContents(703);
+    mockWebContentsRegistry.set(703, wc);
+
+    let sentPayload: Record<string, unknown> | undefined;
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sentPayload = payload as Record<string, unknown>;
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 703 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    await bridge.dispatchActionForWebContents(703, "git.push", {}, false, undefined, "external", {
+      offerSessionApproval: true,
+    });
+
+    expect(sentPayload?.offerSessionApproval).toBe(true);
+    expect(sentPayload).not.toHaveProperty("approvalOnly");
+  });
+
   it("sends context: undefined when no override is supplied — unpinned path is untouched (#8317)", async () => {
     const wc = makeWebContents(702);
     mockWebContentsRegistry.set(702, wc);

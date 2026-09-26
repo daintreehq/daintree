@@ -29,6 +29,8 @@ import type {
   SitePreviewCandidate,
 } from "../../../shared/types/ipc/sitePreview.js";
 import { SITE_PREVIEW_METHOD_CHANNELS } from "./sitePreview.preload.js";
+import { LOCAL_HOST_ID, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import { getRemoteService } from "../../remote/runtime.js";
 
 const modeSchema = z.enum(["browse", "select"]);
 
@@ -183,7 +185,18 @@ export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => v
     // pulls in `ProjectStore`, which reads `app.getPath("userData")` while it
     // evaluates. Registering these handlers must not require an Electron app
     // to exist. `bindLocked` is async, so the deferral costs nothing.
-    isPluginEnabled: async (pluginId) => {
+    //
+    // A view bound to a remote host uses that host's plugins, not this
+    // machine's: the host is asked whether the adapter's plugin is loaded
+    // there. The guest and its CDP session stay on this machine either way.
+    isPluginEnabled: async (pluginId, projectId) => {
+      if (__DAINTREE_REMOTE_HOSTS__) {
+        const { hostId } = parseHostScopedKey(projectId);
+        if (hostId !== LOCAL_HOST_ID) {
+          const parity = getRemoteService("pluginParityClient");
+          return parity ? parity.isPluginLoadedOnHost(hostId, pluginId) : false;
+        }
+      }
       const { pluginService } = await import("../../services/PluginService.js");
       return pluginService.hasPlugin(pluginId);
     },

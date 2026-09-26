@@ -135,6 +135,7 @@ import { LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
+import { HostChip } from "@/components/Hosts/HostChip";
 import { shortSha } from "@/utils/textParsing";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
@@ -2381,6 +2382,7 @@ export function Toolbar({
                   onCloseAutoFocus={suppressPillTooltipForFocusRestore}
                 />
               )}
+              <HostChip />
               <Tooltip
                 open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
                 onOpenChange={

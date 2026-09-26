@@ -32,7 +32,6 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadcast";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
@@ -59,7 +58,21 @@ import { resolveInputBarColors } from "@/utils/terminalTheme";
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
 import { useDragDrop } from "./hooks/useDragDrop";
-import { useAttachFiles } from "./hooks/useAttachFiles";
+import { useAttachFiles, useAttachFromHost } from "./hooks/useAttachFiles";
+import { fileAttachmentEntryFromSource, insertFileAttachments } from "./fileAttachments";
+import { composerUploadSurface, hasPendingUploads } from "./uploads/pendingUploads";
+import { tryComposerFleetBroadcast } from "./composerFleetBroadcast";
+import { PendingUploadChips } from "./uploads/PendingUploadChips";
+import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
+import { registerComposerDropTarget } from "./uploads/composerRouting";
+import { isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
+import { isMac } from "@/lib/platform";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useVoiceDecorations } from "./hooks/useVoiceDecorations";
 import { useContextDetection } from "./hooks/useContextDetection";
 import { useTokenResolution } from "./hooks/useTokenResolution";
@@ -331,6 +344,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // bar would (#11809). Called with no argument, which is what keeps the
     // shift/cmd fleet gestures a click carries out of a drop. Absent for the
     // Assistant, whose input bar owns no selectable pane.
+    // In a remote window, what the user drops here is uploaded to the host;
+    // the chips for those uploads live on this composer, and sending waits on them.
+    const uploadSurface = composerUploadSurface(terminalId);
+    const isRemote = isRemoteWindow();
+    const hostPlatform = useHostPlatform();
+    const cwdRef = useRef(cwd);
+    useEffect(() => {
+      cwdRef.current = cwd;
+    }, [cwd]);
+    const readCwd = useCallback(() => cwdRef.current, []);
+    const addToProjectDirectory = useCallback(
+      () => panelWorktree?.path ?? (cwd || null),
+      [panelWorktree?.path, cwd]
+    );
     const {
       handleDragEnter,
       handleDragOver,
@@ -338,7 +365,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       handleDrop,
       resetDragState,
       isDragOverFiles,
-    } = useDragDrop(editorViewRef, cwd, onActivate);
+    } = useDragDrop(editorViewRef, cwd, onActivate, {
+      uploadSurface,
+      addToProjectDirectory,
+      ...(isRemote ? { cwdProvider: readCwd } : {}),
+    });
 
     // The dialog unmounts its body once its exit animation ends, and can close
     // under a hovering file — a slow submission collapses it mid-drag. Chromium
@@ -351,9 +382,30 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       },
       [resetDragState]
     );
-    const handleAttachFiles = useAttachFiles(editorViewRef, cwd);
+    const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
+    const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
 
-    const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(cwd);
+    // A drop on this pane's agent terminal, in a remote window, lands here.
+    useEffect(() => {
+      if (!isRemote) return;
+      return registerComposerDropTarget(terminalId, (sources) => {
+        const view = editorViewRef.current;
+        if (!view) return;
+        const entries = sources.map(fileAttachmentEntryFromSource);
+        if (entries.length === 0) return;
+        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+        view.focus();
+        void insertFileAttachments(editorViewRef, view, entries, cwd, {
+          uploadSurface,
+          cwdProvider: readCwd,
+        });
+      });
+    }, [isRemote, terminalId, cwd, uploadSurface, readCwd]);
+
+    const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
+      cwd,
+      uploadSurface
+    );
 
     useEffect(() => {
       setInitializationState("initializing");
@@ -602,21 +654,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     };
 
     const sendFromEditor = () => {
+      // An upload still on its way would leave its reference out of what is sent.
+      if (hasPendingUploads(uploadSurface)) return;
       const view = editorViewRef.current;
       const latest = latestRef.current;
       const text = view?.state.doc.toString() ?? latest?.value ?? "";
 
-      if (
-        isFocusedTerminal &&
-        useFleetArmingStore.getState().armedIds.has(terminalId) &&
-        useFleetArmingStore.getState().armedIds.size >= 2
-      ) {
-        const intercepted = tryFleetBroadcastFromEditor(terminalId, text, () => {
-          clearDraftInput(terminalId, projectId);
-          resetEditorDoc();
-        });
-        if (intercepted) return;
-      }
+      const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
+        clearDraftInput(terminalId, projectId);
+        resetEditorDoc();
+      });
+      if (intercepted) return;
 
       sendText(text, { imagePaths: readImageChipPaths(view) });
     };
@@ -975,6 +1023,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         data-hybrid-input-root={terminalId}
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
+        {isRemote && <PendingUploadChips surface={uploadSurface} className="mb-1.5" />}
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
@@ -1155,26 +1204,60 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 confirm itself. */}
             <div className="flex items-center justify-end pr-1.5 group-[[data-composer-narrow]:has([data-composer-multiline])]/shell:basis-full">
               <div ref={trailingGroupRef} className="flex shrink-0 items-center">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => void handleAttachFiles()}
-                      disabled={disabled}
-                      className={cn(
-                        "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
-                        COMPOSER_CONTROL_TEXT_CLASS,
-                        COMPOSER_CONTROL_HOVER_BG_CLASS,
-                        COMPOSER_CONTROL_FOCUS_CLASS,
-                        "disabled:pointer-events-none disabled:opacity-40"
-                      )}
-                      aria-label="Attach files"
-                    >
-                      <Paperclip className="h-3.5 w-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Attach files</TooltipContent>
-                </Tooltip>
+                {isRemote ? (
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            className={cn(
+                              "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                              COMPOSER_CONTROL_TEXT_CLASS,
+                              COMPOSER_CONTROL_HOVER_BG_CLASS,
+                              COMPOSER_CONTROL_FOCUS_CLASS,
+                              "disabled:pointer-events-none disabled:opacity-40"
+                            )}
+                            aria-label="Attach files"
+                          >
+                            <Paperclip className="h-3.5 w-3.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Attach files</TooltipContent>
+                    </Tooltip>
+                    <DropdownMenuContent align="end" side="top">
+                      <DropdownMenuItem onSelect={() => void handleAttachFiles()}>
+                        {isMac() ? "From This Mac…" : "From this computer…"}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => void handleAttachFromHost()}>
+                        {`From ${hostPlatform.hostName ?? "the host"}…`}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => void handleAttachFiles()}
+                        disabled={disabled}
+                        className={cn(
+                          "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                          COMPOSER_CONTROL_TEXT_CLASS,
+                          COMPOSER_CONTROL_HOVER_BG_CLASS,
+                          COMPOSER_CONTROL_FOCUS_CLASS,
+                          "disabled:pointer-events-none disabled:opacity-40"
+                        )}
+                        aria-label="Attach files"
+                      >
+                        <Paperclip className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Attach files</TooltipContent>
+                  </Tooltip>
+                )}
                 {hasStash && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1246,6 +1329,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           {barContent}
         </div>
         <CommandPickerHost context={commandContext} onCommandExecuted={handleCommandExecuted} />
+        {isRemote && <LazyUploadConfirmHost />}
         <AppDialog
           isOpen={isExpanded}
           onClose={collapseEditor}

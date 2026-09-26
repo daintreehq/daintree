@@ -1290,6 +1290,12 @@ export default defineConfig(({ command, mode }) => {
   const importMapState = createImportMapState();
   return {
     envPrefix: ["VITE_", "DAINTREE_"],
+    // Remote Hosts is macOS/Linux only; a Windows build folds the gate to false.
+    define: {
+      __DAINTREE_REMOTE_HOSTS__: JSON.stringify(
+        (process.env.DAINTREE_BUILD_TARGET_PLATFORM || process.platform) !== "win32"
+      ),
+    },
     // xterm 6.0 ships a bundled InputHandler that references an unminified
     // identifier in `requestMode`; Vite's default identifier mangling produces
     // `ReferenceError: i is not defined` at runtime. Disable identifier

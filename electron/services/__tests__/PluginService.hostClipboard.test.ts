@@ -299,3 +299,100 @@ describe("host.clipboard.writeImage", () => {
     expect(mockClipboard.writeImage).not.toHaveBeenCalled();
   });
 });
+
+// ── Host mode: the clipboard is the driving person's ──
+
+import {
+  _resetPluginFrontendRoutingForTesting,
+  runInPluginInvocation,
+  setPluginFrontendRouter,
+  type PluginFrontend,
+} from "../plugin/pluginFrontendRouting.js";
+import {
+  PluginFrontendMethod,
+  REMOTE_CLIPBOARD_TIMEOUT_MS,
+} from "../plugin/pluginFrontendRequests.js";
+import {
+  PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
+  PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+} from "../../../shared/types/pluginCapabilityConsent.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
+
+describe("host.clipboard with a driver on another machine", () => {
+  let frontend: PluginFrontend = { kind: "local" };
+  const request = vi.fn(async (_method: string, payload: { op: string }) =>
+    payload.op === "readText" ? "from the driver" : null
+  );
+
+  beforeEach(() => {
+    request.mockClear();
+    _resetPluginFrontendRoutingForTesting();
+    setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+    frontend = {
+      kind: "remote",
+      endpoint: { request, isClosed: () => false } as unknown as ClientEndpoint,
+    };
+  });
+
+  afterEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("writes and reads the driving machine's clipboard, never this one's", async () => {
+    const host = registerPlugin(["clipboard:write", "clipboard:read"]);
+    await host.clipboard.writeText("hello");
+    await host.clipboard.writeImage(pngBytes());
+    expect(await host.clipboard.readText()).toBe("from the driver");
+
+    expect(request.mock.calls.map(([method, payload]) => [method, payload.op])).toEqual([
+      [PluginFrontendMethod.CLIPBOARD, "writeText"],
+      [PluginFrontendMethod.CLIPBOARD, "writeImage"],
+      [PluginFrontendMethod.CLIPBOARD, "readText"],
+    ]);
+    expect(mockClipboard.writeText).not.toHaveBeenCalled();
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+    expect(mockClipboard.readText).not.toHaveBeenCalled();
+  });
+
+  it("uses nobody's clipboard for a caller on another machine who has gone", async () => {
+    const host = registerPlugin(["clipboard:write", "clipboard:read"]);
+    frontend = { kind: "none", reason: "reserved" };
+    await expect(host.clipboard.writeText("x")).rejects.toMatchObject({
+      code: "NO_FRONTEND_ATTACHED",
+    });
+    frontend = { kind: "none", reason: "vacant" };
+    const gone = { kind: "remote-view", projectId: null, isClosed: () => true };
+    await expect(
+      runInPluginInvocation("acme.clip", gone as unknown as ClientEndpoint, () =>
+        host.clipboard.readText()
+      )
+    ).rejects.toMatchObject({ code: "NO_FRONTEND_ATTACHED" });
+    expect(mockClipboard.writeText).not.toHaveBeenCalled();
+    expect(mockClipboard.readText).not.toHaveBeenCalled();
+  });
+
+  it("waits long enough for the driver's first-use consent dialog", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await host.clipboard.writeText("hello");
+    const call = request.mock.calls[0] as unknown as [string, unknown, { timeoutMs: number }];
+    const timeoutMs = call[2].timeoutMs;
+    expect(timeoutMs).toBe(REMOTE_CLIPBOARD_TIMEOUT_MS);
+    expect(timeoutMs).toBeGreaterThan(
+      PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS + PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS
+    );
+  });
+
+  it("keeps the capability gate in front of the remote clipboard", async () => {
+    const host = registerPlugin([]);
+    await expect(host.clipboard.writeText("nope")).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("uses this machine's clipboard when the driver is here or nobody is attached", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    frontend = { kind: "none", reason: "vacant" };
+    await host.clipboard.writeText("x");
+    expect(mockClipboard.writeText).toHaveBeenCalledWith("x");
+    expect(request).not.toHaveBeenCalled();
+  });
+});

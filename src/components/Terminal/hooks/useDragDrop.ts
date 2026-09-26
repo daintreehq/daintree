@@ -1,17 +1,22 @@
 import { useCallback, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
-import {
-  FILE_DRAG_MIME,
-  decodeFileDragPaths,
-  hasFileDrag,
-  hasInternalFileDrag,
-} from "@/lib/fileDragPayload";
-import {
-  fileAttachmentEntryFromPath,
-  insertFileAttachments,
-  type FileAttachmentEntry,
-} from "../fileAttachments";
+import { hasFileDrag } from "@/lib/fileDragPayload";
+import { resolveTransferSources } from "@/lib/transferSources";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { fileAttachmentEntryFromSource, insertFileAttachments } from "../fileAttachments";
 import { usePanelStore } from "@/store/panelStore";
+
+export interface DragDropUploadOptions {
+  /** Where uploads to a remote host show their progress chips. */
+  uploadSurface?: string;
+  /**
+   * The worktree folder an Option-drop (Alt on Linux) adds files to, in a
+   * remote window. Null when there is none; the drop then attaches as usual.
+   */
+  addToProjectDirectory?: () => string | null;
+  /** The live cwd, read once the uploads land rather than when the drop happened. */
+  cwdProvider?: () => string;
+}
 
 /**
  * @param onDropSelect Selects the panel that owns this input, invoked only once
@@ -24,8 +29,10 @@ import { usePanelStore } from "@/store/panelStore";
 export function useDragDrop(
   editorViewRef: React.RefObject<EditorView | null>,
   cwd: string,
-  onDropSelect?: () => void
+  onDropSelect?: () => void,
+  uploads: DragDropUploadOptions = {}
 ) {
+  const { uploadSurface, addToProjectDirectory, cwdProvider } = uploads;
   const dragDepthRef = useRef(0);
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
 
@@ -70,27 +77,7 @@ export function useDragDrop(
       // Both provenances reduce to the same entry shape before anything is
       // resolved, so an in-app drag (#11576) and an OS drop cannot disagree
       // about what they insert.
-      //
-      // The internal type wins when both are somehow present; decoding it and
-      // then also draining `files` would insert every reference twice.
-      const dropped: FileAttachmentEntry[] = hasInternalFileDrag(e.dataTransfer.types)
-        ? (decodeFileDragPaths(e.dataTransfer.getData(FILE_DRAG_MIME)) ?? []).map(
-            fileAttachmentEntryFromPath
-          )
-        : Array.from(e.dataTransfer.files)
-            .map((file) => ({
-              filePath: window.electron.webUtils.getPathForFile(file),
-              rawName: file.name,
-              fileSize: file.size,
-            }))
-            // A file the OS declines to resolve to a path is not referenceable.
-            .filter((entry) => entry.filePath !== "")
-            .map(({ filePath, rawName, fileSize }) => ({
-              filePath,
-              rawName,
-              fileName: rawName.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath,
-              fileSize,
-            }));
+      const dropped = resolveTransferSources(e.dataTransfer).map(fileAttachmentEntryFromSource);
 
       if (dropped.length === 0) return;
 
@@ -120,9 +107,24 @@ export function useDragDrop(
       onDropSelect?.();
       view.focus();
 
-      await insertFileAttachments(editorViewRef, view, dropped, cwd);
+      // Add to project is the one way a dropped file lands in the repo, and
+      // only ever on purpose: Option held at the moment of the drop.
+      const directory = e.altKey && isRemoteWindow() ? (addToProjectDirectory?.() ?? null) : null;
+      await insertFileAttachments(editorViewRef, view, dropped, cwd, {
+        uploadSurface,
+        ...(cwdProvider ? { cwdProvider } : {}),
+        ...(directory ? { destination: { kind: "worktree", directory } as const } : {}),
+      });
     },
-    [editorViewRef, cwd, onDropSelect, resetDragState]
+    [
+      editorViewRef,
+      cwd,
+      onDropSelect,
+      resetDragState,
+      uploadSurface,
+      addToProjectDirectory,
+      cwdProvider,
+    ]
   );
 
   return {

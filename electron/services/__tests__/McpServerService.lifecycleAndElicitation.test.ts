@@ -487,6 +487,32 @@ describe("McpServerService", () => {
     currentService = service;
   });
 
+  it("starts with an empty window registry, and with none passed falls back to the process one", async () => {
+    const emptyRegistry = {
+      all: () => [],
+      focusOrder: () => [],
+      getPrimary: () => undefined,
+      getByWindowId: () => undefined,
+      getByWebContentsId: () => undefined,
+      size: 0,
+    };
+
+    await service.start(emptyRegistry as never);
+    expect(service.isRunning).toBe(true);
+    expect(service.currentPort ?? 0).toBeGreaterThan(0);
+    const { transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+    await service.stop();
+
+    const fresh = new McpServerService();
+    currentService = fresh;
+    setWindowRegistry(emptyRegistry as never);
+    await fresh.start();
+    expect(fresh.isRunning).toBe(true);
+    await fresh.stop();
+    currentService = service;
+  });
+
   it("lists tools without injecting _meta confirmation properties on destructive actions", async () => {
     const { window } = createMockWindow({
       getManifest: () => [

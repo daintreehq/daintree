@@ -7,7 +7,7 @@ import { CopyableCommand } from "@/components/Setup/CopyableCommand";
 import { systemClient } from "@/clients/systemClient";
 import { getAgentConfig } from "@/config/agents";
 import { extractInspectUrl, isManualOnlyCommand } from "@/lib/agentInstall";
-import { isWindows } from "@/lib/platform";
+import { isHostWindows } from "@/hooks/useHostPlatform";
 import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { VersionTooOld } from "@/controllers/HelpSessionController";
@@ -43,7 +43,7 @@ interface UpdateMethod {
 function updateMethods(agentId: string): UpdateMethod[] {
   const update = getAgentConfig(agentId)?.update;
   if (!update) return [];
-  const windows = isWindows();
+  const windows = isHostWindows();
   return Object.entries(update)
     .filter((entry): entry is [string, string] => typeof entry[1] === "string")
     .filter(

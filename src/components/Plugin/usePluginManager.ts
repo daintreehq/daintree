@@ -622,7 +622,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // Install one or more dropped `.dntr` files sequentially through #9292's
   // install lock — one dialog per file, no batch UX (#9295). Non-`.dntr` drops
   // surface a quiet inline notice; an empty path (synthetic File object that
-  // `getDroppedFilePath` can't resolve) is a structured error, not a missing
+  // `getDroppedFilePaths` can't resolve) is a structured error, not a missing
   // file.
   const installDroppedFiles = async (files: File[]) => {
     const dntrFiles = files.filter((f) => f.name.toLowerCase().endsWith(".dntr"));
@@ -640,8 +640,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     // an earlier file's error (the loop installs one file at a time).
     const failures: string[] = [];
     try {
-      for (const file of dntrFiles) {
-        const path = window.electron.plugin.getDroppedFilePath(file);
+      const paths = window.electron.files.getDroppedFilePaths(dntrFiles);
+      for (const [index, file] of dntrFiles.entries()) {
+        const path = paths[index];
         if (!path) {
           failures.push(`${file.name} — couldn't read its location, try Install from file`);
           continue;

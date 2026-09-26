@@ -1005,6 +1005,27 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH));
     });
 
+    it("names the push as an operation in a remote-bound view", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      try {
+        renderCleanHub({ aheadCount: 1, behindCount: 0 });
+        await screen.findByTestId("review-hub-clean-unpushed");
+        act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
+        await act(async () => {
+          useGitPushConfirmStore.getState().resolveConfirmation(true);
+        });
+        await waitFor(() =>
+          expect(pushMock).toHaveBeenCalledWith(
+            WORKTREE_PATH,
+            undefined,
+            expect.stringMatching(/^[0-9a-f-]{36}$/)
+          )
+        );
+      } finally {
+        delete window.__DAINTREE_HOST_ID__;
+      }
+    });
+
     it("does not push when the preview dialog is declined", async () => {
       renderCleanHub({ aheadCount: 1, behindCount: 0 });
       await screen.findByTestId("review-hub-clean-unpushed");

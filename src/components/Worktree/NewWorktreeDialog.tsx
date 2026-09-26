@@ -47,6 +47,8 @@ import {
 } from "./worktreeAgentLaunch";
 import { useFirstAgentOptions } from "./hooks/useFirstAgentOptions";
 import { Textarea } from "@/components/ui/textarea";
+import { LazyWorktreePlacementRow } from "@/components/Hosts/Overview/LazyHostOverviewParts";
+import type { PlacementDraft } from "@/components/Hosts/Overview/WorktreePlacementRow";
 
 import {
   PrHeader,
@@ -1052,7 +1054,34 @@ export function NewWorktreeDialog({
     [handleIssueSelect, markTouched, clearErrors]
   );
 
+  // Another host chosen for the worktree: the project continues there, nothing is created here.
+  const [placementElsewhere, setPlacementElsewhere] = useState(false);
+  // The form as it stands, for another host to create: validated here, so the
+  // same errors show on the same fields as a create on this host would.
+  const getPlacementDraft = (): PlacementDraft | null => {
+    const result = validate({
+      branchMode,
+      baseBranch,
+      branchInput,
+      selectedExistingBranch,
+      worktreePath,
+    });
+    if (!result.valid) {
+      setValidationError(result.error!.message, result.error!.field);
+      return null;
+    }
+    clearErrors();
+    return {
+      newBranch: isExistingMode ? selectedExistingBranch! : result.fullBranchName!,
+      baseBranch: isExistingMode ? selectedExistingBranch! : baseBranch,
+      fromRemote: isExistingMode ? false : fromRemote,
+      useExistingBranch: isExistingMode,
+      path: worktreePath.trim(),
+      recipeId: selectedRecipeId === CLONE_LAYOUT_ID ? null : selectedRecipeId,
+    };
+  };
   const submitDisabled =
+    placementElsewhere ||
     loading ||
     isCheckingBranch ||
     isGeneratingPath ||
@@ -1282,6 +1311,13 @@ export function NewWorktreeDialog({
                     onBrowseClick={handleBrowseClick}
                   />
                 </FormRow>
+                <LazyWorktreePlacementRow
+                  projectId={currentProject?.id ?? null}
+                  rootPath={rootPath}
+                  getDraft={getPlacementDraft}
+                  onLeave={onClose}
+                  onElsewhereChange={setPlacementElsewhere}
+                />
               </FormSection>
 
               <FormSection title="Setup">

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { BadgeFreshnessCause } from "@/components/Layout/FreshnessUtils";
+import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { cn } from "@/lib/utils";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
@@ -180,14 +181,22 @@ interface TokenMissingTooltipProps {
 }
 
 export function TokenMissingTooltip({ type }: TokenMissingTooltipProps) {
+  // In a remote window the token is the host's own sign-in, so the gap is named as the host's.
+  const remoteHostName = useRemoteHostName();
   return (
     <div className="flex items-start gap-2 max-w-[280px]">
       <KeyRound className="w-3.5 h-3.5 mt-px shrink-0 text-text-secondary" aria-hidden="true" />
       <div className="space-y-0.5">
         <p className="text-xs text-text-primary">
-          Add a forge access token to see {type === "pr" ? "pull request" : "issue"} details
+          {remoteHostName === null
+            ? `Add a forge access token to see ${type === "pr" ? "pull request" : "issue"} details`
+            : forgeNotConnectedLabel("Your code forge", remoteHostName)}
         </p>
-        <p className="text-2xs text-text-secondary">Click the badge to open forge settings</p>
+        <p className="text-2xs text-text-secondary">
+          {remoteHostName === null
+            ? "Click the badge to open forge settings"
+            : "Click the badge to connect it"}
+        </p>
       </div>
     </div>
   );

@@ -22,7 +22,7 @@ import {
   resolveEffectiveBypass,
   resolveEffectiveInlineMode,
 } from "@shared/types";
-import { supportsCrossDirectoryResume } from "@shared/types/agentSettings";
+import { agentClipboardDirectory, supportsCrossDirectoryResume } from "@shared/types/agentSettings";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -61,6 +61,7 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -443,7 +444,7 @@ export const createRestartActions = (
       try {
         const [agentSettings, tmpDir] = await Promise.all([
           agentSettingsClient.get(),
-          systemClient.getTmpDir().catch(() => ""),
+          resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
         ]);
         const entry = (agentSettings?.agents?.[effectiveAgentId] ?? {}) as AgentSettingsEntry;
         const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
@@ -588,7 +589,9 @@ export const createRestartActions = (
           try {
             const runtimeSettings = runtimeForEnv ?? (await loadAgentRuntimeSettings());
             const tmpDir = runtimeSettings?.tmpDir ?? "";
-            const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+            const clipboardDirectory = tmpDir
+              ? agentClipboardDirectory(tmpDir, isRemoteWindow())
+              : undefined;
             if (hasPersistedFlags) {
               const entry = runtimeSettings?.entry;
               const shareClipboardDirectory = entry?.shareClipboardDirectory as boolean | undefined;
@@ -1310,7 +1313,7 @@ export const createRestartActions = (
     try {
       const [agentSettings, tmpDir] = await Promise.all([
         agentSettingsClient.get(),
-        systemClient.getTmpDir().catch(() => ""),
+        resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
       ]);
       const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
       const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
@@ -1331,7 +1334,7 @@ export const createRestartActions = (
 
       let clipboardDirectory: string | undefined;
       if (effectiveAgentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
-        clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+        clipboardDirectory = tmpDir ? agentClipboardDirectory(tmpDir, isRemoteWindow()) : undefined;
       }
 
       const agentConfig = getAgentConfig(effectiveAgentId);

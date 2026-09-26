@@ -1,7 +1,9 @@
 import path from "path";
 import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
-import { checkRateLimit, typedHandleValidated } from "../utils.js";
+import { checkRateLimit, typedHandleWithContextValidated } from "../utils.js";
+import type { IpcContext } from "../types.js";
+import { getRemoteService } from "../../remote/runtime.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { buildHtmlPreviewUrl } from "../../setup/htmlPreviewTokens.js";
 import {
@@ -21,17 +23,33 @@ const LFS_POINTER_MAX_SIZE = 1024;
 const LFS_POINTER_HEADER = "version https://git-lfs.github.com/spec/v1\n";
 const LFS_POINTER_HEADER_BYTES = Buffer.from(LFS_POINTER_HEADER, "ascii");
 
+/**
+ * A local view may name any root, as it always could. A remote Shell's view
+ * may only name its own project's folder or one of its worktrees (or a folder
+ * inside one), so the link can't be used to read the rest of this machine.
+ * Fails closed when the host's file service isn't running.
+ */
+async function remoteCallerHoldsRoot(ctx: IpcContext, root: string): Promise<boolean> {
+  if (ctx.endpoint?.kind !== "remote-view") return true;
+  const projectId = ctx.endpoint.projectId;
+  const files = getRemoteService("hostFileService");
+  if (!projectId || !files) return false;
+  return files.holdsRoot(projectId, root);
+}
+
 export function registerFilesHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleSearch = async ({
-    cwd,
-    query,
-    limit,
-  }: FileSearchPayload): Promise<{ files: string[] }> => {
+  const handleSearch = async (
+    ctx: IpcContext,
+    { cwd, query, limit }: FileSearchPayload
+  ): Promise<{ files: string[] }> => {
     checkRateLimit(CHANNELS.FILES_SEARCH, 20, 10_000);
 
     if (!path.isAbsolute(cwd)) {
+      return { files: [] };
+    }
+    if (!(await remoteCallerHoldsRoot(ctx, cwd))) {
       return { files: [] };
     }
 
@@ -44,18 +62,26 @@ export function registerFilesHandlers(): () => void {
     }
   };
 
-  handlers.push(typedHandleValidated(CHANNELS.FILES_SEARCH, FileSearchPayloadSchema, handleSearch));
+  handlers.push(
+    typedHandleWithContextValidated(CHANNELS.FILES_SEARCH, FileSearchPayloadSchema, handleSearch)
+  );
 
-  const handleRead = async ({
-    path: filePath,
-    rootPath,
-    htmlPreview,
-  }: FileReadPayload): Promise<FileReadResult> => {
+  const handleRead = async (
+    ctx: IpcContext,
+    { path: filePath, rootPath, htmlPreview }: FileReadPayload
+  ): Promise<FileReadResult> => {
     if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
       throw new AppError({
         code: "INVALID_PATH",
         message: "filePath and rootPath must be absolute",
         context: { filePath, rootPath },
+      });
+    }
+    if (!(await remoteCallerHoldsRoot(ctx, rootPath))) {
+      throw new AppError({
+        code: "OUTSIDE_ROOT",
+        message: "Root is outside the calling view's project",
+        context: { rootPath },
       });
     }
 
@@ -222,7 +248,9 @@ export function registerFilesHandlers(): () => void {
     return { content: buffer.toString("utf-8"), htmlPreviewUrl };
   };
 
-  handlers.push(typedHandleValidated(CHANNELS.FILES_READ, FileReadPayloadSchema, handleRead));
+  handlers.push(
+    typedHandleWithContextValidated(CHANNELS.FILES_READ, FileReadPayloadSchema, handleRead)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

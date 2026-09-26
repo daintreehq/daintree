@@ -36,6 +36,7 @@ import {
   encodeBrokerError,
 } from "./services/rpc/RequestResponseBroker.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
+import { buildDroppedFilePathsBinding } from "./utils/droppedFilePaths.js";
 import { buildGitFetchPreloadBindings } from "./ipc/handlers/gitFetch.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
@@ -65,6 +66,17 @@ import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRec
 import { buildForgeCredentialImportPreloadBindings } from "./ipc/handlers/forgeCredentialImport.preload.js";
 import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
+import { buildRemoteHostsPreloadBindings } from "./ipc/handlers/remoteHosts.preload.js";
+import { buildHostModePreloadBindings } from "./ipc/handlers/hostMode.preload.js";
+import { buildDriveLeasePreloadBindings } from "./ipc/handlers/driveLease.preload.js";
+import { buildOperationsPreloadBindings } from "./ipc/handlers/operations.preload.js";
+import { buildHostFilesPreloadBindings } from "./ipc/handlers/hostFiles.preload.js";
+import { buildFileTransferPreloadBindings } from "./ipc/handlers/fileTransfer.preload.js";
+import { buildHostSwitchPreloadBindings } from "./ipc/handlers/hostSwitch.preload.js";
+import { buildProjectMatchPreloadBindings } from "./ipc/handlers/projectMatch.preload.js";
+import { buildHostMetricsPreloadBindings } from "./ipc/handlers/hostMetrics.preload.js";
+import { buildPortForwardsPreloadBindings } from "./ipc/handlers/portForwards.preload.js";
+import { buildPluginParityPreloadBindings } from "./ipc/handlers/pluginParity.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
@@ -245,6 +257,11 @@ const INITIAL_PROJECT_ID_ARG = "--daintree-initial-project-id=";
 const initialProjectId = process.argv
   .find((a) => a.startsWith(INITIAL_PROJECT_ID_ARG))
   ?.slice(INITIAL_PROJECT_ID_ARG.length);
+
+// The host a remote view is attached to. Absent for local views, so the
+// initial project id above is this machine's own and nothing else changes.
+const HOST_ID_ARG = "--daintree-host-id=";
+const viewHostId = process.argv.find((a) => a.startsWith(HOST_ID_ARG))?.slice(HOST_ID_ARG.length);
 
 // Instance role passed from the main process via additionalArguments (#10123),
 // with a process.env fallback for contexts the main process did not seed
@@ -718,21 +735,33 @@ ipcRenderer.on(
  * added fields like `code`. Only `message` and `stack` survive. The encoded
  * prefix below is decoded by the renderer-side `isClientAppError` guard
  * (`src/utils/clientAppError.ts`), which restores `e.name`, `e.code`,
- * `e.userMessage`, and the cleaned `e.message` on the caught error.
+ * `e.userMessage`, `e.details`, and the cleaned `e.message` on the caught
+ * error.
  *
  * Format: `[AppError|<code>] <original message>`
  *      or `[AppError|<code>|<urlencoded userMessage>] <original message>`
+ * An optional `|#<urlencoded JSON details>` segment follows the code and any
+ * userMessage.
  */
 function _reconstructAppError(serialized: {
   name: string;
   message: string;
   code?: string;
   userMessage?: string;
+  details?: unknown;
 }): Error {
   const code = serialized.code ?? "UNKNOWN";
   const userMsgPart =
     serialized.userMessage !== undefined ? `|${encodeURIComponent(serialized.userMessage)}` : "";
-  const encoded = `[AppError|${code}${userMsgPart}] ${serialized.message}`;
+  let detailsPart = "";
+  if (serialized.details !== undefined && serialized.details !== null) {
+    try {
+      detailsPart = `|#${encodeURIComponent(JSON.stringify(serialized.details))}`;
+    } catch {
+      detailsPart = "";
+    }
+  }
+  const encoded = `[AppError|${code}${userMsgPart}${detailsPart}] ${serialized.message}`;
   const error = new Error(encoded);
   // Standard properties — set for callers in the same realm. They don't
   // survive the contextBridge crossing; the message prefix is the source
@@ -741,6 +770,9 @@ function _reconstructAppError(serialized: {
   (error as Error & { code: AppErrorCode }).code = serialized.code as AppErrorCode;
   if (serialized.userMessage !== undefined) {
     (error as Error & { userMessage: string }).userMessage = serialized.userMessage;
+  }
+  if (serialized.details !== undefined) {
+    (error as Error & { details: unknown }).details = serialized.details;
   }
   return error;
 }
@@ -1170,8 +1202,16 @@ function buildElectronApi(): ElectronAPI {
       setActive: (worktreeId: string) =>
         _unwrappingInvoke(CHANNELS.WORKTREE_SET_ACTIVE, { worktreeId }),
 
-      create: (options: CreateWorktreeOptions, rootPath: string): Promise<WorktreeCreateResult> =>
-        _unwrappingInvoke(CHANNELS.WORKTREE_CREATE, { rootPath, options }),
+      create: (
+        options: CreateWorktreeOptions,
+        rootPath: string,
+        opId?: string
+      ): Promise<WorktreeCreateResult> =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_CREATE, {
+          rootPath,
+          options,
+          ...(opId !== undefined ? { opId } : {}),
+        }),
 
       listBranches: (rootPath: string) =>
         _unwrappingInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),
@@ -1472,6 +1512,21 @@ function buildElectronApi(): ElectronAPI {
     files: {
       search: (payload) => _unwrappingInvoke(CHANNELS.FILES_SEARCH, payload),
       read: (payload) => _unwrappingInvoke(CHANNELS.FILES_READ, payload),
+      // The one bridge from a dropped or pasted `File` to its native path.
+      // `webUtils.getPathForFile` has to run here (Electron 32 removed
+      // `File.path`), and it is exposed only as this purpose-named batch call
+      // rather than as `webUtils` itself. That narrows the surface; it is not
+      // isolation. Plugin views render inline in this same document, so any
+      // code in the page can still call it — separating them would need a
+      // context of their own. `""` for a File with nothing on disk behind it.
+      // In a view attached to a remote host, the paths are also recorded in
+      // main as files the person chose here: an upload reads only those.
+      getDroppedFilePaths: buildDroppedFilePathsBinding<File>(
+        (file) => webUtils.getPathForFile(file),
+        viewHostId
+          ? (paths) => ipcRenderer.send(CHANNELS.FILE_TRANSFER_GRANT_LOCAL_SOURCES, paths)
+          : undefined
+      ),
     },
 
     // Diff media API — HEAD vs working-tree image versions for image compare
@@ -1984,7 +2039,8 @@ function buildElectronApi(): ElectronAPI {
         callback: (event: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent) => void
       ) => _typedOn(CHANNELS.PROJECT_CLONE_PROGRESS, callback),
 
-      cancelClone: (): Promise<void> => _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL),
+      cancelClone: (opId?: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL, opId ? { opId } : undefined),
 
       getRecipes: (
         projectId: string
@@ -2220,8 +2276,8 @@ function buildElectronApi(): ElectronAPI {
       commit: (cwd: string, message: string) =>
         _unwrappingInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
 
-      push: (cwd: string, setUpstream?: boolean) =>
-        _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream }),
+      push: (cwd: string, setUpstream?: boolean, opId?: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream, opId }),
 
       pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
 
@@ -2842,11 +2898,6 @@ function buildElectronApi(): ElectronAPI {
     // preloads. See #5691.
     clipboard: buildClipboardPreloadBindings(_unwrappingInvoke),
 
-    // Web Utils API
-    webUtils: {
-      getPathForFile: (file: File) => webUtils.getPathForFile(file),
-    },
-
     appTheme: {
       get: () => _unwrappingInvoke(CHANNELS.APP_THEME_GET),
 
@@ -2924,6 +2975,47 @@ function buildElectronApi(): ElectronAPI {
     },
 
     sentry: buildSentryPreloadBindings(_unwrappingInvoke),
+
+    // Remote Hosts (absent in effect on Windows: the handlers are never registered).
+    remoteHosts: {
+      ...buildRemoteHostsPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["remote-hosts:event"]) => void) =>
+        _typedOn("remote-hosts:event", callback),
+    },
+    hostMode: {
+      ...buildHostModePreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["host-mode:event"]) => void) =>
+        _typedOn("host-mode:event", callback),
+    },
+    driveLease: {
+      ...buildDriveLeasePreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["drive-lease:event"]) => void) =>
+        _typedOn("drive-lease:event", callback),
+    },
+    operations: {
+      ...buildOperationsPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["operations:event"]) => void) =>
+        _typedOn("operations:event", callback),
+    },
+    hostFiles: buildHostFilesPreloadBindings(_unwrappingInvoke),
+    fileTransfer: {
+      ...buildFileTransferPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["file-transfer:event"]) => void) =>
+        _typedOn("file-transfer:event", callback),
+    },
+    hostSwitch: buildHostSwitchPreloadBindings(_unwrappingInvoke),
+    projectMatch: buildProjectMatchPreloadBindings(_unwrappingInvoke),
+    hostMetrics: {
+      ...buildHostMetricsPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["host-metrics:event"]) => void) =>
+        _typedOn("host-metrics:event", callback),
+    },
+    portForwards: {
+      ...buildPortForwardsPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["port-forwards:event"]) => void) =>
+        _typedOn("port-forwards:event", callback),
+    },
+    pluginParity: buildPluginParityPreloadBindings(_unwrappingInvoke),
 
     onboarding: {
       ...buildOnboardingPreloadBindings(_unwrappingInvoke),
@@ -3295,14 +3387,6 @@ function buildElectronApi(): ElectronAPI {
 
     plugin: {
       ...buildPluginPreloadBindings(_unwrappingInvoke),
-
-      // Plugin-scoped bridge to the native filesystem path of a dropped File.
-      // `webUtils.getPathForFile` must run in the preload (Electron 32 removed
-      // `File.path`). Confined to the plugin namespace — deliberately NOT a
-      // global `window.electron` method — so arbitrary native-path recovery
-      // stays bounded to the plugin install surface (#9295). Returns `""` for
-      // synthetic/non-disk File objects; the renderer treats empty as an error.
-      getDroppedFilePath: (file: File): string => webUtils.getPathForFile(file),
 
       // plugin:invoke uses raw ipcMain.handle with variadic args — its signature
       // can't be expressed through IpcInvokeMap, so it stays inline.
@@ -3748,6 +3832,12 @@ if (initialProjectId) {
   contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_PROJECT__", {
     id: initialProjectId,
   });
+}
+
+// Exposed only for a view of a remote host's project; its initial project id
+// is the host's id for the project, and persisted keys scope by this host.
+if (viewHostId) {
+  contextBridge.exposeInMainWorld("__DAINTREE_HOST_ID__", { id: viewHostId });
 }
 
 // Surface the instance role so renderer pollers can suppress automatic
