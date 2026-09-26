@@ -139,6 +139,12 @@ export interface HostProbeResult {
 export interface HostModeObservation {
   /** The Daintree process that wrote it. */
   pid: number;
+  /**
+   * The build that process runs, which is what a link handshake compares.
+   * It can differ from the installed app (a build run from elsewhere, or an
+   * update not yet restarted into). Absent in files written before it existed.
+   */
+  build?: { version: string; commit: string };
   enabled: boolean;
   startAtLogin: boolean;
   /** The Daintree-owned login item or unit was on disk when the host last looked; null when unread. */

@@ -13,6 +13,7 @@ import {
 } from "../host/hostSocketPath.js";
 import type { CommandRunner } from "./commandRunner.js";
 import { createCommandStreamTransport, type StreamCommandChild } from "./commandStreamTransport.js";
+import { sshExecutable } from "./sshExecutable.js";
 import {
   TransportError,
   connectUnixSocket,
@@ -116,12 +117,12 @@ export function isValidSshTarget(target: string): boolean {
   return /^[A-Za-z0-9_.@%+[\]-]{1,255}$/.test(target) && !target.startsWith("-");
 }
 
-export function defaultSshSpawner(sshPath = "ssh"): SshSpawner {
+export function defaultSshSpawner(sshPath = sshExecutable()): SshSpawner {
   return (args) =>
     spawn(sshPath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }) as SshChild;
 }
 
-export function defaultSshStreamSpawner(sshPath = "ssh"): SshStreamSpawner {
+export function defaultSshStreamSpawner(sshPath = sshExecutable()): SshStreamSpawner {
   return (args) =>
     spawn(sshPath, args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -340,7 +341,7 @@ export async function closeSshMaster(
     return;
   }
   usedMasters.delete(controlPath);
-  await run("ssh", buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
+  await run(sshExecutable(), buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
   if (!controlPath.includes("%")) await fs.rm(controlPath, { force: true }).catch(() => {});
 }
 
