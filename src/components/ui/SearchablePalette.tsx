@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useCallback } from "react";
+import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import {
   AppPaletteDialog,
   KBD_CLASS,
@@ -226,6 +227,11 @@ export function SearchablePalette<T>({
 }: SearchablePaletteProps<T>) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const renderLimit = useProgressiveRenderLimit(
+    results.length,
+    `${isOpen}\u0000${query}`,
+    selectedIndex
+  );
 
   useEffect(() => {
     if (listRef.current && selectedIndex >= 0 && results.length > 0) {
@@ -274,19 +280,24 @@ export function SearchablePalette<T>({
   useEffect(() => cancelCount, [cancelCount]);
 
   // A filter pass is announced on its trailing edge — the `isFiltering`
-  // true→false transition that also clears the visual stale-dim — and debounced
-  // so fast typists don't chatter the live region: a new pass cancels the last
-  // one's pending count. Empty-query passes are skipped; the listbox already
-  // shows the no-input state and a count there is noise.
+  // true→false transition that also clears the visual stale-dim, or, for a
+  // list small enough to filter synchronously, the query change itself, whose
+  // results landed in the same render — and debounced so fast typists don't
+  // chatter the live region: a new pass cancels the last one's pending count.
+  // Empty-query passes are skipped; the listbox already shows the no-input
+  // state and a count there is noise.
   const prevIsFilteringRef = useRef(isFiltering);
+  const prevQueryRef = useRef(query);
   useEffect(() => {
     const wasFiltering = prevIsFilteringRef.current;
     prevIsFilteringRef.current = isFiltering;
+    const queryChanged = prevQueryRef.current !== query;
+    prevQueryRef.current = query;
     if (isFiltering) {
       cancelCount();
       return;
     }
-    if (!wasFiltering) return;
+    if (!wasFiltering && !queryChanged) return;
     // Hosts now keep palettes mounted through their exit animation (#9917), so a
     // late filter pass can resolve after close — don't announce to a closed,
     // invisible palette.
@@ -538,15 +549,17 @@ export function SearchablePalette<T>({
                 data-stale={isFiltering ? "true" : undefined}
                 aria-busy={isFiltering || undefined}
               >
-                {results.map((item, index) =>
-                  renderItem(
-                    item,
-                    index,
-                    index === selectedIndex,
-                    hoverIndexHandler,
-                    matchesById?.get(getItemId(item))
-                  )
-                )}
+                {results
+                  .slice(0, renderLimit)
+                  .map((item, index) =>
+                    renderItem(
+                      item,
+                      index,
+                      index === selectedIndex,
+                      hoverIndexHandler,
+                      matchesById?.get(getItemId(item))
+                    )
+                  )}
               </div>
             )}
             {totalResults != null && (

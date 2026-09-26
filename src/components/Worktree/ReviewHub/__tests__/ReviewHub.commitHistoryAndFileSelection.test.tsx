@@ -270,6 +270,7 @@ import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore } from "@/store/diffViewedStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -1341,4 +1342,8 @@ describe("ReviewHub", () => {
       expect(dialogStore.get()).toBe(HUB_PANEL_ID);
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

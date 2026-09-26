@@ -271,6 +271,7 @@ import { ReviewHubContent } from "../ReviewHubContent";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -1255,4 +1256,8 @@ describe("ReviewHub", () => {
       expect(screen.getByTestId("review-hub-push-error-details").textContent).toBe(retryError);
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

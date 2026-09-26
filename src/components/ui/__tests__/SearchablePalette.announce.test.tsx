@@ -116,6 +116,36 @@ describe("SearchablePalette filter-result live announcement", () => {
     expect(announceMock).toHaveBeenCalledWith("3 results", "polite");
   });
 
+  it("announces a synchronously filtered query change, which never reports isFiltering", () => {
+    const all = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    const { rerender } = renderPalette({ query: "", results: all, isFiltering: false });
+
+    rerender(
+      <SearchablePalette<Item>
+        isOpen
+        query="a"
+        results={[{ id: "a" }, { id: "b" }]}
+        selectedIndex={0}
+        onQueryChange={() => {}}
+        onSelectPrevious={() => {}}
+        onSelectNext={() => {}}
+        onConfirm={() => {}}
+        onClose={() => {}}
+        getItemId={(item) => item.id}
+        renderItem={(item) => <div key={item.id}>{item.id}</div>}
+        label="Test"
+        ariaLabel="Test palette"
+        tier="command"
+        isFiltering={false}
+      />
+    );
+
+    expect(announceMock).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(400);
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    expect(announceMock).toHaveBeenCalledWith("2 results", "polite");
+  });
+
   it("uses singular phrasing for exactly one result", () => {
     const items = [{ id: "a" }];
     const { rerender } = renderPalette({ query: "x", results: items, isFiltering: true });

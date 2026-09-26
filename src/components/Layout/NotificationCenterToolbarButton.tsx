@@ -1,4 +1,5 @@
-import { useRef, useEffect, useState, useCallback, Suspense, lazy } from "react";
+import { useRef, useEffect, useState, useCallback, Suspense } from "react";
+import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { Bell, BellOff } from "lucide-react";
@@ -16,12 +17,11 @@ import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { isScheduledQuietNow } from "@shared/utils/quietHours";
 import { DURATION_200, DURATION_250 } from "@/lib/animationUtils";
 
-function preloadNotificationCenter() {
-  return import("@/components/Notifications/NotificationCenter");
-}
-const LazyNotificationCenter = lazy(() =>
-  preloadNotificationCenter().then((m) => ({ default: m.NotificationCenter }))
+const LazyNotificationCenter = lazyWithPreload(
+  () => import("@/components/Notifications/NotificationCenter"),
+  (m) => m.NotificationCenter
 );
+const preloadNotificationCenter = LazyNotificationCenter.preload;
 
 const toolbarIconButtonClass = "toolbar-icon-button text-text-primary";
 

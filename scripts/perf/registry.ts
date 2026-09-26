@@ -262,6 +262,14 @@ export const REGISTRY: Record<string, Command> = {
     gate: "RUN_PERF_SCROLL",
     build: "build:e2e",
   }),
+  interactions: playwrightBench({
+    summary: "Input-to-painted-result latency for ~60 everyday UI interactions (opt-in)",
+    kind: "journey",
+    project: "full-resilience",
+    spec: "e2e/full/resilience/interaction-latency-perf.spec.ts",
+    gate: "RUN_PERF_INTERACTIONS",
+    build: "build:e2e",
+  }),
   "project-switch": playwrightBench({
     summary: "Switch round-trip and on-screen reveal latency, cold (LRU-evicted) and warm",
     kind: "journey",

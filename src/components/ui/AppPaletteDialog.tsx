@@ -2,6 +2,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useInsertionEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -146,6 +147,10 @@ export function AppPaletteDialog({
   useEscapeStack(isOpen, closeOnEscape);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  // Set when this opening's opener is recorded; cleared only once focus has
+  // gone back to it, so reopening during the exit animation keeps the
+  // original opener rather than recording the dialog's own still-focused field.
+  const openerCapturedRef = useRef(false);
   const autofocusRafRef = useRef<number | null>(null);
   /**
    * The initial-focus target, held behind a ref so the effect below does not
@@ -166,6 +171,7 @@ export function AppPaletteDialog({
   const restoreFocus = useCallback(() => {
     const el = previousFocusRef.current;
     previousFocusRef.current = null;
+    openerCapturedRef.current = false;
     // A caller placed focus deliberately (the fleet overview focusing the run
     // it opened); putting it back would undo that. Overlays are still cleared —
     // only the focus move is skipped.
@@ -195,6 +201,7 @@ export function AppPaletteDialog({
     isOpen,
     animationDuration: getUiPaletteTransitionDuration("exit"),
     onAnimateOut: restoreFocus,
+    syncEnter: true,
   });
 
   useOverlayState(isOpen || shouldRender);
@@ -211,10 +218,18 @@ export function AppPaletteDialog({
     clearDialogOverlays();
   }, [isOpen]);
 
+  // Read in the insertion phase, before this commit's layout work: the palette
+  // mounts in the opening render (`syncEnter`), so a descendant `autoFocus`
+  // would otherwise be recorded as the element to restore on close.
+  useInsertionEffect(() => {
+    if (!isOpen || openerCapturedRef.current) return;
+    openerCapturedRef.current = true;
+    const el = document.activeElement;
+    if (el instanceof HTMLElement) previousFocusRef.current = el;
+  }, [isOpen]);
+
   useLayoutEffect(() => {
     if (isOpen) {
-      const el = document.activeElement;
-      if (el instanceof HTMLElement) previousFocusRef.current = el;
       // Own keyboard input immediately when the modal commits. The first
       // tabbable still receives focus on the next animation frame, but leaving
       // the prior terminal/input focused during that gap lets it stop Escape
@@ -341,7 +356,7 @@ export function AppPaletteDialog({
         "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur-palette)] backdrop-saturate-[var(--theme-material-saturation)]",
         // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
         // spatial motion. WCAG 2.3.3.
-        "transition-opacity",
+        "transition-opacity starting:opacity-0",
         isVisible ? "opacity-100" : "opacity-0"
       )}
       style={{
@@ -375,6 +390,9 @@ export function AppPaletteDialog({
           // zoom only animates when `scale` is listed explicitly.
           "transition-[opacity,scale]",
           "motion-reduce:transition-opacity motion-reduce:scale-100",
+          // Enter "from" state lives in @starting-style so the zoom starts in
+          // the opening frame (see useAnimatedPresence `syncEnter`).
+          "starting:opacity-0 starting:scale-[0.96]",
           isVisible ? "opacity-100 scale-100" : "opacity-0 scale-[0.96]",
           className
         )}

@@ -1,4 +1,9 @@
 import {
+  beginStagingStatusRead,
+  getCachedStagingStatus,
+  rememberStagingStatus,
+} from "./stagingStatusCache";
+import {
   useCallback,
   useDeferredValue,
   useEffect,
@@ -192,6 +197,12 @@ export function ReviewHubContent({
 }: ReviewHubContentProps) {
   const isDialog = location === "dialog";
   const [status, setStatus] = useState<StagingStatus | null>(null);
+  // True once this open's own `getStagingStatus` has landed — false while the
+  // status on screen is the cached snapshot seeded at open. Auto-stage, commit
+  // and push wait for it; they act on the real index and branch, which the
+  // snapshot may no longer describe. Staging a clicked row does not: it is an
+  // explicit, reversible action on the path the user chose.
+  const [statusIsFresh, setStatusIsFresh] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -867,11 +878,14 @@ export function ReviewHubContent({
   const refresh = useCallback(async () => {
     if (!worktreePath) return;
     const requestId = ++refreshIdRef.current;
+    const readSeq = beginStagingStatusRead();
     setLoading(true);
     setLoadError(null);
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
+      rememberStagingStatus(worktreePath, result, readSeq);
       if (refreshIdRef.current === requestId) {
+        setStatusIsFresh(true);
         setStatus(result);
       }
     } catch (err) {
@@ -911,10 +925,13 @@ export function ReviewHubContent({
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
     const requestId = ++bgRefreshIdRef.current;
+    const readSeq = beginStagingStatusRead();
     setIsBackgroundRefreshing(true);
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
+      rememberStagingStatus(worktreePath, result, readSeq);
       if (bgRefreshIdRef.current === requestId) {
+        setStatusIsFresh(true);
         setStatus(result);
         setLoadError(null);
       }
@@ -973,8 +990,13 @@ export function ReviewHubContent({
     if (isOpen) {
       // This branch also re-runs when worktreePath changes while open (via
       // `refresh`'s identity): drop the previous worktree's staging status so
-      // the file list and readiness rail never mix two worktrees' state.
-      setStatus(null);
+      // the file list and readiness rail never mix two worktrees' state. The
+      // cache is keyed by worktree, so what it seeds is this worktree's.
+      setStatusIsFresh(false);
+      // A background read still in flight belongs to the previous worktree (or
+      // the previous opening); landing it would mark this one fresh.
+      bgRefreshIdRef.current++;
+      setStatus(worktreePath ? getCachedStagingStatus(worktreePath) : null);
       setActionError(null);
       setPushError(null);
       const seed = readInitialCommitMessage();
@@ -1021,11 +1043,11 @@ export function ReviewHubContent({
       setStagedView(DEFAULT_SECTION_STATE);
       setChangesView(DEFAULT_SECTION_STATE);
     }
-  }, [isOpen, refresh, writeCursorKey]);
+  }, [isOpen, refresh, writeCursorKey, worktreePath]);
 
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;
-    if (!status) return;
+    if (!status || !statusIsFresh) return;
     if (hasAutoStagedRef.current) return;
     if (status.staged.length > 0) {
       // Already staged from a prior session — skip and mark as handled.
@@ -1054,7 +1076,7 @@ export function ReviewHubContent({
         });
       }
     })();
-  }, [isOpen, autoStageOnOpen, status, refresh, worktreePath]);
+  }, [isOpen, autoStageOnOpen, status, statusIsFresh, refresh, worktreePath]);
 
   useEffect(() => {
     if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
@@ -2441,6 +2463,7 @@ export function ReviewHubContent({
               pushTargetBranch={pushTargetBranch}
               skipPushConfirm={skipPushConfirm}
               onSetSkipPushConfirm={(value) => setSkipPushConfirmForWorktree(worktreePath, value)}
+              isVerifying={!statusIsFresh}
             />
           )}
       </div>

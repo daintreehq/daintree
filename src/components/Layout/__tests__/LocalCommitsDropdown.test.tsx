@@ -6,6 +6,7 @@ import { render, fireEvent, cleanup, waitFor, act } from "@testing-library/react
 import type { ReactNode } from "react";
 import { LocalCommitsDropdown, reflowCommitBody } from "../LocalCommitsDropdown";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/git";
+import { resetCommitsFirstPageCacheForTests } from "../LocalCommitsDropdown";
 
 const listCommitsMock = vi.fn();
 const listPushCommitsMock = vi.fn();
@@ -133,6 +134,42 @@ describe("LocalCommitsDropdown", () => {
 
     expect((await findAllByText("commit message 1")).length).toBeGreaterThan(0);
     expect(listCommitsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("narrows the loaded rows while the server search is still answering", async () => {
+    const widget = { ...makeCommit(2), message: "fix the widget" };
+    listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(1), widget]));
+    listCommitsMock.mockReturnValueOnce(new Promise(() => {}));
+
+    const { findAllByText, queryAllByText, getByLabelText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={2} />
+    );
+    expect((await findAllByText("commit message 1")).length).toBeGreaterThan(0);
+
+    fireEvent.change(getByLabelText("Search commits"), { target: { value: "WIDGET" } });
+
+    expect((await findAllByText("fix the widget")).length).toBeGreaterThan(0);
+    expect(queryAllByText("commit message 1")).toHaveLength(0);
+    expect(listCommitsMock).toHaveBeenLastCalledWith(expect.objectContaining({ search: "WIDGET" }));
+  });
+
+  it("paints a reopen from the last page, and drops it when that open's read fails", async () => {
+    listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(1)]));
+    const first = render(<LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />);
+    expect((await first.findAllByText("commit message 1")).length).toBeGreaterThan(0);
+    first.unmount();
+
+    let rejectRead!: (err: Error) => void;
+    listCommitsMock.mockReturnValueOnce(new Promise((_, reject) => (rejectRead = reject)));
+    const second = render(<LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />);
+    // Seeded synchronously, before the read answers.
+    expect(second.getAllByText("commit message 1").length).toBeGreaterThan(0);
+
+    await act(async () => {
+      rejectRead(new Error("git went away"));
+    });
+    expect(await second.findByText("git went away")).toBeTruthy();
+    expect(second.queryAllByText("commit message 1")).toHaveLength(0);
   });
 
   it("loads the next page and appends rows", async () => {
@@ -753,4 +790,8 @@ describe("reflowCommitBody", () => {
     const once = reflowCommitBody(body);
     expect(reflowCommitBody(once)).toBe(once);
   });
+});
+
+afterEach(() => {
+  resetCommitsFirstPageCacheForTests();
 });

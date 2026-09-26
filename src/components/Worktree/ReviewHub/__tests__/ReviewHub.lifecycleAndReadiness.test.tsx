@@ -271,6 +271,7 @@ import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -1061,4 +1062,8 @@ describe("ReviewHub", () => {
       expect(screen.queryByText(COMPLETION_HEADLINE)).toBeNull();
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

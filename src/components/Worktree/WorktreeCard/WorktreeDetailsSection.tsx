@@ -1,4 +1,5 @@
 import type React from "react";
+import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
@@ -573,6 +574,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   <TooltipTrigger asChild>
                     <button
                       onClick={onOpenReviewHub}
+                      onPointerEnter={() => void prefetchStagingStatus(worktree.path)}
                       className={cn(
                         "shrink-0 transition-colors",
                         "text-[var(--color-state-active)] hover:bg-[var(--color-state-active)]/10",

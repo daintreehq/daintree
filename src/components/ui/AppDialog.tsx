@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useInsertionEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -157,6 +158,10 @@ export function AppDialog({
   const effectiveInitialFocus: DialogInitialFocus =
     initialFocus ?? (variant === "destructive" ? "cancel" : "first");
   const previousActiveElement = useRef<HTMLElement | null>(null);
+  // Set when this opening's opener is recorded; cleared only once focus has
+  // gone back to it, so reopening during the exit animation keeps the
+  // original opener rather than recording the dialog's own still-focused field.
+  const openerCapturedRef = useRef(false);
   const backdropPointerRef = useRef<number | null>(null);
   // State, not a ref: `DialogDismissSurface` has to re-render once the node
   // exists, and a ref would leave it registering `null` forever.
@@ -185,6 +190,7 @@ export function AppDialog({
   const restoreFocus = useCallback(() => {
     const el = previousActiveElement.current;
     previousActiveElement.current = null;
+    openerCapturedRef.current = false;
     if (!el) return;
     // Re-arm the tooltip focus-open suppression right before the focus
     // move: focusing a tooltip trigger re-opens its tooltip synchronously
@@ -221,6 +227,7 @@ export function AppDialog({
     isOpen,
     animationDuration: getUiTransitionDuration("exit"),
     onAnimateOut: restoreFocus,
+    syncEnter: true,
   });
 
   useOverlayState(isOpen || shouldRender);
@@ -251,16 +258,33 @@ export function AppDialog({
   }, [isOpen]);
 
   // Initial focus is owed once per opening, and is paid only once the surface
-  // exists. The surface mounts on the render *after* `isOpen` flips, because
-  // `shouldRender` is presence state set from an effect — so a frame queued at the
-  // flip can run before that render commits, find no dialog, and leave focus on
-  // the trigger behind the modal. A click- or keypress-driven open from a surface
-  // that mounts the dialog fresh reliably loses that race.
+  // exists. With `syncEnter` the surface mounts in the render that flips
+  // `isOpen`, but the focus frame stays keyed on `shouldRender` so it can never
+  // run against a render that has not committed the dialog — a frame queued
+  // before the surface exists would find nothing and leave focus on the trigger
+  // behind the modal.
   const initialFocusOwedRef = useRef(false);
+
+  // The opener is read in the insertion phase, before this commit's layout
+  // work: the surface mounts in the opening render (`syncEnter`), and a
+  // descendant's `autoFocus` moves focus during that commit — a passive or
+  // layout effect would record the dialog's own field as the element to
+  // restore on close.
+  // Also recorded every opening, separately from the opener: focus found inside
+  // the dialog at a mid-exit reopen is the last opening's leftover, not a
+  // choice, and the initial-focus pass below replaces it.
+  const focusAtOpenRef = useRef<HTMLElement | null>(null);
+  useInsertionEffect(() => {
+    if (!isOpen) return;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    focusAtOpenRef.current = active;
+    if (openerCapturedRef.current) return;
+    openerCapturedRef.current = true;
+    previousActiveElement.current = active;
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
-      previousActiveElement.current = document.activeElement as HTMLElement;
       initialFocusOwedRef.current = effectiveInitialFocus !== "none";
     } else {
       initialFocusOwedRef.current = false;
@@ -280,7 +304,7 @@ export function AppDialog({
       // mid-exit still holds the last request's button, and the new request's
       // initial focus (Cancel, for a destructive one) has to replace it.
       const active = document.activeElement;
-      if (root.contains(active) && active !== previousActiveElement.current) return;
+      if (root.contains(active) && active !== focusAtOpenRef.current) return;
       let target: HTMLElement | null = null;
       if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
         target = root.querySelector<HTMLElement>(`[data-confirm-role="${effectiveInitialFocus}"]`);
@@ -478,7 +502,7 @@ export function AppDialog({
           effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
           // spatial motion. WCAG 2.3.3.
-          "transition-opacity",
+          "transition-opacity starting:opacity-0",
           isVisible ? "opacity-100" : "opacity-0"
         )}
         style={{
@@ -521,6 +545,9 @@ export function AppDialog({
             // Reduced motion keeps the fade and drops only the rise/zoom: opacity
             // is not vestibular, movement is. WCAG 2.3.3.
             "motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none",
+            // Enter "from" state: rendered visible on the opening commit, so
+            // the rise starts from @starting-style in the first frame.
+            "starting:opacity-0 starting:translate-y-1 starting:scale-[0.98]",
             isVisible
               ? "opacity-100 translate-y-0 scale-100"
               : "opacity-0 translate-y-1 scale-[0.98]",
