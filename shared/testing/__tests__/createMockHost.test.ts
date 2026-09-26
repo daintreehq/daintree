@@ -1616,3 +1616,26 @@ describe("createMockHost settings.open and settings.missingRequired", () => {
     expect(await host.settings.missingRequired()).toEqual([]);
   });
 });
+
+describe("createMockHost settings follow the declarations", () => {
+  it("writes and subscribes in the declared scope, and reads the declared default while unset", async () => {
+    const host = createMockHost({
+      manifestSettings: [{ id: "channel", type: "string", scope: "project", default: "blog" }],
+    });
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("channel", (v) => heard.push(v));
+
+    expect(await host.settings.get("channel")).toBe("blog");
+    await host.settings.set("channel", "x");
+
+    expect(await host.settings.get("channel", "project")).toBe("x");
+    expect(heard).toEqual(["x"]);
+    await expect(host.settings.set("channel", "y", "user")).rejects.toThrow(
+      /declared in "project"/
+    );
+    // Synchronous, like the real host's subscribe guard.
+    expect(() => host.settings.onDidChange("channel", () => {}, "local")).toThrow(
+      /declared in "project"/
+    );
+  });
+});

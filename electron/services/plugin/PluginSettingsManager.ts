@@ -312,6 +312,16 @@ export class PluginSettingsManager {
   }
 
   /**
+   * The manifest `default` for a declared key, as a detached copy — what
+   * `settings.get` answers, and `onDidChange` delivers, while nothing is stored.
+   */
+  getDeclaredDefault(pluginId: string, key: string): unknown {
+    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+    if (def?.default === undefined) return undefined;
+    return JSON.parse(JSON.stringify(def.default)) as unknown;
+  }
+
+  /**
    * Both settings write paths (host `settings.set` and the UI bridge) persist
    * through `PluginSettingsStore.cloneValue`, which JSON-round-trips the value.
    * Probe serializability up front so a non-serializable value surfaces a clear
@@ -356,6 +366,9 @@ export class PluginSettingsManager {
     this.deps.onSettingChanged?.(pluginId);
     const subs = this.settingsSubscribers.get(pluginId);
     if (!subs) return;
+    // A cleared value reads back as the declared default, so that is what the
+    // subscriber hears.
+    if (value === undefined) value = this.getDeclaredDefault(pluginId, key);
     // Snapshot so a callback that disposes itself doesn't mutate the live set
     // mid-iteration.
     for (const sub of [...subs]) {

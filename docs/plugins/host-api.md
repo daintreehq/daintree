@@ -814,7 +814,7 @@ Lines are mirrored to the host console prefixed with `[plugin:{pluginId}]` and r
 Persistent, plugin-scoped key/value settings. Reads, writes, and subscribes.
 
 ```ts
-// Current value (scope defaults to "user")
+// Current value, or the declared default while unset (scope: the key's declared scope)
 const token = await host.settings.get<string>("linear.apiToken");
 
 // Update
@@ -826,7 +826,7 @@ const dispose = await host.settings.onDidChange("linear.apiToken", (newValue) =>
 });
 ```
 
-Scope defaults to `"user"`. `project` scope resolves the active project at call time, so it tracks project switches: `get` returns `undefined` and `set` throws when no project is active. `set` rejects `undefined` and non-JSON-serializable values; when the manifest declares `contributes.settings`, an undeclared key is rejected. `onDidChange` fires only on in-process writes — edits made to the JSON file by other processes don't fire until the plugin reloads.
+Leave `scope` out and `get`, `set` and `onDidChange` all use the key's declared scope — `"user"` for a key your manifest doesn't declare — so the manifest is the one place a scope is written down; an explicit scope that conflicts with the declaration throws. While nothing is stored, `get` resolves to the key's declared `default` (a fresh copy each time), or `undefined` when it declares none, and clearing a value from the settings form fires `onDidChange` with that same default. `project` scope resolves the active project at call time, so it tracks project switches: with no project active, `get` reads as unset and `set` throws. `set` rejects `undefined` and non-JSON-serializable values; when the manifest declares `contributes.settings`, an undeclared key is rejected. Reads notice when the settings file changed on disk — a `git pull` or branch switch that rewrites the committed project file is picked up by the next `get`, and the next write keeps it rather than restoring an older copy — but `onDidChange` fires only on writes made through Daintree.
 
 **Sending the user to your settings.** Don't build a settings screen into a panel; send the user to the one home your settings already have:
 

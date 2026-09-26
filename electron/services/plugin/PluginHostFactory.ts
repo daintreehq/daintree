@@ -1943,19 +1943,26 @@ export function createHost(
           effectiveScope,
           boundScopeRoot
         );
-        // Project scope with no active project: read resolves to undefined
-        // rather than throwing, matching the "unset key" return.
-        if (!filePath) return undefined;
-        return deps.settings
-          .getOrCreateSettingsStore(pluginId, filePath)
-          .get<T>(key, { secret: deps.settings.isSecretKey(pluginId, key) });
+        // Project scope with no active project reads as unset rather than
+        // throwing; unset reads as the declared default, if there is one.
+        const stored = filePath
+          ? await deps.settings
+              .getOrCreateSettingsStore(pluginId, filePath)
+              .get<T>(key, { secret: deps.settings.isSecretKey(pluginId, key) })
+          : undefined;
+        return stored !== undefined
+          ? stored
+          : (deps.settings.getDeclaredDefault(pluginId, key) as T | undefined);
       },
       set: async <T = unknown>(
         key: string,
         value: T,
-        scope: PluginSettingsScope = "user"
+        requestedScope?: PluginSettingsScope
       ): Promise<void> => {
         assertSettingsKey(pluginId, "set", key);
+        // Omitted, the declared scope is the target, as it is for `get`; a
+        // conflicting explicit scope still throws in assertSettingDeclared.
+        const scope = requestedScope ?? deps.settings.getDeclaredScope(pluginId, key) ?? "user";
         if (value === undefined) {
           throw new Error(
             `Plugin "${pluginId}" settings.set: value for "${key}" is undefined — settings cannot store undefined`
@@ -1983,8 +1990,9 @@ export function createHost(
       onDidChange: <T = unknown>(
         key: string,
         callback: (value: T | undefined) => void,
-        scope: PluginSettingsScope = "user"
+        requestedScope?: PluginSettingsScope
       ): Promise<() => void> => {
+        const scope = requestedScope ?? deps.settings.getDeclaredScope(pluginId, key) ?? "user";
         if (revoked) {
           throw new Error(
             `Plugin "${pluginId}" host revoked: settings.onDidChange called after activate() returned or timed out`

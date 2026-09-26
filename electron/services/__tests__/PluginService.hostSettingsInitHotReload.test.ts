@@ -592,6 +592,46 @@ describe("createHost — settings", () => {
     expect(JSON.parse(raw)).toEqual({ ref: "branch-x" });
   });
 
+  it("set and onDidChange target the declared scope when no scope is given", async () => {
+    const projectDir = path.join(tmpDir, "proj-declared-set");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-declared-set", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-set");
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("channel", (v) => heard.push(v));
+
+    await host.settings.set("channel", "x");
+
+    const raw = await fs.readFile(
+      path.join(projectDir, ".daintree", "plugin-settings", "acme.settings-declared-set.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(raw)).toEqual({ channel: "x" });
+    expect(heard).toEqual(["x"]);
+    await expect(host.settings.set("channel", "y", "user")).rejects.toThrow(
+      /declared in "project"/
+    );
+  });
+
+  it("get answers the declared default while nothing is stored", async () => {
+    const projectDir = path.join(tmpDir, "proj-default");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-default", [
+      { id: "channel", type: "string", scope: "project", default: "blog" },
+      { id: "tags", type: "json", default: ["a"] },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-default");
+
+    expect(await host.settings.get("channel")).toBe("blog");
+    const tags = await host.settings.get<string[]>("tags");
+    tags?.push("mutated");
+    expect(await host.settings.get("tags")).toEqual(["a"]);
+    await host.settings.set("channel", "x");
+    expect(await host.settings.get("channel")).toBe("x");
+  });
+
   it("get throws when the explicit scope conflicts with the declared scope", async () => {
     const projectDir = path.join(tmpDir, "proj-conflict");
     projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });

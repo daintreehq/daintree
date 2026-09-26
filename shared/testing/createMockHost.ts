@@ -785,6 +785,27 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     return def ? ((def.scope ?? "user") as PluginSettingsScope) : undefined;
   };
 
+  // The scope a call targets: the declared one when omitted; a conflicting
+  // explicit scope throws, as the real host's write and subscribe guards do.
+  const resolveSettingScope = (
+    method: string,
+    key: string,
+    requested: PluginSettingsScope | undefined
+  ): PluginSettingsScope => {
+    const declared = getDeclaredSettingScope(key);
+    if (requested !== undefined && declared !== undefined && requested !== declared) {
+      throw new Error(
+        `settings.${method}: key "${key}" is declared in "${declared}" scope, not "${requested}"`
+      );
+    }
+    return requested ?? declared ?? "user";
+  };
+
+  const getDeclaredSettingDefault = (key: string): unknown => {
+    const declared = options.manifestSettings?.find((s) => s.id === key)?.default;
+    return declared === undefined ? undefined : (JSON.parse(JSON.stringify(declared)) as unknown);
+  };
+
   const settings: SettingsApi = {
     async get<T = unknown>(key: string, scope?: PluginSettingsScope): Promise<T | undefined> {
       // Manifest-aware mode: a declared key resolves to its declared scope, and an
@@ -797,13 +818,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         );
       }
       const effectiveScope = declaredScope ?? scope ?? "user";
-      return settingsStore[effectiveScope].get(key) as T | undefined;
+      const stored = settingsStore[effectiveScope].get(key);
+      return (stored !== undefined ? stored : getDeclaredSettingDefault(key)) as T | undefined;
     },
     async set<T = unknown>(
       key: string,
       value: T,
-      scope: PluginSettingsScope = "user"
+      requestedScope?: PluginSettingsScope
     ): Promise<void> {
+      const scope = resolveSettingScope("set", key, requestedScope);
       if (value === undefined) {
         throw new Error("settings.set: value cannot be undefined");
       }
@@ -819,8 +842,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     onDidChange<T = unknown>(
       key: string,
       callback: (value: T | undefined) => void,
-      scope: PluginSettingsScope = "user"
+      requestedScope?: PluginSettingsScope
     ): Promise<() => void> {
+      const scope = resolveSettingScope("onDidChange", key, requestedScope);
       let subs = settingsSubs[scope].get(key);
       if (!subs) {
         subs = new Set();

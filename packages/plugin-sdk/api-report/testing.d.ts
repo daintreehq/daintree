@@ -1847,8 +1847,9 @@ interface PluginHostSubscriptionOptions {
 }
 interface SettingsApi {
     /**
-     * Read a setting. Resolves to `undefined` when the key is unset, or (for
-     * `"project"` scope) when no project is active.
+     * Read a setting. While nothing is stored — or, for `"project"` scope, no
+     * project is active — it resolves to the key's declared `default`, and to
+     * `undefined` when it declares none.
      *
      * When the key is declared in `contributes.settings`, its declared `scope`
      * (default `"user"`) is authoritative: omitting `scope` reads from the declared
@@ -1861,12 +1862,16 @@ interface SettingsApi {
      * Persist a setting. Rejects `undefined` and non-JSON-serializable values.
      * For `"project"` scope with no active project, throws. When the manifest
      * declares `contributes.settings`, an undeclared key is rejected. A declared
-     * secret is rejected when no OS keychain is available to encrypt it.
+     * secret is rejected when no OS keychain is available to encrypt it. Omitting
+     * `scope` targets the key's declared scope (`"user"` for an undeclared key);
+     * an explicit scope that conflicts with the declaration throws.
      */
     set<T = unknown>(key: string, value: T, scope?: PluginSettingsScope): Promise<void>;
     /**
-     * Subscribe to in-process writes of `key` in `scope` (default `"user"`). The
-     * callback fires with the new value after each `set` that changes it. Edits
+     * Subscribe to in-process writes of `key` in `scope` (default: the key's
+     * declared scope, else `"user"`). The callback fires with the new value after
+     * each `set` that changes it, and with the declared `default` (or
+     * `undefined`) when the stored value is cleared. Edits
      * made to the JSON file by other processes do NOT fire until the plugin
      * reloads. Must be called during `activate()` — subscribing is revoke-guarded.
      * Resolves to a disposer; calling it more than once is a no-op. All

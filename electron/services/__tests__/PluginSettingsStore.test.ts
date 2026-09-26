@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -190,5 +190,98 @@ describe("PluginSettingsStore", () => {
         await fs.chmod(dir, 0o755);
       }
     });
+  });
+});
+
+describe("PluginSettingsStore after the file changes underneath it", () => {
+  it("reads a rewrite that landed from outside, as a pull or branch switch would", async () => {
+    const { store, filePath } = storeAt("acme.plugin.json");
+    await store.set("channel", "blog");
+
+    await fs.writeFile(filePath, JSON.stringify({ channel: "x", cadence: 3 }));
+
+    expect(await store.get("channel")).toBe("x");
+    expect(await store.get("cadence")).toBe(3);
+  });
+
+  it("keeps the outside change when it writes next, instead of restoring its stale copy", async () => {
+    const { store, filePath } = storeAt("acme.plugin.json");
+    await store.set("channel", "blog");
+    await fs.writeFile(filePath, JSON.stringify({ channel: "x", cadence: 3 }));
+
+    await store.set("reviewer", "sam");
+
+    expect(JSON.parse(await fs.readFile(filePath, "utf-8"))).toEqual({
+      channel: "x",
+      cadence: 3,
+      reviewer: "sam",
+    });
+  });
+
+  it("gives every concurrent read the rewritten file, and writes on top of it", async () => {
+    const { store, filePath } = storeAt("acme.plugin.json");
+    await store.set("channel", "blog");
+    await fs.writeFile(filePath, JSON.stringify({ channel: "x" }));
+
+    const reads = await Promise.all(Array.from({ length: 20 }, () => store.get("channel")));
+    expect(new Set(reads)).toEqual(new Set(["x"]));
+
+    await store.set("reviewer", "sam");
+    expect(JSON.parse(await fs.readFile(filePath, "utf-8"))).toEqual({
+      channel: "x",
+      reviewer: "sam",
+    });
+  });
+
+  it("makes a write wait for a reload already in flight rather than write over it", async () => {
+    const { store, filePath } = storeAt("acme.plugin.json");
+    await store.set("channel", "blog");
+    await fs.writeFile(filePath, JSON.stringify({ channel: "x" }));
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const realReadFile = fs.readFile.bind(fs);
+    const spy = vi.spyOn(fs, "readFile").mockImplementationOnce(async (...args) => {
+      await gate;
+      return realReadFile(...(args as Parameters<typeof fs.readFile>));
+    });
+    try {
+      const read = store.get("channel");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const write = store.set("reviewer", "sam");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      release();
+      expect(await read).toBe("x");
+      await write;
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(JSON.parse(await fs.readFile(filePath, "utf-8"))).toEqual({
+      channel: "x",
+      reviewer: "sam",
+    });
+  });
+
+  it("sees the file deleted and recreated", async () => {
+    const { store, filePath } = storeAt("acme.plugin.json");
+    await store.set("channel", "blog");
+    await fs.rm(filePath);
+    expect(await store.get("channel")).toBeUndefined();
+
+    await fs.writeFile(filePath, JSON.stringify({ channel: "news" }));
+    expect(await store.get("channel")).toBe("news");
+  });
+
+  it("answers a read racing its own write with the value being written", async () => {
+    const { store } = storeAt("acme.plugin.json");
+    await store.set("channel", "blog");
+
+    const write = store.set("channel", "x");
+    const reads = await Promise.all([store.get("channel"), store.get("channel")]);
+    await write;
+
+    for (const value of reads) expect(["blog", "x"]).toContain(value);
+    expect(await store.get("channel")).toBe("x");
   });
 });
