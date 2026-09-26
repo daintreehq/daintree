@@ -23,22 +23,15 @@ async function dispatchOrThrow(host, actionId, args) {
 }
 
 /**
- * Runtime ids a project plugin has to build for itself, and the single thing
- * agents most reliably get wrong on a first attempt.
- *
- * The plugin's own runtime id is an INSTANCE KEY, `project__{projectId}__{manifestId}`
- * — not the manifest id — because two projects can each ship `acme.tour` and
- * they must not collide. Its panel kinds are qualified differently again, as
- * `project:{projectId}/{manifestId}/{kindId}`, and that qualified form is what
- * `panel.openPluginPanel` requires. Passing the bare `tour` or `acme.tour.tour`
- * gets a kind that resolves to nothing.
+ * Runtime ids are the single thing agents most reliably get wrong on a first
+ * attempt. The plugin's own runtime id is an INSTANCE KEY,
+ * `project__{projectId}__{manifestId}` — not the manifest id — because two
+ * projects can each ship `acme.tour` and they must not collide. Its panel kinds
+ * are qualified differently again, and that qualified form is what
+ * `panel.openPluginPanel` requires. Never assemble either by hand:
+ * `host.panelKindId("tour")` qualifies a bare panel id for whichever origin the
+ * plugin loaded under, and `host.pluginInfo` carries the rest of the identity.
  */
-const MANIFEST_ID = "acme.tour";
-
-function panelKindId(projectId) {
-  return `project:${projectId}/${MANIFEST_ID}/tour`;
-}
-
 export async function activate(host) {
   // Per-activation, NOT module scope. A worker is reloaded by unloading and
   // re-importing this module, and module-level state would then be shared with
@@ -79,10 +72,9 @@ export async function activate(host) {
 
   // Opens a SECOND instance of this plugin's own panel. `reuseExisting: false`
   // is what makes it a second one rather than a focus of the first.
-  await host.registerHandler("open-another", async (ctx) => {
-    if (!ctx.projectId) throw new Error("open-another needs a project");
+  await host.registerHandler("open-another", async () => {
     return await dispatchOrThrow(host, "panel.openPluginPanel", {
-      kind: panelKindId(ctx.projectId),
+      kind: host.panelKindId("tour"),
       initialArgs: { openedBy: "tour" },
       reuseExisting: false,
     });
@@ -154,11 +146,9 @@ export async function activate(host) {
       danger: "safe",
       requires: [],
     },
-    async () => {
-      const worktree = await host.getActiveWorktree();
-      await host.showToast({ message: "Surface Tour is open", type: "info" });
-      return { worktree: worktree?.path ?? null };
-    }
+    // The command a user runs to see the plugin opens its panel — focusing the
+    // existing one rather than stacking another.
+    async () => await dispatchOrThrow(host, "panel.openPluginPanel", { kind: host.panelKindId("tour") })
   );
 
   return () => {

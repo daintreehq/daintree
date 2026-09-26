@@ -202,6 +202,8 @@ That surface is visible only while the grid is empty. The moment a terminal open
 `panel.openPluginPanel` spawns or focuses one of your panel kinds and hands the view an argument bag as `initialArgs`, which is also where `persistState` writes back, so a panel reopens the way it was left:
 
 ```js
+const panelKindId = host.panelKindId("videos");
+
 await host.registerAction(
   {
     id: "open-for-file",
@@ -218,7 +220,7 @@ await host.registerAction(
 );
 ```
 
-`kind` is the registered kind id. For a project plugin that is `project:{projectId}/{manifestId}/{kindId}`, and until #12211 adds `host.pluginInfo()` the parts have to come from `host.pluginId` (the instance key `project__{projectId}__{manifestId}`). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
+`kind` is the registered kind id. `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
 
 ## Look like the app, with Tailwind
 
