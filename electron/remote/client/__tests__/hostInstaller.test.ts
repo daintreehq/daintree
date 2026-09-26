@@ -5,7 +5,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import { probeHost } from "../hostProbe.js";
-import { runHostInstall, type InstallProgress, type InstallerDeps } from "../hostInstaller.js";
+import {
+  runHostInstall,
+  stopScript,
+  type InstallProgress,
+  type InstallerDeps,
+} from "../hostInstaller.js";
 import type { ClientBuild } from "../installPlan.js";
 import type { HostCommandChannel } from "../remoteShell.js";
 
@@ -710,5 +715,18 @@ describe("runHostInstall", () => {
     const deps = makeDeps({ shell, probes: [macProbe({ build: NEW_BUILD, hostMode: true })] });
     await expect(install(deps)).resolves.toMatchObject({ status: "up-to-date" });
     expect(shell.scripts).toEqual([]);
+  });
+});
+
+describe("stopScript", () => {
+  // On a shared host another user's Daintree must never be waited on or signalled.
+  it.each([
+    ["darwin", 4242],
+    ["linux", null],
+  ] as const)("only looks at and signals the ssh user's own %s process", (platform, pid) => {
+    const script = stopScript(platform, pid, platform === "linux");
+    const calls = script.match(/\b(pgrep|pkill)\b[^;&|]*/g) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(call).toContain('-u "$(id -u)"');
   });
 });

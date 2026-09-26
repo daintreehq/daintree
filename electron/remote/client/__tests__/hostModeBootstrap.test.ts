@@ -461,12 +461,16 @@ describe("bootstrapHostMode on a headless Linux host", () => {
           : ok()
     );
     await expect(
-      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
-        channel,
-        probe: probes([linux({ unit: "enabled", listening: true, linger: "yes" })]).probe,
-        sleep: async () => {},
-        now: clock(),
-      })
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ linger: "yes", unit: "enabled" })),
+        {
+          channel,
+          probe: probes([linux({ unit: "enabled", listening: true, linger: "yes" })]).probe,
+          sleep: async () => {},
+          now: clock(),
+        }
+      )
     ).rejects.toThrow(/didn't take the request/);
     const restore = restoreUnitScript({ existed: true, wanted: true, active: true });
     expect(calls.at(-1)!.script).toBe(restore);
@@ -481,13 +485,17 @@ describe("bootstrapHostMode on a headless Linux host", () => {
         ? ok("@@dt:unitsaved yes\n@@dt:unitwanted no\n@@dt:unitactive inactive\n")
         : handedOver(script)
     );
-    await bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
-      channel,
-      probe: probes([linux({ unit: "enabled", listening: true, linger: "yes", state: state() })])
-        .probe,
-      sleep: async () => {},
-      now: clock(),
-    });
+    await bootstrapHostMode(
+      { kind: "ssh", target: "bigbox" },
+      await outcomeOf(linux({ linger: "yes", unit: "enabled" })),
+      {
+        channel,
+        probe: probes([linux({ unit: "enabled", listening: true, linger: "yes", state: state() })])
+          .probe,
+        sleep: async () => {},
+        now: clock(),
+      }
+    );
     expect(calls.at(-1)!.script).toBe(DROP_UNIT_BACKUP_SCRIPT);
   });
 
@@ -498,12 +506,16 @@ describe("bootstrapHostMode on a headless Linux host", () => {
         : handedOver(script)
     );
     await expect(
-      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
-        channel,
-        probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
-        sleep: async () => {},
-        now: clock(),
-      })
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ linger: "yes", unit: "enabled" })),
+        {
+          channel,
+          probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
+          sleep: async () => {},
+          now: clock(),
+        }
+      )
     ).rejects.toThrow(/Couldn't keep a copy of the Host mode service/);
     expect(calls.map((c) => c.script)).toEqual([SAVE_UNIT_SCRIPT]);
   });
@@ -515,12 +527,16 @@ describe("bootstrapHostMode on a headless Linux host", () => {
         : handedOver(script)
     );
     await expect(
-      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
-        channel,
-        probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
-        sleep: async () => {},
-        now: clock(),
-      })
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ linger: "yes", unit: "enabled" })),
+        {
+          channel,
+          probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
+          sleep: async () => {},
+          now: clock(),
+        }
+      )
     ).rejects.toThrow(/Couldn't keep a copy of the Host mode service/);
     expect(calls.map((c) => c.script)).toEqual([SAVE_UNIT_SCRIPT]);
   });
@@ -536,12 +552,16 @@ describe("bootstrapHostMode on a headless Linux host", () => {
             : handedOver(script)
     );
     await expect(
-      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
-        channel,
-        probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
-        sleep: async () => {},
-        now: clock(),
-      })
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ linger: "yes", unit: "enabled" })),
+        {
+          channel,
+          probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
+          sleep: async () => {},
+          now: clock(),
+        }
+      )
     ).rejects.toThrow(
       /Couldn't start the Host mode service: Job failed\. Setup couldn't put back the Host mode service that was already on bigbox: its copy is at ~\/\.config\/systemd\/user\/daintree-host\.service\.daintree-setup-backup there \(mv: cannot move: Read-only file system\)/
     );

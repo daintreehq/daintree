@@ -360,7 +360,7 @@ async function waitForIdle(
   }
 }
 
-function stopScript(
+export function stopScript(
   platform: "darwin" | "linux",
   hostPid: number | null,
   hasUnit: boolean
@@ -369,9 +369,9 @@ function stopScript(
   const unitStop = hasUnit ? `systemctl --user stop ${LINUX_UNIT_NAME} 2>/dev/null; ` : "";
   const signalIt =
     hostPid !== null
-      ? `kill -TERM ${hostPid} 2>/dev/null || pkill -TERM -o -x ${name}`
-      : `pkill -TERM -o -x ${name}`;
-  return `${unitStop}if pgrep -x ${name} >/dev/null 2>&1; then ${signalIt}; fi; i=0; while pgrep -x ${name} >/dev/null 2>&1 && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if pgrep -x ${name} >/dev/null 2>&1; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
+      ? `kill -TERM ${hostPid} 2>/dev/null || pkill -TERM -u "$(id -u)" -o -x ${name}`
+      : `pkill -TERM -u "$(id -u)" -o -x ${name}`;
+  return `${unitStop}if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then ${signalIt}; fi; i=0; while pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1 && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 }
 
 /** Put the staged build in place, keeping the previous one beside it until the host is back. */
