@@ -40,6 +40,20 @@ function holdsSelection(container: Element): boolean {
 }
 
 /**
+ * Every mounted `"self"`-scoped region. Focus outranks a held selection: when
+ * the focused element sits in one of these, only that region may claim the
+ * chord, even if the selection was left behind in another.
+ */
+const selfScopedRegions = new Set<Element>();
+
+function isFocusInOtherSelfRegion(container: Element, target: Element): boolean {
+  for (const region of selfScopedRegions) {
+    if (region !== container && region.contains(target)) return true;
+  }
+  return false;
+}
+
+/**
  * What a region claims Select All for.
  *
  * - `"surface"`: the region is the document of its pane or dialog, so the chord
@@ -122,12 +136,25 @@ export function useScopedSelectAll(
     }
 
     if (!isTargetInScope(container, target)) return;
-    if (scope === "self" && !container.contains(target) && !holdsSelection(container)) return;
+    if (scope === "self" && !container.contains(target)) {
+      if (isFocusInOtherSelfRegion(container, target)) return;
+      if (!holdsSelection(container)) return;
+    }
 
     event.preventDefault();
     event.stopPropagation();
     container.ownerDocument.defaultView?.getSelection()?.selectAllChildren(container);
   });
+
+  useEffect(() => {
+    if (!enabled || scope !== "self") return;
+    const container = ref.current;
+    if (!container) return;
+    selfScopedRegions.add(container);
+    return () => {
+      selfScopedRegions.delete(container);
+    };
+  }, [enabled, scope, ref]);
 
   useEffect(() => {
     if (!enabled) return;

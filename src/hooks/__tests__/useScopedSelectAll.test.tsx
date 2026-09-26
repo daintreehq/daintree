@@ -331,6 +331,9 @@ function Block({ testId, text }: { testId: string; text: string }) {
   return (
     <div data-testid={testId} ref={ref}>
       <p>{text}</p>
+      <a href="#x" data-testid={`${testId}-link`}>
+        link
+      </a>
     </div>
   );
 }
@@ -374,6 +377,19 @@ describe("useScopedSelectAll with self scope", () => {
     pressSelectAll(getByTestId("pane"));
 
     expectSelectedWholeOf(getByTestId("first"));
+  });
+
+  // Tabbing to a link moves focus but leaves the old selection where it was.
+  // The block the user is now in wins; the first-mounted block holding the
+  // stale selection must not claim the chord on its way through.
+  it("gives the chord to the focused block over one still holding the selection", () => {
+    const { getByTestId } = render(<SelfScopedHarness />);
+    placeCaretIn(getByTestId("first"));
+
+    const event = pressSelectAll(getByTestId("second-link"));
+
+    expect(event.defaultPrevented).toBe(true);
+    expectSelectedWholeOf(getByTestId("second"));
   });
 
   it("declines when neither focus nor the selection is in any block", () => {
