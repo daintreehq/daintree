@@ -50,6 +50,7 @@ import type {
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
   SystemOpenInEditorPayload,
+  SystemOpenInEditorFallback,
   SystemWakePayload,
   SystemMemoryPressurePayload,
   CliAvailability,
@@ -311,7 +312,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "system:open-in-editor": {
     args: [payload: SystemOpenInEditorPayload];
-    result: void;
+    result: SystemOpenInEditorFallback | void;
   };
   "system:check-command": {
     args: [command: string];

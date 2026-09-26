@@ -171,12 +171,13 @@ export function EditorIntegrationTab() {
       // Open the active project's root to test the editor integration. It is a
       // known-to-exist path inside an allowed root, so it passes the main-process
       // path-containment guard (homeDir would now be rejected as outside-root).
-      await window.electron.system.openInEditor({
+      const fallback = await window.electron.system.openInEditor({
         path: activeProjectPath,
         projectId: activeProjectId,
       });
       if (!isMountedRef.current) return;
-      setTestResult("ok");
+      // A remote window copies the host path when no editor here can open it: not a pass.
+      setTestResult(fallback ? "error" : "ok");
     } catch {
       if (!isMountedRef.current) return;
       setTestResult("error");

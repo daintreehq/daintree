@@ -92,6 +92,7 @@ import {
 } from "@/store/forgeProviderHealthStore";
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
+import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
 import { forgeClient } from "@/clients/forgeClient";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
 import { runHostOperation } from "@/hooks/useHostConnection";
@@ -1219,7 +1220,7 @@ export function ReviewHubContent({
         if (typeof line === "number" && Number.isFinite(line) && line > 0) {
           payload.line = line;
         }
-        await window.electron.system.openInEditor(payload);
+        announceOpenInEditorFallback(await window.electron.system.openInEditor(payload));
       } catch (err) {
         setActionError({
           title: "Couldn't open file in editor",
