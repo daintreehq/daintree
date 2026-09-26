@@ -583,6 +583,16 @@ for (const scenario of SCENARIOS) {
         (window as any).electron.helpAssistant.getSettings()
       );
       expect(settings.runbookSearch).toBe(true);
+      // Extra CLI flags for the assistant, such as a reasoning effort, so one
+      // workflow can be measured at several settings.
+      const assistantArgs = process.env.DAINTREE_E2E_ASSISTANT_ARGS;
+      if (assistantArgs) {
+        await page.evaluate(
+          (customArgs) => (window as any).electron.helpAssistant.setSettings({ customArgs }),
+          assistantArgs
+        );
+        log(`assistant custom args: ${assistantArgs}`);
+      }
 
       await page.evaluate((agentId) => {
         const key = "help-panel-storage";

@@ -213,7 +213,8 @@ describe("help prompt outputs", () => {
       expect(body).not.toContain("### Launch agents");
       expect(body).not.toContain("## Checking Whether Work Is Ready");
       expect(body).not.toContain("### Work through a queue");
-      expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(12 * 1024);
+      // Ratchet: ~5% above the 2026-09 trim (AGENTS.md 7,990 B). Lower it, never raise it.
+      expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(8_400);
     });
 
     // The topic list was dropped: docs search is the scope, and the list had

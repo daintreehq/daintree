@@ -88,7 +88,7 @@ scripts/help-src/
 └── AGENTS.transcript.md   # Codex session-transcript lookup
 ```
 
-`CLAUDE.md` is `CLAUDE.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in a `SHARED*` partial — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling; Codex truncates past it without telling the model. The build test caps each generated prompt at 12 KiB — procedures belong in the runbooks — and keeps the older 24 KiB and 21,500-byte AGENTS.md caps as backstops.
+`CLAUDE.md` is `CLAUDE.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in a `SHARED*` partial — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling; Codex truncates past it without telling the model. The build test caps each generated prompt at 8,400 bytes — procedures belong in the runbooks — and keeps the older 24 KiB and 21,500-byte AGENTS.md caps as backstops.
 
 After editing any partial, run:
 
