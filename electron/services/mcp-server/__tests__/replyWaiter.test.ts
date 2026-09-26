@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalHandback } from "../../../../shared/types/handback.js";
 import { NOTIFY_TARGET_SETTLE_MS } from "../../../../shared/types/terminalNotify.js";
-import { ReplyWaiterService } from "../replyWaiter.js";
+import { MAX_OUTSTANDING_REPLY_WAITS, ReplyWaiterService } from "../replyWaiter.js";
 import type { NotifyStateChange, NotifyTerminalInfo } from "../terminalNotify.js";
 
 function setup() {
@@ -228,6 +228,22 @@ describe("ReplyWaiterService", () => {
     wait.bind("t-new");
 
     await expect(wait.promise).resolves.toMatchObject({ outcome: "settled" });
+  });
+
+  it("returns at once as still going past the outstanding-wait cap", async () => {
+    const h = setup();
+    const held = Array.from({ length: MAX_OUTSTANDING_REPLY_WAITS }, (_, i) =>
+      h.service.wait({ terminalId: `t-${i}`, since: Date.now(), replyLines: 0, timeoutMs: 60_000 })
+    );
+    const extra = h.service.wait({
+      terminalId: "t-extra",
+      since: Date.now(),
+      replyLines: 0,
+      timeoutMs: 60_000,
+    });
+
+    await expect(extra.promise).resolves.toMatchObject({ outcome: "timeout" });
+    for (const wait of held) wait.cancel();
   });
 
   it("ends at once for a request that was already aborted", async () => {

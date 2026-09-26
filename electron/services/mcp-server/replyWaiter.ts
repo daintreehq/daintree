@@ -72,6 +72,13 @@ export interface ReplyWait {
   promise: Promise<AwaitedReply>;
 }
 
+/**
+ * Waits held at once, across sessions. A client that drops its connection does
+ * not abort its request, so an abandoned wait lasts until its timeout; the cap
+ * bounds what those can hold. One past it returns at once as still going.
+ */
+export const MAX_OUTSTANDING_REPLY_WAITS = 128;
+
 /** State changes kept per terminal while waiters exist, for a late bind. */
 const MAX_RECENT_CHANGES = 16;
 
@@ -136,8 +143,14 @@ export class ReplyWaiterService {
       },
     };
     this.waiters.add(waiter);
-    if (options.signal?.aborted) waiter.finish("timeout");
-    else options.signal?.addEventListener("abort", () => waiter.finish("timeout"), { once: true });
+    if (options.signal?.aborted || this.waiters.size > MAX_OUTSTANDING_REPLY_WAITS) {
+      waiter.finish("timeout");
+    } else if (options.signal) {
+      const signal = options.signal;
+      const onAbort = () => waiter.finish("timeout");
+      signal.addEventListener("abort", onAbort, { once: true });
+      void promise.finally(() => signal.removeEventListener("abort", onAbort));
+    }
 
     return {
       bind: (terminalId, submissionToken) => {

@@ -56,7 +56,7 @@ export function buildRunbooksAddendum(): string {
     "",
     `\`${RUNBOOKS_MCP_SERVER_NAME}\` is on, and it comes before everything below: \`search_runbooks\` returns Daintree's procedure for a task, and following it is how you do the task.`,
     "",
-    '**Before acting on any request to do something, call it** — before your first `daintree` call, even when it looks simple. **One search per task:** never search for a step of it, a follow-up on it (closing its agents included) or a notice; those run on the runbooks you have. Only chat and "how do I…" questions skip it: answer those from the docs. A question about live state ("how much usage is left?", "why is it slow?") is a task.',
+    '**Never search for chat or a "how do I…" question:** answer those from the docs. **Before acting on any request to do something, call it** — before your first `daintree` call, even when it looks simple. A question about live state ("how much usage is left?", "why is it slow?") is a task. **One search per task:** never search for a step of it, a follow-up on it (closing its agents included) or a notice; those run on the runbooks you have.',
     "",
     '`query`: one sentence, 8–15 words, saying what the user wants done as they would type it. Keep every part of the task and any condition on how ("…and start an agent on it", "…without fixing anything"). Leave out specifics: numbers, branch, file, repo and people\'s names, pasted output, prompt text. Don\'t narrate ("User wants…", "ask whether…"). Pass `max_results: 3`.',
     "",

@@ -3362,6 +3362,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
     })();
 
+    // A waited call's answer is the dispatch plus its reply, so that is what a
+    // duplicate shares and what the cache keeps: never a bare receipt.
+    const answerPromise: Promise<CallToolResultLike> =
+      replyWait === undefined
+        ? dispatchPromise
+        : dispatchPromise.then((result) => attachReply(result as CallToolResult, replyWait!));
+
     if (dedupKey !== undefined) {
       let inFlight = sessionStore.dedupInFlight.get(sessionId);
       if (!inFlight) {
@@ -3371,9 +3378,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       const ownedInFlight = inFlight;
       const cleanupKey = dedupKey;
       const ownedArgsHash = argsHash!;
-      ownedInFlight.set(cleanupKey, { promise: dispatchPromise, argsHash: ownedArgsHash });
+      ownedInFlight.set(cleanupKey, { promise: answerPromise, argsHash: ownedArgsHash });
 
-      dispatchPromise.then(
+      answerPromise.then(
         (result) => {
           // Session-liveness guard: drain() clears `dedupInFlight` up-front,
           // so a torn-down session leaves `liveInFlight` undefined and we
@@ -3420,10 +3427,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       );
     }
 
-    const toolResult = await dispatchPromise;
-    return replyWait === undefined
-      ? toolResult
-      : await attachReply(toolResult as CallToolResult, replyWait);
+    return (await answerPromise) as CallToolResult;
   };
   server.setRequestHandler(CallToolRequestSchema, handleCallTool);
 

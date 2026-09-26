@@ -42,7 +42,11 @@ describe("buildRunbooksAddendum", () => {
   it("makes the search a requirement before acting, and exempts only chat and how-to", () => {
     expect(text).toContain("**Before acting on any request to do something, call it**");
     expect(text).toContain("before your first `daintree` call");
-    expect(text).toContain('Only chat and "how do I…" questions skip it');
+    expect(text).toContain('**Never search for chat or a "how do I…" question:**');
+    // The exemption leads, so it is read before the rule it narrows.
+    expect(text.indexOf("Never search for chat")).toBeLessThan(
+      text.indexOf("**Before acting on any request")
+    );
     expect(text).toContain("A question about live state");
   });
 

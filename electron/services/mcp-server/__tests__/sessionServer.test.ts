@@ -1012,6 +1012,57 @@ describe("terminal notices", () => {
       });
     });
 
+    it("gives a duplicate waited launch the reply, not a bare receipt", async () => {
+      const dispatchAction = vi.fn().mockResolvedValue({
+        result: {
+          ok: true,
+          result: {
+            launched: true,
+            terminalId: "claude-1a2b",
+            location: "grid",
+            spawnStatus: null,
+            worktreeId: null,
+            worktreePath: null,
+            branch: null,
+            cwd: "/repo",
+            reply: null,
+          },
+        },
+      });
+      const wait = vi.fn(() => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({
+          terminalId: "claude-1a2b",
+          outcome: "handback" as const,
+          reply: { text: "Fact: honey", lineCount: 1, truncated: false },
+        }),
+      }));
+      const { start } = notifyDeps({ origin: "help" }, { dispatchAction, replyWaiter: { wait } });
+      const server = await start("session-wait-dedup");
+      const call = () =>
+        callTool(server, {
+          name: "agent.launch",
+          arguments: {
+            agentId: "claude",
+            prompt: "one fact",
+            requestedId: "claude-1a2b",
+            waitForReply: true,
+          },
+        });
+
+      const first = await call();
+      const second = await call();
+
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      for (const result of [first, second]) {
+        expect(result.structuredContent).toMatchObject({
+          terminalId: "claude-1a2b",
+          reply: { outcome: "handback", reply: { text: "Fact: honey" } },
+        });
+      }
+    });
+
     it("sends every item before waiting, then returns each item's reply", async () => {
       const order: string[] = [];
       const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => {
