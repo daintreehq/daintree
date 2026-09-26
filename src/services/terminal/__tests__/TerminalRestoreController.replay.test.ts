@@ -667,6 +667,17 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
       expect(managed.isSerializedRestoreInProgress).toBe(false);
     });
 
+    it("forgets the previous stream fence, since a reset starts the host's stream over", async () => {
+      const live = makeTerminal(40, 5);
+      const { controller, managed } = makeController(live);
+      managed.streamFence = 5000;
+
+      await controller.applyReset("t1", null, { cols: 40, rows: 5 });
+      await flush(live);
+
+      expect(managed.streamFence).toBeUndefined();
+    });
+
     it("a null reset supersedes a paused incremental restore and releases later output", async () => {
       const live = makeTerminal(40, 5);
       await writeAndFlush(live, "OLD SCREEN");

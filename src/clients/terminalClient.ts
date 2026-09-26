@@ -182,7 +182,7 @@ function handlePortReset(id: string, snapshot: SerializedTerminalSnapshot | null
     }
     return;
   }
-  earlyDataBuffer.set(id, [repaint]);
+  earlyDataBuffer.set(id, [{ data: repaint }]);
   earlyDataBufferBytes.set(id, earlyChunkSize(repaint));
 }
 

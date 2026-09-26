@@ -126,8 +126,11 @@ describe("the composer's send", () => {
   it("lets the broadcast decide, rather than counting only this view's armed panes", () => {
     const source = readFileSync(path.resolve(__dirname, "../HybridInputBar.tsx"), "utf8");
     const start = source.indexOf("const sendFromEditor = () => {");
-    const end = source.indexOf("sendText(text);", start);
+    const end = source.indexOf("sendText(text", start);
     expect(start).toBeGreaterThan(-1);
+    // A missing end marker would slice to the end of the file and read code
+    // outside the send path.
+    expect(end).toBeGreaterThan(start);
     const body = source.slice(start, end);
     expect(body).toContain("tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text,");
     expect(body).not.toMatch(/armedIds\.size/);

@@ -132,7 +132,7 @@ describe("TerminalWriteController.write", () => {
     // A zero-length byte array, not "": an empty string entry ends xterm's
     // flushSync drain and drops everything queued behind it.
     expect(vi.mocked(managed.terminal.write).mock.calls[0]![0]).toEqual(new Uint8Array(0));
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 7, 2);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 7, 2, 0);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 7);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 7);
   });
@@ -215,7 +215,7 @@ describe("TerminalWriteController.write", () => {
     managed.isSerializedRestoreInProgress = false;
     const [entry] = managed.deferredOutput;
     managed.deferredOutput = [];
-    controller.write("t1", entry!.data, entry!.chunkCount, entry!.ackGeneration);
+    controller.write("t1", entry!.data, entry!.chunkCount, entry!.range, entry!.ackGeneration);
     expect(deps.acknowledgePortData).toHaveBeenLastCalledWith("t1", 2, 2, 4);
   });
 
