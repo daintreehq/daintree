@@ -1120,6 +1120,11 @@ class VoiceRecordingService {
   async toggleFocusedPanel(): Promise<void> {
     this.initialize();
 
+    // The shortcut is a global stop: a running session ends wherever it is,
+    // before focus or the lock is consulted, so the press can never move the
+    // recording to whichever panel happens to own focus (#12832).
+    if (await this.stopAnySession()) return;
+
     // Locked target overrides focus routing entirely — synchronous read before
     // any await so the value reflects the user's pin at the moment the hotkey
     // fired (mirrors the assistant-focus pattern below for #6959). When the
@@ -1170,6 +1175,26 @@ class VoiceRecordingService {
     }
 
     await this.startOrToggle(target);
+  }
+
+  /**
+   * End whatever dictation is in progress, regardless of target. Returns false
+   * when idle so the caller can go on to start one. A pre-audio arming window
+   * with no mic open only needs cancelArming(); if a stream is still open (a
+   * panel button retargeting mid-session re-enters arming before tearing the
+   * old session down), a full stop() is needed to release it.
+   */
+  private async stopAnySession(): Promise<boolean> {
+    const { status } = useVoiceRecordingStore.getState();
+    if (status === "arming" && !this.stream) {
+      this.cancelArming();
+      return true;
+    }
+    if (status === "arming" || isActiveVoiceSession(status)) {
+      await this.stop("Dictation stopped.", { preserveLiveText: true });
+      return true;
+    }
+    return false;
   }
 
   /**
