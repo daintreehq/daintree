@@ -6,6 +6,7 @@ import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
+import type { ClipboardSaveImageOptions } from "../../../shared/types/ipc/fileTransfer.js";
 import { CLIPBOARD_METHOD_CHANNELS } from "./clipboard.preload.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -147,7 +148,10 @@ async function writeOwnerOnlyNewFile(filePath: string, data: Buffer): Promise<vo
   await handle.close();
 }
 
-async function handleSaveImage(): Promise<{ filePath: string; thumbnailDataUrl: string }> {
+// The options only steer a remote window's upload (see the clipboard split); a local save has none.
+async function handleSaveImage(
+  _options?: ClipboardSaveImageOptions
+): Promise<{ filePath: string; thumbnailDataUrl: string }> {
   const image = clipboard.readImage();
   if (image.isEmpty()) {
     throw new AppError({

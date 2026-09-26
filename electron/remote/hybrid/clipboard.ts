@@ -1,4 +1,5 @@
 import { clipboard, type NativeImage } from "electron";
+import type { ClipboardSaveImageOptions } from "../../../shared/types/ipc/fileTransfer.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
@@ -33,7 +34,10 @@ function thumbnailOf(image: NativeImage): string {
 }
 
 function saveImage(deps: ClipboardSplitDeps): HybridSplit {
-  return async ({ hostId, webContentsId }) => {
+  return async ({ hostId, webContentsId, args }) => {
+    // The window's operation id for the upload, so it can follow and cancel it.
+    const options = args[0] as ClipboardSaveImageOptions | undefined;
+    const opId = typeof options?.opId === "string" ? options.opId : undefined;
     const image = deps.readImage();
     if (image.isEmpty()) {
       throw new AppError({
@@ -61,7 +65,8 @@ function saveImage(deps: ClipboardSplitDeps): HybridSplit {
     const filePath = await uploader.uploadClipboardImage(
       webContentsId,
       hostId as HostId,
-      new Uint8Array(png)
+      new Uint8Array(png),
+      opId
     );
     return { filePath, thumbnailDataUrl };
   };

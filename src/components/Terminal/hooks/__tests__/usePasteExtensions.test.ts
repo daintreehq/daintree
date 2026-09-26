@@ -32,6 +32,8 @@ vi.mock("../../inputEditorExtensions", () => ({
 const { usePasteExtensions } = await import("../usePasteExtensions");
 const { createFilePasteHandler } = await import("../../inputEditorExtensions");
 const { setRemoteMaterializer } = await import("@/services/materialize");
+const { getPendingUploads, _resetPendingUploadsForTests } =
+  await import("../../uploads/pendingUploads");
 
 const CWD = "/Users/greg/Projects/daintree";
 
@@ -280,5 +282,54 @@ describe("usePasteExtensions — materialize seam", () => {
     await pending;
 
     expect(dispatch.mock.calls[0]?.[0]?.changes?.from).toBe(9);
+  });
+});
+
+describe("usePasteExtensions: an image pasted in a remote window's composer", () => {
+  beforeEach(() => {
+    _resetPendingUploadsForTests();
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+  });
+
+  afterEach(() => {
+    delete window.__DAINTREE_HOST_ID__;
+    _resetPendingUploadsForTests();
+  });
+
+  it("hands the upload the chip's progress and cancel, and inserts nothing once cancelled", async () => {
+    let seen: { onProgress?: (fraction: number) => void; signal?: AbortSignal } | undefined;
+    let finish!: () => void;
+    setRemoteMaterializer((source, options) => {
+      seen = options;
+      return new Promise((resolve, reject) => {
+        options?.signal?.addEventListener("abort", () =>
+          reject(Object.assign(new Error("cancelled"), { code: "CANCELLED" }))
+        );
+        finish = () =>
+          resolve({
+            hostPath: "/tmp/daintree-inbox/clipboard/clipboard-1.png",
+            displayName: "clipboard-1.png",
+            bytes: null,
+            thumbnail: "data:image/png;base64,AA",
+          });
+        void source;
+      });
+    });
+    renderHook(() => usePasteExtensions(CWD, "composer:t1"));
+    const { view, dispatch } = fakeView();
+
+    const pending = captured.imagePaste?.(view);
+    await vi.waitFor(() => expect(seen?.signal).toBeInstanceOf(AbortSignal));
+    seen!.onProgress?.(0.42);
+    const [chip] = getPendingUploads("composer:t1");
+    expect(chip?.fraction).toBe(0.42);
+
+    chip!.cancel();
+    finish();
+    await pending;
+
+    expect(seen!.signal!.aborted).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getPendingUploads("composer:t1")).toHaveLength(0);
   });
 });

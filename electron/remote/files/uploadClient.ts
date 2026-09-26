@@ -36,8 +36,17 @@ import type { EndpointFeed } from "./clientInstall.js";
 export interface HostUploadClient {
   uploadLocalFile(webContentsId: number, payload: UploadLocalFilePayload): Promise<UploadResult>;
   uploadBytes(webContentsId: number, payload: UploadBytesPayload): Promise<UploadResult>;
-  /** A pasted image, captured on this machine, into the host inbox's clipboard folder. */
-  uploadClipboardImage(webContentsId: number, hostId: HostId, png: Uint8Array): Promise<string>;
+  /**
+   * A pasted image, captured on this machine, into the host inbox's clipboard
+   * folder. With the view's operation id it reports progress and can be
+   * cancelled like any other upload.
+   */
+  uploadClipboardImage(
+    webContentsId: number,
+    hostId: HostId,
+    png: Uint8Array,
+    opId?: string
+  ): Promise<string>;
   /** Cancel the view's own upload by its operation id; false when it has none running. */
   cancel(opId: string, webContentsId: number): boolean;
   /**
@@ -83,6 +92,10 @@ const DEFAULT_RECONNECT_WAIT_MS = 30_000;
 /** Answers lost in transit are reconciled with the host at most this many times. */
 const MAX_RECONCILE_ATTEMPTS = 2;
 const REPLACE_TOKEN = /^[0-9a-f]{32}$/;
+const CLIPBOARD_DESTINATION: TransferDestination = { kind: "inbox", bucket: "clipboard" };
+/** Cancels that arrived before their upload started, kept this long for it to catch up. */
+const EARLY_CANCEL_TTL_MS = 60_000;
+const MAX_EARLY_CANCELS = 256;
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
@@ -154,6 +167,22 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       controller: AbortController;
     }
   >();
+  /** Per operation id, the view whose cancel arrived first, and until when it counts. */
+  const earlyCancels = new Map<string, { webContentsId: number; until: number }>();
+  const noteEarlyCancel = (opId: string, webContentsId: number): void => {
+    if (typeof opId !== "string" || opId.length === 0 || opId.length > 128) return;
+    const now = Date.now();
+    for (const [id, entry] of earlyCancels) {
+      if (entry.until <= now || earlyCancels.size >= MAX_EARLY_CANCELS) earlyCancels.delete(id);
+    }
+    earlyCancels.set(opId, { webContentsId, until: now + EARLY_CANCEL_TTL_MS });
+  };
+  const takeEarlyCancel = (opId: string, webContentsId: number): boolean => {
+    const entry = earlyCancels.get(opId);
+    if (!entry) return false;
+    earlyCancels.delete(opId);
+    return entry.webContentsId === webContentsId && entry.until > Date.now();
+  };
   const maxBytes = deps.maxUploadBytes ?? UPLOAD_REFUSE_BYTES;
   const grantTtlMs = deps.grantTtlMs ?? DEFAULT_GRANT_TTL_MS;
   /** Per view, the local files the person chose there, and until when. */
@@ -217,6 +246,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       return existing.promise;
     }
     const controller = new AbortController();
+    if (takeEarlyCancel(opId, webContentsId)) controller.abort();
     let lastSent = 0;
     const attempt = async (): Promise<UploadResult> => {
       const opened = await openSource();
@@ -351,22 +381,33 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       );
     },
 
-    async uploadClipboardImage(webContentsId, hostId, png) {
+    async uploadClipboardImage(webContentsId, hostId, png, opId) {
+      const operation = opId ?? `clipboard-${crypto.randomUUID()}`;
+      validateCommon({ hostId, opId: operation, destination: CLIPBOARD_DESTINATION });
       requireBoundHost(webContentsId, hostId);
-      const result = await deps.transport.upload(hostId, bytesTransferSource(png), {
+      const digest = crypto.createHash("sha256").update(png).digest("hex");
+      const result = await run(
         webContentsId,
-        opId: `clipboard-${crypto.randomUUID()}`,
-        hostLabel: deps.hostLabel(hostId),
-        name: "clipboard.png",
-        destination: { kind: "inbox", bucket: "clipboard" },
-      });
+        hostId,
+        operation,
+        `clipboard:${digest}`,
+        "clipboard.png",
+        CLIPBOARD_DESTINATION,
+        async () => bytesTransferSource(png)
+      );
       return result.hostPath;
     },
 
     cancel(opId, webContentsId) {
       const entry = running.get(opId);
+      if (!entry) {
+        // The cancel can overtake its own upload, which is still on its way
+        // here: remember it for that view, so the upload starts cancelled.
+        noteEarlyCancel(opId, webContentsId);
+        return false;
+      }
       // Only the view that started an upload can stop it.
-      if (!entry || entry.webContentsId !== webContentsId) return false;
+      if (entry.webContentsId !== webContentsId) return false;
       entry.controller.abort();
       return true;
     },
