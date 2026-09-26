@@ -57,8 +57,11 @@ type WorkingAgentsSource = (hostId: HostId) => number | null;
 
 let workingAgentsSource: WorkingAgentsSource | null = null;
 
-/** A refusal's agent count older than this is asked for again before an update relies on it. */
-const MISMATCH_OBSERVATION_MAX_AGE_MS = 5_000;
+/**
+ * Every check before a restart asks the host afresh: a count from an earlier
+ * refusal may say zero after an agent has started.
+ */
+const MISMATCH_OBSERVATION_MAX_AGE_MS = 0;
 
 /**
  * Where "agents working on this host" comes from for the update gate. Until a

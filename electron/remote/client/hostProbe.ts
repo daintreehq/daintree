@@ -105,7 +105,8 @@ export function buildHostProbeScript(): string {
   return [
     `echo "${MARK}uname $(uname -sm)"`,
     `case "$(uname -s)" in Darwin) ${mac} ;; Linux) ${linux} ;; *) d=/nonexistent ;; esac`,
-    `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}")"; fi`,
+    // Only a live process counts: a crash leaves the socket and both files behind.
+    `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; fi; fi`,
     `if [ -f "$d/${HOST_MODE_STATUS_NAME}" ]; then printf '%s %s\\n' "${MARK}hostmodestate" "$(head -c 4096 "$d/${HOST_MODE_STATUS_NAME}" | tr -d '\\n')"; fi`,
     `if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then echo "${MARK}download yes"; fi`,
     `echo "${MARK}end"`,

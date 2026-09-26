@@ -274,7 +274,7 @@ export class HostConnection {
     const now = options.now ?? Date.now;
     const current = this.link.getState();
     if (current.status !== "version-mismatch") return null;
-    if (current.observed && now() - current.observed.at <= options.maxAgeMs) {
+    if (current.observed && now() - current.observed.at < options.maxAgeMs) {
       return current.observed.workingAgents;
     }
     return new Promise((resolve) => {
