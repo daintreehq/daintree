@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import type { CommandRunner } from "../../client/commandRunner.js";
 import { defaultCommandRunner } from "../../client/commandRunner.js";
-import type { SshChild, SshSpawner } from "../../client/sshTransport.js";
+import type { SshChild, SshSpawner, SshStreamSpawner } from "../../client/sshTransport.js";
+import type { StreamCommandChild } from "../../client/commandStreamTransport.js";
 
 /**
  * A private, user-mode OpenSSH `sshd` on 127.0.0.1 for the real-ssh end to
@@ -42,6 +43,8 @@ export interface PrivateSshd {
   logPath: string;
   /** `ssh -F <config> …args`, the one injection the product code gets. */
   spawnSsh: SshSpawner;
+  /** The same, with stdin piped too: for a link carried over ssh's stdio. */
+  spawnSshStream: SshStreamSpawner;
   /** The same prefix for the product's `CommandRunner` (probe, remote shell). */
   runCommand: CommandRunner;
   runSsh(args: string[], timeoutMs?: number): Promise<SshRunResult>;
@@ -152,6 +155,8 @@ export async function startPrivateSshd(
   options: {
     /** More environment for every session (e.g. a PATH with stand-in tools first). */
     env?: Record<string, string>;
+    /** `AllowStreamLocalForwarding`: false stands in for a server that refuses socket forwards. */
+    allowStreamLocalForwarding?: boolean;
   } = {}
 ): Promise<PrivateSshd> {
   const home = path.join(root, "home");
@@ -178,7 +183,7 @@ export async function startPrivateSshd(
       "UsePAM no",
       "StrictModes no",
       `PidFile ${path.join(root, "sshd.pid")}`,
-      "AllowStreamLocalForwarding yes",
+      `AllowStreamLocalForwarding ${options.allowStreamLocalForwarding === false ? "no" : "yes"}`,
       "AllowTcpForwarding yes",
       // Never run the real user's ~/.ssh/rc.
       "PermitUserRC no",
@@ -239,6 +244,10 @@ export async function startPrivateSshd(
 
   const spawnSsh: SshSpawner = (args) =>
     spawn("ssh", ["-F", configPath, ...args], { stdio: ["ignore", "pipe", "pipe"] }) as SshChild;
+  const spawnSshStream: SshStreamSpawner = (args) =>
+    spawn("ssh", ["-F", configPath, ...args], {
+      stdio: ["pipe", "pipe", "pipe"],
+    }) as StreamCommandChild;
   const runCommand: CommandRunner = (command, args, options) =>
     command === "ssh" || command === "scp"
       ? defaultCommandRunner(command, ["-F", configPath, ...args], options)
@@ -252,6 +261,7 @@ export async function startPrivateSshd(
     pid,
     logPath,
     spawnSsh,
+    spawnSshStream,
     runCommand,
     async runSsh(args, timeoutMs = 15_000) {
       const result = await defaultCommandRunner("ssh", ["-F", configPath, ...args], {

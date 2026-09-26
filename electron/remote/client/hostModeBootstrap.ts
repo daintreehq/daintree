@@ -2,6 +2,7 @@ import type {
   HostProbeResult,
   StartHostModeResult,
 } from "../../../shared/types/ipc/remoteHosts.js";
+import { formatHostConnection, type HostConnection } from "../../../shared/types/remoteHosts.js";
 import {
   ENABLE_HOST_MODE_FLAG,
   HOST_MODE_FLAG,
@@ -216,10 +217,11 @@ async function run(
 }
 
 export async function bootstrapHostMode(
-  sshTarget: string,
+  connection: HostConnection,
   before: ProbeOutcome,
   deps: HostModeBootstrapDeps
 ): Promise<StartHostModeResult> {
+  const hostLabel = formatHostConnection(connection);
   const now = deps.now ?? Date.now;
   const signal = new AbortController().signal;
   const probe = before.result;
@@ -235,7 +237,7 @@ export async function bootstrapHostMode(
     throw new AppError({
       code: "UNSUPPORTED",
       message: "The host runs a different build",
-      userMessage: `Update Daintree on ${sshTarget} first: it runs a different build.`,
+      userMessage: `Update Daintree on ${hostLabel} first: it runs a different build.`,
     });
   }
 
@@ -263,7 +265,7 @@ export async function bootstrapHostMode(
         throw new AppError({
           code: "INTERNAL",
           message: `Couldn't start Host mode: ${failureDetail(started, "ssh failed")}`,
-          userMessage: `Couldn't start Daintree on ${sshTarget}. Log in there once and open it.`,
+          userMessage: `Couldn't start Daintree on ${hostLabel}. Log in there once and open it.`,
         });
       }
     } else {
@@ -298,7 +300,7 @@ export async function bootstrapHostMode(
         const up = await pollUntil((o) => o.result.hostModeListening, LISTEN_TIMEOUT_MS);
         if (!up.result.hostModeListening) {
           throw failed(
-            `The Host mode service started on ${sshTarget}, but Daintree didn't start listening`,
+            `The Host mode service started on ${hostLabel}, but Daintree didn't start listening`,
             `see journalctl --user -u ${LINUX_UNIT_NAME} there`
           );
         }
@@ -313,19 +315,19 @@ export async function bootstrapHostMode(
       const code = markerValue(handoff.stdout, "handoff");
       if (code === String(HOST_MODE_HANDOFF_NOBODY_EXIT_CODE)) {
         throw failed(
-          `Daintree stopped running on ${sshTarget} before Host mode could be switched on`
+          `Daintree stopped running on ${hostLabel} before Host mode could be switched on`
         );
       }
       if (code !== "0") {
         throw failed(
-          `Daintree on ${sshTarget} didn't take the request`,
+          `Daintree on ${hostLabel} didn't take the request`,
           `exit status ${code ?? "?"}`
         );
       }
     }
 
     confirmed = await pollUntil(hostModeConfirmed, CONFIRM_TIMEOUT_MS);
-    if (!hostModeConfirmed(confirmed)) throw failed(unconfirmedReason(confirmed, sshTarget));
+    if (!hostModeConfirmed(confirmed)) throw failed(unconfirmedReason(confirmed, hostLabel));
   } catch (error) {
     if (previousUnit && !previousUnit.existed) {
       await deps.channel

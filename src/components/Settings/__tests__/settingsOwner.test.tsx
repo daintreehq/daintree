@@ -9,7 +9,11 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
   isMac: () => platform.mac,
 }));
 
-vi.mock("@/lib/remoteHosts", () => ({ isRemoteHostsSupported: () => true }));
+vi.mock("@/lib/remoteHosts", () => ({
+  isRemoteShellSupported: () => true,
+  isRemoteHostSupported: () => true,
+  isEitherRemoteRoleSupported: () => true,
+}));
 
 import { SettingsOwnerHeaderChip } from "../SettingsDialog";
 import {

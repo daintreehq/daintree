@@ -7,7 +7,11 @@ afterEach(() => {
 
 async function loadWith(supported: boolean) {
   vi.resetModules();
-  vi.doMock("@/lib/remoteHosts", () => ({ isRemoteHostsSupported: () => supported }));
+  vi.doMock("@/lib/remoteHosts", () => ({
+    isRemoteShellSupported: () => supported,
+    isRemoteHostSupported: () => supported,
+    isEitherRemoteRoleSupported: () => supported,
+  }));
   const registry = await import("../settingsTabRegistry");
   const search = await import("../settingsSearchIndex");
   return { registry, search };

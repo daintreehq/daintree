@@ -15,6 +15,12 @@ export const ENABLE_HOST_MODE_FLAG = "--enable-host-mode";
  * become one. Setup runs it from an SSH session, where the backend must not run.
  */
 export const HOST_MODE_HANDOFF_FLAG = "--host-mode-handoff";
+/**
+ * Bridge stdin/stdout to the Daintree already running here (see
+ * `remote/host/attachStdio.ts`) and exit: never a second instance, never a
+ * window, never a backend.
+ */
+export const ATTACH_STDIO_FLAG = "--attach-stdio";
 /** A handoff launch that found no Daintree running to hand over to. */
 export const HOST_MODE_HANDOFF_NOBODY_EXIT_CODE = 3;
 
@@ -26,12 +32,16 @@ export function isHostModeEnableRequested(argv: readonly string[]): boolean {
   return argv.includes(ENABLE_HOST_MODE_FLAG);
 }
 
+export function isAttachStdioRequested(argv: readonly string[]): boolean {
+  return argv.includes(ATTACH_STDIO_FLAG);
+}
+
 export function isHostModeHandoffOnly(argv: readonly string[]): boolean {
   return argv.includes(HOST_MODE_HANDOFF_FLAG);
 }
 
 /**
- * A Host-mode launch on Linux with no display server has to run Chromium on
+ * A Host-mode (or `--attach-stdio`) launch on Linux with no display server has to run Chromium on
  * the headless Ozone backend, or Ozone init aborts before `ready`. Everything
  * else keeps today's platform auto-detection.
  */
@@ -41,7 +51,7 @@ export function shouldUseHeadlessOzone(input: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   if (input.platform !== "linux") return false;
-  if (!isHostModeRequested(input.argv)) return false;
+  if (!isHostModeRequested(input.argv) && !isAttachStdioRequested(input.argv)) return false;
   return !input.env.DISPLAY && !input.env.WAYLAND_DISPLAY;
 }
 

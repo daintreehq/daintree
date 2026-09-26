@@ -2,7 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { LOCAL_HOST_ID, type HostId, type OperationId } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isEitherRemoteRoleSupported } from "@/lib/remoteHosts";
 import { useHostConnectionStore, isHostLinkUp } from "@/store/hostConnectionStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { resyncHostTerminals } from "@/store/hostTerminalResync";
@@ -243,7 +243,7 @@ export function startHostConnectionSync(): () => void {
 }
 
 function beginSync(): () => void {
-  if (!isRemoteHostsSupported()) return () => {};
+  if (!isEitherRemoteRoleSupported()) return () => {};
   const disposers: Array<() => void> = [];
   const hostId = getViewHostId();
   const projectId = getViewWorkspaceId();

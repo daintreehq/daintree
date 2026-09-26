@@ -1,5 +1,6 @@
 import type {
   HostArch,
+  HostConnection,
   HostConnectionState,
   HostDescriptor,
   HostDiscoverySource,
@@ -14,13 +15,13 @@ import type {
 
 export interface AddHostPayload {
   name: string;
-  sshTarget: string;
+  connection: HostConnection;
 }
 
 export interface UpdateHostPayload {
   hostId: HostId;
   name?: string;
-  sshTarget?: string;
+  connection?: HostConnection;
   notificationsEnabled?: boolean;
 }
 
@@ -87,11 +88,11 @@ export interface ResetClipboardGrantsPayload {
 /** A machine discovery saw. Reachability only; whether Daintree runs there is learned by connecting. */
 export interface DiscoveredHost {
   name: string;
-  sshTarget: string;
+  connection: HostConnection;
   source: HostDiscoverySource;
   platform: HostPlatform | null;
   online: boolean;
-  /** True when this sshTarget is already in the host list. */
+  /** True when this machine is already in the host list. */
   alreadyAdded: boolean;
 }
 
@@ -103,7 +104,7 @@ export interface HostInstallInfo {
 }
 
 export interface HostProbeResult {
-  sshTarget: string;
+  connection: HostConnection;
   reachable: boolean;
   /** ssh's own error text when unreachable. */
   sshError: string | null;
@@ -215,14 +216,19 @@ export interface HostInstallPlan {
   reason: string | null;
 }
 
+/** Which machine a setup call (probe, install, Host mode) is about. */
+export interface HostSetupTarget {
+  connection: HostConnection;
+}
+
 export interface PlanInstallPayload {
-  sshTarget: string;
+  connection: HostConnection;
   linuxPackage?: LinuxPackagePreference;
 }
 
 export interface InstallHostPayload {
   opId: OperationId;
-  sshTarget: string;
+  connection: HostConnection;
   /** Set when the host is already in the list, so its link can be checked afterwards. */
   hostId?: HostId;
   linuxPackage?: LinuxPackagePreference;
@@ -260,5 +266,15 @@ export type RemoteHostsEvent =
       reason: "overflow" | "reattached" | "reconnected";
     }
   /** An install or update this client is running on a host. */
-  | { type: "install-progress"; opId: OperationId; sshTarget: string; progress: OperationProgress }
-  | { type: "install-settled"; opId: OperationId; sshTarget: string; outcome: OperationOutcome };
+  | {
+      type: "install-progress";
+      opId: OperationId;
+      connection: HostConnection;
+      progress: OperationProgress;
+    }
+  | {
+      type: "install-settled";
+      opId: OperationId;
+      connection: HostConnection;
+      outcome: OperationOutcome;
+    };

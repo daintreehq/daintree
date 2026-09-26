@@ -122,7 +122,7 @@ function scripted(answer: (script: string) => CommandResult = handedOver) {
 
 async function outcomeOf(stdout: string): Promise<ProbeOutcome> {
   return probeHost({
-    sshTarget: "studio",
+    connection: { kind: "ssh", target: "studio" },
     client: CLIENT,
     shell: {
       exec: async () => ok(stdout),
@@ -158,12 +158,16 @@ describe("bootstrapHostMode on a Mac", () => {
       mac({ listening: true, agent: false, state: state({ enabled: false, startAtLogin: false }) }),
       mac({ listening: true, agent: true, state: state() }),
     ]);
-    const result = await bootstrapHostMode("studio", await outcomeOf(mac({})), {
-      channel,
-      probe: seen.probe,
-      sleep: async () => {},
-      now: clock(),
-    });
+    const result = await bootstrapHostMode(
+      { kind: "ssh", target: "studio" },
+      await outcomeOf(mac({})),
+      {
+        channel,
+        probe: seen.probe,
+        sleep: async () => {},
+        now: clock(),
+      }
+    );
     expect(calls.map((c) => c.script)).toEqual([MAC_ENABLE_SCRIPT]);
     expect(MAC_ENABLE_SCRIPT).toBe(
       "open -n -g -a '/Applications/Daintree.app' --args --host-mode --enable-host-mode"
@@ -177,7 +181,7 @@ describe("bootstrapHostMode on a Mac", () => {
     const { channel } = scripted();
     const listeningOnly = mac({ listening: true, state: state({ enabled: false }) });
     await expect(
-      bootstrapHostMode("studio", await outcomeOf(mac({})), {
+      bootstrapHostMode({ kind: "ssh", target: "studio" }, await outcomeOf(mac({})), {
         channel,
         probe: probes([listeningOnly]).probe,
         sleep: async () => {},
@@ -197,7 +201,7 @@ describe("bootstrapHostMode on a Mac", () => {
       }),
     });
     await expect(
-      bootstrapHostMode("studio", await outcomeOf(mac({})), {
+      bootstrapHostMode({ kind: "ssh", target: "studio" }, await outcomeOf(mac({})), {
         channel,
         probe: probes([failed]).probe,
         sleep: async () => {},
@@ -215,7 +219,7 @@ describe("bootstrapHostMode on a Mac", () => {
   it("does nothing on a host already switched on", async () => {
     const { channel, calls } = scripted();
     const result = await bootstrapHostMode(
-      "studio",
+      { kind: "ssh", target: "studio" },
       await outcomeOf(mac({ listening: true, agent: true, state: state() })),
       { channel, probe: probes([mac({})]).probe, sleep: async () => {}, now: clock() }
     );
@@ -227,7 +231,7 @@ describe("bootstrapHostMode on a Mac", () => {
     const { channel, calls } = scripted();
     const other = mac({}).replace(BUILD, BUILD.replace("abcdef0123", "0000000000"));
     await expect(
-      bootstrapHostMode("studio", await outcomeOf(other), {
+      bootstrapHostMode({ kind: "ssh", target: "studio" }, await outcomeOf(other), {
         channel,
         probe: probes([other]).probe,
         sleep: async () => {},
@@ -241,16 +245,20 @@ describe("bootstrapHostMode on a headless Linux host", () => {
   it("writes and enables the Daintree unit, asks for linger, starts it, then hands over --enable-host-mode", async () => {
     const { channel, calls } = scripted();
     const target = { executable: "/opt/Daintree/daintree", appPath: null };
-    const result = await bootstrapHostMode("bigbox", await outcomeOf(linux({})), {
-      channel,
-      probe: probes([
-        linux({ unit: "enabled" }),
-        linux({ unit: "enabled", listening: true }),
-        linux({ unit: "enabled", listening: true, linger: "yes", state: state() }),
-      ]).probe,
-      sleep: async () => {},
-      now: clock(),
-    });
+    const result = await bootstrapHostMode(
+      { kind: "ssh", target: "bigbox" },
+      await outcomeOf(linux({})),
+      {
+        channel,
+        probe: probes([
+          linux({ unit: "enabled" }),
+          linux({ unit: "enabled", listening: true }),
+          linux({ unit: "enabled", listening: true, linger: "yes", state: state() }),
+        ]).probe,
+        sleep: async () => {},
+        now: clock(),
+      }
+    );
     expect(calls.map((c) => c.script)).toEqual([
       ENABLE_LINGER_SCRIPT,
       SAVE_UNIT_SCRIPT,
@@ -277,15 +285,19 @@ describe("bootstrapHostMode on a headless Linux host", () => {
           ? ok("@@dt:handoff 0\n")
           : handedOver(script)
     );
-    const result = await bootstrapHostMode("bigbox", await outcomeOf(linux({})), {
-      channel,
-      probe: probes([
-        linux({ unit: "enabled", listening: true }),
-        linux({ unit: "enabled", listening: true, state: state() }),
-      ]).probe,
-      sleep: async () => {},
-      now: clock(),
-    });
+    const result = await bootstrapHostMode(
+      { kind: "ssh", target: "bigbox" },
+      await outcomeOf(linux({})),
+      {
+        channel,
+        probe: probes([
+          linux({ unit: "enabled", listening: true }),
+          linux({ unit: "enabled", listening: true, state: state() }),
+        ]).probe,
+        sleep: async () => {},
+        now: clock(),
+      }
+    );
     expect(result.lingerRefused).toBe(
       "Could not enable linger: Interactive authentication required."
     );
@@ -294,7 +306,7 @@ describe("bootstrapHostMode on a headless Linux host", () => {
   it("runs an AppImage unpacked, in the unit and the handoff, where there is no FUSE", async () => {
     const { channel, calls } = scripted();
     const before = linux({ install: "appimage", fuse: false, linger: "yes" });
-    await bootstrapHostMode("bigbox", await outcomeOf(before), {
+    await bootstrapHostMode({ kind: "ssh", target: "bigbox" }, await outcomeOf(before), {
       channel,
       probe: probes([
         linux({
@@ -332,13 +344,17 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     const { channel, calls } = scripted((script) =>
       script.includes("--host-mode-handoff") ? ok("@@dt:handoff 0\n") : ok()
     );
-    await bootstrapHostMode("bigbox", await outcomeOf(linux({ running: true, linger: "yes" })), {
-      channel,
-      probe: probes([linux({ unit: "enabled", listening: true, linger: "yes", state: state() })])
-        .probe,
-      sleep: async () => {},
-      now: clock(),
-    });
+    await bootstrapHostMode(
+      { kind: "ssh", target: "bigbox" },
+      await outcomeOf(linux({ running: true, linger: "yes" })),
+      {
+        channel,
+        probe: probes([linux({ unit: "enabled", listening: true, linger: "yes", state: state() })])
+          .probe,
+        sleep: async () => {},
+        now: clock(),
+      }
+    );
     expect(calls.map((c) => c.script)).toEqual([
       linuxHandoffScript({
         executable: "/opt/Daintree/daintree",
@@ -353,12 +369,16 @@ describe("bootstrapHostMode on a headless Linux host", () => {
       script.includes("--host-mode-handoff") ? ok("@@dt:handoff 3\n") : ok()
     );
     await expect(
-      bootstrapHostMode("bigbox", await outcomeOf(linux({ running: true, linger: "yes" })), {
-        channel,
-        probe: probes([linux({ running: true })]).probe,
-        sleep: async () => {},
-        now: clock(),
-      })
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ running: true, linger: "yes" })),
+        {
+          channel,
+          probe: probes([linux({ running: true })]).probe,
+          sleep: async () => {},
+          now: clock(),
+        }
+      )
     ).rejects.toThrow(/stopped running on bigbox/);
   });
 
@@ -369,24 +389,32 @@ describe("bootstrapHostMode on a headless Linux host", () => {
         : handedOver(script)
     );
     await expect(
-      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes" })), {
-        channel,
-        probe: probes([linux({})]).probe,
-        sleep: async () => {},
-        now: clock(),
-      })
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ linger: "yes" })),
+        {
+          channel,
+          probe: probes([linux({})]).probe,
+          sleep: async () => {},
+          now: clock(),
+        }
+      )
     ).rejects.toThrow(/Host mode service \(systemctl --user\): Failed to connect to bus/);
   });
 
   it("removes the unit it wrote when Host mode never reads back, so nothing starts at the next login", async () => {
     const { channel, calls } = scripted();
     await expect(
-      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes" })), {
-        channel,
-        probe: probes([linux({ unit: "enabled", listening: true, linger: "yes" })]).probe,
-        sleep: async () => {},
-        now: clock(),
-      })
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ linger: "yes" })),
+        {
+          channel,
+          probe: probes([linux({ unit: "enabled", listening: true, linger: "yes" })]).probe,
+          sleep: async () => {},
+          now: clock(),
+        }
+      )
     ).rejects.toThrow(/didn't record that it was switched on/);
     expect(calls.at(-1)!.script).toBe(REMOVE_UNIT_SCRIPT);
   });
@@ -400,12 +428,16 @@ describe("bootstrapHostMode on a headless Linux host", () => {
           : handedOver(script)
     );
     await expect(
-      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
-        channel,
-        probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
-        sleep: async () => {},
-        now: clock(),
-      })
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ linger: "yes", unit: "enabled" })),
+        {
+          channel,
+          probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
+          sleep: async () => {},
+          now: clock(),
+        }
+      )
     ).rejects.toThrow(/Couldn't start the Host mode service/);
     const restore = restoreUnitScript({ existed: true, wanted: false, active: false });
     expect(calls.map((c) => c.script)).toEqual([

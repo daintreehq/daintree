@@ -41,9 +41,9 @@ describe("remoteHosts handlers", () => {
   });
 
   it("refuses mutations with a typed error until the runtime is running", async () => {
-    await expect(ops.add!.handler({ name: "box", sshTarget: "box.example" })).rejects.toMatchObject(
-      { code: "UNSUPPORTED" }
-    );
+    await expect(
+      ops.add!.handler({ name: "box", connection: { kind: "ssh", target: "box.example" } })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
     await expect(
       ops.switchWindowHost!.handler(ctx, { hostId: "box", newWindow: false })
     ).rejects.toMatchObject({ code: "UNSUPPORTED" });
@@ -63,12 +63,15 @@ describe("remoteHosts handlers", () => {
     registerRemoteService("remoteHostsClient", client as never);
 
     await expect(ops.list!.handler()).resolves.toEqual(["entry"]);
-    await ops.add!.handler({ name: "box", sshTarget: "box.example" });
+    await ops.add!.handler({ name: "box", connection: { kind: "ssh", target: "box.example" } });
     await ops.connect!.handler({ hostId: "box" });
     await expect(ops.getWindowHost!.handler(ctx)).resolves.toEqual({ hostId: "box" });
     await ops.switchWindowHost!.handler(ctx, { hostId: "box", newWindow: true });
 
-    expect(client.add).toHaveBeenCalledWith({ name: "box", sshTarget: "box.example" });
+    expect(client.add).toHaveBeenCalledWith({
+      name: "box",
+      connection: { kind: "ssh", target: "box.example" },
+    });
     expect(client.connect).toHaveBeenCalledWith({ hostId: "box" });
     expect(client.switchWindowHost).toHaveBeenCalledWith(ctx, { hostId: "box", newWindow: true });
   });
@@ -105,7 +108,9 @@ describe("remoteHosts handlers", () => {
   });
 
   it("reports in use once a host is configured", async () => {
-    storeValues.set("remoteHosts", { hosts: [{ id: "box", name: "box", sshTarget: "box" }] });
+    storeValues.set("remoteHosts", {
+      hosts: [{ id: "box", name: "box", connection: { kind: "ssh", target: "box" } }],
+    });
     expect(ops.isInUse!.handler()).toBe(true);
   });
 

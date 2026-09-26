@@ -8,7 +8,7 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { notify } from "@/lib/notify";
 import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { logWarn } from "@/utils/logger";
@@ -99,7 +99,7 @@ function TargetItem({
  * through the switch dialog. Renders nothing for anyone with no remote host.
  */
 export function OpenOnHostSubmenu({ projectId }: { projectId: string }) {
-  const supported = isRemoteHostsSupported();
+  const supported = isRemoteShellSupported();
   const targets = useOtherHostTargets(clientPlatform());
   const presence = useProjectPresence(
     projectId,

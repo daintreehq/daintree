@@ -73,7 +73,7 @@ function service(
     run,
     clientDir,
     platform: "darwin",
-    knownTargets: () => [],
+    knownConnections: () => [],
     clientBuild: () => CLIENT,
     workingAgents: async (hostId) => (hostId ? 1 : null),
     download: async () => {},
@@ -87,7 +87,7 @@ function service(
 describe("HostSetupService", () => {
   it("probes over the shared ControlMaster in BatchMode", async () => {
     const { setup, calls } = service(LINUX_NO_UNIT);
-    const result = await setup.probe({ sshTarget: "greg@bigbox" });
+    const result = await setup.probe({ connection: { kind: "ssh", target: "greg@bigbox" } });
     expect(result).toMatchObject({ reachable: true, platform: "linux", matchesClient: false });
     const [command, args] = calls[0]!;
     expect(command).toBe("ssh");
@@ -99,7 +99,9 @@ describe("HostSetupService", () => {
 
   it("refuses an SSH target that could be read as an option", async () => {
     const { setup, calls } = service(LINUX_NO_UNIT);
-    await expect(setup.probe({ sshTarget: "-oProxyCommand=evil" })).rejects.toMatchObject({
+    await expect(
+      setup.probe({ connection: { kind: "ssh", target: "-oProxyCommand=evil" } })
+    ).rejects.toMatchObject({
       code: "VALIDATION",
     });
     expect(calls).toEqual([]);
@@ -107,12 +109,15 @@ describe("HostSetupService", () => {
 
   it("runs an install as an operation, pushes its outcome as events and keeps it for status", async () => {
     const { setup, events } = service(MAC_RUNNING_OLD);
-    const result = await setup.install({ opId: "op-7", sshTarget: "studio" });
+    const result = await setup.install({
+      opId: "op-7",
+      connection: { kind: "ssh", target: "studio" },
+    });
     expect(result).toEqual({ status: "agents-working", working: null });
     expect(events.at(-1)).toMatchObject({
       type: "install-settled",
       opId: "op-7",
-      sshTarget: "studio",
+      connection: { kind: "ssh", target: "studio" },
       outcome: { status: "succeeded", result: { status: "agents-working", working: null } },
     });
     expect(events.some((e) => e.type === "install-progress")).toBe(true);
@@ -122,11 +127,13 @@ describe("HostSetupService", () => {
 
   it("requires an operation id and a known whileWorking", async () => {
     const { setup } = service(MAC_RUNNING_OLD);
-    expect(() => setup.install({ opId: "", sshTarget: "studio" })).toThrow(/opId/);
+    expect(() =>
+      setup.install({ opId: "", connection: { kind: "ssh", target: "studio" } })
+    ).toThrow(/opId/);
     expect(() =>
       setup.install({
         opId: "op-1",
-        sshTarget: "studio",
+        connection: { kind: "ssh", target: "studio" },
         whileWorking: "yolo" as never,
       })
     ).toThrow(/whileWorking/);
@@ -169,7 +176,7 @@ describe("HostSetupService", () => {
         return ok(script.includes("--host-mode-handoff") ? "@@dt:handoff 0\n" : "");
       },
     });
-    const result = await setup.startHostMode({ sshTarget: "bigbox" });
+    const result = await setup.startHostMode({ connection: { kind: "ssh", target: "bigbox" } });
     expect(result.probe.hostModeState).toMatchObject({ enabled: true, startAtLogin: true });
     expect(scripts[1]!.input).toMatchObject({ text: expect.stringContaining("[Service]") });
     expect(scripts.map((s) => s.script)).toEqual([
@@ -211,7 +218,7 @@ describe("HostSetupService", () => {
         return ok();
       },
     });
-    const result = await setup.startHostMode({ sshTarget: "studio" });
+    const result = await setup.startHostMode({ connection: { kind: "ssh", target: "studio" } });
     expect(result.probe.hostModeListening).toBe(true);
     expect(result.probe.hostModeState?.enabled).toBe(true);
     expect(
@@ -227,7 +234,7 @@ describe("HostSetupService", () => {
     await fs.mkdir(hostCache, { recursive: true });
     await fs.mkdir(otherCache, { recursive: true });
     await fs.writeFile(path.join(hostCache, "Daintree.zip"), "partial");
-    await setup.forgetArtifacts({ sshTarget: "studio" });
+    await setup.forgetArtifacts({ connection: { kind: "ssh", target: "studio" } });
     const exit = calls.find(([, args]) => args.includes("-O") && args.includes("exit"));
     expect(exit?.[1].at(-1)).toBe("studio");
     await expect(fs.access(hostCache)).rejects.toThrow();

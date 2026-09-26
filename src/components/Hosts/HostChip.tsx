@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { isRemoteHostsSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { drivenElsewhereBy, getViewHostId } from "@/hooks/useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { actionService } from "@/services/ActionService";
@@ -126,7 +126,7 @@ function hostUpdateOffers(
  * on purpose: which machine the window is on is context, not a call to act.
  */
 export function HostChip() {
-  const supported = isRemoteHostsSupported();
+  const supported = isRemoteShellSupported();
   const hostList = useHostList();
   const windowHostId = getViewHostId() ?? LOCAL_HOST_ID;
   const isLocalWindow = windowHostId === LOCAL_HOST_ID;

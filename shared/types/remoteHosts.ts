@@ -96,13 +96,76 @@ export function compareHandshake(
 /** How a host was found. Discovery only proves reachability. */
 export type HostDiscoverySource = "tailscale" | "bonjour" | "manual";
 
+/**
+ * How this client reaches a host. SSH is the only kind today; each kind names
+ * the one command that gets a stream to the host's Daintree. A future
+ * `{ kind: "wsl"; distro: string }` (a Linux Host inside a WSL distro, reached
+ * with `wsl.exe -d <distro> -- <host> --attach-stdio`) is a new member here,
+ * and every `switch (connection.kind)` then has to say what it does for it.
+ */
+export type HostConnection = {
+  kind: "ssh";
+  /** What `ssh` is given: `user@host`, an alias from ~/.ssh/config, or a tailnet name. */
+  target: string;
+};
+
+export type HostConnectionKind = HostConnection["kind"];
+
+export function sshConnection(target: string): HostConnection {
+  return { kind: "ssh", target };
+}
+
+/** The one way a host's address is shown: what the user typed for ssh. */
+export function formatHostConnection(connection: HostConnection): string {
+  switch (connection.kind) {
+    case "ssh":
+      return connection.target;
+    default:
+      // A kind this build doesn't know (a newer build's settings): name the kind.
+      return (connection as { kind: string }).kind;
+  }
+}
+
+/** The ssh target, or null for a connection that isn't ssh. */
+export function sshTargetOf(connection: HostConnection): string | null {
+  switch (connection.kind) {
+    case "ssh":
+      return connection.target;
+    default:
+      return null;
+  }
+}
+
+export function sameHostConnection(a: HostConnection, b: HostConnection): boolean {
+  return a.kind === b.kind && a.target === b.target;
+}
+
+/**
+ * The connection an entry was saved with, from either shape: `connection`, or
+ * the `sshTarget` string development builds of this feature wrote before it.
+ * Null when neither is usable; the caller validates the target itself.
+ */
+export function readStoredHostConnection(entry: {
+  connection?: unknown;
+  sshTarget?: unknown;
+}): HostConnection | null {
+  const connection = entry.connection as { kind?: unknown; target?: unknown } | null | undefined;
+  if (connection && typeof connection === "object") {
+    if (connection.kind === "ssh" && typeof connection.target === "string") {
+      return sshConnection(connection.target);
+    }
+    return null;
+  }
+  return typeof entry.sshTarget === "string" ? sshConnection(entry.sshTarget) : null;
+}
+
 /** A host the user has added on this client. Device-owned; never synced. */
 export interface HostDescriptor {
   id: HostId;
   /** Display name, e.g. "studio-01". */
   name: string;
-  /** What `ssh` is given: `user@host`, an alias from ~/.ssh/config, or a tailnet name. */
-  sshTarget: string;
+  /** How the host is reached; see {@link HostConnection}. Shown through {@link formatHostConnection}. */
+  connection: HostConnection;
   platform: HostPlatform | null;
   arch: HostArch | null;
   /** Last build seen in a handshake. */

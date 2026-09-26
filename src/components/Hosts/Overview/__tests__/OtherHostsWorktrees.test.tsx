@@ -27,7 +27,7 @@ function entry(id: string, connected: boolean): HostListEntry {
     descriptor: {
       id,
       name: id,
-      sshTarget: id,
+      connection: { kind: "ssh", target: id },
       platform: "linux",
       arch: "x64",
       lastHandshake: null,

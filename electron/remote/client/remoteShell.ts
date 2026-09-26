@@ -4,7 +4,7 @@ import type {
   CommandResult,
   CommandRunner,
 } from "./commandRunner.js";
-import { shellQuote, sshCommonArgs } from "./sshTransport.js";
+import { buildExitArgs, noteSshMaster, shellQuote, sshCommonArgs } from "./sshTransport.js";
 
 /**
  * How setup reaches a host's shell: run one line of `sh`, feed a script its
@@ -81,10 +81,19 @@ export function createSshCommandChannel(params: {
 }): HostCommandChannel {
   const { target, controlPath, run } = params;
   const ssh = params.sshPath ?? "ssh";
-  const exec = (script: string, options?: CommandOptions) =>
-    run(ssh, remoteShellArgs(target, controlPath, script), options);
-  const execWithInput = (script: string, input: CommandInput, options?: CommandOptions) =>
-    run(ssh, remoteShellArgs(target, controlPath, script), { ...options, input });
+  // Any command here may start the host's master; it goes when the app quits.
+  const noteMaster = () =>
+    noteSshMaster(controlPath, async (timeoutMs) => {
+      await run(ssh, buildExitArgs(target, controlPath), { timeoutMs });
+    });
+  const exec = (script: string, options?: CommandOptions) => {
+    noteMaster();
+    return run(ssh, remoteShellArgs(target, controlPath, script), options);
+  };
+  const execWithInput = (script: string, input: CommandInput, options?: CommandOptions) => {
+    noteMaster();
+    return run(ssh, remoteShellArgs(target, controlPath, script), { ...options, input });
+  };
   return {
     exec,
     execWithInput,

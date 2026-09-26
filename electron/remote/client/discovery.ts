@@ -1,13 +1,19 @@
-import type { HostPlatform } from "../../../shared/types/remoteHosts.js";
+import {
+  sshConnection,
+  type HostConnection,
+  type HostPlatform,
+} from "../../../shared/types/remoteHosts.js";
 import type { DiscoveredHost } from "../../../shared/types/ipc/remoteHosts.js";
 import type { CommandRunner } from "./commandRunner.js";
+import { sshTargetOf } from "./connection.js";
 import { isValidSshTarget } from "./sshTransport.js";
 
 /**
  * Finding machines to add: tailnet peers from `tailscale status --json`, and
  * hosts advertising `_daintree._tcp` on the LAN (dns-sd on macOS, avahi on
  * Linux). Discovery only says a machine answered; whether Daintree runs there
- * is learned by probing it. Every source is optional: a missing tool is an
+ * is learned by probing it. Every machine found is reached over ssh (a
+ * tailnet name, a LAN address). Every source is optional: a missing tool is an
  * empty list, never an error.
  */
 
@@ -189,8 +195,8 @@ export function parseDnsSdLookup(
 export interface DiscoverDeps {
   run: CommandRunner;
   platform: NodeJS.Platform;
-  /** SSH targets already in the host list. */
-  knownTargets: readonly string[];
+  /** How the hosts already in the list are reached. */
+  knownConnections: readonly HostConnection[];
   /** How long to listen for LAN advertisements. */
   browseMs?: number;
   signal?: AbortSignal;
@@ -285,8 +291,11 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
     discoverTailscale(deps).catch(() => []),
     bonjour.catch(() => []),
   ]);
-  const known = new Set(deps.knownTargets.map((t) => t.toLowerCase()));
-  const knownMachines = new Set(deps.knownTargets.map(machineKey));
+  const knownTargets = deps.knownConnections
+    .map(sshTargetOf)
+    .filter((target): target is string => target !== null);
+  const known = new Set(knownTargets.map((t) => t.toLowerCase()));
+  const knownMachines = new Set(knownTargets.map(machineKey));
   const seen = new Set<string>();
   const out: DiscoveredHost[] = [];
   for (const candidate of [...tailnet, ...lan]) {
@@ -295,7 +304,7 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
     for (const key of keys) seen.add(key);
     out.push({
       name: candidate.name,
-      sshTarget: candidate.sshTarget,
+      connection: sshConnection(candidate.sshTarget),
       source: candidate.source,
       platform: candidate.platform,
       online: candidate.online,

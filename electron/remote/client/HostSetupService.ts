@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
+  HostConnection,
   HostDescriptor,
   HostId,
   OperationId,
@@ -11,6 +12,7 @@ import type {
   DiscoveredHost,
   HostInstallPlan,
   HostProbeResult,
+  HostSetupTarget,
   InstallHostPayload,
   InstallHostResult,
   PlanInstallPayload,
@@ -23,13 +25,14 @@ import {
 } from "../../services/operations/OperationRegistry.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { CommandRunner } from "./commandRunner.js";
+import { connectionKey, requireHostConnection, unsupportedConnection } from "./connection.js";
 import { discoverHosts } from "./discovery.js";
 import { runHostInstall } from "./hostInstaller.js";
 import { bootstrapHostMode } from "./hostModeBootstrap.js";
 import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, type HostCommandChannel } from "./remoteShell.js";
-import { controlPathFor, isValidSshTarget } from "./sshTransport.js";
+import { closeSshMaster, controlPathFor } from "./sshTransport.js";
 
 /**
  * The Add host flow and host upkeep behind the `remoteHosts` namespace:
@@ -44,7 +47,7 @@ export interface HostSetupDeps {
   /** Daintree-owned directory holding control sockets (see SshTransport). */
   clientDir: string;
   platform: NodeJS.Platform;
-  knownTargets(): string[];
+  knownConnections(): HostConnection[];
   clientBuild(): ClientBuild;
   /** Agents the host reports working; null when unobservable (not connected, no summary). */
   workingAgents(hostId: HostId | null): Promise<number | null>;
@@ -54,24 +57,25 @@ export interface HostSetupDeps {
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
   now?: () => number;
   idlePollMs?: number;
-  /** How commands reach a host; the system `ssh` over the shared ControlMaster unless given. */
-  channelFor?(target: string): HostCommandChannel;
+  /** How commands reach a host; by its connection kind (ssh over the shared ControlMaster) unless given. */
+  channelFor?(connection: HostConnection): HostCommandChannel;
 }
 
-function requireTarget(payload: unknown): string {
-  const target = (payload as { sshTarget?: unknown } | null)?.sshTarget;
-  if (typeof target !== "string" || !isValidSshTarget(target.trim())) {
-    throw new AppError({
-      code: "VALIDATION",
-      message: "Not a usable SSH target",
-      userMessage: "Enter user@host, a host name, or an ~/.ssh/config alias.",
-    });
+function requireTarget(payload: unknown): HostConnection {
+  return requireHostConnection((payload as { connection?: unknown } | null)?.connection);
+}
+
+/** Per-machine cache key: an ssh host keeps the key of its target alone. */
+function targetKey(connection: HostConnection): string {
+  let key: string;
+  switch (connection.kind) {
+    case "ssh":
+      key = connection.target;
+      break;
+    default:
+      key = connectionKey(connection);
   }
-  return target.trim();
-}
-
-function targetKey(target: string): string {
-  return crypto.createHash("sha256").update(target).digest("hex").slice(0, 16);
+  return crypto.createHash("sha256").update(key).digest("hex").slice(0, 16);
 }
 
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -94,18 +98,19 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 
 export class HostSetupService {
   private readonly operations: OperationRegistry;
-  private readonly targets = new Map<OperationId, string>();
+  private readonly targets = new Map<OperationId, HostConnection>();
 
   constructor(private readonly deps: HostSetupDeps) {
     this.operations = new OperationRegistry({
       now: deps.now,
       emit: (_projectId, event) => {
         const opId = event.type === "progress" ? event.progress.opId : event.record.opId;
-        const sshTarget = this.targets.get(opId) ?? "";
+        const connection = this.targets.get(opId);
+        if (!connection) return;
         if (event.type === "progress") {
-          deps.emit({ type: "install-progress", opId, sshTarget, progress: event.progress });
+          deps.emit({ type: "install-progress", opId, connection, progress: event.progress });
         } else {
-          deps.emit({ type: "install-settled", opId, sshTarget, outcome: event.record.outcome });
+          deps.emit({ type: "install-settled", opId, connection, outcome: event.record.outcome });
         }
       },
     });
@@ -115,12 +120,12 @@ export class HostSetupService {
     return discoverHosts({
       run: this.deps.run,
       platform: this.deps.platform,
-      knownTargets: this.deps.knownTargets(),
+      knownConnections: this.deps.knownConnections(),
       signal,
     });
   }
 
-  async probe(payload: { sshTarget: string }): Promise<HostProbeResult> {
+  async probe(payload: HostSetupTarget): Promise<HostProbeResult> {
     return (await this.probeOutcome(requireTarget(payload))).result;
   }
 
@@ -135,7 +140,7 @@ export class HostSetupService {
   }
 
   install(payload: InstallHostPayload): Promise<InstallHostResult> {
-    const sshTarget = requireTarget(payload);
+    const connection = requireTarget(payload);
     const opId = normalizeOperationId(payload?.opId);
     if (!opId) throw new AppError({ code: "VALIDATION", message: "opId is required" });
     const whileWorking = payload.whileWorking ?? "refuse";
@@ -145,10 +150,10 @@ export class HostSetupService {
     if (payload.linuxPackage !== undefined && !["deb", "appimage"].includes(payload.linuxPackage)) {
       throw new AppError({ code: "VALIDATION", message: "linuxPackage is not valid" });
     }
-    if (!this.targets.has(opId)) this.targets.set(opId, sshTarget);
+    if (!this.targets.has(opId)) this.targets.set(opId, connection);
     const normalized: InstallHostPayload = {
       opId,
-      sshTarget,
+      connection,
       hostId: typeof payload.hostId === "string" ? payload.hostId : undefined,
       linuxPackage: payload.linuxPackage,
       whileWorking,
@@ -158,9 +163,9 @@ export class HostSetupService {
         opId,
         kind: "host-update",
         projectId: null,
-        dedupKey: `host-update:${sshTarget}`,
+        dedupKey: `host-update:${connectionKey(connection)}`,
         fingerprint: JSON.stringify([
-          sshTarget,
+          connectionKey(connection),
           normalized.hostId ?? null,
           normalized.linuxPackage ?? null,
           whileWorking,
@@ -169,17 +174,17 @@ export class HostSetupService {
       async (handle) => {
         const controller = new AbortController();
         handle.onCancel(() => controller.abort());
-        const shell = this.shellFor(sshTarget);
+        const shell = this.shellFor(connection);
         return runHostInstall(
           normalized,
           {
             shell,
             run: this.deps.run,
             client: this.deps.clientBuild(),
-            probe: (signal) => this.probeOutcome(sshTarget, shell, signal),
+            probe: (signal) => this.probeOutcome(connection, shell, signal),
             workingAgents: (hostId) => this.deps.workingAgents(hostId),
             download: (url, destination, signal) => this.deps.download(url, destination, signal),
-            cacheDir: this.cacheDirFor(sshTarget),
+            cacheDir: this.cacheDirFor(connection),
             reconnect: this.deps.reconnect,
             sleep: this.deps.sleep ?? abortableSleep,
             now: this.deps.now,
@@ -214,61 +219,58 @@ export class HostSetupService {
    * host's own Daintree saves the setting, installs start at login and checks
    * its keychain, as its Settings switch would. See hostModeBootstrap.ts.
    */
-  async startHostMode(payload: { sshTarget: string }): Promise<StartHostModeResult> {
-    const sshTarget = requireTarget(payload);
-    const channel = this.shellFor(sshTarget);
-    const before = await this.probeOutcome(sshTarget, channel);
+  async startHostMode(payload: HostSetupTarget): Promise<StartHostModeResult> {
+    const connection = requireTarget(payload);
+    const channel = this.shellFor(connection);
+    const before = await this.probeOutcome(connection, channel);
     if (!before.parsed) return { probe: before.result, lingerRefused: null };
-    return bootstrapHostMode(sshTarget, before, {
+    return bootstrapHostMode(connection, before, {
       channel,
-      probe: () => this.probeOutcome(sshTarget, channel),
+      probe: () => this.probeOutcome(connection, channel),
       sleep: this.deps.sleep ?? abortableSleep,
       now: this.deps.now,
     });
   }
 
-  /** Forgetting a host drops its SSH master, control socket and any cached bundles. */
-  async forgetArtifacts(descriptor: Pick<HostDescriptor, "sshTarget">): Promise<void> {
-    const target = descriptor.sshTarget;
-    const controlPath = (() => {
-      try {
-        return controlPathFor(this.deps.clientDir, target);
-      } catch {
-        return null;
-      }
-    })();
-    if (controlPath && isValidSshTarget(target)) {
-      await this.deps
-        .run("ssh", ["-o", `ControlPath=${controlPath}`, "-O", "exit", "--", target], {
-          timeoutMs: 10_000,
-        })
-        .catch(() => {});
-      if (!controlPath.includes("%")) await fs.rm(controlPath, { force: true }).catch(() => {});
+  /** Forgetting a host drops what reaching it left here (an SSH master and control socket) and any cached bundles. */
+  async forgetArtifacts(descriptor: Pick<HostDescriptor, "connection">): Promise<void> {
+    const { connection } = descriptor;
+    switch (connection.kind) {
+      case "ssh":
+        await closeSshMaster(this.deps.run, this.deps.clientDir, connection.target, 10_000);
+        break;
     }
-    await fs.rm(this.cacheDirFor(target), { recursive: true, force: true }).catch(() => {});
+    await fs.rm(this.cacheDirFor(connection), { recursive: true, force: true }).catch(() => {});
   }
 
-  private cacheDirFor(target: string): string {
-    return path.join(this.deps.clientDir, "bundles", targetKey(target));
+  private cacheDirFor(connection: HostConnection): string {
+    return path.join(this.deps.clientDir, "bundles", targetKey(connection));
   }
 
-  private shellFor(target: string): HostCommandChannel {
-    if (this.deps.channelFor) return this.deps.channelFor(target);
-    return createSshCommandChannel({
-      target,
-      controlPath: controlPathFor(this.deps.clientDir, target),
-      run: this.deps.run,
-    });
+  /** The command channel for a connection, by its kind. */
+  private shellFor(connection: HostConnection): HostCommandChannel {
+    if (this.deps.channelFor) return this.deps.channelFor(connection);
+    switch (connection.kind) {
+      case "ssh":
+        return createSshCommandChannel({
+          target: connection.target,
+          controlPath: controlPathFor(this.deps.clientDir, connection.target),
+          run: this.deps.run,
+        });
+      default:
+        // A new kind brings its own channel (a WSL one runs `wsl.exe -d <distro> -- sh -c`).
+        throw unsupportedConnection(connection, "Setting up a host");
+    }
   }
 
   private async probeOutcome(
-    target: string,
-    shell: HostCommandChannel = this.shellFor(target),
+    connection: HostConnection,
+    shell: HostCommandChannel = this.shellFor(connection),
     signal?: AbortSignal
   ): Promise<ProbeOutcome> {
     await fs.mkdir(this.deps.clientDir, { recursive: true, mode: 0o700 }).catch(() => {});
     return probeHost({
-      sshTarget: target,
+      connection,
       shell,
       client: this.deps.clientBuild(),
       options: signal ? { signal } : undefined,

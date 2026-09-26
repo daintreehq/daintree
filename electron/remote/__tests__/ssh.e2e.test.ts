@@ -349,7 +349,7 @@ describe.skipIf(!ENABLED)(
             run: sshd!.runCommand,
           });
           const { result } = await probeHost({
-            sshTarget: SSH_ALIAS,
+            connection: { kind: "ssh", target: SSH_ALIAS },
             shell,
             client: { version: "0.0.0-harness", commit: "none" },
           });
@@ -623,7 +623,7 @@ describe.skipIf(!ENABLED)(
     );
 
     it(
-      "7. teardown: forwards and link sockets go with the client, the master is the only ssh left and exits on request, sshd stops and the directory goes",
+      "7. teardown: forwards and link sockets go with the client, stopping closes the master so no ssh is left, sshd stops and the directory goes",
       async () => {
         const r = h!;
         const ports = requireRemoteService("portForwards");
@@ -636,26 +636,17 @@ describe.skipIf(!ENABLED)(
         // The port forward was cancelled on the master and the link's local sockets removed.
         expect(await listenersOn(live!.localPort)).toEqual([]);
         expect(await localForwardSockets()).toEqual([]);
-        // ControlPersist keeps the master (and only it) for the next connection, as designed.
-        const remaining = await testSshProcesses();
-        expect(remaining.map((row) => row.pid)).toEqual([master]);
-
-        // What forgetting the host does: close the master.
-        const exit = await sshd!.runSsh([
-          "-o",
-          `ControlPath=${controlPath}`,
-          "-O",
-          "exit",
-          SSH_ALIAS,
-        ]);
-        expect(exit.code, exit.stderr).toBe(0);
-        await waitUntil(() => !isAlive(master!), "the master to exit");
+        // Stopping told every master this process used to exit: ControlPersist
+        // keeps one only while the app runs, and no ssh outlives it. The test
+        // sends no `-O exit` of its own.
+        await waitUntil(() => !isAlive(master!), "the master to exit on stop");
         let leftovers = await testSshProcesses();
         for (let i = 0; i < 100 && leftovers.length > 0; i++) {
           await new Promise((resolve) => setTimeout(resolve, 50));
           leftovers = await testSshProcesses();
         }
         expect(leftovers).toEqual([]);
+        expect(await masterPid()).toBeNull();
         const controlEntries = (await fs.readdir(clientDir)).filter((name) =>
           name.startsWith("cm-")
         );

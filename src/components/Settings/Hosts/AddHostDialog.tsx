@@ -14,7 +14,14 @@ import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { mintOperationId } from "@/clients/operationsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { HostId, OperationId } from "@shared/types/remoteHosts";
+import {
+  formatHostConnection,
+  sshConnection,
+  sshTargetOf,
+  type HostConnection,
+  type HostId,
+  type OperationId,
+} from "@shared/types/remoteHosts";
 import type {
   DiscoveredHost,
   HostInstallPlan,
@@ -52,7 +59,7 @@ interface AddHostDialogProps {
   isOpen: boolean;
   onClose: () => void;
   /** Update an existing host: start at the check with its target filled in. */
-  existing?: { hostId: HostId; name: string; sshTarget: string } | null;
+  existing?: { hostId: HostId; name: string; connection: HostConnection } | null;
 }
 
 function StepBar({ current }: { current: Step }) {
@@ -97,7 +104,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discoverAttempt, setDiscoverAttempt] = useState(0);
-  const [target, setTarget] = useState(existing?.sshTarget ?? "");
+  const [target, setTarget] = useState(existing ? (sshTargetOf(existing.connection) ?? "") : "");
+  // What this dialog adds or updates: a machine reached over ssh.
+  const connectionFor = () => sshConnection(target.trim());
   const [name, setName] = useState(existing?.name ?? "");
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
   const [plan, setPlan] = useState<HostInstallPlan | null>(null);
@@ -156,7 +165,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
 
   const check = () =>
     run(
-      () => remoteHostsClient.probe(target.trim()),
+      () => remoteHostsClient.probe(connectionFor()),
       (result) => {
         setProbe(result);
         if (result.install?.packaging === "appimage") setLinuxPackage("appimage");
@@ -166,7 +175,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
 
   const loadPlan = (pkg: LinuxPackagePreference) =>
     run(
-      () => remoteHostsClient.planInstall({ sshTarget: target.trim(), linuxPackage: pkg }),
+      () => remoteHostsClient.planInstall({ connection: connectionFor(), linuxPackage: pkg }),
       (next) => {
         setPlan(next);
         setInstallResult(null);
@@ -176,13 +185,13 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
 
   const startInstall = (whileWorking: InstallHostPayload["whileWorking"]) => {
     const id = mintOperationId();
-    useRemoteHostsStore.getState().trackInstall(id, target.trim());
+    useRemoteHostsStore.getState().trackInstall(id, connectionFor());
     setOpId(id);
     run(
       () =>
         remoteHostsClient.install({
           opId: id,
-          sshTarget: target.trim(),
+          connection: connectionFor(),
           hostId: existing?.hostId,
           linuxPackage: probe?.platform === "linux" ? linuxPackage : undefined,
           whileWorking,
@@ -199,7 +208,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
 
   const startHostMode = () =>
     run(
-      () => remoteHostsClient.startHostMode(target.trim()),
+      () => remoteHostsClient.startHostMode(connectionFor()),
       (result) => {
         setProbe(result.probe);
         setLingerRefused(result.lingerRefused);
@@ -228,7 +237,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     }
     const hostName = name.trim() || defaultHostName(target.trim());
     run(
-      () => remoteHostsClient.add({ name: hostName, sshTarget: target.trim() }),
+      () => remoteHostsClient.add({ name: hostName, connection: connectionFor() }),
       (descriptor) => {
         if (probe?.hostModeListening) connectAdded(descriptor.id, hostName);
         else onClose();
@@ -290,19 +299,19 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           ) : (
             <ul className="divide-y divide-border-subtle rounded-[var(--radius-lg)] border border-border-default">
               {discovered.map((host) => (
-                <li key={`${host.source}:${host.sshTarget}`}>
+                <li key={`${host.source}:${formatHostConnection(host.connection)}`}>
                   <button
                     type="button"
                     disabled={host.alreadyAdded}
-                    aria-pressed={target === host.sshTarget}
+                    aria-pressed={target === sshTargetOf(host.connection)}
                     onClick={() => {
-                      setTarget(host.sshTarget);
+                      setTarget(sshTargetOf(host.connection) ?? "");
                       setName(host.name);
                     }}
                     className={cn(
                       "flex w-full items-center justify-between gap-3 px-3 py-2 text-left",
                       "hover:bg-overlay-soft disabled:cursor-default disabled:hover:bg-transparent",
-                      target === host.sshTarget && "bg-overlay-subtle"
+                      target === sshTargetOf(host.connection) && "bg-overlay-subtle"
                     )}
                   >
                     <span className="min-w-0">
@@ -310,7 +319,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                         {host.name}
                       </span>
                       <span className="block truncate text-xs text-text-secondary">
-                        {host.sshTarget} · {platformLabel(host.platform, null)}
+                        {formatHostConnection(host.connection)} ·{" "}
+                        {platformLabel(host.platform, null)}
                       </span>
                     </span>
                     <span className="shrink-0 text-xs text-text-secondary">

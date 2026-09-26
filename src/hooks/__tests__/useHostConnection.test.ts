@@ -16,7 +16,11 @@ const { pluginRefresh, updateAgentState, setAgentState, panels, rehydrate } = vi
   panels: {} as Record<string, unknown>,
 }));
 
-vi.mock("@/lib/remoteHosts", () => ({ isRemoteHostsSupported: () => true }));
+vi.mock("@/lib/remoteHosts", () => ({
+  isRemoteShellSupported: () => true,
+  isRemoteHostSupported: () => true,
+  isEitherRemoteRoleSupported: () => true,
+}));
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logDebug: vi.fn(),

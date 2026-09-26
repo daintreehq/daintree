@@ -6,7 +6,7 @@ const host: HostListEntry = {
   descriptor: {
     id: "studio",
     name: "studio",
-    sshTarget: "studio",
+    connection: { kind: "ssh", target: "studio" },
     platform: null,
     arch: null,
     lastHandshake: null,
@@ -36,11 +36,11 @@ describe("remoteHostsStore", () => {
 
   it("follows an install from progress to its settled outcome", () => {
     const store = useRemoteHostsStore.getState();
-    store.trackInstall("op-1", "studio");
+    store.trackInstall("op-1", { kind: "ssh", target: "studio" });
     store.applyEvent({
       type: "install-progress",
       opId: "op-1",
-      sshTarget: "studio",
+      connection: { kind: "ssh", target: "studio" },
       progress: {
         opId: "op-1",
         kind: "host-update",
@@ -51,14 +51,14 @@ describe("remoteHostsStore", () => {
       },
     });
     expect(useRemoteHostsStore.getState().installs["op-1"]).toMatchObject({
-      sshTarget: "studio",
+      connection: { kind: "ssh", target: "studio" },
       progress: { stage: "copying" },
       outcome: null,
     });
     store.applyEvent({
       type: "install-settled",
       opId: "op-1",
-      sshTarget: "studio",
+      connection: { kind: "ssh", target: "studio" },
       outcome: { status: "cancelled", settledAt: 2 },
     });
     expect(useRemoteHostsStore.getState().installs["op-1"]).toMatchObject({

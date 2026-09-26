@@ -13,7 +13,7 @@ function entry(id: string, name: string): HostListEntry {
     descriptor: {
       id,
       name,
-      sshTarget: `greg@${id}`,
+      connection: { kind: "ssh", target: `greg@${id}` },
       platform: "linux",
       arch: "x64",
       lastHandshake: {

@@ -1,4 +1,4 @@
-import type net from "node:net";
+import type { Duplex } from "node:stream";
 import type { z } from "zod";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -173,7 +173,7 @@ export class LinkSession {
   private _lastReceivedAt: number;
 
   constructor(
-    private readonly socket: net.Socket,
+    private readonly socket: Duplex,
     options: LinkSessionOptions
   ) {
     this.opts = options;

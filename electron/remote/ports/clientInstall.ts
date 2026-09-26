@@ -7,6 +7,7 @@ import type {
 import {
   isLocalHostId,
   parseHostScopedKey,
+  type HostConnection,
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
 import {
@@ -27,6 +28,7 @@ import {
   getProjectForWebContents,
 } from "../../window/webContentsRegistry.js";
 import { observeForwardedInvokes } from "../client/RemoteRouter.js";
+import { sshTargetOf } from "../client/connection.js";
 import { controlPathFor } from "../client/sshTransport.js";
 import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
@@ -61,8 +63,8 @@ export interface PortForwardClientDeps {
    * it, so a port can be forwarded from a host no window is showing.
    */
   sessionFor?(hostId: HostId): LinkSession | null;
-  /** The SSH target the host is dialled with, or null for a host reached another way. */
-  sshTargetFor(hostId: HostId): string | null;
+  /** How the host is reached, or null for a host not in the list. */
+  connectionFor(hostId: HostId): HostConnection | null;
   /** The Daintree-owned directory holding the hosts' ControlMaster sockets. */
   clientDir: string;
 }
@@ -195,7 +197,9 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
       registeredPreviews.get(subdomain)?.hostId ?? livePreviewOwner(subdomain),
     isKnownHost: deps.isKnownHost,
     sshMuxFor(hostId): SshMuxTarget | null {
-      const target = deps.sshTargetFor(hostId);
+      // `-O forward` needs an ssh master; any other connection forwards over the link.
+      const connection = deps.connectionFor(hostId);
+      const target = connection ? sshTargetOf(connection) : null;
       if (!target) return null;
       try {
         return { target, controlPath: controlPathFor(deps.clientDir, target) };
