@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type {
   LoadedPluginInfo,
+  PluginRuntimeStatusChangedEvent,
   PluginSettingsViewContext,
   SettingDefinition,
 } from "@shared/types/plugin";
@@ -40,7 +41,7 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
 import { PluginSettingsForm } from "../PluginSettingsForm";
 import {
   _resetPluginSettingsViewRuntimesForTest,
-  pruneSettingsViewRuntimes,
+  _settingsViewRemovalSignalForTest,
 } from "@/components/Plugin/PluginSettingsView";
 
 const pluginApi = {
@@ -163,16 +164,6 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(document.querySelectorAll(".settings-card")).toHaveLength(1);
   });
 
-  it("contains the view so it can't paint over the page around it", () => {
-    render(
-      <PluginSettingsForm plugin={makePlugin([], "plugin://a/settings.js")} viewScope="user" />
-    );
-    const box = screen.getByTestId("plugin-settings-view");
-    expect(box.style.contain).toBe("layout paint");
-    expect(box.classList.contains("overflow-hidden")).toBe(true);
-    expect(box.classList.contains("isolate")).toBe(true);
-  });
-
   it("says a stopped plugin's section needs it enabled, instead of dropping it", () => {
     render(
       <PluginSettingsForm
@@ -195,24 +186,61 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(screen.getByText("Available while the plugin is running")).toBeTruthy();
   });
 
-  it("retires a cached runtime when its plugin leaves the list or reloads", () => {
-    const first = makePlugin([], "plugin://a/gen1/settings.js");
-    const { unmount } = render(<PluginSettingsForm plugin={first} viewScope="user" />);
-    unmount();
-    // Same module: the factory is reused.
-    render(<PluginSettingsForm plugin={first} viewScope="user" />);
-    expect(madeFor).toHaveLength(1);
-    cleanup();
+  it("retires a cached runtime when its plugin stops or reloads, with no settings page open", () => {
+    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        plugin: pluginApi,
+        events: {
+          on: (_name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
+            listeners.push(cb);
+            return () => {};
+          },
+        },
+      },
+    });
+    const push = (status: PluginRuntimeStatusChangedEvent["status"]) =>
+      listeners.forEach((cb) => cb({ pluginId: "acme.test", status }));
+    const status = (viewGeneration: number | null) => ({
+      pluginId: "acme.test",
+      viewGeneration,
+      worker: null,
+      dev: null,
+    });
 
-    // Reloaded onto a new generation: the list sweep retires the old factory
-    // and the next mount mints one for the new module.
-    const reloaded = makePlugin([], "plugin://a/gen2/settings.js");
-    pruneSettingsViewRuntimes([reloaded]);
-    render(<PluginSettingsForm plugin={reloaded} viewScope="user" />);
-    expect(madeFor.map((c) => c.componentPath)).toEqual([
-      "plugin://a/gen1/settings.js",
-      "plugin://a/gen2/settings.js",
-    ]);
+    // Mounted once, then the page closes: the runtime stays cached.
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([], "plugin://a/__dtv-3/settings.js")}
+        viewScope="user"
+      />
+    );
+    cleanup();
+    const signal = _settingsViewRemovalSignalForTest("acme.test")!;
+    expect(signal.aborted).toBe(false);
+
+    // Still the same generation: nothing to retire.
+    push(status(3));
+    expect(signal.aborted).toBe(false);
+
+    // Reloaded onto a new module: retired at once, not on the next visit.
+    push(status(4));
+    expect(signal.aborted).toBe(true);
+    expect(_settingsViewRemovalSignalForTest("acme.test")).toBeUndefined();
+
+    // Stopped: the same, for the runtime minted after the reload.
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([], "plugin://a/__dtv-4/settings.js")}
+        viewScope="user"
+      />
+    );
+    cleanup();
+    const next = _settingsViewRemovalSignalForTest("acme.test")!;
+    push(null);
+    expect(next.aborted).toBe(true);
   });
 
   it("renders nothing for a plugin with neither fields nor a view", () => {

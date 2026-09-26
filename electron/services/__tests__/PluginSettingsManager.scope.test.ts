@@ -636,6 +636,7 @@ describe("PluginSettingsManager required settings", () => {
     expect(await mgr.requiredStatusForUi(PLUGIN_ID, null)).toEqual({
       missing: [],
       unreadable: [],
+      labels: {},
     });
     await expect(mgr.missingRequiredForHost(PLUGIN_ID)).resolves.toEqual([]);
   });
@@ -656,6 +657,7 @@ describe("PluginSettingsManager required settings", () => {
       expect(await mgr.requiredStatusForUi(PLUGIN_ID, PROJECT_ID)).toEqual({
         missing: ["token"],
         unreadable: ["team"],
+        labels: { token: "token", team: "team" },
       });
       // The host can't read it either, so it lists it with the missing ones.
       await expect(mgr.missingRequiredForHost(PLUGIN_ID, projectRoot)).resolves.toEqual([

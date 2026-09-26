@@ -29,7 +29,6 @@ import { SearchField } from "@/components/ui/SearchField";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
-import { pruneSettingsViewRuntimes } from "@/components/Plugin/PluginSettingsView";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useOverlayClaim } from "@/hooks";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -559,15 +558,6 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     setSelectedProjectPluginId(null);
     setSelectedPluginId(settingsRequestPluginId);
   }, [isOpen, settingsRequestPluginId, settingsRequestNonce, pm.plugins]);
-
-  // Every list refresh — a disable, an uninstall, a reload onto a new module —
-  // retires the settings-view runtimes it no longer backs. Installed plugins
-  // only: this list does not describe project plugins.
-  // Never from a list still loading: an empty one would retire every live view.
-  useEffect(() => {
-    if (pm.loading) return;
-    pruneSettingsViewRuntimes(pm.plugins, "global");
-  }, [pm.loading, pm.plugins]);
 
   // Fade the deep-link highlight after a beat. Kept separate from the consume
   // effect above: clearing focusPluginId there flips that effect's own

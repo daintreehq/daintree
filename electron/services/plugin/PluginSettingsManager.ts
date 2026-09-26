@@ -384,7 +384,11 @@ export class PluginSettingsManager {
     );
     const idsIn = (state: "missing" | "unreadable") =>
       required.filter((_, index) => states[index] === state).map((def) => def.id);
-    return { missing: idsIn("missing"), unreadable: idsIn("unreadable") };
+    const labels: Record<string, string> = {};
+    required.forEach((def, index) => {
+      if (states[index] !== "set") labels[def.id] = def.label ?? def.id;
+    });
+    return { missing: idsIn("missing"), unreadable: idsIn("unreadable"), labels };
   }
 
   /**

@@ -1,6 +1,5 @@
 import type { ComponentType } from "react";
 import {
-  PROJECT_PLUGIN_INSTANCE_PREFIX,
   pluginSettingsViewKindId,
   type LoadedPluginInfo,
   type PluginSettingsViewContext,
@@ -11,6 +10,7 @@ import {
   type PluginViewContentProps,
 } from "@/components/Plugin/PluginViewContent";
 import { pluginDeclaresSettingsView } from "@/services/plugin/pluginSettingsHome";
+import { stripPluginViewGeneration } from "@shared/utils/pluginViewUrl";
 
 /**
  * One plugin's settings-view runtime: the content factory, the module URL it was
@@ -18,11 +18,63 @@ import { pluginDeclaresSettingsView } from "@/services/plugin/pluginSettingsHome
  */
 interface SettingsViewRuntime {
   componentPath: string;
+  /** The view generation baked into `componentPath`, or `null` if it has none. */
+  generation: number | null;
   content: ComponentType<PluginViewContentProps>;
   removal: AbortController;
 }
 
 const runtimes = new Map<string, SettingsViewRuntime>();
+let unsubscribeLifecycle: (() => void) | null = null;
+
+/** The `__dtv-N` generation of a `plugin://` module URL, or `null` for none. */
+function viewGenerationOf(componentPath: string): number | null {
+  try {
+    const pathname = new URL(componentPath).pathname.replace(/^\/+/, "");
+    return stripPluginViewGeneration(pathname)?.generation ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Abort a runtime's removal signal and drop its factory. */
+function retire(pluginId: string): void {
+  const runtime = runtimes.get(pluginId);
+  if (!runtime) return;
+  runtime.removal.abort();
+  runtimes.delete(pluginId);
+}
+
+/**
+ * Retire runtimes as their plugins stop or reload, whether or not a settings
+ * page is open.
+ *
+ * A settings view has no panel kind whose removal broadcast could tell it the
+ * plugin is gone, and the homes are only mounted while a page shows. The one
+ * app-wide signal that covers every way a plugin stops — disabled, muted,
+ * uninstalled, its project trust withdrawn — and every reload is main's
+ * runtime-status push: a `null` status means the instance left the inventory,
+ * and a new `viewGeneration` means it now serves a different module. Either
+ * retires the cached runtime, so its removal signal aborts then rather than on
+ * some later visit. Subscribed on first use and kept for the life of the
+ * renderer, like the map it sweeps.
+ */
+function ensureLifecycleSubscription(): void {
+  if (unsubscribeLifecycle !== null) return;
+  const events = typeof window === "undefined" ? undefined : window.electron?.events;
+  if (typeof events?.on !== "function") return;
+  unsubscribeLifecycle = events.on("plugin:runtime-status-changed", ({ pluginId, status }) => {
+    const runtime = runtimes.get(pluginId);
+    if (!runtime) return;
+    if (
+      status === null ||
+      status.viewGeneration === null ||
+      (runtime.generation !== null && status.viewGeneration !== runtime.generation)
+    ) {
+      retire(pluginId);
+    }
+  });
+}
 
 /**
  * The content factory for a plugin's settings view, minted once per module URL.
@@ -35,12 +87,14 @@ const runtimes = new Map<string, SettingsViewRuntime>();
  * factory bound to the old module.
  */
 function getRuntime(plugin: LoadedPluginInfo, componentPath: string): SettingsViewRuntime {
+  ensureLifecycleSubscription();
   const pluginId = plugin.instanceId;
   const existing = runtimes.get(pluginId);
   if (existing !== undefined && existing.componentPath === componentPath) return existing;
   existing?.removal.abort();
   const runtime: SettingsViewRuntime = {
     componentPath,
+    generation: viewGenerationOf(componentPath),
     content: makePluginViewContent({
       id: pluginSettingsViewKindId(pluginId),
       name: `${plugin.manifest.displayName ?? plugin.manifest.name} settings`,
@@ -54,37 +108,17 @@ function getRuntime(plugin: LoadedPluginInfo, componentPath: string): SettingsVi
   return runtime;
 }
 
-/**
- * Retire every cached runtime the latest plugin list no longer backs — the
- * plugin unloaded, stopped, or reloaded onto a new module URL — aborting its
- * removal signal so the view's durable cleanup runs, and dropping its factory.
- *
- * A settings view has no panel kind whose removal broadcast could do this, so
- * the homes call it whenever they re-read the list. `origin` narrows the sweep
- * to the plugins that list actually covers: the plugin manager only lists
- * installed plugins, and must not retire a project plugin's section.
- */
-export function pruneSettingsViewRuntimes(
-  plugins: readonly LoadedPluginInfo[],
-  origin?: LoadedPluginInfo["origin"]
-): void {
-  const live = new Map(plugins.map((p) => [p.instanceId, p] as const));
-  for (const [pluginId, runtime] of runtimes) {
-    const plugin = live.get(pluginId);
-    if (plugin === undefined && origin !== undefined) {
-      const isProjectInstance = pluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX);
-      if ((origin === "project") !== isProjectInstance) continue;
-    }
-    if (plugin?.settingsViewPath === runtime.componentPath) continue;
-    runtime.removal.abort();
-    runtimes.delete(pluginId);
-  }
-}
-
-/** Test-only: drop every cached factory and its removal signal. */
+/** Test-only: drop every cached factory, its removal signal and the subscription. */
 export function _resetPluginSettingsViewRuntimesForTest(): void {
   for (const runtime of runtimes.values()) runtime.removal.abort();
   runtimes.clear();
+  unsubscribeLifecycle?.();
+  unsubscribeLifecycle = null;
+}
+
+/** Test-only: the removal signal of a plugin's cached runtime, if it has one. */
+export function _settingsViewRemovalSignalForTest(pluginId: string): AbortSignal | undefined {
+  return runtimes.get(pluginId)?.removal.signal;
 }
 
 /**

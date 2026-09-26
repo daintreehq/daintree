@@ -124,6 +124,15 @@ describe("contributes.settings schema (#9301)", () => {
     expect(settingsOf(result).map((s) => s.required)).toEqual([true, false]);
   });
 
+  it("rejects a default on a secret, which would ship in plugin.json", () => {
+    expect(parseSettings([{ id: "token", type: "secret", default: "sk-demo" }]).success).toBe(
+      false
+    );
+    // The legacy flag normalizes to a secret, so it is held to the same rule.
+    expect(parseSettings([{ id: "token", secret: true, default: "sk-demo" }]).success).toBe(false);
+    expect(parseSettings([{ id: "region", type: "string", default: "us" }]).success).toBe(true);
+  });
+
   it("rejects a non-boolean required", () => {
     expect(parseSettings([{ id: "token", required: "yes" }]).success).toBe(false);
   });
