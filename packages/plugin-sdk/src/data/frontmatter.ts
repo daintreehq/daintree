@@ -1,9 +1,20 @@
-import { Document, isMap, isScalar, parseDocument, stringify, type Pair } from "yaml";
+import {
+  Document,
+  isMap,
+  isNode,
+  isScalar,
+  parseDocument,
+  stringify,
+  visit,
+  type Pair,
+} from "yaml";
 
 /**
- * Thrown for frontmatter that cannot be read: invalid YAML, a block that is
- * opened but never closed, or YAML that is not a mapping. `line` and `column`
- * are 1-based positions in the whole file, not in the YAML block.
+ * Thrown for frontmatter that cannot be read: invalid YAML (an alias with no
+ * anchor included), a block that is opened but never closed, or YAML that is
+ * not a mapping — and by `updateFrontmatter` for an edit that would produce
+ * one of those. `line` and `column` are 1-based positions in the whole file,
+ * not in the YAML block.
  */
 export class FrontmatterError extends Error {
   readonly code = "FRONTMATTER_INVALID";
@@ -84,24 +95,67 @@ function lineAndColumn(source: string, offset: number): { line: number; column: 
   return { line, column: offset - lastBreak };
 }
 
-function parseBlock(block: FrontmatterBlock): Document.Parsed {
-  const doc = parseDocument(block.yaml, { prettyErrors: false });
-  const [error] = doc.errors;
-  if (error) {
-    const { line, column } = lineAndColumn(block.yaml, error.pos[0]);
-    // The opening delimiter is line 1 of the file, so YAML line 1 is file line 2.
-    throw new FrontmatterError(`invalid YAML frontmatter: ${error.message}`, line + 1, column);
-  }
-  if (doc.contents !== null && !isMap(doc.contents)) {
-    const { line, column } = lineAndColumn(block.yaml, doc.contents.range?.[0] ?? 0);
-    throw new FrontmatterError("frontmatter must be a YAML mapping", line + 1, column);
-  }
-  return doc;
+type YamlReading =
+  | { ok: true; doc: Document.Parsed; data: Record<string, unknown> }
+  | { ok: false; problem: string; offset: number };
+
+/** The offset of the first alias whose anchor is not defined before it. */
+function unresolvedAliasOffset(doc: Document.Parsed): number | undefined {
+  let offset: number | undefined;
+  visit(doc, {
+    Alias(_, node) {
+      if (node.resolve(doc) !== undefined) return undefined;
+      offset = node.range?.[0];
+      return visit.BREAK;
+    },
+  });
+  return offset;
 }
 
-function toData(doc: Document.Parsed): Record<string, unknown> {
-  const value: unknown = doc.toJS();
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+/**
+ * Parse and materialise one YAML block, reporting any failure as a problem
+ * with its offset rather than throwing. Materialising is part of reading: an
+ * alias whose anchor is missing, or one that expands past the alias limit,
+ * only fails in `toJS`, after the parse itself reported nothing.
+ */
+function readYaml(yaml: string): YamlReading {
+  const doc = parseDocument(yaml, { prettyErrors: false });
+  const [error] = doc.errors;
+  if (error) return { ok: false, problem: `invalid YAML: ${error.message}`, offset: error.pos[0] };
+  if (doc.contents !== null && !isMap(doc.contents)) {
+    return {
+      ok: false,
+      problem: "frontmatter must be a YAML mapping",
+      offset: doc.contents.range?.[0] ?? 0,
+    };
+  }
+  let value: unknown;
+  try {
+    value = doc.toJS();
+  } catch (toJsError) {
+    // yaml throws plain Errors (a ReferenceError for an unresolved alias).
+    const reason = (toJsError as Error).message;
+    const offset = unresolvedAliasOffset(doc) ?? doc.contents?.range?.[0] ?? 0;
+    return { ok: false, problem: `invalid YAML: ${reason}`, offset };
+  }
+  const data =
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return { ok: true, doc, data };
+}
+
+function failure(yaml: string, offset: number, message: string): FrontmatterError {
+  const { line, column } = lineAndColumn(yaml, offset);
+  // The opening delimiter is line 1 of the file, so YAML line 1 is file line 2.
+  return new FrontmatterError(message, line + 1, column);
+}
+
+function readBlock(block: FrontmatterBlock): {
+  doc: Document.Parsed;
+  data: Record<string, unknown>;
+} {
+  const reading = readYaml(block.yaml);
+  if (!reading.ok) throw failure(block.yaml, reading.offset, reading.problem);
+  return reading;
 }
 
 /**
@@ -110,14 +164,14 @@ function toData(doc: Document.Parsed): Record<string, unknown> {
  * line that is exactly `---`. A document that does not open with `---` has no
  * frontmatter, and its whole text is the body.
  *
- * Throws {@link FrontmatterError} for invalid YAML, an unclosed block, or YAML
- * that is not a mapping, so a malformed file is reported rather than read as
- * empty.
+ * Throws {@link FrontmatterError} for invalid YAML (including an alias with no
+ * anchor), an unclosed block, or YAML that is not a mapping, so a malformed
+ * file is reported rather than read as empty.
  */
 export function parseFrontmatter(text: string): ParsedFrontmatter {
   const block = splitFrontmatter(text);
   if (!block) return { data: {}, body: text, hasFrontmatter: false };
-  return { data: toData(parseBlock(block)), body: block.body, hasFrontmatter: true };
+  return { data: readBlock(block).data, body: block.body, hasFrontmatter: true };
 }
 
 function renderMapping(data: Record<string, unknown>): string {
@@ -160,6 +214,20 @@ function withEol(text: string, eol: string): string {
   return eol === "\n" ? text : text.replace(/\n/g, eol);
 }
 
+/** The line break a text already uses, judged by its first one. */
+function detectEol(text: string): string {
+  const newline = text.indexOf("\n");
+  return newline > 0 && text[newline - 1] === "\r" ? "\r\n" : "\n";
+}
+
+function indentLines(text: string, indent: string): string {
+  if (indent === "") return text;
+  return text
+    .split("\n")
+    .map((line) => (line === "" ? line : indent + line))
+    .join("\n");
+}
+
 /**
  * The byte range one top-level entry occupies: from the start of its key's
  * line to the end of the line its value finishes on. Comment lines before the
@@ -173,6 +241,28 @@ function pairRange(source: string, pair: Pair): { start: number; end: number } |
   return { start: lineStartOf(source, keyRange[0]), end: lineEndAfter(source, contentEnd) };
 }
 
+/**
+ * The indentation the root mapping's keys sit at. A block mapping may be
+ * indented as a whole, and every line written into it has to match.
+ */
+function rootIndent(source: string, pairs: Pair[]): string {
+  const first = pairs[0];
+  const start = first && isScalar(first.key) ? first.key.range?.[0] : undefined;
+  if (start === undefined) return "";
+  const indent = source.slice(lineStartOf(source, start), start);
+  return /^[ ]*$/.test(indent) ? indent : "";
+}
+
+/** One `key: value` entry, carrying over the anchor the old value had. */
+function renderPair(key: string, value: unknown, anchor: string | undefined): string {
+  const doc = new Document({ [key]: value });
+  if (anchor !== undefined) {
+    const node = doc.get(key, true);
+    if (isNode(node)) node.anchor = anchor;
+  }
+  return doc.toString(STRINGIFY_OPTIONS);
+}
+
 /** A value that renders as one plain or quoted scalar on the key's own line. */
 function inlineScalarText(value: unknown): string | null {
   if (value !== null && typeof value === "object" && !(value instanceof Date)) return null;
@@ -181,8 +271,13 @@ function inlineScalarText(value: unknown): string | null {
   return rendered;
 }
 
+/**
+ * A scalar whose text can be swapped in place. An explicit tag is excluded:
+ * it sits outside the scalar's range and would survive the swap, so
+ * `!!str 1` patched with `2` would still read back as a string.
+ */
 function isInlineScalarNode(node: unknown): node is { range: [number, number, number] } {
-  if (!isScalar(node) || !node.range) return false;
+  if (!isScalar(node) || !node.range || node.tag !== undefined) return false;
   return node.type !== "BLOCK_LITERAL" && node.type !== "BLOCK_FOLDED";
 }
 
@@ -198,70 +293,98 @@ function isInlineScalarNode(node: unknown): node is { range: [number, number, nu
  * itself is also conflict-checked.
  *
  * An edited scalar keeps its trailing comment. A value that becomes (or was)
- * a collection or multi-line string rewrites that entry's lines in the
- * library's default style. A top-level flow mapping (`{ a: 1 }`) cannot be
- * edited in place, so it is re-serialised as a whole.
+ * a collection, a multi-line string or an explicitly tagged scalar rewrites
+ * that entry's lines in the library's default style, keeping its anchor. A
+ * top-level flow mapping (`{ a: 1 }`) cannot be edited in place, so a
+ * non-empty patch re-serialises it as a whole.
+ *
+ * Throws {@link FrontmatterError} when the existing frontmatter is invalid,
+ * and when the edit would leave it unreadable — deleting or replacing a value
+ * whose anchor another key still refers to.
  */
 export function updateFrontmatter(text: string, patch: Record<string, unknown>): string {
   const block = splitFrontmatter(text);
   const keys = Object.keys(patch);
   if (!block) {
     const additions = Object.fromEntries(keys.map((key) => [key, patch[key]]));
-    if (renderMapping(additions) === "") return text;
-    return stringifyFrontmatter(additions, text);
+    const rendered = renderMapping(additions);
+    if (rendered === "") return text;
+    return withEol(`---\n${rendered}---\n`, detectEol(text)) + text;
   }
 
-  const doc = parseBlock(block);
+  const { doc } = readBlock(block);
+  if (keys.length === 0) return text;
   const source = block.yaml;
   const map = doc.contents;
+  let yaml: string;
 
   if (map !== null && isMap(map) && map.flow) {
     for (const key of keys) {
       if (patch[key] === undefined) doc.delete(key);
       else doc.set(key, patch[key]);
     }
-    const rendered = withEol(doc.toString(STRINGIFY_OPTIONS), block.eol);
-    return block.head + rendered + block.close + block.body;
+    yaml = withEol(doc.toString(STRINGIFY_OPTIONS), block.eol);
+  } else {
+    const pairs = map !== null && isMap(map) ? (map.items as Pair[]) : [];
+    const indent = rootIndent(source, pairs);
+    const splices: Splice[] = [];
+    const appended: string[] = [];
+
+    for (const key of keys) {
+      const value = patch[key];
+      const pair = pairs.find((candidate) => keyMatches(candidate, key));
+      if (!pair) {
+        if (value !== undefined)
+          appended.push(indentLines(renderPair(key, value, undefined), indent));
+        continue;
+      }
+      const range = pairRange(source, pair);
+      if (!range) {
+        throw new FrontmatterError(`cannot edit the complex key "${key}" in place`, 1, 1);
+      }
+      if (value === undefined) {
+        splices.push({ start: range.start, end: range.end, text: "" });
+        continue;
+      }
+      const inline = inlineScalarText(value);
+      if (inline !== null && isInlineScalarNode(pair.value)) {
+        const [start, end] = pair.value.range;
+        // An empty value (`key:`) has no text to replace, so the new value may
+        // need a space after the colon and before a trailing comment.
+        const empty = start === end;
+        const before = empty && !/\s/.test(source[start - 1] ?? "") ? " " : "";
+        const after = empty && end < source.length && !/\s/.test(source[end]) ? " " : "";
+        splices.push({ start, end, text: before + inline + after });
+        continue;
+      }
+      const anchor = isNode(pair.value) ? pair.value.anchor : undefined;
+      splices.push({
+        start: range.start,
+        end: range.end,
+        text: indentLines(renderPair(key, value, anchor), indent),
+      });
+    }
+
+    yaml = source;
+    for (const splice of splices.sort((a, b) => b.start - a.start)) {
+      yaml = yaml.slice(0, splice.start) + withEol(splice.text, block.eol) + yaml.slice(splice.end);
+    }
+    if (appended.length > 0) {
+      const separator = yaml === "" || yaml.endsWith("\n") ? "" : block.eol;
+      yaml += separator + withEol(appended.join(""), block.eol);
+    }
   }
 
-  const pairs = map !== null && isMap(map) ? (map.items as Pair[]) : [];
-  const splices: Splice[] = [];
-  const appended: string[] = [];
-
-  for (const key of keys) {
-    const value = patch[key];
-    const pair = pairs.find((candidate) => keyMatches(candidate, key));
-    if (!pair) {
-      if (value !== undefined) appended.push(renderMapping({ [key]: value }));
-      continue;
-    }
-    const range = pairRange(source, pair);
-    if (!range) {
-      throw new FrontmatterError(`cannot edit the complex key "${key}" in place`, 1, 1);
-    }
-    if (value === undefined) {
-      splices.push({ start: range.start, end: range.end, text: "" });
-      continue;
-    }
-    const inline = inlineScalarText(value);
-    if (inline !== null && isInlineScalarNode(pair.value)) {
-      const [start, end] = pair.value.range;
-      // An empty value (`key:`) has no text to replace, so the new value needs
-      // its own separator after the colon.
-      const separator = start === end && source[start - 1] === ":" ? " " : "";
-      splices.push({ start, end, text: separator + inline });
-      continue;
-    }
-    splices.push({ start: range.start, end: range.end, text: renderMapping({ [key]: value }) });
-  }
-
-  let yaml = source;
-  for (const splice of splices.sort((a, b) => b.start - a.start)) {
-    yaml = yaml.slice(0, splice.start) + withEol(splice.text, block.eol) + yaml.slice(splice.end);
-  }
-  if (appended.length > 0) {
-    const separator = yaml === "" || yaml.endsWith("\n") ? "" : block.eol;
-    yaml += separator + withEol(appended.join(""), block.eol);
+  // Nothing above can see every way an edit breaks a document — an alias left
+  // pointing at a deleted anchor is the usual one — so the result is read back
+  // before it is handed out.
+  const check = readYaml(yaml);
+  if (!check.ok) {
+    throw failure(
+      yaml,
+      check.offset,
+      `this edit would leave the frontmatter unreadable: ${check.problem}`
+    );
   }
   return block.head + yaml + block.close + block.body;
 }

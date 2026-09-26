@@ -20,6 +20,8 @@ npm install --save-dev @daintreehq/plugin-sdk
 
 A plugin worker that is not bundled — a hand-written `dist/index.mjs` with no `node_modules` — can still import `@daintreehq/plugin-sdk`, `/files` and `/data`: Daintree resolves them to a copy of this package that ships with the app whenever the plugin has no copy of its own. An installed or bundled copy always takes precedence. `/react` and `/testing` are not served that way.
 
+`./data` is newer than the 0.1.0 release on npm. Code you bundle against 0.1.0 cannot import it; build against this repository's package or a later release.
+
 ## Usage
 
 ```ts

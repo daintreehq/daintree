@@ -87,6 +87,19 @@ describe("parseFrontmatter", () => {
     expect(error.message).toMatch(/unique/);
   });
 
+  it("reports an alias with no anchor as a FrontmatterError at the alias", () => {
+    let caught: unknown;
+    try {
+      parseFrontmatter("---\ntitle: ok\nowner: *nobody\n---\n");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(FrontmatterError);
+    expect((caught as FrontmatterError).line).toBe(3);
+    expect((caught as FrontmatterError).column).toBe(8);
+    expect((caught as FrontmatterError).message).toMatch(/nobody/);
+  });
+
   it("refuses an unclosed block and a non-mapping block", () => {
     expect(() => parseFrontmatter("---\ntitle: x\nbody\n")).toThrow(FrontmatterError);
     expect(() => parseFrontmatter("---\n- a\n- b\n---\n")).toThrow(/mapping/);
@@ -186,8 +199,63 @@ describe("updateFrontmatter", () => {
     expect(updateFrontmatter("# Title\n", { stage: undefined })).toBe("# Title\n");
   });
 
-  it("returns the text unchanged for an empty patch", () => {
+  it("writes a new block with the line breaks of a CRLF document", () => {
+    expect(updateFrontmatter("# Title\r\nbody\r\n", { stage: "lead", tags: ["a"] })).toBe(
+      "---\r\nstage: lead\r\ntags:\r\n  - a\r\n---\r\n# Title\r\nbody\r\n"
+    );
+  });
+
+  it("returns the text unchanged for an empty patch, flow mapping included", () => {
     expect(updateFrontmatter(CARD, {})).toBe(CARD);
+    const flow = "---\n{a:   1,  b: 2}\n---\nbody";
+    expect(updateFrontmatter(flow, {})).toBe(flow);
+    expect(() => updateFrontmatter("---\na: [\n---\n", {})).toThrow(FrontmatterError);
+  });
+
+  it("separates a filled empty value from a trailing comment", () => {
+    expect(updateFrontmatter("---\nstage: # pipeline\n---\n", { stage: "won" })).toBe(
+      "---\nstage: won # pipeline\n---\n"
+    );
+  });
+
+  it("drops an explicit tag that would change the new value's type", () => {
+    const updated = updateFrontmatter("---\ncount: !!str 1\nother: x\n---\n", { count: 2 });
+    expect(updated).toBe("---\ncount: 2\nother: x\n---\n");
+    expect(parseFrontmatter(updated).data.count).toBe(2);
+  });
+
+  it("keeps an anchor that another key refers to", () => {
+    const collection = updateFrontmatter("---\na: &x [1]\nb: *x\n---\n", { a: [2] });
+    expect(parseFrontmatter(collection).data).toEqual({ a: [2], b: [2] });
+    const scalar = updateFrontmatter("---\na: &x one # c\nb: *x\n---\n", { a: "two" });
+    expect(scalar).toBe("---\na: &x two # c\nb: *x\n---\n");
+    const tagged = updateFrontmatter("---\na: &x !!str 1\nb: *x\n---\n", { a: 5 });
+    expect(parseFrontmatter(tagged).data).toEqual({ a: 5, b: 5 });
+  });
+
+  it("refuses to delete a value an alias still points at", () => {
+    let caught: unknown;
+    try {
+      updateFrontmatter("---\na: &x one\nb: *x\n---\n", { a: undefined });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(FrontmatterError);
+    expect((caught as FrontmatterError).message).toMatch(/unreadable.*x/);
+    expect((caught as FrontmatterError).line).toBe(2);
+    // Deleting the alias and its anchor together is fine.
+    expect(updateFrontmatter("---\na: &x one\nb: *x\n---\n", { a: undefined, b: undefined })).toBe(
+      "---\n---\n"
+    );
+  });
+
+  it("keeps an indented root mapping's indentation", () => {
+    const updated = updateFrontmatter("---\n  a: 1\n  b: 2\n---\n", {
+      a: [1, 2],
+      c: { d: 3 },
+    });
+    expect(updated).toBe("---\n  a:\n    - 1\n    - 2\n  b: 2\n  c:\n    d: 3\n---\n");
+    expect(parseFrontmatter(updated).data).toEqual({ a: [1, 2], b: 2, c: { d: 3 } });
   });
 
   it("edits a flow mapping by re-serialising it", () => {

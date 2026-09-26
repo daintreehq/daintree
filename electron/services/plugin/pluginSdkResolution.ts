@@ -25,9 +25,14 @@ const REFUSED_SDK_ENTRIES: Readonly<Record<string, string>> = {
   [`${SDK_PACKAGE}/testing`]: "it is a test-time mock host, not something a running plugin loads",
 };
 
-// Only these mean "there is no SDK of the plugin's own to use". Any other
-// failure is the plugin's own install being broken, which it should see.
-const FALL_BACK_ON = new Set(["ERR_MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED"]);
+// Only these mean "there is no SDK of the plugin's own to use" — the first for
+// `import`, the last for `require()`. Any other failure is the plugin's own
+// install being broken, which it should see.
+const FALL_BACK_ON = new Set([
+  "ERR_MODULE_NOT_FOUND",
+  "ERR_PACKAGE_PATH_NOT_EXPORTED",
+  "MODULE_NOT_FOUND",
+]);
 
 function isSdkSpecifier(specifier: string): boolean {
   return specifier === SDK_PACKAGE || specifier.startsWith(`${SDK_PACKAGE}/`);
@@ -71,7 +76,10 @@ export function createPluginSdkResolveHook(sdkDir: string): ResolveHookSync {
 /**
  * Install the fallback for this process. `registerHooks` runs the hook
  * in-thread and synchronously — no loader worker and no separate hook module
- * to ship — and covers `require()` as well as `import`.
+ * to ship — and covers `require()` as well as `import`. The API is not yet
+ * marked stable in Node 24 (Electron 42's runtime) and the tests run it under
+ * the repo's Node 22, so an Electron upgrade should be checked against a real
+ * plugin worker; the bootstrap treats a throw here as losing only the fallback.
  */
 export function installPluginSdkResolution(sdkDir: string): void {
   registerHooks({ resolve: createPluginSdkResolveHook(sdkDir) });

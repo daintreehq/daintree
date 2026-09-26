@@ -113,9 +113,9 @@ describe("a zero-build plugin importing the SDK", () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
-  async function runPlugin(pluginDir: string, source: string): Promise<string> {
+  async function runPlugin(pluginDir: string, source: string, file = "index.mjs"): Promise<string> {
     await fs.mkdir(path.join(pluginDir, "dist"), { recursive: true });
-    const entry = path.join(pluginDir, "dist/index.mjs");
+    const entry = path.join(pluginDir, "dist", file);
     await fs.writeFile(entry, source);
     const script = [
       `import { installPluginSdkResolution } from ${JSON.stringify(pathToFileURL(hookModule).href)};`,
@@ -179,12 +179,67 @@ describe("a zero-build plugin importing the SDK", () => {
     expect(JSON.parse(out)).toBe("plugin");
   }, 30_000);
 
-  it("fails an import of the react entry with the reason", async () => {
-    await expect(
-      runPlugin(
-        path.join(tmp, "project/.daintree/plugins/acme.react"),
-        'import "@daintreehq/plugin-sdk/react";\nexport const probe = () => null;\n'
-      )
-    ).rejects.toThrow(/is not served because it is for panel views/);
+  it("falls back for an entry the plugin's own, older SDK does not export", async () => {
+    const pluginDir = path.join(tmp, "project/.daintree/plugins/acme.old");
+    const ownSdk = path.join(pluginDir, "node_modules/@daintreehq/plugin-sdk");
+    await fs.mkdir(ownSdk, { recursive: true });
+    await fs.writeFile(
+      path.join(ownSdk, "package.json"),
+      JSON.stringify({
+        name: "@daintreehq/plugin-sdk",
+        type: "module",
+        exports: { "./files": "./files.js" },
+      })
+    );
+    await fs.writeFile(path.join(ownSdk, "files.js"), 'export const whose = "plugin";\n');
+    const out = await runPlugin(
+      pluginDir,
+      [
+        'import { whose } from "@daintreehq/plugin-sdk/files";',
+        'import { parseJsonl } from "@daintreehq/plugin-sdk/data";',
+        "export const probe = () => [whose, parseJsonl('{\"a\":1}\\n').records];",
+      ].join("\n")
+    );
+    expect(JSON.parse(out)).toEqual(["plugin", [{ a: 1 }]]);
   }, 30_000);
+
+  it("serves require() from a CommonJS worker and from createRequire", async () => {
+    const cjs = await runPlugin(
+      path.join(tmp, "project/.daintree/plugins/acme.cjs"),
+      [
+        'const { parseJsonl } = require("@daintreehq/plugin-sdk/data");',
+        "exports.probe = () => parseJsonl('{\"a\":1}\\n').records;",
+      ].join("\n"),
+      "index.cjs"
+    );
+    expect(JSON.parse(cjs)).toEqual([{ a: 1 }]);
+
+    const created = await runPlugin(
+      path.join(tmp, "project/.daintree/plugins/acme.create-require"),
+      [
+        'import { createRequire } from "node:module";',
+        "const require = createRequire(import.meta.url);",
+        'const { updateFrontmatter } = require("@daintreehq/plugin-sdk/data");',
+        'export const probe = () => updateFrontmatter("---\\na: 1\\n---\\n", { a: 2 });',
+      ].join("\n")
+    );
+    expect(JSON.parse(created)).toBe("---\na: 2\n---\n");
+  }, 30_000);
+
+  it.each([
+    ["react", /is not served because it is for panel views/],
+    ["testing", /is not served because it is a test-time mock host/],
+    ["nope", /serves only .* to plugin workers\. To use it/],
+  ])(
+    "fails an import of the %s entry with the reason",
+    async (entry, reason) => {
+      await expect(
+        runPlugin(
+          path.join(tmp, `project/.daintree/plugins/acme.refused-${entry}`),
+          `import "@daintreehq/plugin-sdk/${entry}";\nexport const probe = () => null;\n`
+        )
+      ).rejects.toThrow(reason);
+    },
+    30_000
+  );
 });
