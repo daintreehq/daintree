@@ -72,10 +72,13 @@ describe("TerminalScratchpad", () => {
     seed({ content: "- npm test", collapsed: false });
     const { getByTestId } = renderPad();
 
-    const editor = getByTestId("terminal-scratchpad-editor") as HTMLTextAreaElement;
-    expect(editor.value).toBe("- npm test");
+    const editor = getByTestId("terminal-scratchpad-editor");
+    expect(editor instanceof HTMLTextAreaElement && editor.value).toBe("- npm test");
     expect(document.activeElement).not.toBe(editor);
     expect(isScratchpadElement(editor)).toBe(true);
+    expect(isScratchpadElement(editor, "term-1")).toBe(true);
+    // Another pane's notes never block a handoff meant for a different pane.
+    expect(isScratchpadElement(editor, "term-2")).toBe(false);
     expect(isScratchpadElement(document.body)).toBe(false);
   });
 

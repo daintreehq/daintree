@@ -639,6 +639,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (focusGenerationRef.current !== gen) return;
         if (editorViewRef.current !== view) return;
         if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+        if (isScratchpadElement(document.activeElement, terminalId)) return;
         view.focus();
       });
     };
@@ -654,7 +655,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (!isFocusedTerminal) return;
         if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
         // A bar that mounts late must not take the caret from the Scratchpad (#12835).
-        if (isScratchpadElement(document.activeElement)) return;
+        if (isScratchpadElement(document.activeElement, terminalId)) return;
         focusEditor();
       };
     });

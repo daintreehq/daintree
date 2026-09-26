@@ -283,7 +283,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     if (activeFocusPolicy === "preserve") return;
     // Re-runs on agent chrome changes while open; never while the user is
     // writing in the pane's Scratchpad (#12835).
-    if (isScratchpadElement(document.activeElement)) return;
+    if (isScratchpadElement(document.activeElement, activePanelId)) return;
 
     const focusTarget = getTerminalFocusTarget({
       preferredTarget: preferredTerminalFocusTarget,

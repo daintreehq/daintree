@@ -77,10 +77,13 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
     const column = columnRef.current;
     const pane = column?.parentElement?.getBoundingClientRect().width ?? 0;
     const rendered = column?.getBoundingClientRect().width || committedWidth;
-    const max = pane > 0 ? Math.max(SCRATCHPAD_MIN_WIDTH, Math.floor(pane / 2)) : Infinity;
+    const max = pane > 0 ? Math.floor(pane / 2) : Infinity;
     return { rendered, max };
   };
-  const clampToPane = (next: number, max: number) => clampScratchpadWidth(Math.min(next, max));
+  // The half-pane cap wins over the column minimum: in a pane only just wide
+  // enough for its terminal, the minimum would otherwise fight the cap the
+  // column renders at, and no drag could move it.
+  const clampToPane = (next: number, max: number) => Math.min(clampScratchpadWidth(next), max);
 
   const handleResizeStart = (e: React.MouseEvent) => {
     if (e.button !== 0 || e.detail > 1) return;
@@ -168,7 +171,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
   return (
     <aside
       ref={columnRef}
-      {...{ [SCRATCHPAD_BOUNDARY_ATTR]: "" }}
+      {...{ [SCRATCHPAD_BOUNDARY_ATTR]: terminalId }}
       aria-label="Scratchpad"
       data-testid="terminal-scratchpad"
       className="relative flex min-h-0 shrink-0 flex-col border-l border-border-default bg-surface-panel"

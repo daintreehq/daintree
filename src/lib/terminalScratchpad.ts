@@ -33,7 +33,9 @@ export function scratchpadHasContent(scratchpad: TerminalScratchpad | undefined)
  */
 export function sanitizeScratchpad(value: unknown): TerminalScratchpad | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const { content, collapsed, width } = value as Record<string, unknown>;
+  const content = "content" in value ? value.content : undefined;
+  const collapsed = "collapsed" in value ? value.collapsed : undefined;
+  const width = "width" in value ? value.width : undefined;
   if (typeof content !== "string") return undefined;
   const scratchpad: TerminalScratchpad = {
     content: content.slice(0, SCRATCHPAD_MAX_CHARS),
@@ -49,10 +51,17 @@ export function sanitizeScratchpad(value: unknown): TerminalScratchpad | undefin
 export const SCRATCHPAD_BOUNDARY_ATTR = "data-terminal-scratchpad";
 
 /**
- * Whether the user is writing in a Scratchpad. A focus handoff that fires on
- * its own — a pane becoming selected, a dock popover's agent chrome changing, a
- * lazily mounted input bar — must leave the keyboard there (#12835).
+ * Whether the user is writing in a Scratchpad — the given terminal's, when one
+ * is named. A focus handoff that fires on its own for a pane (the pane becoming
+ * selected, a dock popover's agent chrome changing, a lazily mounted input bar)
+ * must leave the keyboard in that pane's notes (#12835). Scoped to the pane so
+ * one pane's notes never block a handoff meant for a different pane.
  */
-export function isScratchpadElement(element: Element | null | undefined): boolean {
-  return !!element?.closest(`[${SCRATCHPAD_BOUNDARY_ATTR}]`);
+export function isScratchpadElement(
+  element: Element | null | undefined,
+  terminalId?: string
+): boolean {
+  const boundary = element?.closest(`[${SCRATCHPAD_BOUNDARY_ATTR}]`);
+  if (!boundary) return false;
+  return terminalId === undefined || boundary.getAttribute(SCRATCHPAD_BOUNDARY_ATTR) === terminalId;
 }

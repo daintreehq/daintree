@@ -803,7 +803,7 @@ function TerminalPaneComponent({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // The Scratchpad is its own editor: its copy, Enter and Space are the
     // user's, never the terminal's.
-    if (isScratchpadElement(e.target as HTMLElement)) return;
+    if (e.target instanceof Element && isScratchpadElement(e.target, id)) return;
 
     // Handle Cmd+C to copy xterm selection regardless of which child has focus.
     // This is needed because agent terminals focus the hybrid input bar, so
@@ -1043,8 +1043,7 @@ function TerminalPaneComponent({
 
     // A click into the Scratchpad of an unfocused pane selects the pane; the
     // caret it just placed must stay where it is (#12835).
-    const active = document.activeElement;
-    if (isScratchpadElement(active) && containerRef.current?.contains(active)) return;
+    if (isScratchpadElement(document.activeElement, id)) return;
 
     // Read selection and focus ownership synchronously, before any handoff.
     // Deciding up front (rather than inside the deferred RAF) also keeps focus
@@ -1065,6 +1064,8 @@ function TerminalPaneComponent({
     if (action === "hybridInput") {
       // A RAF defers the handoff until the pane has painted.
       const rafId = requestAnimationFrame(() => {
+        // A click into the notes can land between scheduling and this frame.
+        if (isScratchpadElement(document.activeElement, id)) return;
         inputBarRef.current?.focusWithCursorAtEnd();
       });
       return () => {
@@ -1073,7 +1074,10 @@ function TerminalPaneComponent({
       };
     }
 
-    const rafId = requestAnimationFrame(() => terminalInstanceService.focus(id));
+    const rafId = requestAnimationFrame(() => {
+      if (isScratchpadElement(document.activeElement, id)) return;
+      terminalInstanceService.focus(id);
+    });
     return () => cancelAnimationFrame(rafId);
   }, [
     id,

@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type FilePanelData,
+  type PtyPanelData,
+  type TerminalScratchpad,
+} from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -48,26 +53,25 @@ vi.mock("../../../persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("../../../panelStore");
 
-function seedTerminal(overrides: Partial<PtyPanelData> = {}): void {
+function seedTerminal(scratchpad?: TerminalScratchpad): void {
+  const terminal: PtyPanelData = {
+    id: "term-1",
+    kind: "terminal",
+    title: "Claude",
+    cwd: "/repo",
+    worktreeId: "/repo",
+    location: "grid",
+    ...(scratchpad && { scratchpad }),
+  };
+  const file: FilePanelData = {
+    id: "file-1",
+    kind: "file",
+    title: "File",
+    location: "grid",
+    filePath: "/repo/a.md",
+  };
   usePanelStore.setState({
-    panelsById: {
-      "term-1": {
-        id: "term-1",
-        kind: "terminal",
-        title: "Claude",
-        cwd: "/repo",
-        worktreeId: "/repo",
-        location: "grid",
-        ...overrides,
-      } as PanelInstance,
-      "file-1": {
-        id: "file-1",
-        kind: "file",
-        title: "File",
-        location: "grid",
-        filePath: "/repo/a.md",
-      } as PanelInstance,
-    },
+    panelsById: { "term-1": terminal, "file-1": file },
     panelIds: ["term-1", "file-1"],
   });
 }
@@ -142,7 +146,7 @@ describe("terminal scratchpad (#12835)", () => {
   });
 
   it("collapses a scratchpad with notes and expands it back as it was", () => {
-    seedTerminal({ scratchpad: { content: "check CI", collapsed: false, width: 340 } });
+    seedTerminal({ content: "check CI", collapsed: false, width: 340 });
 
     usePanelStore.getState().collapseScratchpad("term-1");
     expect(scratchpadOf("term-1")).toEqual({ content: "check CI", collapsed: true, width: 340 });
@@ -152,7 +156,7 @@ describe("terminal scratchpad (#12835)", () => {
   });
 
   it("removes an empty or whitespace-only scratchpad on collapse", () => {
-    seedTerminal({ scratchpad: { content: " \n ", collapsed: false, width: 340 } });
+    seedTerminal({ content: " \n ", collapsed: false, width: 340 });
 
     usePanelStore.getState().collapseScratchpad("term-1");
 
@@ -162,7 +166,7 @@ describe("terminal scratchpad (#12835)", () => {
   });
 
   it("clamps the width it stores", () => {
-    seedTerminal({ scratchpad: { content: "", collapsed: false } });
+    seedTerminal({ content: "", collapsed: false });
 
     usePanelStore.getState().setScratchpadWidth("term-1", 10_000);
     const wide = scratchpadOf("term-1")?.width ?? 0;
@@ -175,7 +179,7 @@ describe("terminal scratchpad (#12835)", () => {
   });
 
   it("keeps the notes when the terminal moves to another worktree", () => {
-    seedTerminal({ scratchpad: { content: "moving", collapsed: false } });
+    seedTerminal({ content: "moving", collapsed: false });
 
     usePanelStore.getState().moveTerminalToWorktree("term-1", "/repo-wt");
 
@@ -185,7 +189,7 @@ describe("terminal scratchpad (#12835)", () => {
   });
 
   it("keeps the notes through trash and restore, and drops them with the panel", () => {
-    seedTerminal({ scratchpad: { content: "keep me", collapsed: true } });
+    seedTerminal({ content: "keep me", collapsed: true });
 
     usePanelStore.getState().trashPanel("term-1");
     expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");

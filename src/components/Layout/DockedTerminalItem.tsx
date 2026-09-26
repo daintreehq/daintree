@@ -282,7 +282,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     if (terminal.focusPolicy === "preserve") return;
     // Re-runs on agent chrome changes while open; never while the user is
     // writing in the pane's Scratchpad (#12835).
-    if (isScratchpadElement(document.activeElement)) return;
+    if (isScratchpadElement(document.activeElement, terminal.id)) return;
 
     const focusTarget = getTerminalFocusTarget({
       preferredTarget: preferredTerminalFocusTarget,
