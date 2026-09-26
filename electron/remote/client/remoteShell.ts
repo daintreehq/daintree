@@ -5,6 +5,7 @@ import type {
   CommandRunner,
 } from "./commandRunner.js";
 import { buildExitArgs, noteSshMaster, shellQuote, sshCommonArgs } from "./sshTransport.js";
+import { sshExecutable } from "./sshExecutable.js";
 
 /**
  * How setup reaches a host's shell: run one line of `sh`, feed a script its
@@ -80,7 +81,7 @@ export function createSshCommandChannel(params: {
   scpPath?: string;
 }): HostCommandChannel {
   const { target, controlPath, run } = params;
-  const ssh = params.sshPath ?? "ssh";
+  const ssh = params.sshPath ?? sshExecutable();
   // Any command here may start the host's master; it goes when the app quits.
   const noteMaster = () =>
     noteSshMaster(controlPath, async (timeoutMs) => {

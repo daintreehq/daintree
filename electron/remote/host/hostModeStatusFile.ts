@@ -19,6 +19,12 @@ const MAX_TEXT = 512;
 const ObservationSchema = z.object({
   daintreeHostMode: z.literal(1),
   pid: z.number().int().min(0),
+  build: z
+    .object({
+      version: z.string().min(1).max(64),
+      commit: z.string().max(64),
+    })
+    .optional(),
   enabled: z.boolean(),
   startAtLogin: z.boolean(),
   startAtLoginInstalled: z.boolean().nullable(),
