@@ -151,8 +151,20 @@ const CURSOR_MOVE_RE = /\x1b\[(\d*)(?:;\d*)?([A-Gdf]|H)/g;
  * a cell-diff repaint of the echoed instruction can leave out the unchanged
  * `<summary>` between two markers it does rewrite.
  */
+/** How much of the buffer's end the raw fallback reads; a marker is short and last. */
+const RAW_TAIL_CHARS = 32_768;
+
 export function rawHandbackText(semanticBuffer: readonly string[]): string {
-  const moves = semanticBuffer
+  // Bounded from the end: a line with no newline keeps growing, and this runs
+  // on every output sample while a handback is outstanding.
+  const tail: string[] = [];
+  let budget = RAW_TAIL_CHARS;
+  for (let i = semanticBuffer.length - 1; i >= 0 && budget > 0; i--) {
+    const line = semanticBuffer[i] ?? "";
+    tail.unshift(line.length > budget ? line.slice(-budget) : line);
+    budget -= line.length + 1;
+  }
+  const moves = tail
     .join("\n")
     .replace(CURSOR_MOVE_RE, (_sequence, count: string, op: string) =>
       op === "C" && Number(count || "1") <= 1 ? " " : RAW_CELLS_SKIPPED

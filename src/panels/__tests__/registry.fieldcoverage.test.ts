@@ -71,6 +71,8 @@ const PTY_FIELD_CLASSIFICATION = {
   // held across a restart instead of launching fresh.
   conversationCwd: true,
   restoreRecovery: true,
+  // The terminal's own notes (#12835) — persisted so they outlive a restart.
+  scratchpad: true,
   // PtyPanelData runtime-only fields
   pid: false,
   hasPty: false,
@@ -427,6 +429,7 @@ const terminalFixture: PtySerializeInput = {
   agentState: "idle",
   lastStateChange: 1_700_000_000_000,
   conversationCwd: "/home/origin",
+  scratchpad: { content: "- check CI", collapsed: true, width: 320 },
   worktreeMoveNotice: { destinationWorktreeId: "wt-feature" },
   createdAt: 1_700_000_000_000,
   lastActiveAt: 1_700_000_000_001,

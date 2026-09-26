@@ -300,6 +300,12 @@ export class AuditService {
     helpSessionId?: string;
     resultSummary?: string;
     resultMeta?: McpAuditRecord["resultMeta"];
+    /**
+     * Whether the calling session is Daintree's own assistant. Not persisted:
+     * it only decides which surface `tierHint` is read from, since the two
+     * origins hold different forms of the same panel tools.
+     */
+    rendererOwnedOrigin?: boolean;
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -334,7 +340,14 @@ export class AuditService {
       record.confirmationDecision = decision;
     }
     if (classification.result === "unauthorized") {
-      record.tierHint = minimumPermittingTier(input.toolId);
+      // Read from the caller's own surface, the same one the tier-mismatch
+      // banner uses: an agent pane refused `terminal.close` is not helped by a
+      // hint naming the tier where only the assistant can call it. A caller
+      // that did not say which origin it is falls back to either surface.
+      record.tierHint =
+        input.rendererOwnedOrigin === undefined
+          ? (minimumPermittingTier(input.toolId) ?? minimumPermittingTier(input.toolId, false))
+          : minimumPermittingTier(input.toolId, input.rendererOwnedOrigin);
       if (input.bannerSuppressed) {
         record.bannerSuppressed = true;
       }
@@ -444,7 +457,8 @@ export class AuditService {
       timestamp: now,
       toolId: "mcp.pre-auth",
       sessionId: "",
-      tier: "system",
+      // Rejected before authentication, so no tier was ever resolved.
+      tier: "unauthenticated",
       argsSummary: "pre-auth request rejected",
       result: "unauthorized",
       errorCode: PRE_AUTH_FAILED_CODE,

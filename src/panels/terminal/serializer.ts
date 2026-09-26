@@ -37,6 +37,8 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
     ...(t.conversationCwd && { conversationCwd: t.conversationCwd }),
     ...(held && { restoreRecovery: t.restoreRecovery }),
+    // Written for a held pane too: the notes belong to the pane, not its process.
+    ...(t.scratchpad && { scratchpad: t.scratchpad }),
     // worktreeMoveNotice intentionally omitted — it's a live prompt to tell a
     // running agent where to go (#11853). Persisting it would resurface the
     // banner for a process that no longer exists after a restart.

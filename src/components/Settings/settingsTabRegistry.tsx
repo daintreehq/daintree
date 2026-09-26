@@ -1,4 +1,5 @@
-import { lazy, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import {
   Blocks,
   Command,
@@ -85,7 +86,7 @@ type AnyComponent = React.ComponentType<any>;
 export interface LazySettingsTabEntry extends SettingsTabEntry {
   readonly importKind: "lazy";
   readonly importer: () => Promise<unknown>;
-  readonly LazyComponent: AnyComponent;
+  readonly LazyComponent: AnyComponent & { readonly isLoaded?: () => boolean };
   readonly needsSubtabs?: boolean;
   readonly needsOnClose?: boolean;
   readonly needsOnSettingsChange?: boolean;
@@ -141,91 +142,92 @@ const importProjectPluginsTab = () => import("./ProjectPluginsTab");
 
 // ── Lazy components (module-level — React requires stable lazy() refs) ──
 
-const LazyAgentSettings = lazy(() =>
-  importAgentSettings().then((m) => ({ default: m.AgentSettings }))
+const LazyAgentSettings = lazyWithPreload(importAgentSettings, (m) => m.AgentSettings);
+const LazyTerminalSettingsTab = lazyWithPreload(
+  importTerminalSettingsTab,
+  (m) => m.TerminalSettingsTab
 );
-const LazyTerminalSettingsTab = lazy(() =>
-  importTerminalSettingsTab().then((m) => ({ default: m.TerminalSettingsTab }))
+const LazyTerminalAppearanceTab = lazyWithPreload(
+  importTerminalAppearanceTab,
+  (m) => m.TerminalAppearanceTab
 );
-const LazyTerminalAppearanceTab = lazy(() =>
-  importTerminalAppearanceTab().then((m) => ({ default: m.TerminalAppearanceTab }))
+const LazyTroubleshootingTab = lazyWithPreload(
+  importTroubleshootingTab,
+  (m) => m.TroubleshootingTab
 );
-const LazyTroubleshootingTab = lazy(() =>
-  importTroubleshootingTab().then((m) => ({ default: m.TroubleshootingTab }))
+const LazyNotificationSettingsTab = lazyWithPreload(
+  importNotificationSettingsTab,
+  (m) => m.NotificationSettingsTab
 );
-const LazyNotificationSettingsTab = lazy(() =>
-  importNotificationSettingsTab().then((m) => ({ default: m.NotificationSettingsTab }))
+const LazyPortalSettingsTab = lazyWithPreload(importPortalSettingsTab, (m) => m.PortalSettingsTab);
+const LazyKeyboardShortcutsTab = lazyWithPreload(
+  importKeyboardShortcutsTab,
+  (m) => m.KeyboardShortcutsTab
 );
-const LazyPortalSettingsTab = lazy(() =>
-  importPortalSettingsTab().then((m) => ({ default: m.PortalSettingsTab }))
+const LazyWorktreeSettingsTab = lazyWithPreload(
+  importWorktreeSettingsTab,
+  (m) => m.WorktreeSettingsTab
 );
-const LazyKeyboardShortcutsTab = lazy(() =>
-  importKeyboardShortcutsTab().then((m) => ({ default: m.KeyboardShortcutsTab }))
+const LazyToolbarSettingsTab = lazyWithPreload(
+  importToolbarSettingsTab,
+  (m) => m.ToolbarSettingsTab
 );
-const LazyWorktreeSettingsTab = lazy(() =>
-  importWorktreeSettingsTab().then((m) => ({ default: m.WorktreeSettingsTab }))
+const LazyIntegrationsTab = lazyWithPreload(importIntegrationsTab, (m) => m.IntegrationsTab);
+const LazyCodeForgeSettingsTab = lazyWithPreload(
+  importCodeForgeSettingsTab,
+  (m) => m.CodeForgeSettingsTab
 );
-const LazyToolbarSettingsTab = lazy(() =>
-  importToolbarSettingsTab().then((m) => ({ default: m.ToolbarSettingsTab }))
+const LazyVoiceInputSettingsTab = lazyWithPreload(
+  importVoiceInputSettingsTab,
+  (m) => m.VoiceInputSettingsTab
 );
-const LazyIntegrationsTab = lazy(() =>
-  importIntegrationsTab().then((m) => ({ default: m.IntegrationsTab }))
+const LazyMcpServerSettingsTab = lazyWithPreload(
+  importMcpServerSettingsTab,
+  (m) => m.McpServerSettingsTab
 );
-const LazyCodeForgeSettingsTab = lazy(() =>
-  importCodeForgeSettingsTab().then((m) => ({ default: m.CodeForgeSettingsTab }))
+const LazyPluginActionsSettingsTab = lazyWithPreload(
+  importPluginActionsSettingsTab,
+  (m) => m.PluginActionsSettingsTab
 );
-const LazyVoiceInputSettingsTab = lazy(() =>
-  importVoiceInputSettingsTab().then((m) => ({ default: m.VoiceInputSettingsTab }))
+const LazyRunHistorySettingsTab = lazyWithPreload(
+  importRunHistorySettingsTab,
+  (m) => m.RunHistorySettingsTab
 );
-const LazyMcpServerSettingsTab = lazy(() =>
-  importMcpServerSettingsTab().then((m) => ({ default: m.McpServerSettingsTab }))
+const LazyPluginsTab = lazyWithPreload(importPluginsTab, (m) => m.PluginsTab);
+const LazyDaintreeAssistantSettingsTab = lazyWithPreload(
+  importDaintreeAssistantSettingsTab,
+  (m) => m.DaintreeAssistantSettingsTab
 );
-const LazyPluginActionsSettingsTab = lazy(() =>
-  importPluginActionsSettingsTab().then((m) => ({ default: m.PluginActionsSettingsTab }))
+const LazyEnvironmentSettingsTab = lazyWithPreload(
+  importEnvironmentSettingsTab,
+  (m) => m.EnvironmentSettingsTab
 );
-const LazyRunHistorySettingsTab = lazy(() =>
-  importRunHistorySettingsTab().then((m) => ({ default: m.RunHistorySettingsTab }))
+const LazyPrivacyDataTab = lazyWithPreload(importPrivacyDataTab, (m) => m.PrivacyDataTab);
+const LazyImportExportSettingsTab = lazyWithPreload(
+  importImportExportSettingsTab,
+  (m) => m.ImportExportSettingsTab
 );
-const LazyPluginsTab = lazy(() => importPluginsTab().then((m) => ({ default: m.PluginsTab })));
-const LazyDaintreeAssistantSettingsTab = lazy(() =>
-  importDaintreeAssistantSettingsTab().then((m) => ({ default: m.DaintreeAssistantSettingsTab }))
+const LazyProjectGeneralTab = lazyWithPreload(importProjectGeneralTab, (m) => m.GeneralTab);
+const LazyProjectContextTab = lazyWithPreload(importProjectContextTab, (m) => m.ContextTab);
+const LazyProjectVariablesTab = lazyWithPreload(
+  importProjectVariablesTab,
+  (m) => m.EnvironmentVariablesEditor
 );
-const LazyEnvironmentSettingsTab = lazy(() =>
-  importEnvironmentSettingsTab().then((m) => ({ default: m.EnvironmentSettingsTab }))
+const LazyProjectAutomationTab = lazyWithPreload(
+  importProjectAutomationTab,
+  (m) => m.AutomationTab
 );
-const LazyPrivacyDataTab = lazy(() =>
-  importPrivacyDataTab().then((m) => ({ default: m.PrivacyDataTab }))
+const LazyProjectRecipesTab = lazyWithPreload(importProjectRecipesTab, (m) => m.RecipesTab);
+const LazyProjectCommandsTab = lazyWithPreload(
+  importProjectCommandsTab,
+  (m) => m.CommandOverridesTab
 );
-const LazyImportExportSettingsTab = lazy(() =>
-  importImportExportSettingsTab().then((m) => ({ default: m.ImportExportSettingsTab }))
+const LazyProjectNotificationsTab = lazyWithPreload(
+  importProjectNotificationsTab,
+  (m) => m.ProjectNotificationsTab
 );
-const LazyProjectGeneralTab = lazy(() =>
-  importProjectGeneralTab().then((m) => ({ default: m.GeneralTab }))
-);
-const LazyProjectContextTab = lazy(() =>
-  importProjectContextTab().then((m) => ({ default: m.ContextTab }))
-);
-const LazyProjectVariablesTab = lazy(() =>
-  importProjectVariablesTab().then((m) => ({ default: m.EnvironmentVariablesEditor }))
-);
-const LazyProjectAutomationTab = lazy(() =>
-  importProjectAutomationTab().then((m) => ({ default: m.AutomationTab }))
-);
-const LazyProjectRecipesTab = lazy(() =>
-  importProjectRecipesTab().then((m) => ({ default: m.RecipesTab }))
-);
-const LazyProjectCommandsTab = lazy(() =>
-  importProjectCommandsTab().then((m) => ({ default: m.CommandOverridesTab }))
-);
-const LazyProjectNotificationsTab = lazy(() =>
-  importProjectNotificationsTab().then((m) => ({ default: m.ProjectNotificationsTab }))
-);
-const LazyProjectCodeForgeTab = lazy(() =>
-  importProjectCodeForgeTab().then((m) => ({ default: m.CodeForgeTab }))
-);
-const LazyProjectPluginsTab = lazy(() =>
-  importProjectPluginsTab().then((m) => ({ default: m.ProjectPluginsTab }))
-);
+const LazyProjectCodeForgeTab = lazyWithPreload(importProjectCodeForgeTab, (m) => m.CodeForgeTab);
+const LazyProjectPluginsTab = lazyWithPreload(importProjectPluginsTab, (m) => m.ProjectPluginsTab);
 
 // ── Voice requiresEnabled gates (referenced repeatedly) ─────────────────
 
@@ -471,7 +473,7 @@ export const SETTINGS_REGISTRY = [
     label: "Appearance",
     icon: <SquareTerminal className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importTerminalAppearanceTab,
+    importer: LazyTerminalAppearanceTab.preload,
     LazyComponent: LazyTerminalAppearanceTab,
     needsSubtabs: true,
     needsOnClose: true,
@@ -553,7 +555,7 @@ export const SETTINGS_REGISTRY = [
     headerTitle: "Keyboard shortcuts",
     icon: <Keyboard className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importKeyboardShortcutsTab,
+    importer: LazyKeyboardShortcutsTab.preload,
     LazyComponent: LazyKeyboardShortcutsTab,
     searchNavDescription: "View and customize keyboard shortcut bindings",
     searchNavKeywords: ["general", "keyboard", "keybindings", "hotkeys", "shortcuts"],
@@ -590,7 +592,7 @@ export const SETTINGS_REGISTRY = [
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importNotificationSettingsTab,
+    importer: LazyNotificationSettingsTab.preload,
     LazyComponent: LazyNotificationSettingsTab,
     searchNavDescription: "Agent notification alerts and sound settings",
     searchNavKeywords: ["general", "notifications", "alerts", "sounds"],
@@ -627,7 +629,7 @@ export const SETTINGS_REGISTRY = [
     label: "Privacy & data",
     icon: <Shield className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importPrivacyDataTab,
+    importer: LazyPrivacyDataTab.preload,
     LazyComponent: LazyPrivacyDataTab,
     needsSubtabs: true,
     searchNavDescription: "Telemetry level, log retention, data folder, cache, and factory reset",
@@ -706,7 +708,7 @@ export const SETTINGS_REGISTRY = [
     label: "Import & export",
     icon: <ArrowDownUp className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importImportExportSettingsTab,
+    importer: LazyImportExportSettingsTab.preload,
     LazyComponent: LazyImportExportSettingsTab,
     searchNavDescription: "Export your configuration to a file or import one from another machine",
     searchNavKeywords: ["import", "export", "backup", "restore", "config", "configuration"],
@@ -736,7 +738,7 @@ export const SETTINGS_REGISTRY = [
     label: "Panel grid",
     icon: <LayoutGrid className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importTerminalSettingsTab,
+    importer: LazyTerminalSettingsTab.preload,
     LazyComponent: LazyTerminalSettingsTab,
     needsSubtabs: true,
     searchNavDescription: "Panel grid layout, scrollback, split pane, and performance settings",
@@ -887,7 +889,7 @@ export const SETTINGS_REGISTRY = [
     headerTitle: "Worktree paths",
     icon: <FolderGit2 className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importWorktreeSettingsTab,
+    importer: LazyWorktreeSettingsTab.preload,
     LazyComponent: LazyWorktreeSettingsTab,
     searchNavDescription: "Configure where git worktrees are created",
     searchNavKeywords: [
@@ -950,7 +952,7 @@ export const SETTINGS_REGISTRY = [
     // already read as "settings". This is the strip along the top of the window.
     icon: <PanelTop className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importToolbarSettingsTab,
+    importer: LazyToolbarSettingsTab.preload,
     LazyComponent: LazyToolbarSettingsTab,
     searchNavDescription: "Reorder, show, and hide toolbar buttons and launcher settings",
     searchNavKeywords: ["terminal", "toolbar", "buttons", "customize"],
@@ -1002,7 +1004,7 @@ export const SETTINGS_REGISTRY = [
     headerTitle: "Environment variables",
     icon: <KeyRound className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importEnvironmentSettingsTab,
+    importer: LazyEnvironmentSettingsTab.preload,
     LazyComponent: LazyEnvironmentSettingsTab,
     searchNavDescription: "Per-project environment variables injected into all terminals",
     searchNavKeywords: [
@@ -1048,7 +1050,7 @@ export const SETTINGS_REGISTRY = [
     label: "Daintree Assistant",
     icon: <DaintreeIcon className="w-4 h-4" size={16} />,
     importKind: "lazy",
-    importer: importDaintreeAssistantSettingsTab,
+    importer: LazyDaintreeAssistantSettingsTab.preload,
     LazyComponent: LazyDaintreeAssistantSettingsTab,
     searchNavDescription: "Tools, security, and audit logging for the help assistant",
     searchNavKeywords: [
@@ -1137,7 +1139,7 @@ export const SETTINGS_REGISTRY = [
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importAgentSettings,
+    importer: LazyAgentSettings.preload,
     LazyComponent: LazyAgentSettings,
     needsSubtabs: true,
     needsOnSettingsChange: true,
@@ -1256,7 +1258,7 @@ export const SETTINGS_REGISTRY = [
     headerTitle: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importCodeForgeSettingsTab,
+    importer: LazyCodeForgeSettingsTab.preload,
     LazyComponent: LazyCodeForgeSettingsTab,
     needsSubtabs: true,
     searchNavDescription:
@@ -1346,7 +1348,7 @@ export const SETTINGS_REGISTRY = [
     label: "Integrations",
     icon: <Blocks className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importIntegrationsTab,
+    importer: LazyIntegrationsTab.preload,
     LazyComponent: LazyIntegrationsTab,
     searchNavDescription: "External editor, image viewer, and other tool integrations",
     searchNavKeywords: [
@@ -1413,7 +1415,7 @@ export const SETTINGS_REGISTRY = [
     label: "Voice input",
     icon: <Mic className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importVoiceInputSettingsTab,
+    importer: LazyVoiceInputSettingsTab.preload,
     LazyComponent: LazyVoiceInputSettingsTab,
     searchNavDescription: "Speech-to-text transcription and AI text correction settings",
     searchNavKeywords: [
@@ -1492,7 +1494,7 @@ export const SETTINGS_REGISTRY = [
     headerTitle: "Portal links",
     icon: <PanelRight className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importPortalSettingsTab,
+    importer: LazyPortalSettingsTab.preload,
     LazyComponent: LazyPortalSettingsTab,
     searchNavDescription: "Default and custom links for the portal browser panel",
     searchNavKeywords: ["integrations", "portal", "links", "browser", "bookmarks"],
@@ -1528,7 +1530,7 @@ export const SETTINGS_REGISTRY = [
     label: "MCP server",
     icon: <McpServerIcon className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importMcpServerSettingsTab,
+    importer: LazyMcpServerSettingsTab.preload,
     LazyComponent: LazyMcpServerSettingsTab,
     searchNavDescription: "Local MCP server for AI agent automation",
     searchNavKeywords: ["integrations", "mcp", "server", "automation", "api"],
@@ -1580,15 +1582,6 @@ export const SETTINGS_REGISTRY = [
         keywords: ["mcp", "api", "key", "auth", "token", "bearer", "security", "password"],
         requiresEnabled: MCP_REQUIRES_ENABLED,
       },
-      {
-        id: "mcp-server-pane-wakes",
-        section: "Pane wakes",
-        title: "Wake agents from terminal watches",
-        description:
-          "Let an agent that watches other terminals be woken with one line typed into its own idle prompt, instead of polling",
-        keywords: ["mcp", "watch", "wake", "orchestrator", "notify", "poll", "idle", "agent"],
-        requiresEnabled: MCP_REQUIRES_ENABLED,
-      },
     ],
   } satisfies LazySettingsTabEntry,
 
@@ -1599,7 +1592,7 @@ export const SETTINGS_REGISTRY = [
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importPluginsTab,
+    importer: LazyPluginsTab.preload,
     LazyComponent: LazyPluginsTab,
     searchNavDescription: "Open the plugin manager to install, enable, and update plugins",
     searchNavKeywords: [
@@ -1646,7 +1639,7 @@ export const SETTINGS_REGISTRY = [
     headerTitle: "Plugin actions",
     icon: <ScrollText className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importPluginActionsSettingsTab,
+    importer: LazyPluginActionsSettingsTab.preload,
     LazyComponent: LazyPluginActionsSettingsTab,
     searchNavDescription: "Audit log of actions dispatched by installed plugins",
     searchNavKeywords: ["plugins", "audit", "log", "actions", "dispatch", "history", "security"],
@@ -1670,7 +1663,7 @@ export const SETTINGS_REGISTRY = [
     headerTitle: "Run history",
     icon: <History className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importRunHistorySettingsTab,
+    importer: LazyRunHistorySettingsTab.preload,
     LazyComponent: LazyRunHistorySettingsTab,
     searchNavDescription: "Durable history of recipe runs and fleet broadcasts",
     searchNavKeywords: [
@@ -1714,7 +1707,7 @@ export const SETTINGS_REGISTRY = [
     label: "Troubleshooting",
     icon: <LifeBuoy className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importTroubleshootingTab,
+    importer: LazyTroubleshootingTab.preload,
     LazyComponent: LazyTroubleshootingTab,
     searchNavDescription: "System health, logs, diagnostics, and developer mode",
     searchNavKeywords: ["support", "troubleshooting", "debug", "logs", "health"],
@@ -1798,7 +1791,7 @@ export const SETTINGS_REGISTRY = [
     label: "General",
     icon: <SettingsIcon className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectGeneralTab,
+    importer: LazyProjectGeneralTab.preload,
     LazyComponent: LazyProjectGeneralTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
@@ -1810,7 +1803,7 @@ export const SETTINGS_REGISTRY = [
     label: "Context",
     icon: <FileCode className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectContextTab,
+    importer: LazyProjectContextTab.preload,
     LazyComponent: LazyProjectContextTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
@@ -1822,7 +1815,7 @@ export const SETTINGS_REGISTRY = [
     label: "Variables",
     icon: <KeyRound className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectVariablesTab,
+    importer: LazyProjectVariablesTab.preload,
     LazyComponent: LazyProjectVariablesTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
@@ -1836,7 +1829,7 @@ export const SETTINGS_REGISTRY = [
     // nav list sharing one glyph makes the icon useless for telling them apart.
     icon: <GitBranchPlus className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectAutomationTab,
+    importer: LazyProjectAutomationTab.preload,
     LazyComponent: LazyProjectAutomationTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
@@ -1848,7 +1841,7 @@ export const SETTINGS_REGISTRY = [
     label: "Recipes",
     icon: <Workflow className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectRecipesTab,
+    importer: LazyProjectRecipesTab.preload,
     LazyComponent: LazyProjectRecipesTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
@@ -1860,7 +1853,7 @@ export const SETTINGS_REGISTRY = [
     label: "Commands",
     icon: <Command className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectCommandsTab,
+    importer: LazyProjectCommandsTab.preload,
     LazyComponent: LazyProjectCommandsTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
@@ -1872,7 +1865,7 @@ export const SETTINGS_REGISTRY = [
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectNotificationsTab,
+    importer: LazyProjectNotificationsTab.preload,
     LazyComponent: LazyProjectNotificationsTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
@@ -1884,7 +1877,7 @@ export const SETTINGS_REGISTRY = [
     label: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectCodeForgeTab,
+    importer: LazyProjectCodeForgeTab.preload,
     LazyComponent: LazyProjectCodeForgeTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
@@ -1896,7 +1889,7 @@ export const SETTINGS_REGISTRY = [
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectPluginsTab,
+    importer: LazyProjectPluginsTab.preload,
     LazyComponent: LazyProjectPluginsTab,
     // Routed through ProjectFormTabContent like every other project tab, though
     // it reads its own stores rather than the shared project form.
@@ -2200,6 +2193,14 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
   "project:plugins": <Package className="w-5 h-5 text-text-secondary" />,
 };
+
+/** Whether rendering `tab` now could suspend on its chunk. Eager tabs never do. */
+export function isSettingsTabLoaded(tab: string): boolean {
+  const entry = SETTINGS_REGISTRY.find((e) => e.id === tab);
+  if (!entry) return false;
+  if (entry.importKind !== "lazy") return true;
+  return entry.LazyComponent.isLoaded?.() ?? false;
+}
 
 export function preloadAllSettingsTabs(): void {
   for (const entry of SETTINGS_REGISTRY) {

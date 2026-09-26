@@ -52,13 +52,14 @@ export {
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
+  NotebookPen, // a terminal's Scratchpad — throwaway notes kept beside that one pane
   OctagonAlert, // a pane's CPU or memory in its red band — beside the neutral reading, so the number keeps its contrast and the band survives forced colors
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
   Plug, // agent (integration that plugs into the host system)
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
-  Radar, // an agent pane watching other terminals, which Daintree may wake when they change — distinct from BellDot, the user's own watch alert
+  Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
   TriangleAlert, // a setting failing validation, an environment reporting a failure, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors

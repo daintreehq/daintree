@@ -52,6 +52,14 @@ export class HibernationManager {
     projectId: string | null;
   } | null = null;
   private _disposers: Array<() => void> = [];
+  /**
+   * Terminal id → whether that lane has terminal notices pending, from main's
+   * pushes. A lane waiting to hear about other terminals is busy in the sense
+   * hibernation cares about: killing it would drop the notice it asked for.
+   */
+  private readonly _pendingNotices = new Map<string, boolean>();
+  /** Terminal id → pushes seen, so a snapshot fetched before a push never overrides it. */
+  private readonly _noticePushes = new Map<string, number>();
 
   constructor(private readonly host: HibernationManagerHost) {}
 
@@ -63,6 +71,47 @@ export class HibernationManager {
       this._isSystemSuspended = false;
     });
     this._disposers.push(offSuspend, offWake);
+    try {
+      const offNotify = window.electron.terminal.onNotifyState((state) => {
+        this._noticePushes.set(
+          state.terminalId,
+          (this._noticePushes.get(state.terminalId) ?? 0) + 1
+        );
+        this._recordNotices(state.terminalId, state.pendingCount + state.readyCount > 0);
+      });
+      this._disposers.push(offNotify);
+    } catch (err) {
+      logError("HibernationManager: could not follow terminal notices", err);
+    }
+  }
+
+  private _recordNotices(terminalId: string, pending: boolean): void {
+    if (pending) this._pendingNotices.set(terminalId, true);
+    else this._pendingNotices.delete(terminalId);
+  }
+
+  /**
+   * Seed the lane's notice state when arming, for a view that missed the
+   * pushes. A push that lands while the snapshot is in flight is newer, so the
+   * snapshot is dropped; otherwise it is the truth, and no state at all means
+   * nothing is pending.
+   */
+  private _refreshNotices(terminalId: string): void {
+    const pushesBefore = this._noticePushes.get(terminalId) ?? 0;
+    try {
+      safeFireAndForget(
+        window.electron.mcpServer.getPaneNotifyState(terminalId).then((state) => {
+          if ((this._noticePushes.get(terminalId) ?? 0) !== pushesBefore) return;
+          this._recordNotices(
+            terminalId,
+            state !== null && state.pendingCount + state.readyCount > 0
+          );
+        }),
+        { context: "HelpPanel:hibernate notice state" }
+      );
+    } catch {
+      // No bridge: pushes are all there is.
+    }
   }
 
   /** Unsubscribe suspend/wake listeners, clear the timer, and drop the armed identity. */
@@ -77,6 +126,8 @@ export class HibernationManager {
     this._disposers = [];
     this.clearTimer();
     this._hibernateArmedFor = null;
+    this._pendingNotices.clear();
+    this._noticePushes.clear();
   }
 
   clearTimer(): void {
@@ -127,6 +178,7 @@ export class HibernationManager {
     const workspaceId = inputs.currentProject?.id ?? null;
     if (!workspaceId) return;
     this.clearTimer();
+    this._refreshNotices(terminalId);
     // Capture the workspace at arm time so a workspace switch between panel
     // close and hibernate fire doesn't write workspace A's session into
     // workspace B's slot. The fire path reads this captured value, never live
@@ -195,7 +247,10 @@ export class HibernationManager {
     const livePanel = panelState.panelsById[initialTerminalId];
     if (!livePanel || !isPtyPanel(livePanel)) return;
     const agentState = livePanel.agentState;
-    if (agentState && ACTIVE_AGENT_STATES.has(agentState)) {
+    if (
+      (agentState && ACTIVE_AGENT_STATES.has(agentState)) ||
+      this._pendingNotices.get(initialTerminalId) === true
+    ) {
       // Re-check shortly without restarting the full hibernate countdown —
       // the user is presumably about to come back.
       this._hibernateTimer = setTimeout(

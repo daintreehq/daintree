@@ -1,3 +1,5 @@
+import type { HelpAssistantTier } from "./maps.js";
+
 /**
  * Result classification for an MCP tool dispatch.
  *
@@ -39,9 +41,10 @@ export type McpAuditResult =
  * prompt text.
  *
  * `tier` records the source-tier classification of the connection that
- * issued the call (`workbench`, `action`, `system`, `external`). Sessions
- * that are not yet stamped fall back to `"workbench"` — the most
- * restrictive tier — so an unstamped session can never elevate access.
+ * issued the call (`core`, `full`, `external`). Sessions that are not yet
+ * stamped fall back to `"core"` — the smaller in-app tool set — so an
+ * unstamped session can never elevate access. Records written before the
+ * core/full split carry the old ladder names and are displayed verbatim.
  */
 /**
  * Outcome of a user-facing confirmation modal for `danger: "confirm"` MCP
@@ -69,7 +72,8 @@ export type McpApprovalScope = "once" | "session";
  * (#12692), stamped on its audit record so an automatic run can be told apart
  * from one a person approved.
  *
- * - `tier`: the project's `system` tier pre-authorized it.
+ * - `tier`: the project's `system` tier pre-authorized it. Only written by
+ *   builds before the core/full split; no tier pre-authorizes a call now.
  * - `user`: the user approved this call in the dialog.
  * - `session-grant`: an earlier "Allow for this session" covered it.
  * - `native-grant`: a native automation grant covered it (#10648).
@@ -193,12 +197,12 @@ export interface McpAuditRecord {
   confirmationDecision?: McpConfirmationDecision;
   /**
    * For `unauthorized` outcomes, the lowest help-session tier that would have
-   * permitted the dispatch — `workbench`, `action`, or `system`. Set at
+   * permitted the dispatch — `core` or `full`. Set at
    * record-write time from the static `TIER_ALLOWLISTS`. `null` means the
    * tool isn't permitted at any tier (unknown tool). Optional and absent on
    * non-unauthorized outcomes.
    */
-  tierHint?: "workbench" | "action" | "system" | null;
+  tierHint?: HelpAssistantTier | null;
   /**
    * For `unauthorized` outcomes only, true when the renderer banner was
    * suppressed for this denial because the per-`(sessionId, toolId)`

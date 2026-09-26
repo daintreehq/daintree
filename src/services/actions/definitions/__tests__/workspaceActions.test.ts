@@ -6,7 +6,7 @@ import type { ActionId } from "@shared/types/actions";
 import type { ActionContext } from "@shared/types/actions";
 import type { ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
-import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import { CORE_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
 
 const workspaceClientMock = vi.hoisted(() => ({ list: vi.fn() }));
 
@@ -64,11 +64,11 @@ describe("workspace.list", () => {
     expect(def.argsSchema).toBeUndefined();
   });
 
-  it("is admitted at the external tier and at workbench", () => {
+  it("is admitted at the external tier and in the core tool set", () => {
     // Two independently curated lists (#10712). The external tier must never
     // reach past what the in-app assistant already can, so both or neither.
     expect(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).toContain("workspace.list");
-    expect(WORKBENCH_TIER_TOOLS as readonly string[]).toContain("workspace.list");
+    expect(CORE_TIER_TOOLS as readonly string[]).toContain("workspace.list");
   });
 
   it("advertises an object-rooted output schema carrying all five fields", () => {

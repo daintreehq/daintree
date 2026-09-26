@@ -337,12 +337,6 @@ export interface StoreSchema {
     abusePolicyEnabled: boolean;
     abusePolicyMaxDenials: number;
     abusePolicyWindowMs: number;
-    /**
-     * Let terminal watches wake the watching agent's pane by typing one line
-     * into its prompt (#12491). Optional because stores written before it
-     * lack the key; anything but `true` reads as off.
-     */
-    paneWakeEnabled?: boolean;
   };
   /**
    * Help-assistant settings. Includes audit/permission configuration plus
@@ -354,10 +348,12 @@ export interface StoreSchema {
   helpAssistant: {
     docSearch: boolean;
     daintreeControl: boolean;
+    /** Absent in stores written before runbooks shipped; read as on. */
+    runbookSearch?: boolean;
     /**
-     * MCP capability tier for the help assistant. Migrated at read time from
-     * the legacy `skipPermissions` boolean — see `helpAssistant.ts`
-     * `sanitizeStored` and `HelpSessionService.readSettings`.
+     * MCP tool set for the help assistant. Read-time migrated from the
+     * pre-split ladder values and the legacy `skipPermissions` boolean — see
+     * `helpAssistant.ts` `sanitizeStored` and `HelpSessionService.readSettings`.
      */
     tier: HelpAssistantTier;
     /**
@@ -418,6 +414,8 @@ export interface StoreSchema {
     tours?: Record<string, { completed: boolean; dismissed: boolean; lastChapter: number }>;
     tourMuted?: boolean;
   };
+  // Once-per-agent duplicate-CLI-install warning flags. The name outlives the
+  // retired milestone toasts; renaming it would re-fire warnings already shown.
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
   /**
@@ -813,12 +811,12 @@ const storeOptions = {
       abusePolicyEnabled: false,
       abusePolicyMaxDenials: 5,
       abusePolicyWindowMs: 60_000,
-      paneWakeEnabled: false,
     },
     helpAssistant: {
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      runbookSearch: true,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7 as const,
     },

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -13,7 +13,18 @@ import {
   GetPromptRequestSchema,
   McpError,
   ErrorCode,
+  type CallToolRequest,
+  type CallToolResult,
+  type ServerNotification,
+  type ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import {
+  AgentLaunchManyArgsSchema,
+  TerminalCloseManyArgsSchema,
+  TerminalSendCommandManyArgsSchema,
+  type BatchItemOutcome,
+} from "../../../shared/types/mcpBatch.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
 import {
   readDispatchTerminalCommand,
@@ -23,12 +34,15 @@ import {
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isAssistantOnlyAgentId } from "../../../shared/config/agentIds.js";
+import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
+import { MCP_EXTERNAL_OMITTED_ARGS } from "../../../shared/config/mcpExternalTierAllowlist.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
 import { onWorkspaceResidencyChanged, readWorkspaceBindingState } from "../workspaceResidency.js";
 import type { AuditOutcome } from "./auditLog.js";
 import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
 import type {
+  HelpAssistantTier,
   McpTier,
   ParsedResourceUri,
   PromptDefinition,
@@ -46,6 +60,7 @@ import {
   truncateTextTail,
   readStringField,
   RESOURCE_BACKING_ACTIONS,
+  MCP_ASSISTANT_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS,
   TIER_NOT_PERMITTED_CODE,
   CONFIRMATION_REQUIRED_CODE,
@@ -60,7 +75,6 @@ import {
   SESSION_GONE,
   INVALID_URL_CODE,
   RESOURCE_NOT_OWNED_CODE,
-  RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS,
   buildToolError,
   buildMcpErrorPayload,
   withResolvedWorkspace,
@@ -91,7 +105,6 @@ import {
   type SessionSurfacePolicy,
   isTierPermitted,
   isApprovalRequestable,
-  isTierAutoConfirmed,
   buildToolInputSchema,
   buildAnnotations,
   buildToolOutputSchema,
@@ -122,18 +135,25 @@ import {
 } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
 import {
-  TERMINAL_CANCEL_WATCH_TOOL,
-  TERMINAL_GET_WATCH_EVENTS_TOOL,
-  TERMINAL_LIST_WATCHES_TOOL,
-  TERMINAL_WATCH_TOOL,
-  TERMINAL_WATCH_TOOLS,
-  TerminalWatchError,
-  WATCH_NOT_ELIGIBLE,
-  auditCodeForWatchRefusal,
-  runTerminalWatchTool,
+  NOTIFY_NOT_ELIGIBLE,
+  NOTIFY_CLOSE_TOOLS,
+  NOTIFY_KEY_TOOLS,
+  NOTIFY_SEND_TOOLS,
+  NOTIFY_VALIDATION_ERROR,
+  TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  TerminalNotifyError,
+  auditCodeForNotifyRefusal,
+  runNotifyWhenIdleTool,
   type OwnPane,
-  type TerminalWatchHandlers,
-} from "./terminalWatch.js";
+  type PendingNotify,
+  type TerminalNotifyHandlers,
+} from "./terminalNotify.js";
+import {
+  NOTIFY_REPLY_LINES_DEFAULT,
+  NotifyReplyLinesSchema,
+} from "../../../shared/types/terminalNotify.js";
+import { REPLY_WAIT_DEFAULT_SECONDS, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
+import type { ReplyWait, ReplyWaiterService } from "./replyWaiter.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -144,7 +164,6 @@ const MAX_LIST_PAGE_WALK = 20;
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
 const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
-const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
@@ -189,12 +208,9 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // agent wrote and dispatches nothing, so a closed workspace is no reason to
   // refuse it.
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
-  // Terminal watches (#12491) live in main and read the pty-host. A pane whose
-  // project view was evicted still has to be able to read what woke it.
-  TERMINAL_WATCH_TOOL,
-  TERMINAL_LIST_WATCHES_TOOL,
-  TERMINAL_GET_WATCH_EVENTS_TOOL,
-  TERMINAL_CANCEL_WATCH_TOOL,
+  // Terminal notices live in main and read the pty-host, so arming one needs
+  // no project view.
+  TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
 ]);
 /**
  * The main-process executors an owned tool can name. Kept apart from the rest
@@ -359,6 +375,18 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     releasesOwnership: false,
     acceptsAdoption: true,
   },
+  // Keys for a dialog in a panel this session launched — most often the trust
+  // screen a fresh worktree puts in front of an agent it just started. Only
+  // the key list is forwarded; the delegate validates it.
+  "terminal.sendKeysOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.sendKeys",
+    idArg: "terminalId",
+    forwardArgs: ["choose", "keys"],
+    releasesOwnership: false,
+    acceptsAdoption: true,
+  },
   // The one entry that runs in main rather than delegating (#12479). What it
   // reads is a file the agent wrote, which the renderer cannot open, and the
   // answer is built from host state — the pty-host record and the store the
@@ -380,6 +408,9 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
  * the new panel's id (#12407).
  */
 const AGENT_LAUNCH_TOOL = "agent.launch";
+
+/** Characters of quoted reply a batch may carry across all its items. */
+const BATCH_REPLY_TEXT_BUDGET = 32_000;
 const AGENT_NAMING_LAUNCH_TOOLS: ReadonlySet<string> = new Set([
   AGENT_LAUNCH_TOOL,
   "workflow.startWorkOnIssue",
@@ -389,6 +420,29 @@ function readStringArg(args: unknown, key: string): string | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
   const value = (args as Record<string, unknown>)[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * A short, readable panel id for an MCP launch that named none (`claude-7f3a`).
+ * A model repeats a terminal id in every send, notice and close, and a UUID
+ * costs four times the tokens and gets mistyped: a live run closed the wrong id
+ * after transposing two of its hex groups.
+ */
+export function shortAgentTerminalId(
+  agentId: string | undefined,
+  isInUse: (terminalId: string) => boolean
+): string {
+  const slug =
+    (agentId ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 24) || "agent";
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const candidate = `${slug}-${randomBytes(attempt < 8 ? 2 : 4).toString("hex")}`;
+    if (!isInUse(candidate)) return candidate;
+  }
+  return `${slug}-${randomUUID()}`;
 }
 
 /** The listing whose `owned` filter main resolves against the ledger (#12308). */
@@ -426,6 +480,196 @@ function prepareTerminalListDispatch(
   const { owned, ...rest } = args as Record<string, unknown>;
   if (typeof owned !== "boolean") return { dispatchArgs: args, ownedOnly: false };
   return { dispatchArgs: rest, ownedOnly: owned };
+}
+
+interface BatchItem {
+  target: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+interface BatchTool<T> {
+  schema: {
+    safeParse(
+      value: unknown
+    ):
+      | { success: true; data: T }
+      | { success: false; error: { issues: Array<{ message: string; path: PropertyKey[] }> } };
+  };
+  expand: (args: T, rendererOwnedOrigin: boolean) => BatchItem[];
+}
+
+function batchTool<T>(tool: BatchTool<T>): BatchTool<unknown> {
+  return tool as unknown as BatchTool<unknown>;
+}
+
+function notifyArgs(args: { notify?: boolean; handback?: boolean; replyLines?: number }) {
+  return {
+    ...(args.notify !== undefined ? { notify: args.notify } : {}),
+    ...(args.handback !== undefined ? { handback: args.handback } : {}),
+    ...(args.replyLines !== undefined ? { replyLines: args.replyLines } : {}),
+  };
+}
+
+/**
+ * The batch tools, and the single calls each item becomes. Items run in
+ * order: launches of one agent kind must follow each other, and a caller
+ * reading the results expects them in the order it gave.
+ */
+const BATCH_TOOLS: Record<string, BatchTool<unknown>> = {
+  "agent.launchMany": batchTool({
+    schema: AgentLaunchManyArgsSchema,
+    expand: (args) =>
+      [...new Set(args.agentIds)].map((agentId) => ({
+        target: agentId,
+        tool: AGENT_LAUNCH_TOOL,
+        args: {
+          agentId,
+          prompt: args.prompt,
+          name: `${args.name ?? "Agent"}: ${agentId}`,
+          ...(args.worktreeId !== undefined ? { worktreeId: args.worktreeId } : {}),
+          ...notifyArgs(args),
+        },
+      })),
+  }),
+  "terminal.sendCommandMany": batchTool({
+    schema: TerminalSendCommandManyArgsSchema,
+    // The assistant sends through the unscoped tool; every other session
+    // through the owned one, which reaches only what it created or was handed.
+    expand: (args, rendererOwnedOrigin) =>
+      args.sends.map((send) => ({
+        target: send.terminalId,
+        tool: rendererOwnedOrigin ? "terminal.sendCommand" : "terminal.sendCommandOwned",
+        args: { terminalId: send.terminalId, command: send.command, ...notifyArgs(args) },
+      })),
+  }),
+  "terminal.closeMany": batchTool({
+    schema: TerminalCloseManyArgsSchema,
+    expand: (args, rendererOwnedOrigin) =>
+      [...new Set(args.terminalIds)].map((terminalId) => ({
+        target: terminalId,
+        tool: rendererOwnedOrigin ? "terminal.close" : "terminal.closeOwned",
+        args: { terminalId },
+      })),
+  }),
+};
+
+/**
+ * Tie a waiter to the terminal and submission a dispatch reported, or settle
+ * it at once when the send or launch did not happen.
+ */
+/** Binds the wait to what the dispatch reported; false when it failed and the wait was cancelled. */
+function bindWait(result: CallToolResult, wait: ReplyWait): boolean {
+  const parsed = resultValue(result);
+  const value =
+    parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+  const terminalId = typeof value?.terminalId === "string" ? value.terminalId : undefined;
+  const failed =
+    result.isError === true ||
+    terminalId === undefined ||
+    value?.launched === false ||
+    (value?.spawnStatus !== undefined && value.spawnStatus !== null);
+  if (failed) {
+    wait.cancel();
+    return false;
+  }
+  const token = typeof value?.submissionToken === "string" ? value.submissionToken : undefined;
+  wait.bind(terminalId, token);
+  return true;
+}
+
+/** A send's or launch's result with the reply it waited for. */
+async function attachReply(result: CallToolResult, wait: ReplyWait): Promise<CallToolResult> {
+  // A failed dispatch is returned as it came, even when its wait had already
+  // ended: rebuilding it around a reply would drop `isError`.
+  if (!bindWait(result, wait)) return result;
+  const reply = await wait.promise;
+  if (reply.terminalId === "") return result;
+  const base = resultValue(result);
+  const value = {
+    ...(base !== null && typeof base === "object" ? (base as Record<string, unknown>) : {}),
+    reply,
+  };
+  return buildToolCallResult(value, {
+    structuredContent: value as unknown as Record<string, unknown>,
+  }) as CallToolResult;
+}
+
+/** A call's value: its structured content, else its JSON text, else the text. */
+function resultValue(result: CallToolResult): unknown {
+  if (result.structuredContent !== undefined) return result.structuredContent;
+  const first = result.content?.[0];
+  const text = first !== undefined && first.type === "text" ? first.text : undefined;
+  if (text === undefined) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+/** One item's result, as structured content when the call carried it. */
+function batchItemOutcome(target: string, result: CallToolResult): BatchItemOutcome {
+  const value = resultValue(result);
+  return result.isError === true
+    ? { target, ok: false, error: value }
+    : { target, ok: true, result: value };
+}
+
+/**
+ * Read a send's or launch's `notify` flag, and take it off the arguments a
+ * send's renderer receives. Whose prompt to type into is main-process state the
+ * renderer never sees, so the flag is acted on here. A launch keeps it: only
+ * the renderer knows the effective agent registry, so `agent.launch` is what
+ * refuses `notify` for a shell or panel, and that refusal cancels the notice.
+ * Only an actual boolean is read; anything else is left for the renderer's own
+ * schema validation to reject; `replyLines` goes with it. The owned send
+ * rebuilds its arguments from `forwardArgs`, which never names the flag.
+ */
+function prepareNotifyDispatch(
+  actionId: string,
+  args: unknown
+): {
+  dispatchArgs: unknown;
+  notify: boolean;
+  replyLines?: number;
+  waitForReply: boolean;
+  waitSeconds?: number;
+} {
+  if (
+    !NOTIFY_SEND_TOOLS.has(actionId) ||
+    args === null ||
+    typeof args !== "object" ||
+    Array.isArray(args)
+  ) {
+    return { dispatchArgs: args, notify: false, waitForReply: false };
+  }
+  const { notify, replyLines, waitForReply, waitSeconds, ...rest } = args as Record<
+    string,
+    unknown
+  >;
+  // A malformed argument stays in the forwarded arguments so the renderer's
+  // schema rejects the call; a well-formed one is main's and goes no further.
+  const parsedLines = NotifyReplyLinesSchema.safeParse(replyLines);
+  const parsedWait = WaitSecondsSchema.safeParse(waitSeconds);
+  const sendArgs: Record<string, unknown> = { ...rest };
+  if (notify !== undefined && typeof notify !== "boolean") sendArgs.notify = notify;
+  if (!parsedLines.success) sendArgs.replyLines = replyLines;
+  if (waitForReply !== undefined && typeof waitForReply !== "boolean") {
+    sendArgs.waitForReply = waitForReply;
+  }
+  if (!parsedWait.success) sendArgs.waitSeconds = waitSeconds;
+  return {
+    dispatchArgs: actionId === AGENT_LAUNCH_TOOL ? args : sendArgs,
+    notify: notify === true,
+    ...(parsedLines.success && parsedLines.data !== undefined
+      ? { replyLines: parsedLines.data }
+      : {}),
+    waitForReply: waitForReply === true && !NOTIFY_KEY_TOOLS.has(actionId),
+    ...(parsedWait.success && parsedWait.data !== undefined
+      ? { waitSeconds: parsedWait.data }
+      : {}),
+  };
 }
 
 /**
@@ -505,26 +749,6 @@ function readOwnedResourceId(args: unknown, key: string): string | undefined {
   return value.trim().length === 0 ? undefined : value;
 }
 
-/**
- * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
- * tool response can carry a real MCP `image` content block (the generic path
- * only ever text-serializes results). Guarded structurally rather than trusting
- * the action id alone.
- */
-function asScreenshotResult(
-  result: unknown
-): { pngBase64: string; width: number; height: number } | null {
-  if (
-    result !== null &&
-    typeof result === "object" &&
-    typeof (result as { pngBase64?: unknown }).pngBase64 === "string" &&
-    typeof (result as { width?: unknown }).width === "number" &&
-    typeof (result as { height?: unknown }).height === "number"
-  ) {
-    return result as { pngBase64: string; width: number; height: number };
-  }
-  return null;
-}
 import type { SessionStore } from "./sessionStore.js";
 
 /**
@@ -683,14 +907,17 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   isTerminalIdInUse: (terminalId: string) => boolean;
   /**
-   * Terminal watches (#12491). Optional so fixtures that never exercise them
-   * need not stub them; absent, every watch tool answers not-eligible.
+   * Terminal notices. Optional so fixtures that never exercise them need not
+   * stub them; absent, `terminal.notifyWhenIdle` and `notify: true` answer
+   * not-eligible.
    */
-  terminalWatch?: TerminalWatchHandlers;
+  terminalNotify?: TerminalNotifyHandlers;
+  /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
+  replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**
    * The caller's own pane, from its credential: a pane bearer's terminal, or
    * the terminal a help session is bound to. Null for everything else — an
-   * api-key client has no pane to wake.
+   * api-key client has no pane to notify.
    */
   resolveOwnPane?: () => OwnPane | null;
   appendAuditRecord: (input: {
@@ -721,6 +948,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * across two groupings.
      */
     capturedTurnId?: string | null;
+    /** The caller's origin, so an unauthorized row's tier hint reads its own surface. */
+    rendererOwnedOrigin?: boolean;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**
@@ -741,7 +970,7 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * the denied tool without changing the session tier at all. A `null`
      * withholds both affordances — the denial isn't actionable.
      */
-    targetTier: "workbench" | "action" | "system" | null;
+    targetTier: HelpAssistantTier | null;
   }) => void;
   /**
    * Feed a denial into the abuse policy — both 401s and tier-mismatches
@@ -882,7 +1111,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyToolCallSettled,
     notifyDisplayImage,
     workspaceBinding,
-    terminalWatch,
+    terminalNotify,
+    replyWaiter,
     resolveOwnPane,
     requestApproval,
   } = deps;
@@ -936,7 +1166,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // handler of ours is involved (#11541). Passed at construction because
       // that result is built once, at the handshake, and instructions have no
       // update notification — there is no later seam to set them from.
-      instructions: MCP_SERVER_INSTRUCTIONS,
+      // Daintree's own assistants carry these rules in their own prompts.
+      instructions: sessionStore.isRendererOwnedOrigin(sessionId)
+        ? MCP_ASSISTANT_SERVER_INSTRUCTIONS
+        : MCP_SERVER_INSTRUCTIONS,
     }
   );
 
@@ -1032,7 +1265,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         return {
           name: entry.id,
           description: entry.description,
-          inputSchema: buildToolInputSchema(entry),
+          // An api-key client is not shown arguments that need a pane of its
+          // own; it would be refused them anyway.
+          inputSchema: buildToolInputSchema(
+            entry,
+            tier === "external" ? MCP_EXTERNAL_OMITTED_ARGS[entry.id] : undefined
+          ),
           annotations: buildAnnotations(entry),
           ...(outputSchema ? { outputSchema } : {}),
           ...(_meta ? { _meta } : {}),
@@ -1042,7 +1280,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     return { tools };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  // Named so a batch tool can run each item through this same gate.
+  const handleCallTool = async (
+    request: CallToolRequest,
+    extra: RequestHandlerExtra<ServerRequest, ServerNotification>
+  ): Promise<CallToolResult> => {
     const actionId = request.params.name;
     const { args, requestKey } = parseToolArguments(request.params.arguments);
     const startedAt = Date.now();
@@ -1052,7 +1294,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // request arrived on a live session" and this handler, so an idle-timer
     // expiry or an abuse trip on a concurrent call can revoke the session in
     // between. Refusing here, before the tier gate, keeps a revoked external
-    // bearer off the workbench surface its own allowlist withholds.
+    // bearer off the core surface its own allowlist withholds.
     //
     // Returns before anything observable happens: no audit record (there is no
     // honest tier to record it under), no denial counter, no tier-mismatch
@@ -1067,7 +1309,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // across two turn groupings in the Assistant panel.
     const capturedTurnId: string | null = getCurrentTurnId?.() ?? null;
     // Asked of the ORIGIN, never inferred from the tier: an unrecognised bearer
-    // resolves to `workbench` while its origin still defaults to `external`,
+    // resolves to `core` while its origin still defaults to `external`,
     // and an agent pane's bearer holds a ladder tier with an `external` origin.
     // Captured once so discovery, the tier gate and `mcp.surface` all describe
     // the same session (#12407).
@@ -1222,7 +1464,24 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // off the search rewrite above rather than folded into it: the two tools
     // are disjoint, and one rewrite that handled both would have to be re-read
     // whenever either changed. `args` stays untouched for the audit record.
-    const { dispatchArgs, ownedOnly } = prepareTerminalListDispatch(actionId, searchDispatchArgs);
+    const { dispatchArgs: listDispatchArgs, ownedOnly } = prepareTerminalListDispatch(
+      actionId,
+      searchDispatchArgs
+    );
+    // A send's or launch's `notify` is decided here and taken off the forwarded
+    // copy the same way; see `prepareNotifyDispatch`.
+    const { dispatchArgs, notify, replyLines, waitForReply, waitSeconds } = prepareNotifyDispatch(
+      actionId,
+      listDispatchArgs
+    );
+    // Armed inside the dispatch, once the owned target is resolved, and read
+    // after it: the reply joins whatever result the dispatch built.
+    let replyWait: ReplyWait | undefined;
+    // The follow-up a `notify: true` call set up before dispatch. Completed
+    // with the envelope once the action returns, and cancelled by the shared
+    // `finally` on every other way out, so a refused or failed call never
+    // leaves a notice behind.
+    let pendingNotify: PendingNotify | undefined;
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
@@ -1388,8 +1647,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     };
 
     // Layered authorization (#8442):
-    //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
-    //      membership stays the default. The "Always allow" project setting
+    //   1. Static tier floor (`TIER_ALLOWLISTS`) — core/full membership
+    //      stays the default. The "Always allow" project setting
     //      elevates the session tier so this check passes for everything
     //      below the chosen tier.
     //   2. Per-`(sessionId, toolId)` grant cache — the "Approve once" flow
@@ -1428,7 +1687,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // session", so beyond widening the floor it also stands in for the
     // confirmation that approval replaced (#12692). That second job is why a
     // pane consults it even for a tool its tier already permits — the
-    // `action`-tier `worktree.delete` a user has allowed for the session.
+    // `full`-tier `worktree.delete` a user has allowed for the session.
     if (!tierPermitted || paneApproval) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       if (grant.granted) {
@@ -1446,7 +1705,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // (#11878). It used to sit inside the tier-denied branch, behind the
     // per-tool check — which left the grant unreachable both for a tool the
     // tier already permitted (`worktree.delete` is `danger: "confirm"` and sits
-    // on the `action` floor since #12116) and for one a per-tool grant had just
+    // in `full`) and for one a per-tool grant had just
     // admitted.
     // Either way the modal still fired on every call despite an explicit
     // Settings pre-authorisation.
@@ -1492,6 +1751,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           outcome: { kind: "unauthorized" },
           bannerSuppressed: suppressBanner ? true : undefined,
           capturedTurnId,
+          rendererOwnedOrigin,
         });
       } catch (err) {
         console.error("[MCP] Failed to append audit record:", err);
@@ -1502,7 +1762,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             sessionId,
             toolId: actionId,
             tier,
-            targetTier: minimumPermittingTier(actionId),
+            targetTier: minimumPermittingTier(actionId, rendererOwnedOrigin),
           });
         } catch (err) {
           console.error("[MCP] Failed to notify tier-mismatch:", err);
@@ -1531,18 +1791,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
       }
       // A tool the tier admits but the origin does not would otherwise be
-      // refused "for the 'action' tier" while the session holds exactly that
+      // refused "for the 'full' tier" while the session holds exactly that
       // tier — true of the gate, and useless to a caller deciding what to do
-      // next (#12407).
+      // next (#12407). An unscoped tool with an owned twin names the twin,
+      // which is the call that would have worked.
       const withheldByOrigin =
-        !rendererOwnedOrigin &&
-        RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS.has(actionId) &&
-        isTierPermitted(tier, actionId, true);
+        !rendererOwnedOrigin && tier !== "external" && isTierPermitted(tier, actionId, true);
+      const ownedTwin = withheldByOrigin
+        ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[actionId]
+        : undefined;
       return buildToolError({
         code: TIER_NOT_PERMITTED_CODE,
-        message: withheldByOrigin
-          ? `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only send input to terminals it created.`
-          : `action '${actionId}' is not permitted for the '${tier}' tier.`,
+        message:
+          ownedTwin !== undefined
+            ? `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`
+            : withheldByOrigin
+              ? `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only act on terminals it created.`
+              : `action '${actionId}' is not permitted for the '${tier}' tier.`,
       });
     }
 
@@ -1763,8 +2028,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // When the grant WAS the authorization, losing it fails closed. When the
     // floor or a per-tool grant already admitted it, the grant only bought a
     // confirmation bypass — so drop the bypass and let the normal modal
-    // decide. Refusing there would answer an `action`-tier `worktree.delete`
-    // with "not permitted for the 'action' tier", which is simply untrue.
+    // decide. Refusing there would answer a `full`-tier `worktree.delete`
+    // with "not permitted for the 'full' tier", which is simply untrue.
     //
     // Accounting note: a matching call spends a use even when the tool is not
     // confirm-gated, so the grant buys it nothing. Charging only where the
@@ -1904,20 +2169,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // What pre-authorizes this dispatch's `danger: "confirm"` modal, if
     // anything. A native automation grant is an explicit user approval of the
     // tool's scope, so it authorizes the dispatch without surfacing a per-call
-    // modal — exactly as if the user had just approved it. For an agent pane
-    // the `system` tier does the same, as does a session approval the user gave
-    // from the dialog (#12692); neither ever covers a tool whose dialog is also
-    // where the user picks its targets. An above-tier approval, granted below,
-    // sets this too. The D3 typed-name gate is outside all of them: the bridge
+    // modal — exactly as if the user had just approved it. For an agent pane a
+    // session approval the user gave from the dialog does the same (#12692),
+    // but never for a tool whose dialog is also where the user picks its
+    // targets. No tier pre-authorizes on its own. An above-tier approval,
+    // granted below, sets this too. The D3 typed-name gate is outside all of them: the bridge
     // re-derives it for any preconfirmed force delete (#12115).
     let dispatchAuthorization: McpDispatchAuthorization | undefined =
       nativeGrantId !== undefined
         ? "native-grant"
-        : isTierAutoConfirmed(tier, actionId, paneApproval)
-          ? "tier"
-          : paneApproval && grantIssuedAt !== undefined && isGenericNativeGrantEligible(actionId)
-            ? "session-grant"
-            : undefined;
+        : paneApproval && grantIssuedAt !== undefined && isGenericNativeGrantEligible(actionId)
+          ? "session-grant"
+          : undefined;
     let dispatchConfirmed = dispatchAuthorization !== undefined;
     // Tracks whether a live "tool-call-started" push fired for this dispatch so
     // the shared `finally` only emits the matching "settled" push for calls the
@@ -2186,6 +2449,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // An assistant-only agent launched from a session that is not the
         // assistant would be given the assistant's own pinned bearer, and with
         // it the unscoped terminal input this session was just denied.
+        if (
+          actionId === AGENT_LAUNCH_TOOL &&
+          typeof args === "object" &&
+          args !== null &&
+          !Array.isArray(args) &&
+          readStringArg(args, "requestedId") === undefined
+        ) {
+          (args as Record<string, unknown>).requestedId = shortAgentTerminalId(
+            readStringArg(args, "agentId"),
+            deps.isTerminalIdInUse
+          );
+        }
         if (AGENT_NAMING_LAUNCH_TOOLS.has(actionId)) {
           const requestedId =
             actionId === AGENT_LAUNCH_TOOL ? readStringArg(args, "requestedId") : undefined;
@@ -2209,6 +2484,162 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // A batch is its items: each runs through this handler again as its
+        // single call, so tier, ownership, notices and audit apply per item
+        // exactly as one at a time. The batch itself is admitted and audited
+        // above like any call, and adds no authority of its own.
+        const batch = BATCH_TOOLS[actionId];
+        if (batch !== undefined) {
+          const parsed = batch.schema.safeParse(args ?? {});
+          if (!parsed.success) {
+            const issue = parsed.error.issues[0];
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              `${actionId}: ${issue?.message ?? "invalid arguments"}${
+                issue && issue.path.length > 0 ? ` at '${issue.path.map(String).join(".")}'` : ""
+              }.`
+            );
+          }
+          emitToolCallStarted(false);
+          const results: BatchItemOutcome[] = [];
+          const batchArgs = parsed.data as {
+            waitForReply?: boolean;
+            waitSeconds?: number;
+            replyLines?: number;
+          };
+          // Every item is sent first and waited on together, so the call lasts
+          // as long as the slowest agent, not the sum of them.
+          const waits: Array<ReplyWait | undefined> = [];
+          for (const item of batch.expand(parsed.data, rendererOwnedOrigin)) {
+            // A cancelled call starts nothing more; what already went out stands.
+            if (extra.signal.aborted) break;
+            const wait =
+              batchArgs.waitForReply === true && replyWaiter !== undefined
+                ? replyWaiter.wait({
+                    ...(item.tool === AGENT_LAUNCH_TOOL
+                      ? {}
+                      : { terminalId: item.target, expectsToken: true }),
+                    since: Date.now(),
+                    replyLines: batchArgs.replyLines ?? NOTIFY_REPLY_LINES_DEFAULT,
+                    timeoutMs: (batchArgs.waitSeconds ?? REPLY_WAIT_DEFAULT_SECONDS) * 1_000,
+                    signal: extra.signal,
+                  })
+                : undefined;
+            let itemResult: CallToolResult;
+            try {
+              itemResult = await handleCallTool(
+                { method: "tools/call", params: { name: item.tool, arguments: item.args } },
+                extra
+              );
+            } catch (error) {
+              // One item's refusal is its own outcome, not the batch's.
+              wait?.cancel();
+              waits.push(undefined);
+              results.push({
+                target: item.target,
+                ok: false,
+                error: { message: error instanceof Error ? error.message : String(error) },
+              });
+              continue;
+            }
+            if (wait !== undefined) bindWait(itemResult, wait);
+            waits.push(wait);
+            results.push(batchItemOutcome(item.target, itemResult));
+          }
+          const replies = await Promise.all(waits.map((wait) => wait?.promise));
+          // Share the response ceiling so every item's receipt survives:
+          // replies are trimmed from their start, keeping their ends.
+          const replyBudget = Math.floor(BATCH_REPLY_TEXT_BUDGET / Math.max(1, replies.length));
+          replies.forEach((reply, index) => {
+            const entry = results[index];
+            if (entry !== undefined && reply !== undefined && reply.terminalId !== "") {
+              const text = reply.reply?.text;
+              entry.reply =
+                text !== undefined && text.length > replyBudget
+                  ? {
+                      ...reply,
+                      reply: { ...reply.reply!, text: text.slice(-replyBudget), truncated: true },
+                    }
+                  : reply;
+            }
+          });
+          const value = { results };
+          outcome = { kind: "result", value: { ok: true, result: value } };
+          return buildToolCallResult(value, {
+            structuredContent: value as unknown as Record<string, unknown>,
+          }) as CallToolResult;
+        }
+
+        if (waitForReply && replyWaiter !== undefined) {
+          replyWait = replyWaiter.wait({
+            ...(actionId === AGENT_LAUNCH_TOOL
+              ? {}
+              : {
+                  terminalId: ownedResourceId ?? readStringArg(args, "terminalId"),
+                  expectsToken: true,
+                }),
+            since: Date.now(),
+            replyLines: replyLines ?? NOTIFY_REPLY_LINES_DEFAULT,
+            timeoutMs: (waitSeconds ?? REPLY_WAIT_DEFAULT_SECONDS) * 1_000,
+            signal: extra.signal,
+          });
+        }
+
+        // `notify: true` on a send or launch: the notice is set up here, before
+        // the prompt goes out, so none of the target's state changes can slip
+        // past it. Refused before anything reaches a renderer when there is no
+        // pane to type into — an api-key client has none — so a caller is
+        // never told its prompt went out with a promise nobody will keep.
+        if (notify) {
+          const refuse = (code: string, message: string) => {
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: auditCodeForNotifyRefusal(code), message } },
+            };
+            return buildToolError({ code, message });
+          };
+          const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
+          if (pane === null || terminalNotify === undefined) {
+            return refuse(
+              NOTIFY_NOT_ELIGIBLE,
+              "`notify` types into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for it. Nothing was sent."
+            );
+          }
+          try {
+            if (actionId === AGENT_LAUNCH_TOOL) {
+              if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
+                return refuse(
+                  NOTIFY_VALIDATION_ERROR,
+                  "`notify` needs a `prompt`: there is no work to finish without one. Nothing was launched."
+                );
+              }
+              pendingNotify = await terminalNotify.prepareLaunch(pane, { replyLines });
+            } else if (NOTIFY_KEY_TOOLS.has(actionId)) {
+              const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
+              if (targetId === undefined || targetId.length === 0) {
+                return refuse(NOTIFY_VALIDATION_ERROR, "`notify` needs a `terminalId`.");
+              }
+              pendingNotify = await terminalNotify.prepareKeys(pane, targetId, { replyLines });
+            } else {
+              const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
+              if (targetId === undefined || targetId.length === 0) {
+                return refuse(NOTIFY_VALIDATION_ERROR, "`notify` needs a `terminalId`.");
+              }
+              pendingNotify = await terminalNotify.prepareSend(pane, targetId, { replyLines });
+            }
+          } catch (err) {
+            if (err instanceof TerminalNotifyError) return refuse(err.code, err.message);
+            throw err;
+          }
+        }
+
+        // A pane closing a terminal it asked about needs no notice saying so.
+        if (NOTIFY_CLOSE_TOOLS.has(actionId) && terminalNotify !== undefined) {
+          const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
+          const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
+          if (pane !== null && targetId !== undefined) terminalNotify.forgetTarget(pane, targetId);
+        }
+
         // Short-circuit: terminal.waitUntilIdle runs in the main process. The
         // action manifest entry handles schema, tier, and audit registration; the
         // execution must bypass renderer dispatch because (a) the MCP AbortSignal
@@ -2220,7 +2651,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // so the strip shows a plain in-flight row (no "awaiting confirmation").
           emitToolCallStarted(false);
           try {
-            // Interactive help sessions (workbench/action/system tiers) have a
+            // Interactive help sessions (core/full tiers) have a
             // human waiting on the conversation — a tool call held open blocks
             // the whole session, so the wait is clamped to the interactive cap
             // and the agent re-polls on `timedOut: true`. External (api-key)
@@ -2341,38 +2772,37 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Short-circuit: terminal watches (#12491) are session state in main —
-        // which pane a call comes from is known only from its credential, and
-        // the watch it registers outlives the call. Never `danger: "confirm"`;
-        // registering types nothing, and the wake it may later cause is gated
-        // by the user's setting. Audit + strip-settle unify via the shared
-        // `finally`.
-        if (TERMINAL_WATCH_TOOLS.has(actionId)) {
+        // Short-circuit: `terminal.notifyWhenIdle` is session state in main —
+        // which pane to type into is known only from the credential, and the
+        // notice outlives the call. Never `danger: "confirm"`; arming types
+        // nothing, and the line it may later cause goes only to the caller's
+        // own prompt. Audit + strip-settle unify via the shared `finally`.
+        if (actionId === TERMINAL_NOTIFY_WHEN_IDLE_TOOL) {
           emitToolCallStarted(false);
           const refuse = (code: string, message: string) => {
             outcome = {
               kind: "result",
-              value: { ok: false, error: { code: auditCodeForWatchRefusal(code), message } },
+              value: { ok: false, error: { code: auditCodeForNotifyRefusal(code), message } },
             };
             return buildToolError({ code, message });
           };
           // An api-key client has no pane of its own. The external allowlist
-          // already withholds these tools; this keeps it true if that drifts.
+          // already withholds this tool; this keeps it true if that drifts.
           const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
-          if (pane === null || terminalWatch === undefined) {
+          if (pane === null || terminalNotify === undefined) {
             return refuse(
-              WATCH_NOT_ELIGIBLE,
-              "Terminal watches wake the caller's own pane, and this connection has none: only an agent pane or an assistant session bound to its terminal can hold one."
+              NOTIFY_NOT_ELIGIBLE,
+              "Notices are typed into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for one."
             );
           }
           try {
-            const result = await runTerminalWatchTool(actionId, args, pane, terminalWatch);
+            const result = await runNotifyWhenIdleTool(args, pane, terminalNotify);
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
             });
           } catch (err) {
-            if (err instanceof TerminalWatchError) return refuse(err.code, err.message);
+            if (err instanceof TerminalNotifyError) return refuse(err.code, err.message);
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) throw err;
             return buildToolError({
@@ -2522,7 +2952,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           emitToolCallStarted(false);
           try {
             // Help-session bearers only. A pane-token session can also resolve
-            // to the workbench tier and clear the static allowlist gate above,
+            // to the core tier and clear the static allowlist gate above,
             // but it has no pinned panel to render the figure and no public
             // help-session id to key the counter, so reject it here.
             const helpSessionId = sessionStore.sessionHelpIdMap.get(sessionId);
@@ -2741,6 +3171,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           recordDispatchOwnership(envelope);
+          // Hand the notice what the action reported: the send's submission
+          // token or the launch's terminal id. A failed dispatch drops it —
+          // the caller already has the error.
+          if (pendingNotify !== undefined) {
+            const follow = pendingNotify;
+            pendingNotify = undefined;
+            if (envelope.result.ok) follow.complete(envelope.result.result);
+            else follow.cancel();
+          }
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           // "Allow for this session" on the ordinary confirm dialog of a pane's
           // own-tier tool (#12692). The bridge only reports the scope for an
@@ -2858,26 +3297,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               sessionStore.resetHttpIdleTimer(sessionId);
             }
           }
-          // browser.captureScreenshot returns PNG bytes — surface them as a real
-          // MCP image content block so the model receives a usable image, not a
-          // base64 blob text-serialized into the transcript.
-          if (actionId === BROWSER_CAPTURE_SCREENSHOT_TOOL) {
-            const shot = asScreenshotResult(outcome.value.result);
-            if (shot) {
-              return withResolvedWorkspace(
-                {
-                  content: [
-                    { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
-                    {
-                      type: "text" as const,
-                      text: `Screenshot captured (${shot.width}×${shot.height})`,
-                    },
-                  ],
-                },
-                dispatchedWorkspace
-              );
-            }
-          }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
           return withResolvedWorkspace(
             buildToolCallResult(outcome.value.result, {
@@ -2900,6 +3319,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           dispatchedWorkspace
         );
       } finally {
+        pendingNotify?.cancel();
+        pendingNotify = undefined;
         const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
         // Compute the duration once so the audit record and the live strip
         // report the same wall-clock, not two reads a few µs apart (#9759).
@@ -2941,6 +3362,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
     })();
 
+    // A waited call's answer is the dispatch plus its reply, so that is what a
+    // duplicate shares and what the cache keeps: never a bare receipt.
+    const answerPromise: Promise<CallToolResultLike> =
+      replyWait === undefined
+        ? dispatchPromise
+        : dispatchPromise.then((result) => attachReply(result as CallToolResult, replyWait!));
+
     if (dedupKey !== undefined) {
       let inFlight = sessionStore.dedupInFlight.get(sessionId);
       if (!inFlight) {
@@ -2950,9 +3378,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       const ownedInFlight = inFlight;
       const cleanupKey = dedupKey;
       const ownedArgsHash = argsHash!;
-      ownedInFlight.set(cleanupKey, { promise: dispatchPromise, argsHash: ownedArgsHash });
+      ownedInFlight.set(cleanupKey, { promise: answerPromise, argsHash: ownedArgsHash });
 
-      dispatchPromise.then(
+      answerPromise.then(
         (result) => {
           // Session-liveness guard: drain() clears `dedupInFlight` up-front,
           // so a torn-down session leaves `liveInFlight` undefined and we
@@ -2999,8 +3427,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       );
     }
 
-    return await dispatchPromise;
-  });
+    return (await answerPromise) as CallToolResult;
+  };
+  server.setRequestHandler(CallToolRequestSchema, handleCallTool);
 
   // Each resource handler resolves the tier once at entry and threads it down
   // (#11799). One capture per request: the listing helpers await dispatches

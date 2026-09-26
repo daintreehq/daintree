@@ -48,7 +48,7 @@ vi.mock("../persistence/auditRingStore.js", () => ({
   auditRingStore: { readAll: () => [], writeAll: vi.fn() },
 }));
 
-const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "core" | "full">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
@@ -86,7 +86,7 @@ import { pluginMcpRoutePath, type AgentMcpToolInvoker } from "../pluginAgentMcp/
 import { compileAgentMcpTool } from "../pluginAgentMcp/validateTools.js";
 
 const API_KEY = "orchestration-api-key";
-const PANE_TOKEN = "pane-token-workbench";
+const PANE_TOKEN = "pane-token-core";
 const PROJECT = "c".repeat(64);
 const INSTANCE = "acme.ledger";
 const ENDPOINT = "data";
@@ -139,7 +139,7 @@ describe("McpServerService plugin route", () => {
       auditMaxRecords: 500,
     });
     paneTokenTiers.clear();
-    paneTokenTiers.set(PANE_TOKEN, "workbench");
+    paneTokenTiers.set(PANE_TOKEN, "core");
     pluginHost.loaded = new Set([INSTANCE]);
     pluginHost.activatePlugin.mockClear();
     pluginMcpGrantRegistry.revokeAll();

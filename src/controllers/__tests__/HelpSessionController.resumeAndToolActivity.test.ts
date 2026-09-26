@@ -982,7 +982,7 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
     const ctrl = startCtrl();
     fireStarted({
       sessionId: "s1",
-      toolId: "git.push",
+      toolId: "worktree.delete",
       argsSummary: "{}",
       startedAt: 1,
       danger: true,

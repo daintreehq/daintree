@@ -33,7 +33,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List actions",
     description:
-      "Enumerate the available actions as lightweight entries, filtered by domain or substring and returned a page at a time. Use ranked search instead when looking for a capability by intent; use this when walking a domain systematically. Entries omit argument and result schemas to stay small, so fetch one action's schema before dispatching. Ordering is stable, so paging cannot skip or repeat entries.",
+      "List actions a page at a time, filtered by category or substring, to walk a domain; search instead to find a capability by intent. Entries omit schemas, so fetch the schema before dispatching. Ordering is stable across pages.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -41,15 +41,9 @@ export function registerIntrospectionActions(
     mcpVisibility: "core",
     argsSchema: z
       .object({
-        category: z
-          .string()
-          .optional()
-          .describe("Filter by exact category (e.g. terminal, worktree, forge, git, portal)"),
-        search: z.string().optional().describe("Search in action id, title, or description"),
-        enabledOnly: z
-          .boolean()
-          .optional()
-          .describe("Only return enabled actions (default: false)"),
+        category: z.string().optional().describe("Exact category, e.g. terminal, worktree, forge"),
+        search: z.string().optional().describe("Substring of id, title or description"),
+        enabledOnly: z.boolean().optional().describe("Only enabled actions (default false)"),
         limit: z
           .number()
           .int()
@@ -57,14 +51,14 @@ export function registerIntrospectionActions(
           .max(MAX_LIST_LIMIT)
           .optional()
           .default(DEFAULT_LIST_LIMIT)
-          .describe(`Max actions to return (1-${MAX_LIST_LIMIT}, default ${DEFAULT_LIST_LIMIT})`),
+          .describe(`Max actions, 1-${MAX_LIST_LIMIT} (default ${DEFAULT_LIST_LIMIT})`),
         offset: z
           .number()
           .int()
           .min(0)
           .optional()
           .default(0)
-          .describe("Number of matching actions to skip (default: 0)"),
+          .describe("Matches to skip (default 0)"),
       })
       .optional(),
     resultSchema: z.object({
@@ -141,7 +135,7 @@ export function registerIntrospectionActions(
     id: "mcp.surface",
     title: "Get MCP surface",
     description:
-      "Report this session's tool surface as data: its authorization tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints, and deprecation. Call it once at startup to check the surface matches what this client was built against, then re-read the hash to detect drift without diffing everything. It describes exactly what tools/list returns for this session.",
+      "Report this session's tool surface as data: its tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints and deprecation. Call once at startup to check it matches what this client expects, then compare the hash to detect drift.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -160,7 +154,7 @@ export function registerIntrospectionActions(
     id: "actions.getContext",
     title: "Get action context",
     description:
-      "Snapshot what the user currently has open — active project, worktree, focused terminal, and panel state. Call this first to resolve an implicit 'current' target before an action that needs an explicit id. Anything not focused or active is simply absent, so treat a missing field as nothing being selected. It can fail early in a session, before the worktree view store has initialised.",
+      "Snapshot what the user has open: active project, worktree, focused terminal and panel state. Call first to resolve an implicit 'current' target. A missing field means nothing is selected. Can fail early in a session, before the worktree view initialises.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -289,7 +283,7 @@ export function registerIntrospectionActions(
     id: "actions.search",
     title: "Search actions",
     description:
-      "Find actions by describing what you want to do, ranked by how well each matches. This is the discovery path: start here, then fetch the chosen action's schema before dispatching it. Use the plain listing when walking a domain systematically rather than searching by intent. Results omit argument and result schemas to stay small, and matching nothing returns an empty list rather than failing.",
+      "Find actions by describing what you want to do, ranked by match. Start here, then fetch the chosen action's schema before dispatching. Results omit schemas; no match returns an empty list, not a failure.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -300,7 +294,7 @@ export function registerIntrospectionActions(
         .string()
         .min(1)
         .refine((s) => s.trim().length > 0, "must contain non-whitespace text")
-        .describe("Natural-language query or keywords to search for"),
+        .describe("Natural-language query or keywords"),
       limit: z
         .number()
         .int()
@@ -309,7 +303,7 @@ export function registerIntrospectionActions(
         .optional()
         .default(ACTIONS_SEARCH_DEFAULT_LIMIT)
         .describe(
-          `Max results (1-${ACTIONS_SEARCH_MAX_LIMIT}, default ${ACTIONS_SEARCH_DEFAULT_LIMIT})`
+          `Max results, 1-${ACTIONS_SEARCH_MAX_LIMIT} (default ${ACTIONS_SEARCH_DEFAULT_LIMIT})`
         ),
     }),
     examples: [
@@ -403,7 +397,7 @@ export function registerIntrospectionActions(
     id: "actions.getSchema",
     title: "Get action schema",
     description:
-      "Fetch one action's full manifest entry — the exact arguments it accepts, the shape it returns, and a policy record saying whether this session can call it, at which tier, and whether confirmation applies. Use it after finding a candidate by search or listing, before dispatching. An unknown, hidden or restricted id comes back as a structured failure rather than a thrown error.",
+      "Fetch one action's manifest entry: its arguments, result shape, and whether this session may call it (tier, confirmation). Use after search, before dispatching. An unknown, hidden or restricted id returns a structured failure, not an error.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -413,9 +407,7 @@ export function registerIntrospectionActions(
       actionId: z
         .string()
         .min(1)
-        .describe(
-          "Identifies the action to inspect, using an id from a registry search or listing. This is a Daintree action id passed as a value, not the name of a tool to call."
-        ),
+        .describe("Action id from search or listing, passed as a value; not a tool name."),
     }),
     examples: [
       {

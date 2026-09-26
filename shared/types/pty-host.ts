@@ -709,6 +709,13 @@ export type PtyHostEvent =
       timestamp: number;
     }
   | {
+      /** A handback marker a submission asked for is complete in this pane (#12488). */
+      type: "agent-handback-observed";
+      terminalId: string;
+      handback: TerminalHandback;
+      timestamp: number;
+    }
+  | {
       /** A rate-limit banner appeared in this pane (#12797). Never carries its text. */
       type: "agent-rate-limit-observed";
       terminalId: string;

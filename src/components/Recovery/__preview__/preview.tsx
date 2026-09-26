@@ -13,7 +13,6 @@ import { HostMemoryStallBanner } from "../HostMemoryStallBanner";
 import { SafeModeBanner } from "../SafeModeBanner";
 import { RestoreConfirmationBanner } from "../RestoreConfirmationBanner";
 import { MissingPrerequisiteBanner } from "../MissingPrerequisiteBanner";
-import { ForgeTokenBanner } from "../ForgeTokenBanner";
 import { CloudSyncBanner } from "../CloudSyncBanner";
 import { RosettaBanner } from "../RosettaBanner";
 import { PluginDocumentWarning } from "@/components/Plugin/PluginDocumentWarning";
@@ -27,7 +26,7 @@ installPreviewShims();
  * Standalone visual-review harness for the global banner family.
  *
  * Only one of these banners ever holds the top-of-window slot, so in the real
- * app no two of them can be seen together — which is how ten banners came to
+ * app no two of them can be seen together — which is how nine banners came to
  * disagree with each other without anyone noticing. This page renders them
  * against the real stores, the real theme tokens and the real `index.css`,
  * in the band they actually occupy: pinned above the toolbar, sharing the row
@@ -146,8 +145,6 @@ function bannerForSlot(slot: Exclude<GlobalBannerSlot, null>) {
       return <RestoreConfirmationBanner />;
     case "missing-prerequisite":
       return <MissingPrerequisiteBanner />;
-    case "forge-token":
-      return <ForgeTokenBanner />;
     case "plugin-document":
       return <PluginDocumentWarning />;
     case "cloud-sync":

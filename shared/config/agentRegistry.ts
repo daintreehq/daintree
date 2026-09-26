@@ -708,6 +708,13 @@ export interface AgentConfig {
      * unverified, not unsupported.
      */
     interrupt?: AgentInterruptStrategy;
+    /**
+     * The CLI queues a message submitted while it is mid-turn and reads it once
+     * the turn allows, rather than dropping or garbling it. Daintree then types
+     * a terminal notice into a working pane at once instead of holding it for
+     * the pane's next settle. Omitted means unverified: the notice waits.
+     */
+    queuesInputWhileWorking?: boolean;
     /** Delay in ms before sending Enter key after body write (default: 200) */
     submitEnterDelayMs?: number;
     /**

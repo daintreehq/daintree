@@ -35,10 +35,6 @@ import {
 import { DEMO_METHOD_CHANNELS, buildDemoPreloadBindings } from "../handlers/demo.preload.js";
 import { SENTRY_METHOD_CHANNELS, buildSentryPreloadBindings } from "../handlers/sentry.preload.js";
 import {
-  MILESTONES_METHOD_CHANNELS,
-  buildMilestonesPreloadBindings,
-} from "../handlers/milestones.preload.js";
-import {
   SHORTCUT_HINTS_METHOD_CHANNELS,
   buildShortcutHintsPreloadBindings,
 } from "../handlers/shortcutHints.preload.js";
@@ -178,11 +174,6 @@ describe("leaf preload namespace bindings", () => {
       expect(SENTRY_METHOD_CHANNELS.getConsentState).toBe(CHANNELS.SENTRY_GET_CONSENT_STATE);
     });
 
-    it("milestones matches", () => {
-      expect(MILESTONES_METHOD_CHANNELS.get).toBe(CHANNELS.MILESTONES_GET);
-      expect(MILESTONES_METHOD_CHANNELS.markShown).toBe(CHANNELS.MILESTONES_MARK_SHOWN);
-    });
-
     it("shortcutHints matches", () => {
       expect(SHORTCUT_HINTS_METHOD_CHANNELS.getCounts).toBe(CHANNELS.SHORTCUT_HINTS_GET_COUNTS);
       expect(SHORTCUT_HINTS_METHOD_CHANNELS.incrementCount).toBe(
@@ -298,9 +289,6 @@ describe("leaf preload namespace bindings", () => {
       );
       expect(ONBOARDING_METHOD_CHANNELS.markChecklistItem).toBe(
         CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM
-      );
-      expect(ONBOARDING_METHOD_CHANNELS.markChecklistCelebrationShown).toBe(
-        CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN
       );
     });
 
@@ -602,18 +590,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("sentry:get-consent-state");
-    });
-  });
-
-  describe("milestones", () => {
-    it("routes markShown(id) to milestones:mark-shown with the id forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildMilestonesPreloadBindings(invoke);
-
-      await bindings.markShown("foo");
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("milestones:mark-shown", "foo");
     });
   });
 

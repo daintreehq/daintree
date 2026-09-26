@@ -119,7 +119,7 @@ describe("help.launchAgent", () => {
               sessionId: "sess-default",
               sessionPath: "/mock/help",
               token: "tok-default",
-              tier: "action",
+              tier: "core",
               mcpUrl: null,
               windowId: 1,
             }),
@@ -412,7 +412,7 @@ describe("help.launchAgent", () => {
       sessionId: "sess-1",
       sessionPath: "/sessions/sess-1",
       token: "tok-abc",
-      tier: "action",
+      tier: "core",
       mcpUrl: "http://127.0.0.1:45454/sse",
       windowId: 5,
     });
@@ -488,7 +488,7 @@ describe("help.launchAgent", () => {
       sessionId: "sess-s1",
       sessionPath: "/sessions/sess-s1",
       token: "tok-s1",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 3,
     });
@@ -639,7 +639,7 @@ describe("help.launchAgent", () => {
       sessionId: "sess-fail",
       sessionPath: "/sessions/sess-fail",
       token: "tok-fail",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -666,7 +666,7 @@ describe("help.launchAgent", () => {
       sessionId: "sess-orphan",
       sessionPath: "/sessions/sess-orphan",
       token: "tok-orphan",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });

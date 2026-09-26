@@ -239,6 +239,46 @@ export function createRendererBridge(
   // log on every dispatch (#11536).
   let warnedWorkspaceResolveFailure = false;
 
+  // One `destroyed` listener per WebContents, fanned out to every request still
+  // waiting on it. A listener per request tripped Node's MaxListeners warning as
+  // soon as a workflow had more than ten calls in flight to one view (parallel
+  // waits and notices); raising the limit would only move that threshold.
+  const destroyedWatchers = new Map<
+    number,
+    { callbacks: Set<() => void>; listener: () => void; webContents: Electron.WebContents }
+  >();
+
+  /**
+   * Runs `callback` if `webContents` is destroyed; the returned function
+   * unwatches. The shared listener is removed with its last watcher, so a view
+   * with nothing in flight carries none.
+   */
+  function watchDestroyed(webContents: Electron.WebContents, callback: () => void): () => void {
+    const id = webContents.id;
+    let watcher = destroyedWatchers.get(id);
+    if (!watcher || watcher.webContents !== webContents) {
+      const callbacks = new Set<() => void>();
+      const listener = () => {
+        if (destroyedWatchers.get(id)?.listener === listener) destroyedWatchers.delete(id);
+        for (const cb of [...callbacks]) cb();
+      };
+      watcher = { callbacks, listener, webContents };
+      destroyedWatchers.set(id, watcher);
+      webContents.once("destroyed", listener);
+    }
+    const current = watcher;
+    current.callbacks.add(callback);
+    return () => {
+      if (!current.callbacks.delete(callback) || current.callbacks.size > 0) return;
+      if (destroyedWatchers.get(id) === current) destroyedWatchers.delete(id);
+      try {
+        current.webContents.removeListener("destroyed", current.listener);
+      } catch {
+        // best-effort cleanup; webContents may already be gone
+      }
+    };
+  }
+
   function getActiveProjectWebContents(): Electron.WebContents {
     const registry = getRegistry();
     if (registry) {
@@ -509,7 +549,7 @@ export function createRendererBridge(
         settle();
         pending.reject(route ? routeLostError(route) : new Error("MCP renderer bridge destroyed"));
       };
-      webContents.once("destroyed", onDestroyed);
+      const unwatchDestroyed = watchDestroyed(webContents, onDestroyed);
       // Idempotent: a request can settle through the response, the deadline,
       // WebContents destruction, or a synchronous `send()` throw, and more than
       // one of those can run for the same request. A double release would
@@ -520,11 +560,7 @@ export function createRendererBridge(
       const settle = () => {
         if (settled) return;
         settled = true;
-        try {
-          webContents.removeListener("destroyed", onDestroyed);
-        } catch {
-          // best-effort cleanup; webContents may already be gone
-        }
+        unwatchDestroyed();
         releaseLease?.();
       };
 
@@ -609,16 +645,12 @@ export function createRendererBridge(
         settle();
         pending.reject(route ? routeLostError(route) : new Error("MCP renderer bridge destroyed"));
       };
-      webContents.once("destroyed", onDestroyed);
+      const unwatchDestroyed = watchDestroyed(webContents, onDestroyed);
       let settled = false;
       const settle = () => {
         if (settled) return;
         settled = true;
-        try {
-          webContents.removeListener("destroyed", onDestroyed);
-        } catch {
-          // best-effort cleanup; webContents may already be gone
-        }
+        unwatchDestroyed();
         releaseLease?.();
       };
 

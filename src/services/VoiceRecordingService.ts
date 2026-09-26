@@ -487,6 +487,9 @@ class VoiceRecordingService {
    * touching panel buffers (no transcript exists yet).
    */
   private cancelArming(): void {
+    // A push-to-talk press that aborted arming must not have its keyup send a
+    // stop for a session that never began.
+    this.pttActiveKeyCode = null;
     this.startRequestId++;
     useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
   }
@@ -897,6 +900,14 @@ class VoiceRecordingService {
     } = {}
   ): Promise<void> {
     if (this.stopPromise) {
+      // Joining a stop already in flight — typically a retarget's teardown,
+      // which runs with preservePendingStart so its own start can follow. An
+      // explicit stop has to cancel that pending start too, or the recording
+      // resumes on the new target once the drain finishes.
+      if (!options.preservePendingStart) {
+        this.startRequestId++;
+        this.pttActiveKeyCode = null;
+      }
       await this.stopPromise;
       return;
     }
@@ -1120,6 +1131,15 @@ class VoiceRecordingService {
   async toggleFocusedPanel(): Promise<void> {
     this.initialize();
 
+    // The shortcut is a global stop: a running session ends wherever it is,
+    // before focus or the lock is consulted, so the press can never move the
+    // recording to whichever panel happens to own focus (#12832).
+    const stopping = this.stopAnySession();
+    if (stopping) {
+      await stopping;
+      return;
+    }
+
     // Locked target overrides focus routing entirely — synchronous read before
     // any await so the value reflects the user's pin at the moment the hotkey
     // fired (mirrors the assistant-focus pattern below for #6959). When the
@@ -1170,6 +1190,26 @@ class VoiceRecordingService {
     }
 
     await this.startOrToggle(target);
+  }
+
+  /**
+   * End whatever dictation is in progress, regardless of target. Returns null
+   * when idle — synchronously, so the caller's focus and lock reads still
+   * happen before any await. A pre-audio arming window with no mic open only
+   * needs cancelArming(); if a stream is still open (a panel button
+   * retargeting mid-session re-enters arming before tearing the old session
+   * down), a full stop() is needed to release it.
+   */
+  private stopAnySession(): Promise<void> | null {
+    const { status } = useVoiceRecordingStore.getState();
+    if (status === "arming" && !this.stream) {
+      this.cancelArming();
+      return Promise.resolve();
+    }
+    if (status === "arming" || isActiveVoiceSession(status)) {
+      return this.stop("Dictation stopped.", { preserveLiveText: true });
+    }
+    return null;
   }
 
   /**

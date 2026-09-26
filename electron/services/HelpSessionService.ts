@@ -1,5 +1,6 @@
 // eager-import-allow: reads help-session state via store.get synchronously
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../shared/types/replyWait.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
@@ -15,9 +16,21 @@ import {
   hasAssistantMcpImplementation,
 } from "../../shared/config/agentRegistry.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
+import {
+  DEFAULT_HELP_ASSISTANT_TIER,
+  normalizeHelpAssistantTier,
+} from "../../shared/config/helpAssistantTierAllowlists.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
+import {
+  DAINTREE_DOCS_MCP_URL,
+  RUNBOOKS_BLOCK_END,
+  RUNBOOKS_BLOCK_START,
+  RUNBOOKS_MCP_SERVER_NAME,
+  buildRunbooksAddendum,
+  resolveRunbooksMcpUrl,
+} from "./helpSessionRunbooks.js";
 import { agentSupportsAssistantContent, syncAssistantContent } from "./AssistantContentMirror.js";
 import {
   loadAssistantUserConfig,
@@ -83,21 +96,19 @@ const COPILOT_BEARER_PLACEHOLDER = "$DAINTREE_MCP_TOKEN";
 // might grow to ship.
 const TEMPLATE_HASH_FILE = ".template-hash";
 
-// `action` is the deliberate default tier for assistant sessions, including the
-// headless Daintree Assistant CLI (#10640): it covers orchestration, terminal
-// driving, branch setup, recipes, reads, and — since #12116 — the confirm-gated
-// worktree cleanup that follows them, while leaving git and forge writes above
-// the floor. What the promotion rests on is that admission and approval are
-// separate gates: a `danger: "confirm"` tool admitted here still goes to the
-// renderer for a native ConfirmDialog, so the tier hands the agent nothing it
-// could not have asked a human for. (An explicit native automation grant does
-// pre-authorise that modal, but issuing one is itself a user decision and was
-// never tier-gated.) What the tier permits vs. withholds is locked by the
-// policy guard in `mcp-server/__tests__/tierAuth.test.ts`; this constant
-// selects it as the provisioning default.
-const DEFAULT_TIER: HelpAssistantTier = "action";
+// `core` is the default tool set for assistant sessions: orchestration —
+// worktrees, agent launches, prompts, terminal reads and waits, moves and
+// closes — which is what the assistant is almost always asked to do, while
+// every other tool stays out of the per-turn tool list until the user picks
+// `full`. Admission and approval are separate gates: a `danger: "confirm"` tool
+// admitted here still goes to the renderer for a native ConfirmDialog. What
+// each set permits vs. withholds is locked by the policy guard in
+// `mcp-server/__tests__/tierAuth.test.ts`; this constant selects the
+// provisioning default.
+const DEFAULT_TIER: HelpAssistantTier = DEFAULT_HELP_ASSISTANT_TIER;
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
+const DEFAULT_RUNBOOK_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
 const DEFAULT_DEBUG_LOGGING = false;
 
@@ -115,6 +126,36 @@ const USER_INSTRUCTIONS_SIDECAR_PATTERN = /^assistant-instructions-[0-9a-f]{12}\
 function userInstructionsSidecarName(content: string): string {
   return `assistant-instructions-${createHash("sha256").update(content).digest("hex").slice(0, 12)}.md`;
 }
+/**
+ * Runbooks are procedures for Daintree's own tools, so they ride on Daintree
+ * control: with it off there is nothing for a runbook to drive.
+ */
+/**
+ * Mark the session folder trusted for this Codex process only, so the
+ * assistant opens at its prompt instead of asking whether to trust a folder
+ * Daintree created. Codex keys trust by the canonical path, and only the
+ * inline-table form survives a path with dots in it, so the override replaces
+ * `projects` in memory for this launch; `~/.codex/config.toml` is untouched.
+ * A path that cannot sit in a TOML literal string is left to the dialog.
+ */
+export async function codexTrustArgs(sessionPath: string): Promise<string[]> {
+  const paths = new Set([sessionPath]);
+  try {
+    paths.add(await fs.realpath(sessionPath));
+  } catch {
+    // The folder is created before launch; if it cannot be resolved, the
+    // path as given is the best key there is.
+  }
+  const entries = [...paths]
+    .filter((p) => !/['\r\n]/.test(p))
+    .map((p) => `'${p}' = { trust_level = "trusted" }`);
+  return entries.length > 0 ? ["-c", `projects={ ${entries.join(", ")} }`] : [];
+}
+
+function runbooksEnabled(settings: { daintreeControl: boolean; runbookSearch: boolean }): boolean {
+  return settings.daintreeControl && settings.runbookSearch;
+}
+
 const SCRATCH_BLOCK_MARKERS = {
   start: "<!-- DAINTREE_ASSISTANT_SCRATCH_START -->",
   end: "<!-- DAINTREE_ASSISTANT_SCRATCH_END -->",
@@ -141,10 +182,6 @@ const ORPHAN_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 // the assistant launch hostage — past this bound the block is written without
 // the facts the reader would have supplied.
 const PROJECT_METADATA_READ_TIMEOUT_MS = 5000;
-
-function isHelpAssistantTier(value: unknown): value is HelpAssistantTier {
-  return value === "workbench" || value === "action" || value === "system";
-}
 
 interface ProvisionInput {
   projectId: string;
@@ -252,10 +289,37 @@ interface BundledClaudeSettings {
   permissions?: {
     allow?: string[];
     deny?: string[];
+    additionalDirectories?: string[];
   };
   defaultMode?: string;
   enableAllProjectMcpServers?: boolean;
   [key: string]: unknown;
+}
+
+/**
+ * A project path in Claude Code's absolute-rule form (`//abs/path`), plus its
+ * realpath when that differs (macOS reports temp dirs through `/private`).
+ */
+export async function projectRuleRoots(
+  projectPath: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
+  // Rules are gitignore patterns: a literal `[`, `*` or backslash in the path must
+  // not become a glob, or the deny would miss the directory it names.
+  const escapeGlob = (p: string) => p.replace(/[\\*?[\]{}!]/g, (c) => `\\${c}`);
+  const toRule = (p: string) => {
+    if (platform === "win32") {
+      const posix = p.replace(/\\/g, "/").replace(/\/+$/, "");
+      const drive = /^([A-Za-z]):(\/.*)?$/.exec(posix);
+      if (drive) return `//${drive[1]!.toLowerCase()}${escapeGlob(drive[2] ?? "")}`;
+      return `/${escapeGlob(posix)}`;
+    }
+    return `/${escapeGlob(p.replace(/\/+$/, ""))}`;
+  };
+  const paths = new Set([projectPath]);
+  const real = await fs.realpath(projectPath).catch(() => null);
+  if (real) paths.add(real);
+  return [...paths].map(toRule);
 }
 
 function deepClonePlainJson<T>(value: T): T {
@@ -810,9 +874,9 @@ export class HelpSessionService {
   }
 
   /**
-   * The terminal an unrevoked help session is bound to, or null (#12491). The
-   * MCP server reads this when a terminal-watch tool is called, so the pane a
-   * watch may wake is always the PTY currently serving the session.
+   * The terminal an unrevoked help session is bound to, or null. The MCP
+   * server reads this when a terminal notice is asked for, so the pane it is
+   * typed into is the PTY serving the session at the time of asking.
    */
   getTerminalIdForSession(sessionId: string): string | null {
     if (!sessionId) return null;
@@ -932,12 +996,11 @@ export class HelpSessionService {
   ): Promise<ProvisionResult | null> {
     const settings = this.readSettings();
     // Every help agent — the Daintree Assistant included — provisions at the
-    // tier the user configured. Agent identity never widens the MCP surface,
-    // which restores the #10640/#10647 safety model: `action` is the default
-    // floor, git and forge writes sit above it and need a human-approved scoped
-    // grant, and `workbench` / `system` stay explicit user choices. An identity
-    // override here would make the Settings tier selector lie about the surface
-    // it hands out (#11907). What each tier permits is locked in
+    // tool set the user configured. Agent identity never widens the MCP
+    // surface: `core` is the default, `full` is an explicit user choice, and
+    // anything outside `full` needs a human-approved scoped grant or is off MCP
+    // entirely. An identity override here would make the Settings selector lie
+    // about the surface it hands out (#11907). What each tier permits is locked in
     // `mcp-server/__tests__/tierAuth.test.ts`.
     const tier: HelpAssistantTier = settings.tier;
     const slot = input.slot ?? 0;
@@ -1148,6 +1211,7 @@ export class HelpSessionService {
         // Uses managed markers so re-provision replaces the block in place instead
         // of accumulating duplicate stanzas.
         await this.writeScratchAddendum(sessionPath, scratchPath);
+        await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings));
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
         // only project-level observations go in — never a lane's focus.
@@ -1195,7 +1259,13 @@ export class HelpSessionService {
             token,
             userConfig.mcpServers
           );
-          await this.writeClaudeSettings(sessionPath, helpFolder, settings, userConfig.claudeHooks);
+          await this.writeClaudeSettings(
+            sessionPath,
+            helpFolder,
+            settings,
+            userConfig.claudeHooks,
+            input.projectPath
+          );
         } else if (input.agentId === "copilot") {
           await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
         } else {
@@ -1233,7 +1303,8 @@ export class HelpSessionService {
     const codexLaunchArgs =
       input.agentId === "codex"
         ? [
-            ...this.buildCodexLaunchArgs(settings.daintreeControl, settings.docSearch, port),
+            ...(await codexTrustArgs(sessionPath)),
+            ...this.buildCodexLaunchArgs(settings, port),
             ...toCodexMcpServerArgs(
               userConfig.mcpServers,
               userConfig.warnings,
@@ -1344,27 +1415,48 @@ export class HelpSessionService {
    * so no literal token is ever embedded in argv or written to disk.
    */
   private buildCodexLaunchArgs(
-    daintreeControl: boolean,
-    docSearch: boolean,
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null
   ): string[] {
     const args: string[] = [];
-    if (daintreeControl && port) {
+    // Daintree's own servers skip Codex's per-call approval prompt, as the
+    // Claude lane's allow list does: the `daintree` tier and its confirmation
+    // dialogs are the gate, and docs and runbooks only read. Asked on every
+    // call, the prompt stalls each step of a task until the user clicks.
+    const approve = (name: string) => [
+      "-c",
+      `mcp_servers.${name}.default_tools_approval_mode="approve"`,
+    ];
+    if (settings.daintreeControl && port) {
       args.push(
         "-c",
         `mcp_servers.daintree.transport="http"`,
         "-c",
         `mcp_servers.daintree.url="http://127.0.0.1:${port}/mcp"`,
         "-c",
-        `mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"`
+        `mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"`,
+        // A `waitForReply` call stays open until the agent answers.
+        "-c",
+        `mcp_servers.daintree.tool_timeout_sec=${HELP_MCP_TOOL_TIMEOUT_MS / 1_000}`,
+        ...approve("daintree")
       );
     }
-    if (docSearch) {
+    if (settings.docSearch) {
       args.push(
         "-c",
         `mcp_servers.daintree-docs.transport="http"`,
         "-c",
-        `mcp_servers.daintree-docs.url="https://daintree.org/api/mcp"`
+        `mcp_servers.daintree-docs.url="${DAINTREE_DOCS_MCP_URL}"`,
+        ...approve("daintree-docs")
+      );
+    }
+    if (runbooksEnabled(settings)) {
+      args.push(
+        "-c",
+        `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.transport="http"`,
+        "-c",
+        `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.url="${resolveRunbooksMcpUrl()}"`,
+        ...approve(RUNBOOKS_MCP_SERVER_NAME)
       );
     }
     return args;
@@ -2103,6 +2195,7 @@ export class HelpSessionService {
   private readSettings(): {
     daintreeControl: boolean;
     docSearch: boolean;
+    runbookSearch: boolean;
     tier: HelpAssistantTier;
     bypassPermissions: boolean;
     debugLogging: boolean;
@@ -2114,13 +2207,9 @@ export class HelpSessionService {
     // lockstep so a session provisioned during the same boot as a renderer
     // settings load reads identical values from the store.
     const legacySkip = typeof stored.skipPermissions === "boolean" ? stored.skipPermissions : null;
-    const tier: HelpAssistantTier = isHelpAssistantTier(stored.tier)
-      ? stored.tier
-      : legacySkip !== null
-        ? legacySkip
-          ? "system"
-          : "action"
-        : DEFAULT_TIER;
+    const tier: HelpAssistantTier =
+      normalizeHelpAssistantTier(stored.tier) ??
+      (legacySkip !== null ? (legacySkip ? "full" : "core") : DEFAULT_TIER);
     const bypassPermissions =
       typeof stored.bypassPermissions === "boolean"
         ? stored.bypassPermissions
@@ -2133,6 +2222,8 @@ export class HelpSessionService {
           ? stored.daintreeControl
           : DEFAULT_DAINTREE_CONTROL,
       docSearch: typeof stored.docSearch === "boolean" ? stored.docSearch : DEFAULT_DOC_SEARCH,
+      runbookSearch:
+        typeof stored.runbookSearch === "boolean" ? stored.runbookSearch : DEFAULT_RUNBOOK_SEARCH,
       tier,
       bypassPermissions,
       debugLogging:
@@ -2308,7 +2399,7 @@ export class HelpSessionService {
     sessionPath: string,
     slot: number,
     sessionId: string,
-    settings: { daintreeControl: boolean; docSearch: boolean },
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null,
     token: string,
     userServers: Record<string, AssistantUserMcpServer> = {}
@@ -2322,7 +2413,13 @@ export class HelpSessionService {
     if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
         type: "http",
-        url: "https://daintree.org/api/mcp",
+        url: DAINTREE_DOCS_MCP_URL,
+      };
+    }
+    if (runbooksEnabled(settings)) {
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = {
+        type: "http",
+        url: resolveRunbooksMcpUrl(),
       };
     }
     if (settings.daintreeControl && port) {
@@ -2441,7 +2538,7 @@ export class HelpSessionService {
    */
   private async writeCopilotMcpConfig(
     sessionPath: string,
-    settings: { daintreeControl: boolean; docSearch: boolean },
+    settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null,
     userServers: Record<string, AssistantUserMcpServer> = {}
   ): Promise<void> {
@@ -2452,7 +2549,13 @@ export class HelpSessionService {
     if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
         type: "http",
-        url: "https://daintree.org/api/mcp",
+        url: DAINTREE_DOCS_MCP_URL,
+      };
+    }
+    if (runbooksEnabled(settings)) {
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = {
+        type: "http",
+        url: resolveRunbooksMcpUrl(),
       };
     }
     if (settings.daintreeControl && port) {
@@ -2475,7 +2578,8 @@ export class HelpSessionService {
     sessionPath: string,
     bundledHelpFolder: string,
     settings: { daintreeControl: boolean; bypassPermissions: boolean },
-    userHooks: Record<string, unknown> | null = null
+    userHooks: Record<string, unknown> | null = null,
+    projectPath?: string
   ): Promise<void> {
     const bundledSettingsPath = path.join(bundledHelpFolder, ".claude", "settings.json");
     const baseline = await this.readBundledSettings(bundledSettingsPath);
@@ -2491,6 +2595,18 @@ export class HelpSessionService {
 
     if (settings.daintreeControl && !merged.permissions.allow.includes("mcp__daintree__*")) {
       merged.permissions.allow.push("mcp__daintree__*");
+    }
+
+    // The bundled `Read(**)`/`Edit(**)` are relative to the session folder, so
+    // without these every read of the project it serves stops on a directory
+    // prompt. Reads are allowed there; edits stay the launched agents' job.
+    if (projectPath) {
+      const roots = await projectRuleRoots(projectPath);
+      merged.permissions.additionalDirectories = [projectPath];
+      for (const root of roots) {
+        merged.permissions.allow.push(`Read(${root}/**)`);
+        merged.permissions.deny.push(`Edit(${root}/**)`);
+      }
     }
 
     // Auto-trust the project-scoped MCP servers we wrote into the session-dir
@@ -2569,6 +2685,7 @@ export class HelpSessionService {
           "Read(**)",
           "WebFetch",
           "mcp__daintree-docs__*",
+          "mcp__daintree-runbooks__*",
           "Bash(gh *)",
           "Bash(glab *)",
           "Bash(tea *)",
@@ -2631,6 +2748,22 @@ export class HelpSessionService {
     );
   }
 
+  /**
+   * Fills the runbook slot the template carries right after the role, so the
+   * rule is among the first things the agent reads. Off, the slot is emptied
+   * rather than removed: the session dir is reused across launches, and a
+   * removed slot would put a later rule at the end of the file.
+   */
+  private async writeRunbooksAddendum(sessionPath: string, enabled: boolean): Promise<void> {
+    const markers = { start: RUNBOOKS_BLOCK_START, end: RUNBOOKS_BLOCK_END };
+    const body = enabled ? buildRunbooksAddendum() : "";
+    await Promise.all(
+      ["CLAUDE.md", "AGENTS.md"].map((name) =>
+        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
+      )
+    );
+  }
+
   private async writeProjectMetadataAddendum(sessionPath: string, addendum: string): Promise<void> {
     const markers = { start: PROJECT_METADATA_START, end: PROJECT_METADATA_END };
     const targets = ["CLAUDE.md", "AGENTS.md"];
@@ -2677,9 +2810,7 @@ export class HelpSessionService {
     return [
       "## Assistant Scratch Folder",
       "",
-      `You have a dedicated scratch folder for any temporary or working files you need to create. Its path is in the environment variable \`${ASSISTANT_SCRATCH_ENV_VAR}\`; read that variable rather than assuming a location.`,
-      "",
-      "Use this folder — not the project workspace, not the system temp dir — for any notes, drafts, intermediate output, or other scratch work. The folder is cleared on every Daintree launch, so don't put anything you want to keep there.",
+      `Put notes, drafts and working files in the folder named by \`${ASSISTANT_SCRATCH_ENV_VAR}\` (read the variable; don't assume a path), never in the project or the system temp dir. It is cleared on every Daintree launch.`,
       "",
     ].join("\n");
   }

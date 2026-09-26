@@ -94,6 +94,22 @@ describe("AgentStateService handback detection (#12488)", () => {
     expect(terminal.handbackTracker?.hasRequests()).toBe(false);
   });
 
+  it("publishes a marker seen early in output on the next settle, once", () => {
+    // The output observer retires the code, so the settle detects nothing;
+    // the renderer's lastHandback still has to learn of it.
+    const service = new AgentStateService();
+    const early = { message: "fixed it", observedAt: 1, truncated: false };
+    const terminal = createTerminal({ lastHandback: early, lastHandbackUnpublished: true });
+    const payloads = capturePayloads();
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+    service.updateAgentState(terminal, { type: "busy" }, "activity", 1.0);
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(payloads[0]?.lastHandback).toEqual(early);
+    expect(payloads.filter((p) => p.lastHandback !== undefined)).toHaveLength(1);
+  });
+
   it("publishes nothing for the echoed instruction and keeps waiting", () => {
     const service = new AgentStateService();
     const terminal = askedTerminal([ECHO, "⏺ Looking into it…"]);

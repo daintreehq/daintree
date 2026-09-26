@@ -277,12 +277,6 @@ export const onboardingNamespace = defineIpcNamespace({
         store.set(`onboarding.checklist.items.${key}`, true);
       }
     ),
-    markChecklistCelebrationShown: op(
-      ONBOARDING_METHOD_CHANNELS.markChecklistCelebrationShown,
-      (): void => {
-        store.set("onboarding.checklist.celebrationShown", true);
-      }
-    ),
     dismissTourInvite: op(
       ONBOARDING_METHOD_CHANNELS.dismissTourInvite,
       (tourId: string): TourOnboardingState => {

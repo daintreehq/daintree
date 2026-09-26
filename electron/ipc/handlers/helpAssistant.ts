@@ -11,6 +11,10 @@ import type {
   HelpSessionLiveStatus,
 } from "../../../shared/types/ipc/api.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
+import {
+  DEFAULT_HELP_ASSISTANT_TIER,
+  normalizeHelpAssistantTier,
+} from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 
@@ -33,7 +37,8 @@ const MODEL_ID_MAX_LEN = 200;
 const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
-  tier: "action",
+  runbookSearch: true,
+  tier: DEFAULT_HELP_ASSISTANT_TIER,
   bypassPermissions: false,
   auditRetention: 7,
   modelId: null,
@@ -46,6 +51,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
 const HELP_ASSISTANT_KEYS = [
   "docSearch",
   "daintreeControl",
+  "runbookSearch",
   "tier",
   "bypassPermissions",
   "auditRetention",
@@ -69,7 +75,7 @@ function isValidIdleHibernateMinutes(value: unknown): value is HelpAssistantIdle
 }
 
 function isValidHelpAssistantTier(value: unknown): value is HelpAssistantTier {
-  return value === "workbench" || value === "action" || value === "system";
+  return value === "core" || value === "full";
 }
 
 function sanitizeCustomArgs(value: unknown): string | undefined {
@@ -106,6 +112,7 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   const record = stored as Record<string, unknown>;
   if (typeof record.docSearch === "boolean") out.docSearch = record.docSearch;
   if (typeof record.daintreeControl === "boolean") out.daintreeControl = record.daintreeControl;
+  if (typeof record.runbookSearch === "boolean") out.runbookSearch = record.runbookSearch;
   if (typeof record.debugLogging === "boolean") out.debugLogging = record.debugLogging;
   if (typeof record.loadGlobalHooksAndServers === "boolean") {
     out.loadGlobalHooksAndServers = record.loadGlobalHooksAndServers;
@@ -114,10 +121,12 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   // new fields aren't stored, derive them from the old boolean. New writes
   // never touch `skipPermissions`, so once a user has saved the new fields
   // the legacy fallback is dormant.
-  if (isValidHelpAssistantTier(record.tier)) {
-    out.tier = record.tier;
+  // A tier stored before the core/full split is read onto the new pair.
+  const storedTier = normalizeHelpAssistantTier(record.tier);
+  if (storedTier) {
+    out.tier = storedTier;
   } else if (typeof record.skipPermissions === "boolean") {
-    out.tier = record.skipPermissions ? "system" : "action";
+    out.tier = record.skipPermissions ? "full" : "core";
   }
   if (typeof record.bypassPermissions === "boolean") {
     out.bypassPermissions = record.bypassPermissions;
@@ -144,7 +153,7 @@ export function getHelpAssistantSettings(): HelpAssistantSettings {
 // session — the renderer renders this as a quiet idle state, never a spinner.
 const DISCONNECTED_LIVE_STATUS: HelpSessionLiveStatus = {
   connected: false,
-  tier: "workbench",
+  tier: DEFAULT_HELP_ASSISTANT_TIER,
   activeGrants: [],
 };
 
@@ -152,7 +161,7 @@ const DISCONNECTED_LIVE_STATUS: HelpSessionLiveStatus = {
 // api-key/loopback sessions. Help-session bearers are never external, but
 // narrow defensively so the IPC surface only ever exposes a HelpAssistantTier.
 function narrowToHelpAssistantTier(tier: string): HelpAssistantTier {
-  return isValidHelpAssistantTier(tier) ? tier : "workbench";
+  return isValidHelpAssistantTier(tier) ? tier : "core";
 }
 
 export const helpAssistantNamespace = defineIpcNamespace({
@@ -179,6 +188,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (
             (field === "docSearch" ||
               field === "daintreeControl" ||
+              field === "runbookSearch" ||
               field === "bypassPermissions" ||
               field === "debugLogging" ||
               field === "loadGlobalHooksAndServers") &&

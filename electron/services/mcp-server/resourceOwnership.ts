@@ -340,17 +340,12 @@ const SUCCESS_EXTRACTORS: Record<
     const terminalId = readString(result, "terminalId");
     return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
   },
-  // Both open a panel on a ladder tier and hand its id back (#12407). Without
-  // them a pane bearer that opened a shell or started work on an issue could
-  // not type into the terminal it had just opened.
-  "agent.terminal": (result) => {
-    const terminalId = readString(result, "terminalId");
-    return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
-  },
-  // The agent terminal only. The worktree it creates and any recipe children
-  // are left unrecorded: children come back as a count that identifies nothing,
-  // and attributing the worktree would extend owned-delete authority, which is
-  // a separate decision from terminal input.
+  // Opens a panel on a ladder tier and hands its id back (#12407). Without it
+  // a pane bearer that started work on an issue could not type into the
+  // terminal it had just opened. The agent terminal only: the worktree it
+  // creates and any recipe children are left unrecorded. Children come back as
+  // a count that identifies nothing, and attributing the worktree would extend
+  // owned-delete authority, which is a separate decision from terminal input.
   "workflow.startWorkOnIssue": (result) => {
     const terminalId = readString(result, "terminalId");
     return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];

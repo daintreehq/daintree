@@ -43,6 +43,7 @@ import {
   unwrapDispatchResult,
   RESOLVED_WORKSPACE_META_KEY,
   withResolvedWorkspace,
+  MCP_ASSISTANT_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS_MAX_BYTES,
   TIER_ALLOWLISTS,
@@ -57,6 +58,7 @@ import {
   buildToolOutputSchema,
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_GET_SCHEMA_TOOL_ID,
+  PANE_APPROVAL_CEILING,
 } from "../tierAuth.js";
 import {
   SessionBindingError,
@@ -65,7 +67,15 @@ import {
 } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
-import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
+import {
+  MCP_EXTERNAL_OMITTED_ARGS,
+  MCP_EXTERNAL_TIER_TOOLS,
+} from "../../../../shared/config/mcpExternalTierAllowlist.js";
+import {
+  OWNED_TWIN_TOOLS,
+  RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
+} from "../../../../shared/config/helpAssistantTierAllowlists.js";
+import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
 import { MCP_EXTERNAL_BASE_MANIFEST } from "../generated/mcpExternalBaseManifest.js";
 
 /**
@@ -124,9 +134,7 @@ function toolErrorPayload(result: { content: unknown }): { code: string; retriab
   return JSON.parse(first.text) as { code: string; retriable: boolean };
 }
 
-function fakeSessionStore(
-  tier: "workbench" | "action" | "system" | "external" = "workbench"
-): SessionStore {
+function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionStore {
   // Real GrantCache instance with sweeping disabled — tests drive lazy
   // eviction via the optional `now` clock when they need to assert
   // expiry, and they call dispose() at teardown.
@@ -341,7 +349,7 @@ async function initializeClient(server: ReturnType<typeof createSessionServer>) 
 function seedLiveSession(
   store: RealSessionStore,
   sessionId: string,
-  tier: "workbench" | "action" | "system" | "external",
+  tier: "core" | "full" | "external",
   transport: "sse" | "http" = "sse"
 ): void {
   // Unref'd because the store's own `clearTimeout` is reachable only through
@@ -393,6 +401,23 @@ describe("sessionServer initialize instructions", () => {
     await expect(initializeClient(server)).resolves.toBe(MCP_SERVER_INSTRUCTIONS);
   });
 
+  it("sends Daintree's own assistants the short instructions, and every other session the full ones", async () => {
+    for (const origin of ["help", "assistant-pane"]) {
+      const store = fakeSessionStore("core");
+      store.sessionOriginMap.set(`session-${origin}`, origin as never);
+      await expect(
+        initializeClient(
+          createSessionServer(`session-${origin}`, fakeDeps({ sessionStore: store }))
+        )
+      ).resolves.toBe(MCP_ASSISTANT_SERVER_INSTRUCTIONS);
+    }
+    const pane = fakeSessionStore("core");
+    pane.sessionOriginMap.set("session-pane", "external" as never);
+    await expect(
+      initializeClient(createSessionServer("session-pane", fakeDeps({ sessionStore: pane })))
+    ).resolves.toBe(MCP_SERVER_INSTRUCTIONS);
+  });
+
   it("sends the same instructions regardless of session tier", async () => {
     // Instructions are sent once and have no update notification, so they must
     // not encode a tier that can elevate or decay later in the same session.
@@ -419,7 +444,7 @@ describe("sessionServer initialize instructions", () => {
   it("names every tier a session can hold", () => {
     // Adding a tier without describing it here leaves the model unable to
     // reason about a denial it can now receive. Matched with backticks because
-    // the bare word `action` also occurs inside `actions.search` and prose.
+    // the bare words `core` and `full` also occur in prose.
     for (const tier of Object.keys(TIER_ALLOWLISTS)) {
       expect(MCP_SERVER_INSTRUCTIONS).toContain(`\`${tier}\``);
     }
@@ -655,7 +680,7 @@ describe("sessionServer prompt handler", () => {
     expect(queue).toMatch(/suggested next prompt[^\n]*never submit or act on it/);
     expect(queue).toMatch(/Waiting alone is not done, only a cue to inspect/);
     expect(queue).toMatch(/approval or question is blocked and keeps its slot/);
-    expect(queue).toMatch(/pane watch[^\n]*after each refill cancel it[^\n]*current running ids/);
+    expect(queue).toMatch(/`notify: true`[^\n]*end your turn[^\n]*Re-arm with every new prompt/);
   });
 
   it("does not dispatch worktree.getCurrent for triage_terminals (static prompt)", async () => {
@@ -757,7 +782,12 @@ describe("skills.search / skills.load short-circuit (#10892)", () => {
       ],
     }));
     const dispatchAction = vi.fn();
-    const deps = fakeDeps({ handleSkillsSearch, dispatchAction });
+    // Skills are in the full tool set.
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("full"),
+      handleSkillsSearch,
+      dispatchAction,
+    });
     const server = createSessionServer("session-skill-search", deps);
     await server.connect(makeMockTransport());
 
@@ -781,7 +811,11 @@ describe("skills.search / skills.load short-circuit (#10892)", () => {
       body: "# TDD\n\nRed, green, refactor.",
     }));
     const dispatchAction = vi.fn();
-    const deps = fakeDeps({ handleSkillsLoad, dispatchAction });
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("full"),
+      handleSkillsLoad,
+      dispatchAction,
+    });
     const server = createSessionServer("session-skill-load", deps);
     await server.connect(makeMockTransport());
 
@@ -801,7 +835,7 @@ describe("skills.search / skills.load short-circuit (#10892)", () => {
     const handleSkillsLoad = vi.fn(() => {
       throw new McpError(ErrorCode.InvalidParams, 'No skill found with id "x".');
     });
-    const deps = fakeDeps({ handleSkillsLoad });
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), handleSkillsLoad });
     const server = createSessionServer("session-skill-missing", deps);
     await server.connect(makeMockTransport());
 
@@ -811,124 +845,672 @@ describe("skills.search / skills.load short-circuit (#10892)", () => {
   });
 });
 
-describe("terminal watch short-circuit (#12491)", () => {
-  const OWN_PANE = { key: "pane\u0000principal-1", terminalId: "own-pane" };
+describe("terminal notices", () => {
+  const OWN_PANE = { key: "help\u0000lane-1", terminalId: "own-pane" };
 
-  function watchDeps(overrides?: Partial<SessionServerDeps>) {
-    const terminalWatch = {
-      register: vi.fn().mockResolvedValue({
-        watchId: "w_12345678",
-        terminalIds: ["t-a"],
-        conditions: ["state"],
-        maxDeliveries: 25,
-      }),
-      list: vi.fn(() => ({ watches: [], pendingEvents: 0, delivery: { status: "idle" as const } })),
-      readEvents: vi.fn(() => ({ events: [], droppedEvents: 0, remainingEvents: 0 })),
-      cancel: vi.fn((_pane: unknown, watchId: string) => ({ watchId, cancelled: false })),
+  function notifyDeps(
+    options: { tier?: "core" | "full" | "external"; origin?: string } = {},
+    overrides?: Partial<SessionServerDeps>
+  ) {
+    const pending = { complete: vi.fn(), cancel: vi.fn() };
+    const terminalNotify = {
+      whenIdle: vi.fn().mockResolvedValue({ armed: true, terminalId: "t-a" }),
+      prepareSend: vi.fn().mockResolvedValue(pending),
+      prepareLaunch: vi.fn().mockResolvedValue(pending),
+      prepareKeys: vi.fn().mockResolvedValue(pending),
+      forgetTarget: vi.fn(),
     };
-    const dispatchAction = vi.fn();
+    const dispatchAction = vi.fn().mockResolvedValue({
+      result: { ok: true, result: { sent: true, terminalId: "t-a", submissionToken: "tok-1" } },
+    });
+    const sessionStore = fakeSessionStore(options.tier ?? "core");
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("action"),
-      terminalWatch,
+      sessionStore,
+      terminalNotify,
       resolveOwnPane: () => OWN_PANE,
       dispatchAction,
       ...overrides,
     });
-    return { deps, terminalWatch, dispatchAction };
+    const start = async (sessionId: string) => {
+      if (options.origin !== undefined) {
+        (sessionStore as unknown as { sessionOriginMap: Map<string, string> }).sessionOriginMap.set(
+          sessionId,
+          options.origin
+        );
+      }
+      const server = createSessionServer(sessionId, deps);
+      await server.connect(makeMockTransport());
+      return server;
+    };
+    return { deps, terminalNotify, pending, dispatchAction, start };
   }
 
-  it("registers a watch in main for the caller's own pane, never through a renderer", async () => {
-    const { deps, terminalWatch, dispatchAction } = watchDeps();
-    const server = createSessionServer("session-watch", deps);
-    await server.connect(makeMockTransport());
+  describe("batch tools", () => {
+    it("launches each named agent as its own agent.launch, each with its own notice", async () => {
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => ({
+        result: {
+          ok: true,
+          result: {
+            launched: true,
+            terminalId: `t-${(args as { agentId: string }).agentId}`,
+            spawnStatus: null,
+          },
+        },
+      }));
+      const { terminalNotify, start } = notifyDeps({ origin: "help" }, { dispatchAction });
+      const server = await start("session-launch-many");
 
-    const result = await callTool(server, {
-      name: "terminal.registerWatch",
-      arguments: { terminalIds: ["t-a"], conditions: ["state"] },
+      const result = await callTool(server, {
+        name: "agent.launchMany",
+        arguments: {
+          agentIds: ["claude", "codex"],
+          prompt: "one fact",
+          name: "Fact",
+          notify: true,
+          handback: true,
+        },
+      });
+
+      expect(dispatchAction.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+        [
+          "agent.launch",
+          {
+            agentId: "claude",
+            prompt: "one fact",
+            name: "Fact: claude",
+            notify: true,
+            handback: true,
+            requestedId: expect.stringMatching(/^claude-[0-9a-f]{4}$/),
+          },
+        ],
+        [
+          "agent.launch",
+          {
+            agentId: "codex",
+            prompt: "one fact",
+            name: "Fact: codex",
+            notify: true,
+            handback: true,
+            requestedId: expect.stringMatching(/^codex-[0-9a-f]{4}$/),
+          },
+        ],
+      ]);
+      expect(terminalNotify.prepareLaunch).toHaveBeenCalledTimes(2);
+      expect(result.structuredContent).toMatchObject({
+        results: [
+          { target: "claude", ok: true, result: { terminalId: "t-claude" } },
+          { target: "codex", ok: true, result: { terminalId: "t-codex" } },
+        ],
+      });
     });
 
-    expect(result.isError).not.toBe(true);
-    expect(terminalWatch.register).toHaveBeenCalledWith(OWN_PANE, {
-      terminalIds: ["t-a"],
-      conditions: ["state"],
-    });
-    expect(result.structuredContent).toMatchObject({ watchId: "w_12345678" });
-    expect(dispatchAction).not.toHaveBeenCalled();
-    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ toolId: "terminal.registerWatch" })
-    );
-  });
+    it("sends each terminal its own message through the assistant's send", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-many");
 
-  it.each([
-    ["terminal.listWatches", {}, "list"],
-    ["terminal.getWatchEvents", { clear: false }, "readEvents"],
-    ["terminal.cancelWatch", { watchId: "w_1" }, "cancel"],
-  ] as const)("routes %s to the watch service", async (name, args, handler) => {
-    const { deps, terminalWatch } = watchDeps();
-    const server = createSessionServer("session-watch-route", deps);
-    await server.connect(makeMockTransport());
+      await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: "t-a", command: "ballot A" },
+            { terminalId: "t-b", command: "ballot B" },
+          ],
+          notify: true,
+        },
+      });
 
-    const result = await callTool(server, { name, arguments: { ...args } });
-
-    expect(result.isError).not.toBe(true);
-    expect(terminalWatch[handler]).toHaveBeenCalledTimes(1);
-    expect(terminalWatch[handler].mock.calls[0]?.[0]).toEqual(OWN_PANE);
-  });
-
-  it("refuses a connection with no pane of its own", async () => {
-    const { deps, terminalWatch } = watchDeps({ resolveOwnPane: () => null });
-    const server = createSessionServer("session-watch-no-pane", deps);
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, {
-      name: "terminal.registerWatch",
-      arguments: { terminalIds: ["t-a"] },
+      expect(dispatchAction.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+        ["terminal.sendCommand", { terminalId: "t-a", command: "ballot A" }],
+        ["terminal.sendCommand", { terminalId: "t-b", command: "ballot B" }],
+      ]);
+      expect(terminalNotify.prepareSend.mock.calls.map((c) => c[1])).toEqual(["t-a", "t-b"]);
     });
 
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe("WATCH_NOT_ELIGIBLE");
-    expect(terminalWatch.register).not.toHaveBeenCalled();
-  });
+    it("sends through the owned tool from an agent pane, which refuses what it did not create", async () => {
+      const { deps, dispatchAction, start } = notifyDeps({ origin: "external" });
+      Object.assign(deps.sessionStore, { terminalAdoption: { get: () => undefined } });
+      const server = await start("session-send-many-pane");
 
-  it("keeps the tools from an api-key session altogether", async () => {
-    const { deps, terminalWatch } = watchDeps({ sessionStore: fakeSessionStore("external") });
-    const server = createSessionServer("session-watch-external", deps);
-    await server.connect(makeMockTransport());
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: { sends: [{ terminalId: "t-foreign", command: "hi" }] },
+      });
 
-    const result = await callTool(server, { name: "terminal.listWatches", arguments: {} });
-
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
-    expect(terminalWatch.list).not.toHaveBeenCalled();
-  });
-
-  it("returns a refusal under its own code", async () => {
-    const { TerminalWatchError } = await import("../terminalWatch.js");
-    const { deps } = watchDeps();
-    (deps.terminalWatch!.register as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new TerminalWatchError("WATCH_WAKE_DISABLED", "Turned off.")
-    );
-    const server = createSessionServer("session-watch-disabled", deps);
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, {
-      name: "terminal.registerWatch",
-      arguments: { terminalIds: ["t-a"] },
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(result.structuredContent).toMatchObject({
+        results: [{ target: "t-foreign", ok: false }],
+      });
     });
 
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe("WATCH_WAKE_DISABLED");
+    it("holds a waitForReply send open and returns the agent's reply with the send", async () => {
+      const bind = vi.fn();
+      const wait = vi.fn(() => ({
+        bind,
+        cancel: vi.fn(),
+        promise: Promise.resolve({
+          terminalId: "t-a",
+          outcome: "handback" as const,
+          reply: { text: "Fact: honey", lineCount: 1, truncated: false },
+        }),
+      }));
+      const { dispatchAction, start } = notifyDeps({ origin: "help" }, { replyWaiter: { wait } });
+      const server = await start("session-wait-send");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "one fact", waitForReply: true, waitSeconds: 60 },
+      });
+
+      expect(dispatchAction.mock.calls[0]?.[1]).toEqual({ terminalId: "t-a", command: "one fact" });
+      expect(wait).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalId: "t-a", timeoutMs: 60_000 })
+      );
+      expect(bind).toHaveBeenCalledWith("t-a", "tok-1");
+      expect(result.structuredContent).toMatchObject({
+        sent: true,
+        reply: { outcome: "handback", reply: { text: "Fact: honey" } },
+      });
+    });
+
+    it("gives a duplicate waited launch the reply, not a bare receipt", async () => {
+      const dispatchAction = vi.fn().mockResolvedValue({
+        result: {
+          ok: true,
+          result: {
+            launched: true,
+            terminalId: "claude-1a2b",
+            location: "grid",
+            spawnStatus: null,
+            worktreeId: null,
+            worktreePath: null,
+            branch: null,
+            cwd: "/repo",
+            reply: null,
+          },
+        },
+      });
+      const wait = vi.fn(() => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({
+          terminalId: "claude-1a2b",
+          outcome: "handback" as const,
+          reply: { text: "Fact: honey", lineCount: 1, truncated: false },
+        }),
+      }));
+      const { start } = notifyDeps({ origin: "help" }, { dispatchAction, replyWaiter: { wait } });
+      const server = await start("session-wait-dedup");
+      const call = () =>
+        callTool(server, {
+          name: "agent.launch",
+          arguments: {
+            agentId: "claude",
+            prompt: "one fact",
+            requestedId: "claude-1a2b",
+            waitForReply: true,
+          },
+        });
+
+      const first = await call();
+      const second = await call();
+
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      for (const result of [first, second]) {
+        expect(result.structuredContent).toMatchObject({
+          terminalId: "claude-1a2b",
+          reply: { outcome: "handback", reply: { text: "Fact: honey" } },
+        });
+      }
+    });
+
+    it("sends every item before waiting, then returns each item's reply", async () => {
+      const order: string[] = [];
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => {
+        const { terminalId } = args as { terminalId: string };
+        order.push(`send ${terminalId}`);
+        return {
+          result: {
+            ok: true,
+            result: { sent: true, terminalId, submissionToken: `tok-${terminalId}` },
+          },
+        };
+      });
+      const wait = vi.fn((options: { terminalId?: string }) => {
+        order.push(`wait ${options.terminalId}`);
+        return {
+          bind: vi.fn(),
+          cancel: vi.fn(),
+          promise: Promise.resolve({
+            terminalId: options.terminalId ?? "",
+            outcome: "settled" as const,
+            reply: { text: `vote from ${options.terminalId}`, lineCount: 1, truncated: false },
+          }),
+        };
+      });
+      const { start } = notifyDeps({ origin: "help" }, { dispatchAction, replyWaiter: { wait } });
+      const server = await start("session-wait-batch");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: "t-a", command: "ballot" },
+            { terminalId: "t-b", command: "ballot" },
+          ],
+          waitForReply: true,
+        },
+      });
+
+      expect(order).toEqual(["wait t-a", "send t-a", "wait t-b", "send t-b"]);
+      expect(result.structuredContent).toMatchObject({
+        results: [
+          { target: "t-a", ok: true, reply: { reply: { text: "vote from t-a" } } },
+          { target: "t-b", ok: true, reply: { reply: { text: "vote from t-b" } } },
+        ],
+      });
+    });
+
+    it("keeps going past an item that fails, and cancels only that item's wait", async () => {
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => {
+        const { terminalId } = args as { terminalId: string };
+        if (terminalId === "t-a") throw new Error("renderer gone");
+        return { result: { ok: true, result: { sent: true, terminalId, submissionToken: "tok" } } };
+      });
+      const cancels: string[] = [];
+      const wait = vi.fn((options: { terminalId?: string }) => ({
+        bind: vi.fn(),
+        cancel: vi.fn(() => cancels.push(options.terminalId ?? "")),
+        promise: Promise.resolve({
+          terminalId: options.terminalId ?? "",
+          outcome: "settled" as const,
+        }),
+      }));
+      const { start } = notifyDeps({ origin: "help" }, { dispatchAction, replyWaiter: { wait } });
+      const server = await start("session-batch-item-error");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: "t-a", command: "x" },
+            { terminalId: "t-b", command: "x" },
+          ],
+          waitForReply: true,
+        },
+      });
+
+      const items = (
+        result.structuredContent as { results: Array<{ target: string; ok: boolean }> }
+      ).results;
+      expect(items.map((r) => [r.target, r.ok])).toEqual([
+        ["t-a", false],
+        ["t-b", true],
+      ]);
+      expect(cancels).toEqual(["t-a"]);
+    });
+
+    it("shares the response ceiling across replies, keeping each reply's end", async () => {
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => {
+        const { terminalId } = args as { terminalId: string };
+        return { result: { ok: true, result: { sent: true, terminalId, submissionToken: "tok" } } };
+      });
+      const long = "a".repeat(20_000) + "END";
+      const wait = vi.fn((options: { terminalId?: string }) => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({
+          terminalId: options.terminalId ?? "",
+          outcome: "settled" as const,
+          reply: { text: long, lineCount: 1, truncated: false },
+        }),
+      }));
+      const { start } = notifyDeps({ origin: "help" }, { dispatchAction, replyWaiter: { wait } });
+      const server = await start("session-batch-reply-budget");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: ["t-a", "t-b", "t-c", "t-d"].map((terminalId) => ({ terminalId, command: "x" })),
+          waitForReply: true,
+        },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const items = (
+        result.structuredContent as {
+          results: Array<{ reply: { reply: { text: string; truncated: boolean } } }>;
+        }
+      ).results;
+      expect(items).toHaveLength(4);
+      for (const item of items) {
+        expect(item.reply.reply.text.endsWith("END")).toBe(true);
+        expect(item.reply.reply.text.length).toBeLessThan(long.length);
+        expect(item.reply.reply.truncated).toBe(true);
+      }
+    });
+
+    it("rejects malformed batch arguments before any item runs", async () => {
+      const { dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-batch-invalid");
+
+      await expect(
+        callTool(server, { name: "agent.launchMany", arguments: { agentIds: [], prompt: "x" } })
+      ).rejects.toThrow(/agent\.launchMany/);
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
   });
 
-  it("rejects malformed arguments before the service sees them", async () => {
-    const { deps, terminalWatch } = watchDeps();
-    const server = createSessionServer("session-watch-invalid", deps);
-    await server.connect(makeMockTransport());
+  describe("terminal.notifyWhenIdle", () => {
+    it("arms in main for the caller's own pane, never through a renderer", async () => {
+      const { terminalNotify, dispatchAction, deps, start } = notifyDeps();
+      const server = await start("session-notify");
 
-    await expect(
-      callTool(server, { name: "terminal.registerWatch", arguments: { terminalIds: [] } })
-    ).rejects.toThrow(/terminal\.registerWatch/);
-    expect(terminalWatch.register).not.toHaveBeenCalled();
+      const result = await callTool(server, {
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-a", note: "next: review" },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(terminalNotify.whenIdle).toHaveBeenCalledWith(OWN_PANE, {
+        terminalId: "t-a",
+        note: "next: review",
+      });
+      expect(result.structuredContent).toEqual({ armed: true, terminalId: "t-a" });
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ toolId: "terminal.notifyWhenIdle" })
+      );
+    });
+
+    it("refuses a connection with no pane of its own", async () => {
+      const { terminalNotify, start } = notifyDeps({}, { resolveOwnPane: () => null });
+      const server = await start("session-notify-no-pane");
+
+      const result = await callTool(server, {
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-a" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe("NOTIFY_NOT_ELIGIBLE");
+      expect(terminalNotify.whenIdle).not.toHaveBeenCalled();
+    });
+
+    it("keeps the tool from an api-key session altogether", async () => {
+      const { terminalNotify, start } = notifyDeps({ tier: "external" });
+      const server = await start("session-notify-external");
+
+      const result = await callTool(server, {
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-a" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+      expect(terminalNotify.whenIdle).not.toHaveBeenCalled();
+    });
+
+    it("returns a refusal under its own code", async () => {
+      const { TerminalNotifyError } = await import("../terminalNotify.js");
+      const { terminalNotify, start } = notifyDeps();
+      terminalNotify.whenIdle.mockRejectedValue(
+        new TerminalNotifyError("NOTIFY_TARGET_UNAVAILABLE", "Not here.")
+      );
+      const server = await start("session-notify-refused");
+
+      const result = await callTool(server, {
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-a" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe("NOTIFY_TARGET_UNAVAILABLE");
+    });
+
+    it("rejects malformed arguments before the service sees them", async () => {
+      const { terminalNotify, start } = notifyDeps();
+      const server = await start("session-notify-invalid");
+
+      await expect(
+        callTool(server, { name: "terminal.notifyWhenIdle", arguments: {} })
+      ).rejects.toThrow(/terminal\.notifyWhenIdle/);
+      expect(terminalNotify.whenIdle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("notify on a send", () => {
+    it("arms before the prompt goes out, strips the flag, and hands the notice the result", async () => {
+      const { terminalNotify, pending, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-notify");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "plan it", notify: true },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", {});
+      expect(terminalNotify.prepareSend.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchAction.mock.invocationCallOrder[0]!
+      );
+      expect(dispatchAction.mock.calls[0]?.slice(0, 2)).toEqual([
+        "terminal.sendCommand",
+        { terminalId: "t-a", command: "plan it" },
+      ]);
+      expect(pending.complete).toHaveBeenCalledWith({
+        sent: true,
+        terminalId: "t-a",
+        submissionToken: "tok-1",
+      });
+      expect(pending.cancel).not.toHaveBeenCalled();
+    });
+
+    it("hands the notice the reply length it asked for, and strips it from the send", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-reply-lines");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "vote", notify: true, replyLines: 12 },
+      });
+
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", { replyLines: 12 });
+      expect(dispatchAction.mock.calls[0]?.[1]).toEqual({ terminalId: "t-a", command: "vote" });
+    });
+
+    it("forwards a malformed reply length for the send's own schema to reject", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-reply-lines-bad");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "vote", notify: true, replyLines: -1 },
+      });
+
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", {});
+      expect(dispatchAction.mock.calls[0]?.[1]).toMatchObject({ replyLines: -1 });
+    });
+
+    it("arms a key press through its own path and strips the flag from the keys", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-keys-notify");
+
+      await callTool(server, {
+        name: "terminal.sendKeys",
+        arguments: { terminalId: "t-a", keys: ["Down", "Enter"], notify: true },
+      });
+
+      expect(terminalNotify.prepareKeys).toHaveBeenCalledWith(OWN_PANE, "t-a", {});
+      expect(terminalNotify.prepareSend).not.toHaveBeenCalled();
+      expect(dispatchAction.mock.calls[0]?.slice(0, 2)).toEqual([
+        "terminal.sendKeys",
+        { terminalId: "t-a", keys: ["Down", "Enter"] },
+      ]);
+    });
+
+    it("drops the pane's own notice for a terminal it closes", async () => {
+      const { terminalNotify, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-close-forgets");
+
+      await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-a" } });
+
+      expect(terminalNotify.forgetTarget).toHaveBeenCalledWith(OWN_PANE, "t-a");
+    });
+
+    it("leaves a send without the flag alone", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-plain");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "plan it", notify: false },
+      });
+
+      expect(terminalNotify.prepareSend).not.toHaveBeenCalled();
+      expect(dispatchAction.mock.calls[0]?.[1]).toEqual({ terminalId: "t-a", command: "plan it" });
+    });
+
+    it("drops the notice when the send fails", async () => {
+      const { pending, start } = notifyDeps(
+        { origin: "help" },
+        {
+          dispatchAction: vi.fn().mockResolvedValue({
+            result: { ok: false, error: { code: "EXECUTION_ERROR", message: "no pty" } },
+          }),
+        }
+      );
+      const server = await start("session-send-failed");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "plan it", notify: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(pending.cancel).toHaveBeenCalledTimes(1);
+      expect(pending.complete).not.toHaveBeenCalled();
+    });
+
+    it("drops the notice when the dispatch throws", async () => {
+      const { pending, start } = notifyDeps(
+        { origin: "help" },
+        { dispatchAction: vi.fn().mockRejectedValue(new Error("bridge gone")) }
+      );
+      const server = await start("session-send-threw");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "plan it", notify: true },
+      });
+
+      expect(pending.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends nothing when the notice is refused", async () => {
+      const { TerminalNotifyError } = await import("../terminalNotify.js");
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      terminalNotify.prepareSend.mockRejectedValue(
+        new TerminalNotifyError("VALIDATION_ERROR", "Not an agent.")
+      );
+      const server = await start("session-send-refused");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "shell", command: "ls", notify: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses an api-key client before anything is sent: it has no pane", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ tier: "external" });
+      const server = await start("session-launch-external");
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", prompt: "plan it", notify: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe("NOTIFY_NOT_ELIGIBLE");
+      expect(terminalNotify.prepareLaunch).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("hands a launch's result to its notice", async () => {
+      const launchResult = { launched: true, terminalId: "t-new", spawnStatus: null };
+      const dispatchAction = vi
+        .fn()
+        .mockResolvedValue({ result: { ok: true, result: launchResult } });
+      const { terminalNotify, pending, start } = notifyDeps({}, { dispatchAction });
+      const server = await start("session-launch-notify");
+
+      await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", prompt: "plan it", notify: true },
+      });
+
+      expect(terminalNotify.prepareLaunch).toHaveBeenCalledWith(OWN_PANE, {});
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      // A launch keeps the flag: the renderer, which knows the agent registry,
+      // is what refuses it for a shell or panel.
+      expect(dispatchAction.mock.calls[0]?.[1]).toMatchObject({ notify: true });
+      expect(pending.complete).toHaveBeenCalledWith(launchResult);
+    });
+
+    it("drops the notice when the launch refuses it", async () => {
+      const { pending, start } = notifyDeps(
+        {},
+        {
+          dispatchAction: vi.fn().mockResolvedValue({
+            result: { ok: false, error: { code: "UNACTIONABLE_TARGET", message: "not an agent" } },
+          }),
+        }
+      );
+      const server = await start("session-launch-refused");
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "browser", prompt: "plan it", notify: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(pending.cancel).toHaveBeenCalledTimes(1);
+      expect(pending.complete).not.toHaveBeenCalled();
+    });
+
+    it("refuses a launch with no prompt to finish", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps();
+      const server = await start("session-launch-no-prompt");
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", notify: true },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      expect(terminalNotify.prepareLaunch).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not advertise notify to an api-key client", async () => {
+    const { buildToolInputSchema } = await import("../tierAuth.js");
+    const entry = {
+      id: "agent.launch",
+      inputSchema: {
+        type: "object",
+        properties: { agentId: { type: "string" }, notify: { type: "boolean" } },
+        required: ["agentId"],
+      },
+    } as unknown as Parameters<typeof buildToolInputSchema>[0];
+
+    expect(buildToolInputSchema(entry).properties).toHaveProperty("notify");
+    expect(
+      buildToolInputSchema(entry, MCP_EXTERNAL_OMITTED_ARGS["agent.launch"]).properties
+    ).not.toHaveProperty("notify");
   });
 });
 
@@ -953,7 +1535,7 @@ describe("project.runCheck short-circuit (#11548)", () => {
     const handleProjectRunCheck = vi.fn().mockResolvedValue(passingResult);
     const dispatchAction = vi.fn();
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("action"),
+      sessionStore: fakeSessionStore("full"),
       handleProjectRunCheck,
       dispatchAction,
     });
@@ -979,7 +1561,7 @@ describe("project.runCheck short-circuit (#11548)", () => {
   it("forwards the MCP abort signal so a runaway check can be cancelled", async () => {
     const handleProjectRunCheck = vi.fn().mockResolvedValue(passingResult);
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("action"),
+      sessionStore: fakeSessionStore("full"),
       handleProjectRunCheck,
     });
     const server = createSessionServer("session-run-check-signal", deps);
@@ -998,7 +1580,7 @@ describe("project.runCheck short-circuit (#11548)", () => {
     const failing = { ...passingResult, passed: false, exitCode: 1, output: "1 failing\n" };
     const handleProjectRunCheck = vi.fn().mockResolvedValue(failing);
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("action"),
+      sessionStore: fakeSessionStore("full"),
       handleProjectRunCheck,
     });
     const server = createSessionServer("session-run-check-fail", deps);
@@ -1020,7 +1602,7 @@ describe("project.runCheck short-circuit (#11548)", () => {
       .fn()
       .mockRejectedValue(new Error('No runner "nope" detected in /repo.'));
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("action"),
+      sessionStore: fakeSessionStore("full"),
       handleProjectRunCheck,
     });
     const server = createSessionServer("session-run-check-unknown", deps);
@@ -1035,13 +1617,13 @@ describe("project.runCheck short-circuit (#11548)", () => {
     expect(JSON.stringify(result.content)).toContain("No runner");
   });
 
-  it("denies a workbench-tier session — detecting runners is read-only, running them is not", async () => {
+  it("denies a core session — running a project check is in the full tool set only", async () => {
     const handleProjectRunCheck = vi.fn().mockResolvedValue(passingResult);
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("workbench"),
+      sessionStore: fakeSessionStore("core"),
       handleProjectRunCheck,
     });
-    const server = createSessionServer("session-run-check-workbench", deps);
+    const server = createSessionServer("session-run-check-core", deps);
     await server.connect(makeMockTransport());
 
     const result = await callTool(server, {
@@ -1067,7 +1649,7 @@ describe("CallTool idempotency dedup", () => {
     );
     const appendAuditRecord = vi.fn();
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
       appendAuditRecord,
     });
@@ -1119,7 +1701,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-2" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-2", deps);
@@ -1137,7 +1719,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { ok: true } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-3", deps);
@@ -1153,7 +1735,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-x" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-4", deps);
@@ -1175,7 +1757,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-rk" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-5", deps);
@@ -1206,7 +1788,7 @@ describe("CallTool idempotency dedup", () => {
         })
     );
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-5b", deps);
@@ -1245,7 +1827,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-rk-ok" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-rk-ok", deps);
@@ -1267,7 +1849,7 @@ describe("CallTool idempotency dedup", () => {
         })
     );
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-rk-inflight", deps);
@@ -1301,7 +1883,7 @@ describe("CallTool idempotency dedup", () => {
       })
       .mockResolvedValueOnce({ result: { ok: true, result: { terminalId: "t-retry" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-6", deps);
@@ -1324,7 +1906,7 @@ describe("CallTool idempotency dedup", () => {
       .mockRejectedValueOnce(new Error("network down"))
       .mockResolvedValueOnce({ result: { ok: true, result: { terminalId: "t-throw" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-7", deps);
@@ -1347,7 +1929,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-audit" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
       appendAuditRecord,
     });
@@ -1385,7 +1967,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-empty" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-9", deps);
@@ -1407,7 +1989,7 @@ describe("CallTool idempotency dedup", () => {
     const dispatchAction = vi
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-drain" } } });
-    const sessionStore = fakeSessionStore("system");
+    const sessionStore = fakeSessionStore("full");
     const deps = fakeDeps({ sessionStore, dispatchAction });
     const server = createSessionServer("dedup-10", deps);
 
@@ -1430,7 +2012,7 @@ describe("CallTool idempotency dedup", () => {
         .fn()
         .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-ttl" } } });
       const deps = fakeDeps({
-        sessionStore: fakeSessionStore("system"),
+        sessionStore: fakeSessionStore("full"),
         dispatchAction,
       });
       const server = createSessionServer("dedup-ttl", deps);
@@ -1456,7 +2038,7 @@ describe("CallTool idempotency dedup", () => {
     const dispatchAction = vi
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-iso" } } });
-    const sessionStore = fakeSessionStore("system");
+    const sessionStore = fakeSessionStore("full");
     const deps = fakeDeps({ sessionStore, dispatchAction });
     const serverA = createSessionServer("session-a", deps);
     const serverB = createSessionServer("session-b", deps);
@@ -1474,7 +2056,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-agent" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-agent", deps);
@@ -1490,7 +2072,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { worktreeId: "wt-1" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-wt", deps);
@@ -1507,7 +2089,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-recipe" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-recipe", deps);
@@ -1524,7 +2106,7 @@ describe("CallTool idempotency dedup", () => {
     // A live transport, not just a tier row: `getTier` gates on transport
     // membership (#11799), so a tier-map-only session is refused before it can
     // reach dispatch at all.
-    seedLiveSession(realStore, "dedup-resurrect", "system");
+    seedLiveSession(realStore, "dedup-resurrect", "full");
 
     let resolveDispatch: ((envelope: unknown) => void) | undefined;
     const dispatchAction = vi.fn().mockImplementation(
@@ -1568,7 +2150,7 @@ describe("CallTool idempotency dedup", () => {
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-long" } } });
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction,
     });
     const server = createSessionServer("dedup-long", deps);
@@ -1599,7 +2181,7 @@ describe("buildToolError envelope", () => {
   it("produces a parseable JSON payload with code, message, and retriable", () => {
     const result = buildToolError({
       code: TIER_NOT_PERMITTED_CODE,
-      message: "action 'foo' is not permitted for the 'workbench' tier.",
+      message: "action 'foo' is not permitted for the 'core' tier.",
     });
     expect(result.isError).toBe(true);
     expect(result.content).toHaveLength(1);
@@ -1608,7 +2190,7 @@ describe("buildToolError envelope", () => {
     const parsed = JSON.parse(getErrorText(result));
     expect(parsed).toEqual({
       code: TIER_NOT_PERMITTED_CODE,
-      message: "action 'foo' is not permitted for the 'workbench' tier.",
+      message: "action 'foo' is not permitted for the 'core' tier.",
       retriable: false,
     });
   });
@@ -1674,11 +2256,11 @@ describe("buildToolError envelope", () => {
   it("legacy substrings remain greppable for existing .toContain assertions", () => {
     const result = buildToolError({
       code: TIER_NOT_PERMITTED_CODE,
-      message: "action 'panel.gridLayout.setStrategy' is not permitted for the 'workbench' tier.",
+      message: "action 'panel.gridLayout.setStrategy' is not permitted for the 'core' tier.",
     });
     const text = getErrorText(result);
     expect(text).toContain("TIER_NOT_PERMITTED");
-    expect(text).toContain("workbench");
+    expect(text).toContain("core");
     expect(text).toContain("panel.gridLayout.setStrategy");
   });
 });
@@ -1687,11 +2269,11 @@ describe("buildMcpErrorPayload", () => {
   it("returns the same shape used on both surfaces", () => {
     const payload = buildMcpErrorPayload({
       code: TIER_NOT_PERMITTED_CODE,
-      message: "Resource 'x' is not permitted for the 'workbench' tier.",
+      message: "Resource 'x' is not permitted for the 'core' tier.",
     });
     expect(payload).toEqual({
       code: TIER_NOT_PERMITTED_CODE,
-      message: "Resource 'x' is not permitted for the 'workbench' tier.",
+      message: "Resource 'x' is not permitted for the 'core' tier.",
       retriable: false,
     });
   });
@@ -1790,39 +2372,40 @@ describe("sessionServer tier-mismatch notifier", () => {
     );
   }
 
-  it("invokes notifyTierMismatch with targetTier when a workbench session calls a tool above its tier", async () => {
+  it("invokes notifyTierMismatch with targetTier when a core session calls a tool above its tier", async () => {
     const notify = vi.fn();
     const dispatchAction = vi.fn();
-    const deps = fakeDeps({ notifyTierMismatch: notify, dispatchAction });
+    const handleProjectRunCheck = vi.fn();
+    const deps = fakeDeps({ notifyTierMismatch: notify, dispatchAction, handleProjectRunCheck });
     const server = createSessionServer("session-A", deps);
     await server.connect(makeMockTransport());
 
-    // git.commit is in SYSTEM_TIER_ADDONS — denied at workbench tier, and the
+    // project.runCheck is in FULL_TIER_ADDONS — denied at core, and the
     // banner's recovery target is the tier that would permit it.
     const result = (await callTool(server, {
-      name: "git.commit",
-      arguments: {},
+      name: "project.runCheck",
+      arguments: { projectId: "proj-1", runnerId: "npm-test" },
     })) as { isError?: boolean; content: Array<{ text: string }> };
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
     expect(dispatchAction).not.toHaveBeenCalled();
+    expect(handleProjectRunCheck).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith({
       sessionId: "session-A",
-      toolId: "git.commit",
-      tier: "workbench",
-      targetTier: "system",
+      toolId: "project.runCheck",
+      tier: "core",
+      targetTier: "full",
     });
   });
 
-  it("points a workbench session at `action`, not `system`, for worktree cleanup (#12116)", async () => {
-    // The banner offers the NARROWEST tier that would permit the call, so the
-    // promotion has to reach the recovery prompt too — telling a user to select
-    // `system` for a delete that `action` now covers would over-escalate the
-    // surface they end up granting.
+  it("points the assistant's core session at `full` for the unscoped worktree.delete", async () => {
+    // The owned delete is core; only the unscoped one needs `full`, and the
+    // banner must name the tier that actually covers what was called.
     const notify = vi.fn();
     const deps = fakeDeps({ notifyTierMismatch: notify });
+    deps.sessionStore.sessionOriginMap.set("session-A2", "help");
     const server = createSessionServer("session-A2", deps);
     await server.connect(makeMockTransport());
 
@@ -1831,8 +2414,29 @@ describe("sessionServer tier-mismatch notifier", () => {
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
         toolId: "worktree.delete",
-        tier: "workbench",
-        targetTier: "action",
+        tier: "core",
+        targetTier: "full",
+      })
+    );
+  });
+
+  it("offers no recovery tier for an unscoped tool outside the caller's origin surface", async () => {
+    // A session that is not the assistant is admitted against the owned
+    // projection, where `worktree.delete` never appears at any tier — its
+    // `worktree.deleteOwned` twin does. Pointing it at `full` would promise an
+    // elevation that still refuses the call.
+    const notify = vi.fn();
+    const deps = fakeDeps({ notifyTierMismatch: notify });
+    const server = createSessionServer("session-A3", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "worktree.delete",
+        tier: "core",
+        targetTier: null,
       })
     );
   });
@@ -1844,39 +2448,40 @@ describe("sessionServer tier-mismatch notifier", () => {
     const server = createSessionServer("session-B", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.list is in WORKBENCH_TOOLS — permitted at workbench tier.
+    // worktree.list is in CORE_TIER_TOOLS — permitted at core.
     await callTool(server, { name: "worktree.list", arguments: {} });
 
     expect(notify).not.toHaveBeenCalled();
     expect(dispatchAction).toHaveBeenCalled();
   });
 
-  it("computes targetTier=action for action-tier tools and forwards it", async () => {
+  it("computes targetTier=full for an owned twin only the projected full set carries", async () => {
+    // `terminal.injectOwned` is on no list as written; it reaches a session
+    // that is not the assistant only as the twin of full's `terminal.inject`.
+    // The target has to be read from that projection, not the assistant's.
     const notify = vi.fn();
     const deps = fakeDeps({ notifyTierMismatch: notify });
     const server = createSessionServer("session-C", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.createWithRecipe is in ACTION_TIER_ADDONS — denied at workbench.
     await callTool(server, {
-      name: "worktree.createWithRecipe",
-      arguments: { branchName: "x" },
+      name: "terminal.injectOwned",
+      arguments: { terminalId: "t-1" },
     });
 
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolId: "worktree.createWithRecipe",
-        targetTier: "action",
+        toolId: "terminal.injectOwned",
+        targetTier: "full",
       })
     );
   });
 
-  it("offers a recovery tier for worktree.create instead of a dead end (#11880)", async () => {
-    // The reported symptom: in no tier allowlist, the primitive resolved to
-    // targetTier null, and HelpPanelBanners withholds both "Approve once" and
-    // "Always allow" on a null target — a denial the user cannot act on at any
-    // tier. A non-null target is what restores those, so an action-tier
-    // overlay that needs it can still ask rather than being told no twice.
+  it("offers no recovery tier for worktree.create, which is on neither tool set", async () => {
+    // Explicit-root creation left MCP with the core/full split in favour of
+    // `worktree.createWithRecipe`, so no elevation reaches it and a banner
+    // offering one would be a promise the next call breaks. A null target is
+    // what withholds "Approve once" and "Always allow".
     const notify = vi.fn();
     const deps = fakeDeps({ notifyTierMismatch: notify });
     const server = createSessionServer("session-C2", deps);
@@ -1887,7 +2492,7 @@ describe("sessionServer tier-mismatch notifier", () => {
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
         toolId: "worktree.create",
-        targetTier: "system",
+        targetTier: null,
       })
     );
   });
@@ -2013,8 +2618,8 @@ describe("CallTool live activity notifications (#9759)", () => {
     const server = createSessionServer("session-B", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.delete is action-tier (#12116) — still denied at the default
-    // workbench tier, which is all this test needs.
+    // worktree.delete is outside the default core session's surface, which is
+    // all this test needs.
     await callTool(server, { name: "worktree.delete", arguments: {} });
 
     expect(started).not.toHaveBeenCalled();
@@ -2029,8 +2634,8 @@ describe("CallTool live activity notifications (#9759)", () => {
     await server.connect(makeMockTransport());
 
     const before = Date.now();
-    // worktree.delete is action-tier (#12116) — still denied at the default
-    // workbench tier, which is all this test needs.
+    // worktree.delete is outside the default core session's surface, which is
+    // all this test needs.
     await callTool(server, { name: "worktree.delete", arguments: {} });
     const after = Date.now();
 
@@ -2077,9 +2682,9 @@ describe("CallTool live activity notifications (#9759)", () => {
       finalState: "idle",
     });
     const deps = fakeDeps({
-      // waitUntilIdle is in ACTION_TIER_ADDONS — use an action-tier session so
-      // the call clears the tier floor and reaches the dispatch path.
-      sessionStore: fakeSessionStore("action"),
+      // waitUntilIdle is in CORE_TIER_TOOLS, so the call clears the tier floor
+      // and reaches the dispatch path.
+      sessionStore: fakeSessionStore("core"),
       notifyToolCallStarted: started,
       notifyToolCallSettled: settled,
       handleWaitUntilIdle,
@@ -2154,7 +2759,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "git.push",
+      name: "project.runCheck",
       arguments: {},
     })) as { isError: boolean; content: { type: string; text: string }[] };
 
@@ -2162,16 +2767,16 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.code).toBe(TIER_NOT_PERMITTED_CODE);
     expect(parsed.retriable).toBe(false);
-    expect(parsed.message).toContain("workbench");
+    expect(parsed.message).toContain("core");
   });
 
   it("propagates ActionError.details through the envelope", async () => {
     const manifest = [
       {
-        id: "files.search",
-        title: "Files: search",
-        description: "Search files",
-        category: "files",
+        id: "worktree.list",
+        title: "Worktree: list",
+        description: "List worktrees",
+        category: "worktree",
         danger: "safe" as const,
         source: ["agent"] as const,
       },
@@ -2194,7 +2799,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "files.search",
+      name: "worktree.list",
       arguments: { badKey: 1 },
     })) as { isError: boolean; content: { type: string; text: string }[] };
 
@@ -2208,10 +2813,10 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
   it("synthesises EXECUTION_ERROR with retriable=true when dispatch throws", async () => {
     const manifest = [
       {
-        id: "files.search",
-        title: "Files: search",
-        description: "Search",
-        category: "files",
+        id: "worktree.list",
+        title: "Worktree: list",
+        description: "List",
+        category: "worktree",
         danger: "safe" as const,
         source: ["agent"] as const,
       },
@@ -2225,7 +2830,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "files.search",
+      name: "worktree.list",
       arguments: {},
     })) as { isError: boolean; content: { type: string; text: string }[] };
 
@@ -2239,10 +2844,10 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
   it("maps SessionBindingError to SESSION_BINDING_GONE with retriable=false (#8432)", async () => {
     const manifest = [
       {
-        id: "files.search",
-        title: "Files: search",
-        description: "Search",
-        category: "files",
+        id: "worktree.list",
+        title: "Worktree: list",
+        description: "List",
+        category: "worktree",
         danger: "safe" as const,
         source: ["agent"] as const,
       },
@@ -2256,7 +2861,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "files.search",
+      name: "worktree.list",
       arguments: {},
     })) as { isError: boolean; content: { type: string; text: string }[] };
 
@@ -2269,7 +2874,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
   });
 
   it("reclassifies a no-channel confirm dispatch to CONFIRMATION_REQUIRED, not EXECUTION_ERROR (#10640)", async () => {
-    // recipe.run is a real danger:"confirm" action in the action tier. Its
+    // recipe.run is a real danger:"confirm" action in the full tool set. Its
     // unconfirmed dispatch is forwarded to the renderer bridge (host-side
     // confirmation, #11342), which throws RendererBridgeUnavailableError when
     // no Daintree window is open. Because the manifest entry IS known to be
@@ -2287,8 +2892,8 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     ] as unknown as import("../../../../shared/types/actions.js").ActionManifestEntry[];
     const dispatchAction = vi.fn().mockRejectedValue(new RendererBridgeUnavailableError());
     const deps = fakeDeps({
-      // action tier so recipe.run clears the tier floor and reaches dispatch.
-      sessionStore: fakeSessionStore("action"),
+      // full tier so recipe.run clears the tier floor and reaches dispatch.
+      sessionStore: fakeSessionStore("full"),
       requestManifest: vi.fn().mockResolvedValue(manifest),
       getCachedManifest: vi.fn(() => manifest),
       dispatchAction,
@@ -2317,10 +2922,10 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     // — but with an explicit cause rather than an opaque dispatch failure.
     const manifest = [
       {
-        id: "files.search",
-        title: "Files: search",
-        description: "Search files",
-        category: "files",
+        id: "worktree.list",
+        title: "Worktree: list",
+        description: "List worktrees",
+        category: "worktree",
         danger: "safe" as const,
         source: ["agent"] as const,
       },
@@ -2334,7 +2939,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "files.search",
+      name: "worktree.list",
       arguments: {},
     })) as { isError: boolean; content: { type: string; text: string }[] };
 
@@ -2354,7 +2959,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     // window opens) rather than the non-retriable confirmation signal the
     // warm-cache path produces.
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("action"),
+      sessionStore: fakeSessionStore("full"),
       // Cold cache + no renderer: both the manifest fetch and the dispatch fail.
       getCachedManifest: vi.fn(() => null),
       requestManifest: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
@@ -2399,8 +3004,10 @@ describe("Resource error envelope (integration through sessionServer)", () => {
   it("propagates ActionError as McpError with structured payload in data", async () => {
     // Backing dispatch fails with a NOT_FOUND ActionError carrying details.
     // unwrapDispatchResult should rethrow as McpError with the structured
-    // payload attached as `data`, mirroring the tool-path JSON envelope.
+    // payload attached as `data`, mirroring the tool-path JSON envelope. The
+    // pulse resource rides `git.getProjectPulse`, which is in the full tool set.
     const deps = fakeDeps({
+      sessionStore: fakeSessionStore("full"),
       dispatchAction: vi.fn().mockResolvedValue({
         result: {
           ok: false,
@@ -2436,6 +3043,7 @@ describe("Resource error envelope (integration through sessionServer)", () => {
     const circular: { self?: unknown } = {};
     circular.self = circular;
     const deps = fakeDeps({
+      sessionStore: fakeSessionStore("full"),
       dispatchAction: vi.fn().mockResolvedValue({
         result: {
           ok: false,
@@ -2466,6 +3074,7 @@ describe("Resource error envelope (integration through sessionServer)", () => {
 
   it("returns successful resource contents when dispatch succeeds", async () => {
     const deps = fakeDeps({
+      sessionStore: fakeSessionStore("full"),
       dispatchAction: vi.fn().mockResolvedValue({
         result: { ok: true, result: { commits: [], status: "clean" } },
       }),
@@ -2563,6 +3172,18 @@ describe("Resource error envelope (integration through sessionServer)", () => {
 });
 
 describe("sessionServer grant cache fallback (#8442)", () => {
+  /**
+   * A session on the assistant's own origin. Grants are only ever issued to
+   * one, and it is the only origin whose surface names the unscoped
+   * `worktree.delete` — every other session holds `worktree.deleteOwned` in its
+   * place at every tier.
+   */
+  function assistantSessionStore(tier: "core" | "full"): SessionStore {
+    const store = fakeSessionStore(tier);
+    store.sessionOriginMap.set("s", "help");
+    return store;
+  }
+
   async function callTool(
     server: ReturnType<typeof createSessionServer>,
     params: { name: string; arguments?: Record<string, unknown> }
@@ -2591,7 +3212,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   }
 
   it("floor-permitted tool skips the per-tool grant but still peeks native pre-authorization", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = fakeSessionStore("core");
     const checkSpy = vi.spyOn(sessionStore.grantCache, "check");
     const peekSpy = vi.spyOn(sessionStore.grantCache, "peekNativeGrant");
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
@@ -2599,7 +3220,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.list is in WORKBENCH_TOOLS → static floor permits.
+    // worktree.list is in CORE_TIER_TOOLS → static floor permits.
     await callTool(server, { name: "worktree.list", arguments: {} });
 
     expect(dispatchAction).toHaveBeenCalled();
@@ -2615,12 +3236,11 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("native grant pre-authorizes a tier-permitted confirm tool and consumes a use (#11878)", async () => {
-    // worktree.delete is `danger: "confirm"` but IS on the action-tier
-    // allowlist (#12116), so the floor admits it and the tier-denied leg never
-    // runs. Before #11878 that made the grant unreachable and the modal fired
-    // on every call despite an explicit Settings pre-authorization. Pinned at
-    // `action` rather than a wider tier so it fails if that floor moves back.
-    const sessionStore = fakeSessionStore("action");
+    // worktree.delete is `danger: "confirm"` but IS in the full tool set, so
+    // the floor admits it and the tier-denied leg never runs. Before #11878
+    // that made the grant unreachable and the modal fired on every call despite
+    // an explicit Settings pre-authorization.
+    const sessionStore = assistantSessionStore("full");
     // Unref'd for the reason `seedLiveSession` documents: a referenced
     // 1,000,000 ms timer holds the Vitest worker open past the suite.
     const idleTimer = setTimeout(() => {}, 1_000_000);
@@ -2672,7 +3292,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // once its single use is gone the call must still run — just with the
     // modal back. The tier-denied equivalent fails closed instead, because
     // there the grant was the authorization itself.
-    const sessionStore = fakeSessionStore("action");
+    const sessionStore = assistantSessionStore("full");
     sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2711,7 +3331,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // behind the per-tool check, which made an explicit Settings
     // pre-authorization silently do nothing here, exactly as it did for a
     // tier-permitted tool.
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     sessionStore.grantCache.issueGrant("s", "worktree.delete");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
@@ -2734,9 +3354,9 @@ describe("sessionServer grant cache fallback (#8442)", () => {
 
   it("a tier-permitted call falls back to the modal when the grant dies between peek and consume (#11878)", async () => {
     // The tier still admits the call, so losing the grant costs only the
-    // bypass. Refusing here would report "not permitted for the 'action'
+    // bypass. Refusing here would report "not permitted for the 'full'
     // tier" for an action that tier plainly permits.
-    const sessionStore = fakeSessionStore("action");
+    const sessionStore = assistantSessionStore("full");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2767,7 +3387,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
 
   it("a tier-denied call still fails closed when the grant dies between peek and consume (#11878)", async () => {
     // Here the grant WAS the authorization, so losing it must fail closed.
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2804,7 +3424,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // rather than "did the tier permit this?". Under the narrower question
     // this call would be refused as tier-denied even though a live grant
     // admitted it.
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     sessionStore.grantCache.issueGrant("s", "worktree.delete");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
@@ -2838,7 +3458,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // would mean resolving effective danger — async manifest plus
     // args-conditional elevation — before the consume site. Over-charging
     // fails toward more confirmation, so it is the safe direction to accept.
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = fakeSessionStore("core");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2861,19 +3481,19 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     sessionStore.grantCache.dispose();
   });
 
-  it("terminal.killAll cannot ride a native grant past the confirm modal (#12121)", async () => {
+  it("terminal.closeAll cannot ride a native grant past the confirm modal (#12121)", async () => {
     // Issuance refuses a scope naming a fan-out tool, so this grant is minted
     // through the cache directly — the stale/hand-rolled state the peek and
-    // consume guards exist to catch. The floor already admits terminal.killAll
-    // at the system tier, so the call must still run; what it must NOT do is
-    // arrive pre-confirmed or spend a use, because `maxUses` cannot express
-    // "every terminal in the project".
-    const sessionStore = fakeSessionStore("system");
+    // consume guards exist to catch. The floor already admits terminal.closeAll
+    // in the assistant's full tool set, so the call must still run; what it
+    // must NOT do is arrive pre-confirmed or spend a use, because `maxUses`
+    // cannot express "every terminal in the project".
+    const sessionStore = assistantSessionStore("full");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["terminal.killAll"],
+      allowedTools: ["terminal.closeAll"],
       maxUses: 3,
     });
     const consumeSpy = vi.spyOn(sessionStore.grantCache, "consumeNativeGrantUse");
@@ -2884,14 +3504,14 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "terminal.killAll",
+      name: "terminal.closeAll",
       arguments: {},
     })) as { isError?: boolean };
 
     expect(result.isError).not.toBe(true);
     // Dispatched, but unconfirmed — the renderer's modal decides, exactly as it
     // would with no grant at all.
-    expect(dispatchAction).toHaveBeenCalledWith("terminal.killAll", expect.any(Object), false);
+    expect(dispatchAction).toHaveBeenCalledWith("terminal.closeAll", expect.any(Object), false);
     expect(consumeSpy).not.toHaveBeenCalled();
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(3);
     // An untouched budget alone would not prove the grant was left alone: the
@@ -2901,16 +3521,16 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     sessionStore.grantCache.dispose();
   });
 
-  it("a native grant cannot admit terminal.killAll below the tier floor (#12121)", async () => {
-    // The other leg: at workbench tier nothing else admits the call, so a grant
-    // that covered it would be the authorization itself. It must fail closed
-    // rather than fall through to an unauthorized dispatch.
-    const sessionStore = fakeSessionStore("workbench");
+  it("a native grant cannot admit terminal.closeAll below the tier floor (#12121)", async () => {
+    // The other leg: at core nothing else admits the call, so a grant that
+    // covered it would be the authorization itself. It must fail closed rather
+    // than fall through to an unauthorized dispatch.
+    const sessionStore = assistantSessionStore("core");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["terminal.killAll"],
+      allowedTools: ["terminal.closeAll"],
       maxUses: 3,
     });
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
@@ -2919,7 +3539,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "terminal.killAll",
+      name: "terminal.closeAll",
       arguments: {},
     })) as { isError?: boolean; content: Array<{ type: string; text: string }> };
 
@@ -2938,7 +3558,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // automation budget on a discovery call and evict entries mid-enumeration.
     // The peek still runs when the carrier is NOT otherwise admitted, because
     // there the grant is what authorizes it.
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = fakeSessionStore("core");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2963,7 +3583,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("denied tool with an active grant dispatches and refreshes TTL on success", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     sessionStore.sessions.set("s", {
       transport: {} as never,
       server: {} as never,
@@ -2993,7 +3613,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("native grant authorizes a denied tool without a modal and refreshes on success (#10648)", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     sessionStore.sessions.set("s", {
       transport: {} as never,
       server: {} as never,
@@ -3028,7 +3648,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("native grant for tool A does not authorize tool B (fails closed on scope) (#10648)", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -3041,10 +3661,10 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
 
-    // git.push is denied at the workbench floor AND is not in the grant's
+    // recipe.run is denied at the core floor AND is not in the grant's
     // allowlist → fail closed with TIER_NOT_PERMITTED, never dispatched.
     const result = (await callTool(server, {
-      name: "git.push",
+      name: "recipe.run",
       arguments: {},
     })) as { isError?: boolean; content?: Array<{ text?: string }> };
 
@@ -3055,7 +3675,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("an exhausted native grant fails closed on the next call (#10648)", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     sessionStore.sessions.set("s", {
       transport: {} as never,
       server: {} as never,
@@ -3090,7 +3710,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("grant for tool A does not authorize tool B in the same session", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     sessionStore.grantCache.issueGrant("s", "worktree.delete");
     const dispatchAction = vi.fn();
     const notify = vi.fn();
@@ -3098,22 +3718,20 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.createWithRecipe is action-tier, distinct from worktree.delete.
+    // recipe.run is full-only too, distinct from worktree.delete.
     const result = (await callTool(server, {
-      name: "worktree.createWithRecipe",
-      arguments: { branchName: "x" },
+      name: "recipe.run",
+      arguments: { recipeId: "build" },
     })) as { isError?: boolean };
 
     expect(result.isError).toBe(true);
     expect(dispatchAction).not.toHaveBeenCalled();
-    expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ toolId: "worktree.createWithRecipe" })
-    );
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ toolId: "recipe.run" }));
     sessionStore.grantCache.dispose();
   });
 
   it("failed dispatch through a grant does not refresh the TTL", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     sessionStore.grantCache.issueGrant("s", "worktree.delete");
     const refreshSpy = vi.spyOn(sessionStore.grantCache, "refresh");
     const dispatchAction = vi.fn().mockResolvedValue({
@@ -3131,7 +3749,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("denials below the silence threshold fire the banner", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     const notify = vi.fn();
     const audit = vi.fn();
     const deps = fakeDeps({
@@ -3168,7 +3786,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("issueGrant zeroes the denial counter — banner re-arms after explicit approval", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = assistantSessionStore("core");
     const notify = vi.fn();
     const deps = fakeDeps({ sessionStore, notifyTierMismatch: notify });
     const server = createSessionServer("s", deps);
@@ -3188,7 +3806,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("terminal.waitUntilIdle refreshes the grant TTL and resets idle timer on success", async () => {
-    const sessionStore = fakeSessionStore("workbench");
+    const sessionStore = fakeSessionStore("core");
     sessionStore.sessions.set("s", {
       transport: {} as never,
       server: {} as never,
@@ -3212,6 +3830,10 @@ describe("sessionServer grant cache fallback (#8442)", () => {
       sessionStore,
       handleWaitUntilIdle,
       dispatchAction,
+      // The wait is core, so no floor denies it any more. An agent pane still
+      // consults its session grant for a tool its tier permits (#12692), which
+      // is the path that reaches this block's refresh now.
+      requestApproval: vi.fn(),
     });
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
@@ -3246,27 +3868,20 @@ describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
   // `{cwd, setUpstream}` and `git.commit` commits whatever the index holds, so
   // a second push after a new commit — or a repeated `wip` message — is
   // same-argument, and caching it would report success for work that never
-  // happened. Restoring either entry must fail here.
-  it.each(["git.commit", "git.push"])("redispatches a repeated %s", async (tool) => {
-    const dispatchAction = twoDistinctDispatches();
-    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
-    const server = createSessionServer(`git-8468-${tool}`, deps);
-
-    const args = { target: "x" };
-    await callTool(server, { name: tool, arguments: args });
-    const second = await callTool(server, { name: tool, arguments: args });
-
-    expect(dispatchAction).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(second)).toContain("second");
+  // happened. Git left MCP with the core/full split, so no dispatch can prove
+  // the boundary any more; restoring either entry must still fail here.
+  it.each(["git.commit", "git.push"])("keeps %s off the dedup allowlist", (tool) => {
+    expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
   });
 
-  it.each(["git.stageAll", "terminal.sendCommand"])(
+  it.each(["terminal.inject", "terminal.sendCommand"])(
     "stays bounded — redispatches unlisted mutation %s",
     async (tool) => {
       const dispatchAction = twoDistinctDispatches();
-      const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
-      // Unscoped submission is only reachable from the assistant's own origin
-      // (#12407); what this pins is the dedup boundary, not that reservation.
+      const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
+      // Unscoped terminal input is only reachable from the assistant's own
+      // origin (#12407); what this pins is the dedup boundary, not that
+      // reservation.
       deps.sessionStore.sessionOriginMap.set(`bounded-8468-${tool}`, "help");
       const server = createSessionServer(`bounded-8468-${tool}`, deps);
 
@@ -3296,15 +3911,17 @@ describe("worktree resource lifecycle dedup (#10683)", () => {
   });
 
   it("gates each tool at its intended minimum tier", () => {
-    expect(minimumPermittingTier("worktree.resource.provision")).toBe("action");
-    expect(minimumPermittingTier("worktree.resource.pause")).toBe("action");
-    expect(minimumPermittingTier("worktree.resource.resume")).toBe("action");
-    // Teardown joined its lifecycle siblings on the default floor in #12116; it
-    // stays `danger: "confirm"`, which is what bounds it.
-    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("action");
-    expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBe("workbench");
-    expect(minimumPermittingTier("cliAvailability.get")).toBe("workbench");
-    expect(minimumPermittingTier("hibernation.getConfig")).toBe("workbench");
+    expect(minimumPermittingTier("worktree.resource.provision")).toBe("full");
+    expect(minimumPermittingTier("worktree.resource.pause")).toBe("full");
+    expect(minimumPermittingTier("worktree.resource.resume")).toBe("full");
+    // Teardown sits with its lifecycle siblings; it stays `danger: "confirm"`,
+    // which is what bounds it.
+    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("full");
+    // The host-state reads that used to sit beside them left MCP with the
+    // core/full split.
+    expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBeNull();
+    expect(minimumPermittingTier("cliAvailability.get")).toBeNull();
+    expect(minimumPermittingTier("hibernation.getConfig")).toBeNull();
   });
 });
 
@@ -3325,9 +3942,12 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
         .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
         .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
       const deps = fakeDeps({
-        sessionStore: fakeSessionStore("system"),
+        sessionStore: fakeSessionStore("full"),
         dispatchAction,
       });
+      // The unscoped delete is on the assistant's surface only; every other
+      // origin holds `worktree.deleteOwned`, which is deliberately not deduped.
+      deps.sessionStore.sessionOriginMap.set(`dedup-9156-${tool}`, "help");
       const server = createSessionServer(`dedup-9156-${tool}`, deps);
 
       const args = { target: "x" };
@@ -3345,22 +3965,31 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
   // Creation tools whose replay leaves a durable or immediately visible
   // artifact. Each has a structural twin that was already deduped, which is
   // exactly why the omission was invisible: the same retry was safe through
-  // one id and duplicated through the other.
-  const NEWLY_DEDUPED = [
+  // one id and duplicated through the other. The rest of the #11534 cohort —
+  // `agent.terminal` and the forge writes — left MCP with the core/full split;
+  // see `LEFT_MCP` below.
+  const NEWLY_DEDUPED = ["workflow.startWorkOnIssue"];
+
+  // Navigation and idempotent state-sets. Caching these suppresses a call the
+  // caller legitimately meant to repeat — switching back to a worktree the user
+  // navigated away from, or reloading a preview after a change — so they must
+  // always redispatch. #11534 dropped `git.commit`/`git.push` for the same
+  // reason; the #8468 block above covers them.
+  const MUST_REDISPATCH = ["worktree.setActive", "devPreview.reloadPreview"];
+
+  // What #11534 either added or ruled out of dedup, all of which left MCP with
+  // the core/full split, so no replay of them can arrive and no dispatch can
+  // prove their membership. The forge openers and `forge.assignIssue` were
+  // ruled out on the criterion itself; the rest would be dead weight.
+  const LEFT_MCP = [
     "agent.terminal",
-    "workflow.startWorkOnIssue",
+    "forge.createPR",
+    "forge.mergePR",
+    "forge.commentOnPR",
     "forge.createIssue",
     "forge.addIssueComment",
     "forge.approvePR",
     "forge.requestChanges",
-  ];
-
-  // Navigation and idempotent state-sets. Caching these suppresses a call the
-  // caller legitimately meant to repeat — reopening a URL the user closed, or
-  // re-assigning after an unassign — so they must always redispatch. #11534
-  // dropped `git.commit`/`git.push` for the same reason; the #8468 block above
-  // covers them.
-  const MUST_REDISPATCH = [
     "forge.openIssue",
     "forge.openPR",
     "forge.openIssues",
@@ -3381,7 +4010,7 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
 
   it.each(NEWLY_DEDUPED)("dedups a post-completion duplicate of %s", async (tool) => {
     const dispatchAction = twoDistinctDispatches();
-    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
     const server = createSessionServer(`dedup-11534-${tool}`, deps);
 
     const args = { target: "x" };
@@ -3401,7 +4030,7 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
       // The singleflight window, not the result cache: both calls are in flight
       // before either resolves, which is the reconnect-replay shape.
       const dispatchAction = twoDistinctDispatches();
-      const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
       const server = createSessionServer(`dedup-11534-inflight-${tool}`, deps);
 
       const args = { target: "x" };
@@ -3416,14 +4045,15 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
     }
   );
 
-  it("gives agent.terminal and terminal.new the same retry outcome", async () => {
+  it("gives agent.launch and terminal.new the same retry outcome", async () => {
     // The issue's core complaint: "the same retry is safe through one id and
     // duplicates through the other." Assert the parity directly, so a future
-    // membership edit that reintroduces the asymmetry fails here.
+    // membership edit that reintroduces the asymmetry fails here. With
+    // `agent.terminal` gone from MCP, `agent.launch` is the launcher twin left.
     const dispatchCounts = await Promise.all(
-      ["terminal.new", "agent.terminal"].map(async (tool) => {
+      ["terminal.new", "agent.launch"].map(async (tool) => {
         const dispatchAction = twoDistinctDispatches();
-        const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+        const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
         const server = createSessionServer(`parity-11534-${tool}`, deps);
 
         const args = { spawnedBy: "agent" };
@@ -3441,7 +4071,7 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
     "redispatches a repeated %s instead of returning a cached result",
     async (tool) => {
       const dispatchAction = twoDistinctDispatches();
-      const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
       const server = createSessionServer(`nodedup-11534-${tool}`, deps);
 
       const args = { target: "x" };
@@ -3454,12 +4084,18 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
     }
   );
 
+  it.each(LEFT_MCP)("keeps %s, which left MCP, unreachable and off the dedup allowlist", (tool) => {
+    expect(minimumPermittingTier(tool)).toBeNull();
+    expect(minimumPermittingTier(tool, false)).toBeNull();
+    expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
+  });
+
   it("keeps every deduped tool reachable from a help-session tier", () => {
     // A dedup entry for a tool no tier exposes is dead weight that reads as
     // coverage. Catches an id that survives the compile-time BuiltInActionId
     // check but has drifted off every tier allowlist. `minimumPermittingTier`
-    // spans workbench/action/system only, so an external-only entry would
-    // need this widened rather than the entry excused.
+    // spans core/full only, so an external-only entry would need this widened
+    // rather than the entry excused.
     expect(MCP_DEDUP_ALLOWLIST.size).toBeGreaterThan(0);
     for (const tool of MCP_DEDUP_ALLOWLIST) {
       expect(minimumPermittingTier(tool)).not.toBeNull();
@@ -3468,54 +4104,50 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
 });
 
 describe("worktree.create redispatch (#11880)", () => {
-  // The primitive became LLM-callable when it joined the system tier, which is
-  // the first time dedup could apply to it at all. It must stay out: deleting
-  // a worktree leaves its branch behind and the host reuses that stale branch
-  // on the next create (#6463), so create -> delete -> recreate with identical
-  // arguments is a supported workflow. Caching the first id would return a
-  // worktree that no longer exists. The session tier is `system`, the tier the
-  // first-party assistant is forced to, so a reverted tier fix shows up here
-  // as zero dispatches rather than two.
-  const twoDistinctDispatches = () =>
-    vi
-      .fn()
-      .mockResolvedValueOnce({ result: { ok: true, result: "wt-first" } })
-      .mockResolvedValueOnce({ result: { ok: true, result: "wt-second" } });
-
+  // The primitive was LLM-callable from the old `system` tier, and dedup had to
+  // stay off it: deleting a worktree leaves its branch behind and the host
+  // reuses that stale branch on the next create (#6463), so create -> delete ->
+  // recreate with identical arguments is a supported workflow, and caching the
+  // first id would return a worktree that no longer exists. Explicit-root
+  // creation then left MCP with the core/full split in favour of
+  // `worktree.createWithRecipe`, so what this pins now is that it cannot come
+  // back through either door.
   const createArgs = {
     worktreePath: "/repo",
     options: { baseBranch: "develop", newBranch: "bugfix/issue-6463", path: "/repo-wt-a" },
   };
 
-  it("recreates after a delete instead of replaying the original worktree id", async () => {
-    const dispatchAction = twoDistinctDispatches();
-    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+  it("refuses worktree.create from the assistant's full tool set without dispatching", async () => {
+    const dispatchAction = vi.fn();
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
+    deps.sessionStore.sessionOriginMap.set("recreate-11880", "help");
     const server = createSessionServer("recreate-11880", deps);
 
-    await callTool(server, { name: "worktree.create", arguments: createArgs });
-    const second = await callTool(server, { name: "worktree.create", arguments: createArgs });
+    const result = await callTool(server, { name: "worktree.create", arguments: createArgs });
 
-    expect(dispatchAction).toHaveBeenCalledTimes(2);
-    // The caller sees the second dispatch, not a replay of the first — a
-    // cached id here would name the worktree the delete just removed.
-    expect(JSON.stringify(second)).toContain("wt-second");
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("keeps worktree.create off the dedup allowlist", () => {
+    expect(MCP_DEDUP_ALLOWLIST.has("worktree.create")).toBe(false);
   });
 });
 
 describe("CallTool rate limiter removal (#10764)", () => {
   it("dispatches a burst of mutation calls without ever rejecting with MCP_RATE_LIMITED", async () => {
-    // The mutation tier used to cap git.commit at 10/min — a burst past the
-    // cap returned MCP_RATE_LIMITED before dispatch. With the limiter gone,
-    // every call must reach dispatch.
+    // The mutation tier used to cap mutations such as git.commit at 10/min — a
+    // burst past the cap returned MCP_RATE_LIMITED before dispatch. With the
+    // limiter gone, every call must reach dispatch.
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
-    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
     const server = createSessionServer("rl-removed", deps);
 
     const BURST = 15; // comfortably past the old mutation cap of 10
     for (let i = 0; i < BURST; i++) {
       const result = (await callTool(server, {
-        name: "git.commit",
-        arguments: { message: `commit-${i}` },
+        name: "worktree.setActive",
+        arguments: { worktreeId: `wt-${i}` },
       })) as { isError?: boolean };
       expect(result.isError).not.toBe(true);
     }
@@ -3582,7 +4214,7 @@ describe("validateDisplayImageUrl (#9828)", () => {
 
 describe("help.displayImage short-circuit (#9828)", () => {
   function helpSessionStore(sessionId: string, helpSessionId: string | null): SessionStore {
-    const store = fakeSessionStore("workbench");
+    const store = fakeSessionStore("core");
     const mutable = store as unknown as {
       sessionHelpIdMap: Map<string, string>;
       figureCounters: Map<string, number>;
@@ -3923,10 +4555,10 @@ describe("resolved-workspace result metadata (#11536)", () => {
 
   const manifest = [
     {
-      id: "files.search",
-      title: "Files: search",
-      description: "Search files",
-      category: "files",
+      id: "worktree.list",
+      title: "Worktree: list",
+      description: "List worktrees",
+      category: "worktree",
       danger: "safe" as const,
       source: ["agent"] as const,
     },
@@ -3959,7 +4591,7 @@ describe("resolved-workspace result metadata (#11536)", () => {
     );
     await server.connect(makeMockTransport());
 
-    const result = await callTool(server, { name: "files.search", arguments: {} });
+    const result = await callTool(server, { name: "worktree.list", arguments: {} });
 
     expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
   });
@@ -3976,7 +4608,7 @@ describe("resolved-workspace result metadata (#11536)", () => {
     );
     await server.connect(makeMockTransport());
 
-    const result = await callTool(server, { name: "files.search", arguments: {} });
+    const result = await callTool(server, { name: "worktree.list", arguments: {} });
 
     expect(workspaceMetaOf(result)).toEqual(scratch);
   });
@@ -4017,7 +4649,7 @@ describe("resolved-workspace result metadata (#11536)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "files.search",
+      name: "worktree.list",
       arguments: {},
     })) as { isError: boolean };
 
@@ -4031,51 +4663,11 @@ describe("resolved-workspace result metadata (#11536)", () => {
     expect(parsed.details).toEqual({ field: "query" });
   });
 
-  it("stamps the screenshot image result, which returns before the generic path", async () => {
-    // browser.captureScreenshot short-circuits into an image content block, so
-    // it needs its own stamp — the generic success return never runs for it.
-    const shotEntry = [
-      {
-        id: "browser.captureScreenshot",
-        name: "browser.captureScreenshot",
-        title: "Capture Browser Screenshot",
-        description: "Capture the focused browser panel as a PNG",
-        category: "browser",
-        kind: "command",
-        danger: "safe",
-        enabled: true,
-        requiresArgs: false,
-      },
-    ] as unknown as ActionManifestEntry[];
-    const server = createSessionServer(
-      "rp-shot",
-      fakeDeps({
-        sessionStore: fakeSessionStore("action"),
-        requestManifest: vi.fn().mockResolvedValue(shotEntry),
-        getCachedManifest: vi.fn(() => shotEntry),
-        dispatchAction: vi.fn().mockResolvedValue({
-          result: { ok: true, result: { pngBase64: "aGVsbG8=", width: 1024, height: 768 } },
-          dispatchedWorkspace: WORKSPACE,
-        }),
-      })
-    );
-    await server.connect(makeMockTransport());
-
-    const result = (await callTool(server, {
-      name: "browser.captureScreenshot",
-      arguments: {},
-    })) as { content: Array<Record<string, unknown>>; isError?: boolean };
-
-    expect(result.isError).toBeFalsy();
-    expect(result.content[0]).toMatchObject({ type: "image", data: "aGVsbG8=" });
-    expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
-  });
-
   it("omits the key entirely when the dispatch reported no workspace", async () => {
     const server = createSessionServer("rp-none", depsFor({ result: { ok: true, result: "ok" } }));
     await server.connect(makeMockTransport());
 
-    const result = await callTool(server, { name: "files.search", arguments: {} });
+    const result = await callTool(server, { name: "worktree.list", arguments: {} });
 
     // Absent, not null — "unknown" must not be confusable with "no workspace".
     expect(workspaceMetaOf(result)).toBeUndefined();
@@ -4095,7 +4687,7 @@ describe("resolved-workspace result metadata (#11536)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "files.search",
+      name: "worktree.list",
       arguments: {},
     })) as { isError: boolean };
 
@@ -4156,7 +4748,7 @@ describe("resolved-workspace result metadata (#11536)", () => {
 // back out.
 describe("sessionServer introspection tier filtering", () => {
   function introspectionDeps(
-    tier: "workbench" | "action" | "system" | "external",
+    tier: "core" | "full" | "external",
     result: unknown,
     overrides?: Partial<SessionServerDeps>
   ) {
@@ -4186,7 +4778,7 @@ describe("sessionServer introspection tier filtering", () => {
   });
 
   it("drops actions.list entries the calling tier cannot dispatch", async () => {
-    // `git.push` is a system-tier tool; a workbench session can never call it,
+    // `git.push` is on neither tool set; even a full session can never call it,
     // so advertising it in discovery only buys a TIER_NOT_PERMITTED round trip.
     // Give the manifest lookup a real entry with an outputSchema so the
     // handler also emits structuredContent — the two renderings of the result
@@ -4196,7 +4788,7 @@ describe("sessionServer introspection tier filtering", () => {
       outputSchema: { type: "object", properties: {} },
     };
     const deps = introspectionDeps(
-      "workbench",
+      "full",
       { actions: [entry("actions.list"), entry("git.push"), entry("terminal.list")] },
       { getCachedManifest: vi.fn(() => [manifestEntry]) }
     );
@@ -4205,15 +4797,16 @@ describe("sessionServer introspection tier filtering", () => {
 
     const listed = payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
     expect(listed).toEqual(["actions.list", "terminal.list"]);
-    expect(isTierPermitted("workbench", "git.push")).toBe(false);
+    expect(isTierPermitted("full", "git.push")).toBe(false);
     const text = (res.content as Array<{ text: string }>)[0]!.text;
     expect(text).not.toContain("git.push");
     expect(res.structuredContent).toEqual(JSON.parse(text));
   });
 
-  // The same allowlist the call gate reads, narrowed by origin (#12407): an
-  // agent pane's bearer at `action` must not discover unscoped terminal input
-  // its dispatch would refuse, while the assistant at that tier still does.
+  // The same allowlist the call gate reads, projected by origin (#12407): an
+  // agent pane's bearer at `full` must not discover unscoped terminal input its
+  // dispatch would refuse, while the assistant at that tier still does — and
+  // the assistant, which holds the unscoped form, is not offered the owned one.
   it("narrows discovery of unscoped terminal input by origin, not tier", async () => {
     const manifest = {
       actions: [
@@ -4223,44 +4816,48 @@ describe("sessionServer introspection tier filtering", () => {
       ],
     };
     const ids = async (origin: "help" | "external") => {
-      const deps = introspectionDeps("action", manifest);
+      const deps = introspectionDeps("full", manifest);
       deps.sessionStore.sessionOriginMap.set("s1", origin);
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, { name: "actions.list" });
       return payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
     };
     expect(await ids("external")).toEqual(["terminal.sendCommandOwned"]);
-    expect(await ids("help")).toEqual([
-      "terminal.sendCommand",
-      "terminal.sendCommandOwned",
-      "copyTree.injectToTerminal",
-    ]);
+    expect(await ids("help")).toEqual(["terminal.sendCommand", "copyTree.injectToTerminal"]);
   });
 
   it("returns strictly more to a higher tier", async () => {
-    const manifest = { actions: [entry("actions.list"), entry("git.push")] };
-    const ids = async (tier: "workbench" | "system") => {
-      const server = createSessionServer("s1", introspectionDeps(tier, manifest));
-      const res = await callTool(server, { name: "actions.list" });
-      return payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
+    // Read through `actions.search`, which both tool sets carry — `actions.list`
+    // is itself full-only.
+    const matches = {
+      totalMatches: 2,
+      results: [entry("terminal.list"), entry("project.runCheck")],
     };
-    expect(await ids("workbench")).toEqual(["actions.list"]);
-    expect(await ids("system")).toEqual(["actions.list", "git.push"]);
+    const ids = async (tier: "core" | "full") => {
+      const server = createSessionServer("s1", introspectionDeps(tier, matches));
+      const res = await callTool(server, {
+        name: "actions.search",
+        arguments: { query: "run" },
+      });
+      return payload<{ results: ActionManifestEntry[] }>(res).results.map((a) => a.id);
+    };
+    expect(await ids("core")).toEqual(["terminal.list"]);
+    expect(await ids("full")).toEqual(["terminal.list", "project.runCheck"]);
   });
 
   it("narrows search to the session's own surface", async () => {
     // Search reports what this tier can dispatch and nothing beyond it: a
-    // workbench session sees terminal.list and not git.push. Post-#11585 there
-    // is no class of entry that search reaches but tools/list withholds — the
-    // tier allowlist is the whole surface, and both gates read it.
+    // core session sees terminal.list and not project.runCheck. Post-#11585
+    // there is no class of entry that search reaches but tools/list withholds —
+    // the tier allowlist is the whole surface, and both gates read it.
     const permittedEntry = entry("terminal.list");
-    expect(shouldExposeTool(permittedEntry, "workbench")).toBe(true);
-    expect(isTierPermitted("workbench", "terminal.list")).toBe(true);
-    expect(isTierPermitted("workbench", "git.push")).toBe(false);
+    expect(shouldExposeTool(permittedEntry, "core")).toBe(true);
+    expect(isTierPermitted("core", "terminal.list")).toBe(true);
+    expect(isTierPermitted("core", "project.runCheck")).toBe(false);
 
-    const deps = introspectionDeps("workbench", {
+    const deps = introspectionDeps("core", {
       totalMatches: 2,
-      results: [permittedEntry, entry("git.push")],
+      results: [permittedEntry, entry("project.runCheck")],
     });
     const server = createSessionServer("s1", deps);
     const res = await callTool(server, {
@@ -4273,19 +4870,18 @@ describe("sessionServer introspection tier filtering", () => {
     expect(body.totalMatches).toBe(1);
   });
 
-  // #12117. The bug this reproduces: an assistant at `action` tier could not
-  // see a higher-tier action at any discovery surface, so it told the user
+  // #12117. The bug this reproduces: an assistant below the tier an action
+  // needs could not see it at any discovery surface, so it told the user
   // Daintree has no such feature. It now learns the name exists and needs
-  // `system` — without the name becoming callable anywhere. The exemplar is
-  // `terminal.arm`: the action the bug was filed about, `worktree.delete`, has
-  // since been promoted to the action tier (#12116) and no longer sits above
-  // this session.
+  // `full` — without the name becoming callable anywhere. The exemplar is
+  // `worktree.delete`, the action the bug was filed about, which sits above a
+  // core session again now that only its owned form is core.
   describe("first-party existence catalog (#12117)", () => {
     function firstPartyDeps(
       result: unknown,
       overrides?: Partial<SessionServerDeps>
     ): SessionServerDeps {
-      const deps = introspectionDeps("action", result, overrides);
+      const deps = introspectionDeps("core", result, overrides);
       deps.sessionStore.sessionOriginMap.set("s1", "help");
       return deps;
     }
@@ -4293,12 +4889,12 @@ describe("sessionServer introspection tier filtering", () => {
     it("reports a higher-tier action to a renderer-owned session", async () => {
       const deps = firstPartyDeps({
         totalMatches: 2,
-        results: [entry("terminal.list"), entry("terminal.arm", { category: "terminal" })],
+        results: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.search",
-        arguments: { query: "arm terminal" },
+        arguments: { query: "delete worktree" },
       });
 
       const body = payload<{
@@ -4308,8 +4904,8 @@ describe("sessionServer introspection tier filtering", () => {
       expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
       expect(body.unavailable).toEqual([
         expect.objectContaining({
-          id: "terminal.arm",
-          minimumTier: "system",
+          id: "worktree.delete",
+          minimumTier: "full",
           callable: false,
         }),
       ]);
@@ -4321,8 +4917,11 @@ describe("sessionServer introspection tier filtering", () => {
     // paged path would leave search working and listing silently bare.
     it("reports them through the paged actions.list path too", async () => {
       const deps = firstPartyDeps({
-        actions: [entry("terminal.list"), entry("terminal.arm", { category: "terminal" })],
+        actions: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
       });
+      // `actions.list` is itself full-only, so a core session reaches the paged
+      // path only once the user has allowed it that one tool.
+      deps.sessionStore.grantCache.issueGrant("s1", "actions.list");
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, { name: "actions.list" });
 
@@ -4334,7 +4933,7 @@ describe("sessionServer introspection tier filtering", () => {
       }>(res);
       expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
       expect(body.total).toBe(1);
-      expect(body.unavailable.map((s) => s.id)).toEqual(["terminal.arm"]);
+      expect(body.unavailable.map((s) => s.id)).toEqual(["worktree.delete"]);
       expect(body.unavailableTotal).toBe(1);
     });
 
@@ -4342,7 +4941,8 @@ describe("sessionServer introspection tier filtering", () => {
     // moment a grant admits the id, it must leave the catalog and appear in
     // `actions`. Anything else advertises the same tool in two states at once.
     it("moves a granted id out of the catalog and into the callable list", async () => {
-      const deps = firstPartyDeps({ actions: [entry("terminal.arm")] });
+      const deps = firstPartyDeps({ actions: [entry("worktree.delete")] });
+      deps.sessionStore.grantCache.issueGrant("s1", "actions.list");
       const server = createSessionServer("s1", deps);
 
       const before = payload<{ actions: ActionManifestEntry[]; unavailableTotal: number }>(
@@ -4351,14 +4951,14 @@ describe("sessionServer introspection tier filtering", () => {
       expect(before.actions).toEqual([]);
       expect(before.unavailableTotal).toBe(1);
 
-      deps.sessionStore.grantCache.issueGrant("s1", "terminal.arm");
+      deps.sessionStore.grantCache.issueGrant("s1", "worktree.delete");
 
       const after = payload<{
         actions: ActionManifestEntry[];
         unavailable: unknown[];
         unavailableTotal: number;
       }>(await callTool(server, { name: "actions.list" }));
-      expect(after.actions.map((a) => a.id)).toEqual(["terminal.arm"]);
+      expect(after.actions.map((a) => a.id)).toEqual(["worktree.delete"]);
       expect(after.unavailable).toEqual([]);
       expect(after.unavailableTotal).toBe(0);
     });
@@ -4368,22 +4968,22 @@ describe("sessionServer introspection tier filtering", () => {
     // catalog must not appear on either side of it.
     it("leaves the name out of tools/list and refuses the call", async () => {
       const deps = firstPartyDeps(
-        { actions: [entry("terminal.arm")] },
+        { actions: [entry("worktree.delete")] },
         {
           requestManifest: vi
             .fn()
             .mockResolvedValue([
               makeManifestEntry("terminal.list"),
-              makeManifestEntry("terminal.arm"),
+              makeManifestEntry("worktree.delete"),
             ]),
         }
       );
       const server = createSessionServer("s1", deps);
 
       const listed = await listTools(server);
-      expect(listed.tools.map((t) => t.name)).not.toContain("terminal.arm");
+      expect(listed.tools.map((t) => t.name)).not.toContain("worktree.delete");
 
-      const denied = await callTool(server, { name: "terminal.arm", arguments: {} });
+      const denied = await callTool(server, { name: "worktree.delete", arguments: {} });
       expect(denied.isError).toBe(true);
       expect(toolErrorPayload(denied).code).toBe(TIER_NOT_PERMITTED_CODE);
     });
@@ -4391,15 +4991,15 @@ describe("sessionServer introspection tier filtering", () => {
     it("gives an external-origin session the payload it got before", async () => {
       // Same tier, same manifest — only the origin differs, which is the one
       // fact the catalog gates on.
-      const deps = introspectionDeps("action", {
+      const deps = introspectionDeps("core", {
         totalMatches: 2,
-        results: [entry("terminal.list"), entry("terminal.arm")],
+        results: [entry("terminal.list"), entry("worktree.delete")],
       });
       deps.sessionStore.sessionOriginMap.set("s1", "external");
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.search",
-        arguments: { query: "arm terminal" },
+        arguments: { query: "delete worktree" },
       });
 
       const body = payload<Record<string, unknown>>(res);
@@ -4409,14 +5009,14 @@ describe("sessionServer introspection tier filtering", () => {
     it("names the tier on a getSchema read instead of an unknown-id denial", async () => {
       const deps = firstPartyDeps({
         ok: true,
-        entry: entry("terminal.arm", { category: "terminal" }),
+        entry: entry("worktree.delete", { category: "worktree" }),
         policy: null,
         error: null,
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.getSchema",
-        arguments: { actionId: "terminal.arm" },
+        arguments: { actionId: "worktree.delete" },
       });
 
       const body = payload<{
@@ -4428,7 +5028,7 @@ describe("sessionServer introspection tier filtering", () => {
       expect(body.ok).toBe(false);
       expect(body.entry).toBeNull();
       expect(body.error?.code).toBe(TIER_NOT_PERMITTED_CODE);
-      expect(body.unavailable?.minimumTier).toBe("system");
+      expect(body.unavailable?.minimumTier).toBe("full");
     });
   });
 
@@ -4441,7 +5041,7 @@ describe("sessionServer introspection tier filtering", () => {
     }
 
     function schemaDeps(
-      tier: "workbench" | "action" | "system" | "external",
+      tier: "core" | "full" | "external",
       target: ActionManifestEntry,
       overrides?: Partial<SessionServerDeps>
     ) {
@@ -4468,7 +5068,7 @@ describe("sessionServer introspection tier filtering", () => {
     }
 
     it("substitutes a real policy for the renderer's null placeholder", async () => {
-      const deps = schemaDeps("workbench", entry("terminal.list"));
+      const deps = schemaDeps("core", entry("terminal.list"));
       const body = await lookup(deps, "terminal.list");
 
       // The renderer sent `policy: null`; anything non-null here is main's
@@ -4483,12 +5083,12 @@ describe("sessionServer introspection tier filtering", () => {
     // declared one defaults to `external` — so the honest answer for it is that
     // no approval flow exists, whatever tier admitted the call.
     it("reports grantability from the session origin, not its tier", async () => {
-      const unowned = schemaDeps("workbench", entry("terminal.list"));
+      const unowned = schemaDeps("core", entry("terminal.list"));
       expect((await lookup(unowned, "terminal.list")).policy).toMatchObject({
         grantable: false,
       });
 
-      const owned = schemaDeps("workbench", entry("terminal.list"));
+      const owned = schemaDeps("core", entry("terminal.list"));
       owned.sessionStore.sessionOriginMap.set("s1", "help");
       expect((await lookup(owned, "terminal.list")).policy).toMatchObject({
         grantable: true,
@@ -4508,14 +5108,14 @@ describe("sessionServer introspection tier filtering", () => {
     // A live grant widens discovery, and the record must name the grant as what
     // admits the call — the client's cue that this access can lapse.
     it("names a live per-tool grant as the admitting mechanism", async () => {
-      const deps = schemaDeps("workbench", entry("git.push"));
+      const deps = schemaDeps("core", entry("project.runCheck"));
       deps.sessionStore.sessionOriginMap.set("s1", "help");
-      deps.sessionStore.grantCache.issueGrant("s1", "git.push");
+      deps.sessionStore.grantCache.issueGrant("s1", "project.runCheck");
 
-      const body = await lookup(deps, "git.push");
+      const body = await lookup(deps, "project.runCheck");
 
       expect(body.ok).toBe(true);
-      expect(body.policy).toMatchObject({ authorizedBy: "grant", minimumTier: "system" });
+      expect(body.policy).toMatchObject({ authorizedBy: "grant", minimumTier: "full" });
       // The grant is bridging a real gap rather than rubber-stamping a target
       // the tier already allowed — stated as the relation, so it keeps meaning
       // if the fixture's tier changes.
@@ -4523,8 +5123,8 @@ describe("sessionServer introspection tier filtering", () => {
     });
 
     it("still collapses a tier-denied target with no policy attached", async () => {
-      const deps = schemaDeps("workbench", entry("git.push"));
-      const body = await lookup(deps, "git.push");
+      const deps = schemaDeps("core", entry("project.runCheck"));
+      const body = await lookup(deps, "project.runCheck");
 
       expect(body.ok).toBe(false);
       expect(body.entry).toBeNull();
@@ -4537,7 +5137,7 @@ describe("sessionServer introspection tier filtering", () => {
         { mcpVisibility: "hidden" as const },
         { danger: "restricted" as const },
       ]) {
-        const deps = schemaDeps("workbench", entry("terminal.list", overrides));
+        const deps = schemaDeps("core", entry("terminal.list", overrides));
         const body = await lookup(deps, "terminal.list");
 
         expect(body).toEqual({
@@ -4555,19 +5155,19 @@ describe("sessionServer introspection tier filtering", () => {
     it("stops reporting a grant once its TTL has lapsed", async () => {
       let now = 1000;
       const grantCache = new GrantCache({ ttlMs: 100, sweepIntervalMs: 0, now: () => now });
-      const store = fakeSessionStore("workbench");
+      const store = fakeSessionStore("core");
       (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
       store.sessionOriginMap.set("s1", "help");
 
-      const deps = schemaDeps("workbench", entry("git.push"), { sessionStore: store });
-      grantCache.issueGrant("s1", "git.push");
+      const deps = schemaDeps("core", entry("project.runCheck"), { sessionStore: store });
+      grantCache.issueGrant("s1", "project.runCheck");
 
-      const whileLive = await lookup(deps, "git.push");
+      const whileLive = await lookup(deps, "project.runCheck");
       expect(whileLive.ok).toBe(true);
       expect(whileLive.policy).toMatchObject({ authorizedBy: "grant" });
 
       now = 50_000;
-      const afterExpiry = await lookup(deps, "git.push");
+      const afterExpiry = await lookup(deps, "project.runCheck");
       expect(afterExpiry.ok).toBe(false);
       expect(afterExpiry.policy).toBeNull();
 
@@ -4582,12 +5182,12 @@ describe("sessionServer introspection tier filtering", () => {
     // the real action does instead of ignoring the limit.
     const ranked = [
       ...Array.from({ length: 40 }, (_, i) => entry(`git.denied${i}`)),
-      entry("actions.list"),
+      entry("actions.getSchema"),
       entry("actions.search"),
       entry("terminal.list"),
     ];
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("workbench"),
+      sessionStore: fakeSessionStore("core"),
       dispatchAction: vi.fn((_id: string, args: unknown) => {
         const limit = (args as { limit?: number }).limit ?? 20;
         return Promise.resolve({
@@ -4606,7 +5206,7 @@ describe("sessionServer introspection tier filtering", () => {
 
     const body = payload<{ totalMatches: number; results: ActionManifestEntry[] }>(res);
     expect(body.results.map((r) => r.id)).toEqual([
-      "actions.list",
+      "actions.getSchema",
       "actions.search",
       "terminal.list",
     ]);
@@ -4621,7 +5221,7 @@ describe("sessionServer introspection tier filtering", () => {
   });
 
   it("leaves an out-of-contract search limit for the renderer to reject", async () => {
-    const deps = introspectionDeps("workbench", { totalMatches: 0, results: [] });
+    const deps = introspectionDeps("core", { totalMatches: 0, results: [] });
     const server = createSessionServer("s1", deps);
     await callTool(server, {
       name: "actions.search",
@@ -4641,7 +5241,7 @@ describe("sessionServer introspection tier filtering", () => {
     const permitted = Array.from({ length: 120 }, (_, i) => entry(`actions.p${i}`));
     const all = [...permitted.slice(0, 60), entry("git.push"), ...permitted.slice(60)];
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("workbench"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
         const { offset = 0, limit = 50 } = callArgs as { offset?: number; limit?: number };
         const page = all.slice(offset, offset + limit);
@@ -4681,7 +5281,7 @@ describe("sessionServer introspection tier filtering", () => {
    */
   function pagedListDeps(all: ActionManifestEntry[], dispatchedWorkspace?: DispatchedWorkspaceRef) {
     return fakeDeps({
-      sessionStore: fakeSessionStore("workbench"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
         const { offset = 0, limit = 50 } = callArgs as { offset?: number; limit?: number };
         return Promise.resolve({
@@ -4742,13 +5342,13 @@ describe("sessionServer introspection tier filtering", () => {
   });
 
   it("pages the permitted set so total and hasMore describe the reachable surface", async () => {
-    // Six workbench-permitted ids, deliberately split across two renderer
-    // pages: three land beyond the first 100-entry window, so a filter applied
-    // to a single page would miss them entirely.
+    // Six permitted ids, deliberately split across two renderer pages: three
+    // land beyond the first 100-entry window, so a filter applied to a single
+    // page would miss them entirely.
     const early = ["actions.search", "actions.getSchema", "terminal.list"];
     const late = ["terminal.getOutput", "terminal.getStatus", "worktree.list"];
     for (const id of [...early, ...late]) {
-      expect(isTierPermitted("workbench", id)).toBe(true);
+      expect(isTierPermitted("full", id)).toBe(true);
     }
     const denied = (n: number, from: number) =>
       Array.from({ length: n }, (_, i) => entry(`git.denied${from + i}`));
@@ -4762,7 +5362,7 @@ describe("sessionServer introspection tier filtering", () => {
     expect(all.length).toBeGreaterThan(100);
 
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("workbench"),
+      sessionStore: fakeSessionStore("full"),
       dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
         const { offset = 0, limit = 50 } = callArgs as { offset?: number; limit?: number };
         return Promise.resolve({
@@ -4804,11 +5404,11 @@ describe("sessionServer introspection tier filtering", () => {
   });
 
   it("reports a tier-denied getSchema id as NOT_FOUND rather than advertising it", async () => {
-    const deps = introspectionDeps("workbench", { ok: true, entry: entry("git.push") });
+    const deps = introspectionDeps("core", { ok: true, entry: entry("project.runCheck") });
     const server = createSessionServer("s1", deps);
     const res = await callTool(server, {
       name: "actions.getSchema",
-      arguments: { actionId: "git.push" },
+      arguments: { actionId: "project.runCheck" },
     });
 
     const body = payload<{ ok: boolean; error: { code: string } }>(res);
@@ -4818,25 +5418,36 @@ describe("sessionServer introspection tier filtering", () => {
 
   it("leaves non-introspection results untouched", async () => {
     const result = { actions: [entry("git.push")], totalMatches: 99 };
-    const deps = introspectionDeps("workbench", result);
+    const deps = introspectionDeps("core", result);
     const server = createSessionServer("s1", deps);
     const res = await callTool(server, { name: "terminal.list" });
     expect(payload(res)).toEqual(result);
   });
 
+  // Read through `actions.search`, the enumerating tool a core session holds:
+  // `actions.list` is itself full-only, and the permitted set these widen is
+  // computed once for every introspection carrier.
   describe("live grants widen discovery", () => {
-    it("surfaces a per-tool grant's action in actions.list", async () => {
-      const deps = introspectionDeps("workbench", { actions: [entry("git.push")] });
+    function matches(...ids: string[]) {
+      return { totalMatches: ids.length, results: ids.map((id) => entry(id)) };
+    }
+
+    async function searchIds(server: ReturnType<typeof createSessionServer>): Promise<string[]> {
+      const res = await callTool(server, {
+        name: "actions.search",
+        arguments: { query: "anything" },
+      });
+      return payload<{ results: ActionManifestEntry[] }>(res).results.map((a) => a.id);
+    }
+
+    it("surfaces a per-tool grant's action in actions.search", async () => {
+      const deps = introspectionDeps("core", matches("project.runCheck"));
       const server = createSessionServer("s1", deps);
 
-      const before = await callTool(server, { name: "actions.list" });
-      expect(payload<{ actions: unknown[] }>(before).actions).toHaveLength(0);
+      expect(await searchIds(server)).toEqual([]);
 
-      deps.sessionStore.grantCache.issueGrant("s1", "git.push");
-      const after = await callTool(server, { name: "actions.list" });
-      expect(payload<{ actions: ActionManifestEntry[] }>(after).actions.map((a) => a.id)).toEqual([
-        "git.push",
-      ]);
+      deps.sessionStore.grantCache.issueGrant("s1", "project.runCheck");
+      expect(await searchIds(server)).toEqual(["project.runCheck"]);
 
       deps.sessionStore.grantCache.dispose();
     });
@@ -4845,49 +5456,45 @@ describe("sessionServer introspection tier filtering", () => {
       // Native grants (#10648) are issued up front with an explicit allowlist.
       // If discovery ignored them the agent could never find the tools it was
       // just approved for.
-      const deps = introspectionDeps("workbench", {
-        actions: [entry("git.push"), entry("git.commit"), entry("worktree.delete")],
-      });
+      const deps = introspectionDeps(
+        "core",
+        matches("project.runCheck", "recipe.run", "worktree.delete")
+      );
       const server = createSessionServer("s1", deps);
       deps.sessionStore.grantCache.issueNativeGrant({
         sessionId: "s1",
         actorId: "test-actor",
         actorType: "help-session",
-        allowedTools: ["git.push", "git.commit"],
+        allowedTools: ["project.runCheck", "recipe.run"],
         maxUses: 5,
       });
 
-      const res = await callTool(server, { name: "actions.list" });
-      expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
-        "git.push",
-        "git.commit",
-      ]);
+      expect(await searchIds(server)).toEqual(["project.runCheck", "recipe.run"]);
 
       deps.sessionStore.grantCache.dispose();
     });
 
     it("does not surface a per-resolved-target tool a native grant cannot admit (#12121)", async () => {
-      // The mirror of the test above. `peekNativeGrant` refuses terminal.killAll,
-      // so listing it here would produce the discoverable-but-uncallable state
-      // #11585 rejects: the agent finds the tool, calls it, and is told
-      // TIER_NOT_PERMITTED. The eligible sibling proves the grant is otherwise
-      // live, so the omission is the policy and not a dead grant.
-      const deps = introspectionDeps("workbench", {
-        actions: [entry("git.push"), entry("terminal.killAll"), entry("terminal.closeAll")],
-      });
+      // The mirror of the test above. `peekNativeGrant` refuses
+      // terminal.closeAll, so listing it here would produce the
+      // discoverable-but-uncallable state #11585 rejects: the agent finds the
+      // tool, calls it, and is told TIER_NOT_PERMITTED. The eligible sibling
+      // proves the grant is otherwise live, so the omission is the policy and
+      // not a dead grant.
+      const deps = introspectionDeps(
+        "core",
+        matches("project.runCheck", "terminal.killAll", "terminal.closeAll")
+      );
       const server = createSessionServer("s1", deps);
       deps.sessionStore.grantCache.issueNativeGrant({
         sessionId: "s1",
         actorId: "test-actor",
         actorType: "help-session",
-        allowedTools: ["git.push", "terminal.killAll", "terminal.closeAll"],
+        allowedTools: ["project.runCheck", "terminal.killAll", "terminal.closeAll"],
         maxUses: 5,
       });
 
-      const res = await callTool(server, { name: "actions.list" });
-      expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
-        "git.push",
-      ]);
+      expect(await searchIds(server)).toEqual(["project.runCheck"]);
 
       deps.sessionStore.grantCache.dispose();
     });
@@ -4898,13 +5505,13 @@ describe("sessionServer introspection tier filtering", () => {
         sweepIntervalMs: 0,
         emit: (_sessionId, payload) => emitted.push(payload.type),
       });
-      const store = fakeSessionStore("workbench");
+      const store = fakeSessionStore("core");
       (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
 
       const deps = fakeDeps({
         sessionStore: store,
         dispatchAction: vi.fn().mockResolvedValue({
-          result: { ok: true, result: { actions: [entry("git.push")] } },
+          result: { ok: true, result: matches("project.runCheck") },
         }),
       });
       const server = createSessionServer("s1", deps);
@@ -4912,13 +5519,13 @@ describe("sessionServer introspection tier filtering", () => {
         sessionId: "s1",
         actorId: "test-actor",
         actorType: "help-session",
-        allowedTools: ["git.push"],
+        allowedTools: ["project.runCheck"],
         maxUses: 1,
       });
       emitted.length = 0;
 
-      await callTool(server, { name: "actions.list" });
-      await callTool(server, { name: "actions.list" });
+      expect(await searchIds(server)).toEqual(["project.runCheck"]);
+      expect(await searchIds(server)).toEqual(["project.runCheck"]);
 
       // Discovery is a read: the single use is still available for a real call.
       expect(grantCache.getNativeGrant(grant.id)?.remainingUses).toBe(1);
@@ -4931,11 +5538,12 @@ describe("sessionServer introspection tier filtering", () => {
     // discover what session B was approved for and then fail to dispatch it —
     // the original bug, recreated across sessions.
     it("ignores grants belonging to a different session", async () => {
-      const deps = introspectionDeps("workbench", {
-        actions: [entry("git.push"), entry("git.commit"), entry("worktree.delete")],
-      });
+      const deps = introspectionDeps(
+        "core",
+        matches("project.runCheck", "recipe.run", "worktree.delete")
+      );
       const server = createSessionServer("s1", deps);
-      deps.sessionStore.grantCache.issueGrant("other", "git.commit");
+      deps.sessionStore.grantCache.issueGrant("other", "recipe.run");
       deps.sessionStore.grantCache.issueNativeGrant({
         sessionId: "other",
         actorId: "test-actor",
@@ -4945,12 +5553,9 @@ describe("sessionServer introspection tier filtering", () => {
       });
       // One grant that DOES belong to s1, so the test proves scoping rather
       // than merely proving grants were ignored altogether.
-      deps.sessionStore.grantCache.issueGrant("s1", "git.push");
+      deps.sessionStore.grantCache.issueGrant("s1", "project.runCheck");
 
-      const res = await callTool(server, { name: "actions.list" });
-      expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
-        "git.push",
-      ]);
+      expect(await searchIds(server)).toEqual(["project.runCheck"]);
 
       deps.sessionStore.grantCache.dispose();
     });
@@ -4963,13 +5568,13 @@ describe("sessionServer introspection tier filtering", () => {
         sweepIntervalMs: 0,
         now: () => now,
       });
-      const store = fakeSessionStore("workbench");
+      const store = fakeSessionStore("core");
       (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
 
       const deps = fakeDeps({
         sessionStore: store,
         dispatchAction: vi.fn().mockResolvedValue({
-          result: { ok: true, result: { actions: [entry("git.push")] } },
+          result: { ok: true, result: matches("project.runCheck") },
         }),
       });
       const server = createSessionServer("s1", deps);
@@ -4977,7 +5582,7 @@ describe("sessionServer introspection tier filtering", () => {
         sessionId: "s1",
         actorId: "test-actor",
         actorType: "help-session",
-        allowedTools: ["git.push"],
+        allowedTools: ["project.runCheck"],
         maxUses: 5,
       });
 
@@ -4988,8 +5593,7 @@ describe("sessionServer introspection tier filtering", () => {
       now = 6500;
       expect(grantCache.getActiveNativeGrants("s1")[0]!.expiresAt).toBeGreaterThan(now);
 
-      const res = await callTool(server, { name: "actions.list" });
-      expect(payload<{ actions: unknown[] }>(res).actions).toHaveLength(0);
+      expect(await searchIds(server)).toEqual([]);
 
       grantCache.dispose();
     });
@@ -4997,21 +5601,20 @@ describe("sessionServer introspection tier filtering", () => {
     it("ignores a grant that has lapsed its TTL", async () => {
       let now = 1000;
       const grantCache = new GrantCache({ ttlMs: 100, sweepIntervalMs: 0, now: () => now });
-      const store = fakeSessionStore("workbench");
+      const store = fakeSessionStore("core");
       (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
 
       const deps = fakeDeps({
         sessionStore: store,
         dispatchAction: vi.fn().mockResolvedValue({
-          result: { ok: true, result: { actions: [entry("git.push")] } },
+          result: { ok: true, result: matches("project.runCheck") },
         }),
       });
       const server = createSessionServer("s1", deps);
-      grantCache.issueGrant("s1", "git.push");
+      grantCache.issueGrant("s1", "project.runCheck");
 
       now = 50_000;
-      const res = await callTool(server, { name: "actions.list" });
-      expect(payload<{ actions: unknown[] }>(res).actions).toHaveLength(0);
+      expect(await searchIds(server)).toEqual([]);
 
       grantCache.dispose();
     });
@@ -5022,7 +5625,7 @@ describe("sessionServer introspection tier filtering", () => {
   // sail through unfiltered.
   describe("fails closed on a payload shape it does not recognise", () => {
     it("returns no actions when actions is not an array", async () => {
-      const deps = introspectionDeps("workbench", {
+      const deps = introspectionDeps("full", {
         actions: { smuggled: entry("git.push") },
         leaked: [entry("git.push")],
       });
@@ -5036,7 +5639,7 @@ describe("sessionServer introspection tier filtering", () => {
     });
 
     it("returns no search results when results is not an array", async () => {
-      const deps = introspectionDeps("workbench", {
+      const deps = introspectionDeps("core", {
         totalMatches: 99,
         results: "not-an-array",
         leaked: [entry("git.push")],
@@ -5054,21 +5657,21 @@ describe("sessionServer introspection tier filtering", () => {
 
     it("rejects a getSchema answer for an id other than the one requested", async () => {
       // A permitted id must not vouch for a denied entry's schema.
-      const deps = introspectionDeps("workbench", {
+      const deps = introspectionDeps("core", {
         ok: true,
-        entry: { ...entry("git.push"), id: "actions.list" },
+        entry: { ...entry("project.runCheck"), id: "terminal.list" },
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.getSchema",
-        arguments: { actionId: "git.push" },
+        arguments: { actionId: "project.runCheck" },
       });
 
       const body = payload<{ ok: boolean; error: { code: string; message: string } }>(res);
       expect(body.ok).toBe(false);
       expect(body.error.code).toBe("NOT_FOUND");
       // The message names what the caller asked for, not what came back.
-      expect(body.error.message).toContain("git.push");
+      expect(body.error.message).toContain("project.runCheck");
     });
   });
 
@@ -5093,14 +5696,19 @@ describe("mcp.surface short-circuit (#11549)", () => {
     return [
       makeManifestEntry("actions.list"),
       makeManifestEntry(SURFACE),
+      makeManifestEntry("terminal.list"),
       { ...makeManifestEntry("terminal.new"), kind: "command" as const },
-      { ...makeManifestEntry("git.commit"), kind: "command" as const, danger: "confirm" as const },
+      {
+        ...makeManifestEntry("worktree.resource.teardown"),
+        kind: "command" as const,
+        danger: "confirm" as const,
+      },
       { ...makeManifestEntry("actions.persistedStores"), mcpVisibility: "hidden" as const },
     ];
   }
 
   async function readSurface(
-    tier: "workbench" | "action" | "system" | "external",
+    tier: "core" | "full" | "external",
     overrides?: Partial<SessionServerDeps>
   ) {
     const deps = fakeDeps({
@@ -5116,14 +5724,14 @@ describe("mcp.surface short-circuit (#11549)", () => {
 
   it("answers from main without dispatching to the renderer", async () => {
     const dispatchAction = vi.fn();
-    const { result } = await readSurface("workbench", { dispatchAction });
+    const { result } = await readSurface("core", { dispatchAction });
 
     expect(dispatchAction).not.toHaveBeenCalled();
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({
       manifestVersion: expect.any(Number),
       appVersion: "0.0.0-test",
-      tier: "workbench",
+      tier: "core",
       hash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
   });
@@ -5132,7 +5740,7 @@ describe("mcp.surface short-circuit (#11549)", () => {
   // the listing would send clients chasing drift that does not exist, or hide
   // drift that does.
   it("reports exactly the tool ids tools/list serves at the same tier", async () => {
-    for (const tier of ["workbench", "action", "system", "external"] as const) {
+    for (const tier of ["core", "full", "external"] as const) {
       const { server, result } = await readSurface(tier);
       const listed = ((await listTools(server)) as { tools: Array<{ name: string }> }).tools
         .map((t) => t.name)
@@ -5143,7 +5751,7 @@ describe("mcp.surface short-circuit (#11549)", () => {
 
       // Two empty lists compare equal, so pin the listing to something real
       // first — a short-circuit that returned nothing would otherwise pass.
-      // `mcp.surface` is the anchor: allowlisted at all four tiers, so its
+      // `mcp.surface` is the anchor: allowlisted at all three tiers, so its
       // absence means the registration itself regressed.
       expect(listed).toContain(SURFACE);
       expect(listed.length).toBeGreaterThan(1);
@@ -5152,7 +5760,7 @@ describe("mcp.surface short-circuit (#11549)", () => {
   });
 
   it("omits a tool hidden from tools/list even though its tier permits it", async () => {
-    const { result } = await readSurface("workbench");
+    const { result } = await readSurface("core");
     const ids = (result.structuredContent as { tools: Array<{ id: string }> }).tools.map(
       (t) => t.id
     );
@@ -5161,23 +5769,24 @@ describe("mcp.surface short-circuit (#11549)", () => {
   });
 
   it("ignores a live grant, so the hash tracks the listing rather than a timer", async () => {
-    const sessionStore = fakeSessionStore("workbench");
-    const granted = { ...makeManifestEntry("git.commit"), kind: "command" as const };
+    const sessionStore = fakeSessionStore("core");
+    const granted = { ...makeManifestEntry("project.runCheck"), kind: "command" as const };
     const deps = fakeDeps({
       sessionStore,
-      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("actions.list"), granted]),
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list"), granted]),
     });
     const server = createSessionServer("session-surface-grant", deps);
     await server.connect(makeMockTransport());
 
     const before = await callTool(server, { name: SURFACE });
-    sessionStore.grantCache.issueGrant("session-surface-grant", "git.commit");
+    sessionStore.grantCache.issueGrant("session-surface-grant", "project.runCheck");
     const after = await callTool(server, { name: SURFACE });
 
     const ids = (r: { structuredContent?: unknown }) =>
       (r.structuredContent as { tools: Array<{ id: string }> }).tools.map((t) => t.id);
     expect(ids(after)).toEqual(ids(before));
-    expect(ids(after)).not.toContain("git.commit");
+    expect(ids(before)).toContain("terminal.list");
+    expect(ids(after)).not.toContain("project.runCheck");
     expect((after.structuredContent as { hash: string }).hash).toBe(
       (before.structuredContent as { hash: string }).hash
     );
@@ -5189,19 +5798,17 @@ describe("mcp.surface short-circuit (#11549)", () => {
     // no tier at all afterwards (#11799), and re-reading would either refuse a
     // call the gate already admitted or disagree with the audit record that
     // logs the admitted tier. The gate's tier is the only coherent answer.
-    // The witness has to be a tool `workbench` grants and `external` does not,
-    // or its absence proves nothing — a tool neither tier reaches is missing
+    // The witness has to be a tool `core` grants and `external` does not, or
+    // its absence proves nothing — a tool neither tier reaches is missing
     // either way. Derived rather than named so it cannot rot into a tautology.
-    const workbenchOnly = [...TIER_ALLOWLISTS.workbench].find(
-      (id) => !TIER_ALLOWLISTS.external.has(id)
-    );
-    expect(workbenchOnly).toBeDefined();
+    const coreOnly = [...TIER_ALLOWLISTS.core].find((id) => !TIER_ALLOWLISTS.external.has(id));
+    expect(coreOnly).toBeDefined();
     const sessionStore = fakeSessionStore("external");
     const deps = fakeDeps({
       sessionStore,
       requestManifest: vi.fn().mockImplementation(async () => {
         vi.mocked(sessionStore.getTier).mockReturnValue(null);
-        return [...surfaceManifest(), makeManifestEntry(workbenchOnly!)];
+        return [...surfaceManifest(), makeManifestEntry(coreOnly!)];
       }),
     });
     const server = createSessionServer("session-surface-revoked", deps);
@@ -5214,8 +5821,8 @@ describe("mcp.surface short-circuit (#11549)", () => {
     };
 
     expect(reported.tier).toBe("external");
-    // The concrete tool a workbench re-read would have added to the report.
-    expect(reported.tools.map((t) => t.id)).not.toContain(workbenchOnly);
+    // The concrete tool a core re-read would have added to the report.
+    expect(reported.tools.map((t) => t.id)).not.toContain(coreOnly);
     // Resolved once, at the gate — the re-read this guards against would show
     // up here as a second call.
     expect(sessionStore.getTier).toHaveBeenCalledTimes(1);
@@ -5225,7 +5832,7 @@ describe("mcp.surface short-circuit (#11549)", () => {
     const appendAuditRecord = vi.fn();
     const notifyToolCallStarted = vi.fn();
     const notifyToolCallSettled = vi.fn();
-    await readSurface("workbench", {
+    await readSurface("core", {
       appendAuditRecord,
       notifyToolCallStarted,
       notifyToolCallSettled,
@@ -5236,7 +5843,7 @@ describe("mcp.surface short-circuit (#11549)", () => {
     expect(appendAuditRecord).toHaveBeenCalledTimes(1);
     expect(appendAuditRecord.mock.calls[0]![0]).toMatchObject({
       toolId: SURFACE,
-      tier: "workbench",
+      tier: "core",
       outcome: { kind: "result" },
     });
     // A read never asks the user for anything, so the strip must show a plain
@@ -5294,17 +5901,17 @@ describe("mcp.surface short-circuit (#11549)", () => {
 
   it("is refused before the short-circuit when the tier does not permit it", async () => {
     // The short-circuit sits AFTER the tier gate. Proven by driving a real
-    // denied call rather than by restating the allowlist: `git.commit` stands in
-    // for a tool this tier lacks, and the refusal must be the tier error, not a
-    // surface report.
+    // denied call rather than by restating the allowlist: `terminal.new` stands
+    // in for a tool this tier lacks, and the refusal must be the tier error, not
+    // a surface report.
     const deps = fakeDeps({
-      sessionStore: fakeSessionStore("workbench"),
+      sessionStore: fakeSessionStore("core"),
       requestManifest: vi.fn().mockResolvedValue(surfaceManifest()),
     });
     const server = createSessionServer("session-surface-denied", deps);
     await server.connect(makeMockTransport());
 
-    const denied = await callTool(server, { name: "git.commit" });
+    const denied = await callTool(server, { name: "terminal.new" });
 
     expect(denied.isError).toBe(true);
     expect(JSON.stringify(denied.content)).toContain(TIER_NOT_PERMITTED_CODE);
@@ -5741,11 +6348,8 @@ describe("workspace-bound external sessions (#11789)", () => {
           handler: "handleTerminalReadLastMessageOwned",
           ownsTerminal: "t-1",
         },
-        // Executed through the injected watch service rather than a named dep.
-        "terminal.registerWatch": { args: { terminalIds: ["t-1"] } },
-        "terminal.listWatches": { args: {} },
-        "terminal.getWatchEvents": { args: {} },
-        "terminal.cancelWatch": { args: { watchId: "w_00000000" } },
+        // Executed through the injected notify service rather than a named dep.
+        "terminal.notifyWhenIdle": { args: { terminalId: "t-1" } },
       };
 
       function viewlessDepsFor(name: string): SessionServerDeps {
@@ -6120,7 +6724,10 @@ describe("workspace-bound external sessions (#11789)", () => {
       for (const tool of tools) {
         const source = MCP_EXTERNAL_BASE_MANIFEST.find((e) => e.id === tool.name);
         expect(source).toBeDefined();
-        expect(tool.inputSchema).toEqual(buildToolInputSchema(source!));
+        // The same projection an api-key session is listed with.
+        expect(tool.inputSchema).toEqual(
+          buildToolInputSchema(source!, MCP_EXTERNAL_OMITTED_ARGS[source!.id])
+        );
         expect(tool.outputSchema).toEqual(buildToolOutputSchema(source!));
       }
       // Premise: the loop is vacuous on an empty listing, and several of these
@@ -6520,27 +7127,25 @@ describe("session-liveness gate (#11799)", () => {
   }
 
   /**
-   * A tool `workbench` permits and `external` does not — derived, not named, so
-   * this cannot drift into restating the allowlist. Its existence IS the issue's
+   * A tool `core` permits and `external` does not — derived, not named, so this
+   * cannot drift into restating the allowlist. Its existence IS the issue's
    * premise: if the two tiers were a ladder there would be no such tool, and
-   * falling back to workbench would be a narrowing rather than an escalation.
+   * falling back to core would be a narrowing rather than an escalation.
    */
-  const WORKBENCH_ONLY_TOOL = [...TIER_ALLOWLISTS.workbench].find(
-    (id) => !TIER_ALLOWLISTS.external.has(id)
-  );
+  const CORE_ONLY_TOOL = [...TIER_ALLOWLISTS.core].find((id) => !TIER_ALLOWLISTS.external.has(id));
 
-  it("has at least one tool workbench permits and external withholds", () => {
+  it("has at least one tool core permits and external withholds", () => {
     // Guards the derivation above rather than a literal: were this to come back
     // undefined, every escalation test below would silently lose its teeth.
-    expect(WORKBENCH_ONLY_TOOL).toBeDefined();
+    expect(CORE_ONLY_TOOL).toBeDefined();
   });
 
   it.each([["sse"], ["http"]] as const)(
-    "refuses a revoked external session's tools/call over %s instead of dispatching it at workbench",
+    "refuses a revoked external session's tools/call over %s instead of dispatching it at core",
     async (transport) => {
       // The issue verbatim: an external bearer's session is revoked while its
       // request is in flight, and the tier read that follows used to resolve to
-      // `workbench` — a peer allowlist that permits this tool.
+      // the in-app fallback — a peer allowlist that permits this tool.
       const store = makeStore();
       seedLiveSession(store, "revoked-external", "external", transport);
       const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
@@ -6559,7 +7164,7 @@ describe("session-liveness gate (#11799)", () => {
       store.revokeSession("revoked-external");
 
       const result = await callTool(server, {
-        name: WORKBENCH_ONLY_TOOL!,
+        name: CORE_ONLY_TOOL!,
         arguments: { path: "/etc/passwd" },
       });
 
@@ -6582,12 +7187,12 @@ describe("session-liveness gate (#11799)", () => {
   it("leaves no dedup bookkeeping behind for a session refused at the gate", async () => {
     // The tier row is left behind deliberately while the transport is removed.
     // Revoking would delete both, and the un-gated read would then resolve to
-    // `workbench`, which does not permit `terminal.new` — the call would exit at
-    // the tier gate before dedup and this would pass without the fix. An orphan
-    // `system` row makes the un-gated path actually dispatch and populate dedup,
+    // `core`, which does not permit `terminal.new` — the call would exit at the
+    // tier gate before dedup and this would pass without the fix. An orphan
+    // `full` row makes the un-gated path actually dispatch and populate dedup,
     // so the assertion has something to catch.
     const store = makeStore();
-    seedLiveSession(store, "gone-dedup", "system");
+    seedLiveSession(store, "gone-dedup", "full");
     const dispatchAction = vi
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-1" } } });
@@ -6632,7 +7237,7 @@ describe("session-liveness gate (#11799)", () => {
     // that read as "you legitimately have nothing" and carry no hint that
     // reconnecting is the fix.
     const store = makeStore();
-    seedLiveSession(store, "gone-empty", "system");
+    seedLiveSession(store, "gone-empty", "full");
     const deps = fakeDeps({ sessionStore: store });
     const server = createSessionServer("gone-empty", deps);
 
@@ -6652,7 +7257,7 @@ describe("session-liveness gate (#11799)", () => {
 
   it("refuses resources/read for a revoked session without dispatching the backing action", async () => {
     const store = makeStore();
-    seedLiveSession(store, "gone-read", "system");
+    seedLiveSession(store, "gone-read", "full");
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
     const deps = fakeDeps({ sessionStore: store, dispatchAction });
     const server = createSessionServer("gone-read", deps);
@@ -6669,7 +7274,7 @@ describe("session-liveness gate (#11799)", () => {
     // Subscribing a dead session would leave an event listener pushing updates
     // at a transport that is already gone.
     const store = makeStore();
-    seedLiveSession(store, "gone-sub", "system");
+    seedLiveSession(store, "gone-sub", "full");
     const deps = fakeDeps({ sessionStore: store });
     const server = createSessionServer("gone-sub", deps);
 
@@ -6722,7 +7327,7 @@ describe("session-liveness gate (#11799)", () => {
     const server = createSessionServer("abuse", deps);
 
     const denied = await callTool(server, {
-      name: WORKBENCH_ONLY_TOOL!,
+      name: CORE_ONLY_TOOL!,
       arguments: { path: "/etc/passwd" },
     });
 
@@ -6735,7 +7340,7 @@ describe("session-liveness gate (#11799)", () => {
 
     appendAuditRecord.mockClear();
     const afterRevoke = await callTool(server, {
-      name: WORKBENCH_ONLY_TOOL!,
+      name: CORE_ONLY_TOOL!,
       arguments: { path: "/etc/passwd" },
     });
 
@@ -6749,7 +7354,7 @@ describe("session-liveness gate (#11799)", () => {
     // rewrite a call the gate already admitted. The admitted call still must
     // not resurrect dedup state for the torn-down session.
     const store = makeStore();
-    seedLiveSession(store, "admitted", "system");
+    seedLiveSession(store, "admitted", "full");
     let resolveDispatch: ((envelope: unknown) => void) | undefined;
     const dispatchAction = vi.fn().mockImplementation(
       () =>
@@ -8675,7 +9280,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       dispatchAction: SessionServerDeps["dispatchAction"],
       principal: string = PRINCIPAL
     ) {
-      seedLiveSession(store, sessionId, "action");
+      seedLiveSession(store, sessionId, "full");
       store.sessionOriginMap.set(sessionId, "external");
       store.resourceOwnership.bindPrincipal(sessionId, principal);
       return createSessionServer(
@@ -8935,7 +9540,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       dispatchAction: SessionServerDeps["dispatchAction"],
       principal: string = PRINCIPAL
     ) {
-      seedLiveSession(store, sessionId, "action");
+      seedLiveSession(store, sessionId, "full");
       store.sessionOriginMap.set(sessionId, "external");
       store.resourceOwnership.bindPrincipal(sessionId, principal);
       return createSessionServer(
@@ -9019,7 +9624,7 @@ describe("session-scoped resource ownership (#11909)", () => {
 
     it("reads a handed-over agent's last message", async () => {
       const store = makeStore();
-      seedLiveSession(store, "s-orch", "action");
+      seedLiveSession(store, "s-orch", "full");
       store.sessionOriginMap.set("s-orch", "external");
       store.resourceOwnership.bindPrincipal("s-orch", PRINCIPAL);
       handOver(store, "terminal-handed");
@@ -9069,7 +9674,7 @@ describe("session-scoped resource ownership (#11909)", () => {
         envelope: { result: { ok: true, result: null } },
         raised: true,
       });
-      seedLiveSession(store, "s-orch", "action");
+      seedLiveSession(store, "s-orch", "full");
       store.sessionOriginMap.set("s-orch", "external");
       store.resourceOwnership.bindPrincipal("s-orch", PRINCIPAL);
       handOver(store, "terminal-handed");
@@ -9176,7 +9781,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     it("sends nothing when the user takes the terminal back while the call waits", async () => {
       const store = makeStore();
       const dispatchAction = listingDispatch();
-      seedLiveSession(store, "s-orch", "action");
+      seedLiveSession(store, "s-orch", "full");
       store.sessionOriginMap.set("s-orch", "external");
       store.resourceOwnership.bindPrincipal("s-orch", PRINCIPAL);
       handOver(store, "terminal-handed");
@@ -9244,7 +9849,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     it("does not carry a call across a take-back and a fresh hand-over", async () => {
       const store = makeStore();
       const dispatchAction = listingDispatch();
-      seedLiveSession(store, "s-orch", "action");
+      seedLiveSession(store, "s-orch", "full");
       store.sessionOriginMap.set("s-orch", "external");
       store.resourceOwnership.bindPrincipal("s-orch", PRINCIPAL);
       handOver(store, "terminal-handed");
@@ -9331,14 +9936,14 @@ describe("session-scoped resource ownership (#11909)", () => {
 });
 
 // #12407 — the ladder tiers reach agent panes as well as the assistant. A Claude
-// pane's bearer holds the project's tier with an `external` origin, and at
-// `action` that used to include input into any terminal. The tier still decides
-// what a session could reach; the origin now decides whether unscoped terminal
-// input is part of it, at both gates.
+// pane's bearer holds the project's tier with an `external` origin, and a tier
+// that names unscoped terminal input used to hand it input into any terminal.
+// The tier still decides what a session could reach; the origin now decides
+// whether the unscoped form or its owned twin is part of it, at both gates.
 describe("unscoped terminal input by session origin (#12407)", () => {
   const RESERVED = ["terminal.sendCommand", "terminal.inject", "copyTree.injectToTerminal"];
 
-  function originDeps(origin: "help" | "assistant-pane" | "external", tier: "action" | "system") {
+  function originDeps(origin: "help" | "assistant-pane" | "external", tier: "core" | "full") {
     const manifest = [
       ...RESERVED.map((id) => ({ ...makeManifestEntry(id), kind: "command" as const })),
       { ...makeManifestEntry("terminal.sendCommandOwned"), kind: "command" as const },
@@ -9354,12 +9959,16 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     return deps;
   }
 
-  it.each(["action", "system"] as const)(
+  it.each([
+    // `terminal.inject` is full-only, so its owned twin is too.
+    ["core", ["mcp.surface", "terminal.sendCommandOwned"]],
+    ["full", ["mcp.surface", "terminal.injectOwned", "terminal.sendCommandOwned"]],
+  ] as const)(
     "lists only the owned forms to an agent pane's bearer at %s",
-    async (tier) => {
+    async (tier, expected) => {
       const server = createSessionServer("s-origin", originDeps("external", tier));
       const names = (await listTools(server)).tools.map((t) => t.name).sort();
-      expect(names).toEqual(["mcp.surface", "terminal.injectOwned", "terminal.sendCommandOwned"]);
+      expect(names).toEqual(expected);
     }
   );
 
@@ -9370,7 +9979,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     ["help", true],
     ["assistant-pane", true],
   ] as const)("reports the same surface as tools/list for a %s session", async (origin, full) => {
-    const server = createSessionServer("s-origin", originDeps(origin, "action"));
+    const server = createSessionServer("s-origin", originDeps(origin, "full"));
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, { name: "mcp.surface" })) as {
@@ -9378,22 +9987,50 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     };
     const reported = result.structuredContent.tools.map((t) => t.id);
     for (const id of RESERVED) expect(reported.includes(id)).toBe(full);
-    expect(reported).toContain("terminal.sendCommandOwned");
+    // Each origin holds one form of the input, never both.
+    expect(reported.includes("terminal.sendCommandOwned")).toBe(!full);
   });
 
   it.each(["help", "assistant-pane"] as const)(
     "lists unscoped terminal input to the assistant's %s session",
     async (origin) => {
-      const server = createSessionServer("s-origin", originDeps(origin, "action"));
+      const server = createSessionServer("s-origin", originDeps(origin, "full"));
       const names = (await listTools(server)).tools.map((t) => t.name);
       for (const id of RESERVED) expect(names).toContain(id);
+      // The assistant holds the unscoped forms in place of the owned ones.
+      expect(names).not.toContain("terminal.sendCommandOwned");
+      expect(names).not.toContain("terminal.injectOwned");
     }
   );
 
-  it.each(RESERVED)(
+  it.each(Object.keys(OWNED_TWIN_TOOLS))(
+    "refuses the unscoped %s from a non-renderer-owned session without dispatching",
+    async (tool) => {
+      const deps = originDeps("external", "full");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: tool,
+        arguments: { terminalId: "user-shell", worktreeId: "/repo-wt", command: "ls" },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      // Points at the call that would have worked rather than blaming a tier
+      // the session already holds.
+      expect(text).toContain(
+        `Use '${(OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[tool]}'`
+      );
+      expect(text).not.toContain("not permitted for the 'full' tier");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(RENDERER_OWNED_ORIGIN_ONLY_TOOLS)(
     "refuses %s from a non-renderer-owned session without dispatching",
     async (tool) => {
-      const deps = originDeps("external", "action");
+      const deps = originDeps("external", "full");
       const server = createSessionServer("s-origin", deps);
 
       const result = await callTool(server, {
@@ -9413,16 +10050,16 @@ describe("unscoped terminal input by session origin (#12407)", () => {
   // Only a tool the tier admits is described as reserved; anything above the
   // tier keeps the ordinary tier explanation.
   it("keeps the plain tier refusal when the tier itself does not admit the tool", async () => {
-    const deps = fakeDeps({ sessionStore: fakeSessionStore("workbench") });
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("core") });
     const server = createSessionServer("s-origin", deps);
 
     const result = await callTool(server, {
-      name: "terminal.sendCommand",
-      arguments: { terminalId: "user-shell", command: "ls" },
+      name: "copyTree.injectToTerminal",
+      arguments: { terminalId: "user-shell" },
     });
 
     const text = JSON.stringify(result.content);
-    expect(text).toContain("not permitted for the 'workbench' tier");
+    expect(text).toContain("not permitted for the 'core' tier");
     expect(text).not.toContain("reserved");
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
@@ -9430,7 +10067,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
   it.each(["help", "assistant-pane"] as const)(
     "dispatches unscoped submission for the assistant's %s session",
     async (origin) => {
-      const deps = originDeps(origin, "action");
+      const deps = originDeps(origin, "full");
       const server = createSessionServer("s-origin", deps);
 
       const result = await callTool(server, {
@@ -9452,7 +10089,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
   // hand the session a panel it never opened.
   it("refuses a launch under the id of a terminal that already exists, for any origin", async () => {
     for (const origin of ["external", "help"] as const) {
-      const deps = originDeps(origin, "action");
+      const deps = originDeps(origin, "full");
       deps.isTerminalIdInUse = vi.fn((id: string) => id === "user-shell");
       const server = createSessionServer("s-origin", deps);
 
@@ -9471,7 +10108,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
   });
 
   it("launches under a requested id no terminal is using", async () => {
-    const deps = originDeps("external", "action");
+    const deps = originDeps("external", "full");
     const server = createSessionServer("s-origin", deps);
 
     const result = await callTool(server, {
@@ -9489,7 +10126,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
   it.each(["agent.launch", "workflow.startWorkOnIssue"])(
     "%s will not start Daintree's own assistant for a non-renderer-owned session",
     async (tool) => {
-      const deps = originDeps("external", "action");
+      const deps = originDeps("external", "full");
       const server = createSessionServer("s-origin", deps);
 
       const result = await callTool(server, {
@@ -9508,7 +10145,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
   );
 
   it("still lets a non-renderer-owned session start an ordinary agent", async () => {
-    const deps = originDeps("external", "action");
+    const deps = originDeps("external", "full");
     const server = createSessionServer("s-origin", deps);
 
     const result = await callTool(server, {
@@ -9523,7 +10160,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
   // A session whose origin was never recorded — or was already torn down — is
   // the least-privileged classification, so it gets the narrower surface.
   it("treats an unrecorded origin as not renderer-owned", async () => {
-    const deps = originDeps("help", "action");
+    const deps = originDeps("help", "full");
     deps.sessionStore.sessionOriginMap.delete("s-origin");
     const server = createSessionServer("s-origin", deps);
 
@@ -9534,9 +10171,9 @@ describe("unscoped terminal input by session origin (#12407)", () => {
 
 // #12692: an agent pane's project tier is the line below which calls run
 // without asking. Above it, up to the pane ceiling, a call asks the user
-// instead of being refused; at `system`, confirm-gated calls skip the dialog.
+// instead of being refused. No tier skips a confirm-gated call's dialog.
 describe("agent-pane approval (#12692)", () => {
-  type Tier = "workbench" | "action" | "system";
+  type Tier = "core" | "full";
 
   function paneServer(
     tier: Tier,
@@ -9578,47 +10215,46 @@ describe("agent-pane approval (#12692)", () => {
     return appendAuditRecord.mock.calls.at(-1)?.[0] as Record<string, unknown>;
   }
 
-  it("runs a confirm-gated tool at system without the dialog, and audits it as the tier's", async () => {
-    const pane = paneServer("system");
+  // The old `system` tier pre-authorized this dialog; `full`, which replaced
+  // it, does not, so the pane's widest tool set still leaves the ordinary
+  // confirmation to the renderer and audits no authorization of its own.
+  it("leaves a confirm-gated tool to the ordinary dialog even at full", async () => {
+    const pane = paneServer("full");
     await pane.server.connect(makeMockTransport());
 
     const result = await callTool(pane.server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: { worktreeId: "wt-1" },
     });
 
     expect(result.isError).not.toBe(true);
     expect(pane.requestApproval).not.toHaveBeenCalled();
-    expect(pane.dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
-    expect(lastAudit(pane.appendAuditRecord)).toMatchObject({ authorization: "tier" });
-    pane.sessionStore.grantCache.dispose();
-  });
-
-  it("still leaves a confirm-gated tool to the ordinary dialog below system", async () => {
-    const pane = paneServer("action");
-    await pane.server.connect(makeMockTransport());
-
-    await callTool(pane.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
-
-    expect(pane.requestApproval).not.toHaveBeenCalled();
-    expect(pane.dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    expect(pane.dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      false
+    );
     expect(lastAudit(pane.appendAuditRecord).authorization).toBeUndefined();
     pane.sessionStore.grantCache.dispose();
   });
 
   it("asks before an above-tier call instead of refusing it, then runs it once", async () => {
-    const pane = paneServer("action");
+    const pane = paneServer("core");
     await pane.server.connect(makeMockTransport());
 
     const result = await callTool(pane.server, {
-      name: "git.push",
-      arguments: { remote: "origin" },
+      name: "worktree.setActive",
+      arguments: { worktreeId: "wt-1" },
     });
 
     expect(result.isError).not.toBe(true);
-    expect(pane.requestApproval).toHaveBeenCalledWith("git.push", { remote: "origin" });
+    expect(pane.requestApproval).toHaveBeenCalledWith("worktree.setActive", { worktreeId: "wt-1" });
     // The approval is the confirmation — one ask, not two.
-    expect(pane.dispatchAction).toHaveBeenCalledWith("git.push", { remote: "origin" }, true);
+    expect(pane.dispatchAction).toHaveBeenCalledWith(
+      "worktree.setActive",
+      { worktreeId: "wt-1" },
+      true
+    );
     expect(lastAudit(pane.appendAuditRecord)).toMatchObject({
       confirmationDecision: "approved",
       authorization: "user",
@@ -9626,12 +10262,12 @@ describe("agent-pane approval (#12692)", () => {
     expect(pane.recordDenial).not.toHaveBeenCalled();
     expect(pane.notifyTierMismatch).not.toHaveBeenCalled();
     // "Once" mints nothing: the next call asks again.
-    expect(pane.sessionStore.grantCache.check("pane-s", "git.push").granted).toBe(false);
+    expect(pane.sessionStore.grantCache.check("pane-s", "worktree.setActive").granted).toBe(false);
     pane.sessionStore.grantCache.dispose();
   });
 
   it("refuses a declined ask with USER_REJECTED and does not count it as a denial", async () => {
-    const pane = paneServer("action", {
+    const pane = paneServer("core", {
       requestApproval: vi.fn().mockResolvedValue({
         result: { ok: false, error: { code: USER_REJECTED_CODE, message: "declined" } },
         confirmationDecision: "rejected",
@@ -9639,7 +10275,7 @@ describe("agent-pane approval (#12692)", () => {
     });
     await pane.server.connect(makeMockTransport());
 
-    const result = await callTool(pane.server, { name: "git.push", arguments: {} });
+    const result = await callTool(pane.server, { name: "worktree.setActive", arguments: {} });
 
     expect(result.isError).toBe(true);
     expect(toolErrorPayload(result).code).toBe(USER_REJECTED_CODE);
@@ -9652,7 +10288,7 @@ describe("agent-pane approval (#12692)", () => {
   });
 
   it("reports a missed ask as CONFIRMATION_TIMEOUT", async () => {
-    const pane = paneServer("action", {
+    const pane = paneServer("core", {
       requestApproval: vi.fn().mockResolvedValue({
         result: { ok: false, error: { code: CONFIRMATION_TIMEOUT_CODE, message: "timed out" } },
         confirmationDecision: "timeout",
@@ -9660,7 +10296,7 @@ describe("agent-pane approval (#12692)", () => {
     });
     await pane.server.connect(makeMockTransport());
 
-    const result = await callTool(pane.server, { name: "git.push", arguments: {} });
+    const result = await callTool(pane.server, { name: "worktree.setActive", arguments: {} });
 
     expect(toolErrorPayload(result).code).toBe(CONFIRMATION_TIMEOUT_CODE);
     expect(pane.dispatchAction).not.toHaveBeenCalled();
@@ -9668,12 +10304,12 @@ describe("agent-pane approval (#12692)", () => {
   });
 
   it("fails closed with CONFIRMATION_REQUIRED when no window can show the ask", async () => {
-    const pane = paneServer("action", {
+    const pane = paneServer("core", {
       requestApproval: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
     });
     await pane.server.connect(makeMockTransport());
 
-    const result = await callTool(pane.server, { name: "git.push", arguments: {} });
+    const result = await callTool(pane.server, { name: "worktree.setActive", arguments: {} });
 
     expect(toolErrorPayload(result).code).toBe(CONFIRMATION_REQUIRED_CODE);
     expect(pane.dispatchAction).not.toHaveBeenCalled();
@@ -9681,7 +10317,7 @@ describe("agent-pane approval (#12692)", () => {
   });
 
   it("keeps allowing a tool approved for the session, without asking again", async () => {
-    const pane = paneServer("action", {
+    const pane = paneServer("core", {
       requestApproval: vi.fn().mockResolvedValue({
         result: { ok: true, result: null },
         confirmationDecision: "approved",
@@ -9690,11 +10326,16 @@ describe("agent-pane approval (#12692)", () => {
     });
     await pane.server.connect(makeMockTransport());
 
-    await callTool(pane.server, { name: "git.push", arguments: {} });
-    await callTool(pane.server, { name: "git.push", arguments: { force: false } });
+    await callTool(pane.server, { name: "worktree.setActive", arguments: { worktreeId: "wt-1" } });
+    await callTool(pane.server, { name: "worktree.setActive", arguments: { worktreeId: "wt-2" } });
 
     expect(pane.requestApproval).toHaveBeenCalledTimes(1);
-    expect(pane.dispatchAction).toHaveBeenNthCalledWith(2, "git.push", { force: false }, true);
+    expect(pane.dispatchAction).toHaveBeenNthCalledWith(
+      2,
+      "worktree.setActive",
+      { worktreeId: "wt-2" },
+      true
+    );
     expect(lastAudit(pane.appendAuditRecord)).toMatchObject({ authorization: "session-grant" });
     pane.sessionStore.grantCache.dispose();
   });
@@ -9708,21 +10349,37 @@ describe("agent-pane approval (#12692)", () => {
         approvalScope: "session",
       })
       .mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
-    const pane = paneServer("action", { dispatchAction });
+    const pane = paneServer("full", { dispatchAction });
     await pane.server.connect(makeMockTransport());
 
-    await callTool(pane.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
-    await callTool(pane.server, { name: "worktree.delete", arguments: { worktreeId: "wt-2" } });
+    await callTool(pane.server, {
+      name: "worktree.resource.teardown",
+      arguments: { worktreeId: "wt-1" },
+    });
+    await callTool(pane.server, {
+      name: "worktree.resource.teardown",
+      arguments: { worktreeId: "wt-2" },
+    });
 
-    expect(dispatchAction).toHaveBeenNthCalledWith(1, "worktree.delete", expect.any(Object), false);
-    expect(dispatchAction).toHaveBeenNthCalledWith(2, "worktree.delete", expect.any(Object), true);
+    expect(dispatchAction).toHaveBeenNthCalledWith(
+      1,
+      "worktree.resource.teardown",
+      expect.any(Object),
+      false
+    );
+    expect(dispatchAction).toHaveBeenNthCalledWith(
+      2,
+      "worktree.resource.teardown",
+      expect.any(Object),
+      true
+    );
     pane.sessionStore.grantCache.dispose();
   });
 
   it("neither runs nor remembers an approval for a session that ended while the user decided", async () => {
     type Envelope = Awaited<ReturnType<NonNullable<SessionServerDeps["requestApproval"]>>>;
     let approve!: (envelope: Envelope) => void;
-    const pane = paneServer("action", {
+    const pane = paneServer("core", {
       requestApproval: vi.fn(
         () =>
           new Promise<Envelope>((resolve) => {
@@ -9732,7 +10389,9 @@ describe("agent-pane approval (#12692)", () => {
     });
     await pane.server.connect(makeMockTransport());
 
-    const call = callTool(pane.server, { name: "git.push", arguments: {} }).catch((err) => err);
+    const call = callTool(pane.server, { name: "worktree.setActive", arguments: {} }).catch(
+      (err) => err
+    );
     await vi.waitFor(() => expect(pane.requestApproval).toHaveBeenCalled());
     // Revoked mid-dialog.
     pane.sessionStore.sessions.clear();
@@ -9745,7 +10404,7 @@ describe("agent-pane approval (#12692)", () => {
     await call;
 
     expect(pane.dispatchAction).not.toHaveBeenCalled();
-    expect(pane.sessionStore.grantCache.check("pane-s", "git.push").granted).toBe(false);
+    expect(pane.sessionStore.grantCache.check("pane-s", "worktree.setActive").granted).toBe(false);
     pane.sessionStore.grantCache.dispose();
   });
 
@@ -9755,7 +10414,7 @@ describe("agent-pane approval (#12692)", () => {
       result: { ok: false, error: { code: USER_REJECTED_CODE, message: "declined" } },
       confirmationDecision: "rejected",
     });
-    const pane = paneServer("workbench", { handleProjectRunCheck, requestApproval });
+    const pane = paneServer("core", { handleProjectRunCheck, requestApproval });
     await pane.server.connect(makeMockTransport());
 
     const result = await callTool(pane.server, {
@@ -9769,27 +10428,31 @@ describe("agent-pane approval (#12692)", () => {
     pane.sessionStore.grantCache.dispose();
   });
 
-  it("leaves a target-picking tool's own dialog in place after an approval", async () => {
-    // `terminal.killBatch` is an `action` tool, so a workbench pane asks for it.
-    const pane = paneServer("workbench");
+  // A target-picking tool's dialog is where the user picks the targets, so an
+  // approval could never stand in for it. None is within the pane ceiling any
+  // more — `terminal.killBatch` and `terminal.killAll` left MCP, and
+  // `terminal.closeAll` is reserved for the assistant — so a pane is refused
+  // one outright rather than asked.
+  it("refuses a target-picking tool outright rather than asking for it", async () => {
+    for (const id of Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES)) {
+      expect(PANE_APPROVAL_CEILING.has(id)).toBe(false);
+    }
+    const pane = paneServer("core");
     await pane.server.connect(makeMockTransport());
 
-    await callTool(pane.server, { name: "terminal.killBatch", arguments: { terminalIds: ["t1"] } });
+    const result = await callTool(pane.server, { name: "terminal.closeAll", arguments: {} });
 
-    expect(pane.requestApproval).toHaveBeenCalledTimes(1);
-    expect(pane.dispatchAction).toHaveBeenCalledWith(
-      "terminal.killBatch",
-      expect.any(Object),
-      false
-    );
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(pane.requestApproval).not.toHaveBeenCalled();
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
     pane.sessionStore.grantCache.dispose();
   });
 
   it("leaves a recipe dispatch's own dialog to bind the run after an approval", async () => {
-    // `recipe.run` is an `action` tool. Its dialog is what ties the run to the
-    // recipe the user read (#12263), so the above-tier approval must not stand
-    // in for it.
-    const pane = paneServer("workbench");
+    // `recipe.run` is in the full tool set. Its dialog is what ties the run to
+    // the recipe the user read (#12263), so the above-tier approval must not
+    // stand in for it.
+    const pane = paneServer("core");
     await pane.server.connect(makeMockTransport());
 
     await callTool(pane.server, { name: "recipe.run", arguments: { recipeId: "r-1" } });
@@ -9800,7 +10463,7 @@ describe("agent-pane approval (#12692)", () => {
   });
 
   it("refuses what is outside the pane ceiling without asking", async () => {
-    const pane = paneServer("system");
+    const pane = paneServer("full");
     await pane.server.connect(makeMockTransport());
 
     const result = await callTool(pane.server, {
@@ -9815,10 +10478,10 @@ describe("agent-pane approval (#12692)", () => {
   });
 
   it("keeps a non-pane session's tier a hard ceiling", async () => {
-    const pane = paneServer("action", { requestApproval: undefined });
+    const pane = paneServer("core", { requestApproval: undefined });
     await pane.server.connect(makeMockTransport());
 
-    const result = await callTool(pane.server, { name: "git.push", arguments: {} });
+    const result = await callTool(pane.server, { name: "worktree.setActive", arguments: {} });
 
     expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
     expect(pane.recordDenial).toHaveBeenCalledWith("pane-s", "tierMismatch");
@@ -9827,9 +10490,9 @@ describe("agent-pane approval (#12692)", () => {
   });
 
   it("lists above-tier tools to a pane so it can ask for them", async () => {
-    const manifest = ["worktree.list", "git.push"].map((id) => makeManifestEntry(id));
-    const pane = paneServer("workbench", { requestManifest: vi.fn().mockResolvedValue(manifest) });
-    const plain = paneServer("workbench", {
+    const manifest = ["worktree.list", "worktree.setActive"].map((id) => makeManifestEntry(id));
+    const pane = paneServer("core", { requestManifest: vi.fn().mockResolvedValue(manifest) });
+    const plain = paneServer("core", {
       requestManifest: vi.fn().mockResolvedValue(manifest),
       requestApproval: undefined,
     });
@@ -9837,8 +10500,9 @@ describe("agent-pane approval (#12692)", () => {
     const paneNames = (await listBaseTools(pane.server)).map((tool) => tool.name);
     const plainNames = (await listBaseTools(plain.server)).map((tool) => tool.name);
 
-    expect(paneNames).toContain("git.push");
-    expect(plainNames).not.toContain("git.push");
+    expect(paneNames).toContain("worktree.setActive");
+    expect(plainNames).toContain("worktree.list");
+    expect(plainNames).not.toContain("worktree.setActive");
     pane.sessionStore.grantCache.dispose();
     plain.sessionStore.grantCache.dispose();
   });

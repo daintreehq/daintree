@@ -4,6 +4,7 @@
       "Read(**)",
       "WebFetch",
       "mcp__daintree-docs__*",
+      "mcp__daintree-runbooks__*",
       "Bash(gh *)",
       "Bash(glab *)",
       "Bash(tea *)"

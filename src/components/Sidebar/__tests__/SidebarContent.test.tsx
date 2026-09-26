@@ -154,8 +154,13 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toMatch(/hasFilters\s*=\s*[\s\S]*?liveQuery\.trim\(\)\.length\s*>\s*0/);
   });
 
-  it("drives the filtering memo from a deferred query so keystrokes stay responsive", () => {
-    expect(source).toContain("const deferredQuery = useDeferredValue(liveQuery)");
+  it("defers the filtering memo only for a sidebar large enough to hold up typing", () => {
+    // Small sidebars filter in the keystroke's own frame; past the threshold
+    // the memo reads the lagged query so keystrokes stay responsive.
+    expect(source).toContain("const laggedQuery = useDeferredValue(liveQuery)");
+    expect(source).toMatch(
+      /deferredWorktrees\.length > SIDEBAR_DEFER_FILTER_MIN_WORKTREES \? laggedQuery : liveQuery/
+    );
     expect(source).toMatch(/query:\s*deferredQuery/);
   });
 });

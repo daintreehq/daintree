@@ -613,7 +613,7 @@ describe("project action hardening", () => {
   it("project.saveSettings strips daintreeMcpTier and exposeDaintreeMcpToAgents to block self-elevation", async () => {
     mocks.projectClient.getSettings.mockResolvedValueOnce({
       runCommands: [],
-      daintreeMcpTier: "workbench",
+      daintreeMcpTier: "core",
     });
     mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
     const { service } = buildService(registerProjectActions);
@@ -624,7 +624,7 @@ describe("project action hardening", () => {
         projectId: "project-1",
         settings: {
           devServerCommand: "vite",
-          daintreeMcpTier: "system",
+          daintreeMcpTier: "full",
           exposeDaintreeMcpToAgents: true,
         },
       },
@@ -633,7 +633,7 @@ describe("project action hardening", () => {
 
     expect(result).toEqual({ ok: true, result: undefined });
     const saved = mocks.projectClient.saveSettings.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(saved.daintreeMcpTier).toBe("workbench");
+    expect(saved.daintreeMcpTier).toBe("core");
     expect(saved.exposeDaintreeMcpToAgents).toBeUndefined();
     expect(saved.devServerCommand).toBe("vite");
   });

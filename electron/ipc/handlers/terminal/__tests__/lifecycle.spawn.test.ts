@@ -183,7 +183,7 @@ const {
   mockGetPaneIdForToken,
   mockEnsureReady,
 } = vi.hoisted(() => ({
-  mockValidateToken: vi.fn<(token: string) => "workbench" | "action" | "system" | false>(),
+  mockValidateToken: vi.fn<(token: string) => "core" | "full" | false>(),
   mockIsRunning: vi.fn<() => boolean>(),
   mockCurrentPort: vi.fn<() => number | null>(),
   mockPreparePaneConfig: vi.fn(),
@@ -1368,7 +1368,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("skips per-pane MCP injection when DAINTREE_MCP_TOKEN is a valid help token (session-dir owns the .mcp.json)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1388,7 +1388,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    // No flag rewriting on action-tier help launches — Claude Code's normal
+    // No flag rewriting on core help launches — Claude Code's normal
     // cwd discovery loads the session-dir .mcp.json that HelpSessionService
     // already wrote.
     expect(spawnArgs.command).toBe("claude");
@@ -1401,7 +1401,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // session journal and hydration's orphan adoption treated the overlay's
     // PTY as an ordinary agent pane. Sealing it onto the record is what lets
     // those paths recognise it from a pre-kill snapshot.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1471,7 +1471,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("appends --dangerously-skip-permissions when help session bypassPermissions is true", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "system" : false));
+    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "full" : false));
     mockGetBypassPermissions.mockImplementation((token) => token === "bypass-token");
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -1500,7 +1500,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   // an installed CLI carrying a valid bearer never gets the assistant env.
   it("treats a retired Daintree Assistant launch as a plain spawn, even with bypass and debug on", async () => {
     mockValidateToken.mockImplementation((token) =>
-      token === "assistant-bypass" ? "workbench" : false
+      token === "assistant-bypass" ? "core" : false
     );
     mockGetBypassPermissions.mockImplementation((token) => token === "assistant-bypass");
     mockGetDebugLogging.mockImplementation((token) => token === "assistant-bypass");
@@ -1528,7 +1528,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
 
   it("does NOT inject DAINTREE_ASSISTANT_AUTO_APPROVE when the assistant launches with bypassPermissions off", async () => {
     mockValidateToken.mockImplementation((token) =>
-      token === "assistant-nobypass" ? "system" : false
+      token === "assistant-nobypass" ? "full" : false
     );
     mockGetBypassPermissions.mockImplementation(() => false);
 
@@ -1554,7 +1554,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
 
   it("does NOT inject DAINTREE_ASSISTANT_DEBUG_LOG when debugLogging is off", async () => {
     mockValidateToken.mockImplementation((token) =>
-      token === "assistant-nodebug" ? "action" : false
+      token === "assistant-nodebug" ? "core" : false
     );
     mockGetDebugLogging.mockImplementation(() => false);
 
@@ -1581,7 +1581,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   it("does NOT inject DAINTREE_ASSISTANT_DEBUG_LOG for a non-assistant help agent even when debugLogging is on", async () => {
     // The var is scoped to the daintree-assistant CLI; a claude help launch
     // with debugLogging on must never receive it.
-    mockValidateToken.mockImplementation((token) => (token === "claude-debug" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "claude-debug" ? "core" : false));
     mockGetDebugLogging.mockImplementation(() => true);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -1604,13 +1604,13 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
   });
 
-  it("appends --dangerously-skip-permissions even at action tier when bypassPermissions is on", async () => {
-    // Tier and bypassPermissions are decoupled (#7532): an action-tier
-    // session with bypass on should still skip the CLI confirmation gate.
+  it("appends --dangerously-skip-permissions even at core tier when bypassPermissions is on", async () => {
+    // Tier and bypassPermissions are decoupled (#7532): a core session with
+    // bypass on should still skip the CLI confirmation gate.
     mockValidateToken.mockImplementation((token) =>
-      token === "bypass-action-token" ? "action" : false
+      token === "bypass-core-token" ? "core" : false
     );
-    mockGetBypassPermissions.mockImplementation((token) => token === "bypass-action-token");
+    mockGetBypassPermissions.mockImplementation((token) => token === "bypass-core-token");
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1624,7 +1624,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         cwd: tmpDir,
         command: "claude",
         launchAgentId: "claude",
-        env: { DAINTREE_MCP_TOKEN: "bypass-action-token" },
+        env: { DAINTREE_MCP_TOKEN: "bypass-core-token" },
       } as unknown as Parameters<typeof handler>[1]
     );
 
@@ -1632,12 +1632,10 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(spawnArgs.command).toContain("--dangerously-skip-permissions");
   });
 
-  it("does NOT append --dangerously-skip-permissions when tier=system but bypassPermissions=false", async () => {
-    // Tier and bypassPermissions are decoupled (#7532): a system-tier
-    // session can still respect Claude's permission gate.
-    mockValidateToken.mockImplementation((token) =>
-      token === "system-no-bypass" ? "system" : false
-    );
+  it("does NOT append --dangerously-skip-permissions when tier=full but bypassPermissions=false", async () => {
+    // Tier and bypassPermissions are decoupled (#7532): a full session can
+    // still respect Claude's permission gate.
+    mockValidateToken.mockImplementation((token) => (token === "full-no-bypass" ? "full" : false));
     mockGetBypassPermissions.mockImplementation(() => false);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -1652,7 +1650,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         cwd: tmpDir,
         command: "claude",
         launchAgentId: "claude",
-        env: { DAINTREE_MCP_TOKEN: "system-no-bypass" },
+        env: { DAINTREE_MCP_TOKEN: "full-no-bypass" },
       } as unknown as Parameters<typeof handler>[1]
     );
 
@@ -1667,7 +1665,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // renderer's command generator may include `--dangerously-skip-permissions`,
     // and a help session with bypass off must strip it so the assistant
     // doesn't silently bypass permission prompts.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetBypassPermissions.mockImplementation(() => false);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -1696,7 +1694,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // `--dangerously-skip-permissions=false` could survive a substring-only
     // check. The strip must use a token-boundary regex that also matches
     // `--flag=value` forms.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetBypassPermissions.mockImplementation(() => false);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -1723,7 +1721,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   it("strips lookalike =false and appends canonical --dangerously-skip-permissions when bypass is on", async () => {
     // Strip-first then conditionally append guarantees the session's
     // bypass preference wins over a smuggled `=false` form in customArgs.
-    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "core" : false));
     mockGetBypassPermissions.mockImplementation((token) => token === "bypass-token");
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -1751,7 +1749,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("keeps a help launch's enrichment when an untouched session starts fresh (#12371)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "core" : false));
     mockGetBypassPermissions.mockImplementation((token) => token === "bypass-token");
     const session = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
     findUntouchedClaudeSessionMock.mockResolvedValueOnce(session);
@@ -1789,7 +1787,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(true);
     mockCurrentPort.mockReturnValue(45454);
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1838,10 +1836,10 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         },
       },
     });
-    mockValidateToken.mockReturnValue("action");
+    mockValidateToken.mockReturnValue("core");
     mockIsRunning.mockReturnValue(true);
     mockCurrentPort.mockReturnValue(45454);
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1877,7 +1875,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(true);
     mockCurrentPort.mockReturnValue(45454);
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1904,7 +1902,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(true);
     mockCurrentPort.mockReturnValue(45454);
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1936,7 +1934,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       configPath: "/tmp/pane-config.json",
       token: "pane-token",
     });
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1960,18 +1958,62 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).toHaveBeenCalledWith({
       paneId: "restored-pane",
       port: 45454,
-      tier: "action",
+      tier: "core",
     });
     expect(spawnArgs.command).toContain("--mcp-config");
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
   });
+
+  it.each([
+    ["workbench", "core"],
+    ["action", "core"],
+    ["system", "full"],
+  ] as const)(
+    "mints the pane bearer at the current tool set for a pre-split project tier (%s → %s)",
+    async (stored, expected) => {
+      // Project files written before the core/full split still carry the
+      // ladder names; the pane must be served the equivalent set, not refused
+      // or silently dropped to "off".
+      mockValidateToken.mockReturnValue(false);
+      mockIsRunning.mockReturnValue(true);
+      mockCurrentPort.mockReturnValue(45454);
+      mockPreparePaneConfig.mockResolvedValue({
+        configPath: "/tmp/pane-config.json",
+        token: "pane-token",
+      });
+      mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: stored });
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+
+      const handler = getSpawnHandler();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          id: "legacy-tier-pane",
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: "claude",
+          launchAgentId: "claude",
+        } as unknown as Parameters<typeof handler>[1]
+      );
+
+      expect(mockPreparePaneConfig).toHaveBeenCalledWith({
+        paneId: "legacy-tier-pane",
+        port: 45454,
+        tier: expected,
+      });
+      expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
+    }
+  );
 
   it("continues without per-pane MCP injection when MCP cannot be made ready", async () => {
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(false);
     mockCurrentPort.mockReturnValue(null);
     mockEnsureReady.mockResolvedValue(false);
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1996,7 +2038,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("appends Codex MCP -c flags to a Codex help-session spawn", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetCodexLaunchArgs.mockImplementation((token) =>
       token === "help-token"
         ? [
@@ -2042,8 +2084,8 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("appends --dangerously-bypass-approvals-and-sandbox when bypassPermissions is on for a Codex help launch", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "system-token" ? "system" : false));
-    mockGetBypassPermissions.mockImplementation((token) => token === "system-token");
+    mockValidateToken.mockImplementation((token) => (token === "full-token" ? "full" : false));
+    mockGetBypassPermissions.mockImplementation((token) => token === "full-token");
     mockGetCodexLaunchArgs.mockReturnValue([]);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2058,7 +2100,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         cwd: tmpDir,
         command: "codex",
         launchAgentId: "codex",
-        env: { DAINTREE_MCP_TOKEN: "system-token" },
+        env: { DAINTREE_MCP_TOKEN: "full-token" },
       } as unknown as Parameters<typeof handler>[1]
     );
 
@@ -2091,7 +2133,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // `null` from the agent-specific arg accessor with a valid help token
     // means the token belongs to a different agent. Spawning Codex without
     // its MCP wiring would silently degrade the help session — fail hard.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetCodexLaunchArgs.mockReturnValue(null);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2118,7 +2160,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // Every lane of a project shares one session directory, so Claude's MCP
     // wiring — with its literal per-lane bearer — cannot come from the cwd's
     // `.mcp.json`. It arrives as a per-lane file through this flag instead.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetClaudeLaunchArgs.mockReturnValue([
       "--mcp-config",
       "/Users/me/Library/help-sessions/abc123/.lanes/slot-1.mcp.json",
@@ -2152,7 +2194,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("refuses to spawn a Claude help session when getClaudeLaunchArgs returns null — cross-agent token reuse", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetClaudeLaunchArgs.mockReturnValue(null);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2205,7 +2247,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("appends --plan to a Copilot help-session spawn (#7542)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetCopilotLaunchArgs.mockImplementation((token) =>
       token === "help-token" ? ["--plan"] : null
     );
@@ -2233,7 +2275,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("refuses to spawn a Copilot help session when getCopilotLaunchArgs returns null — cross-agent token reuse signal (#7542)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetCopilotLaunchArgs.mockReturnValue(null);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2257,7 +2299,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("strips a smuggled --plan from a Copilot command so the appended flag is unambiguously authoritative (#7542)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetCopilotLaunchArgs.mockReturnValue(["--plan"]);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2304,7 +2346,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("binds terminalId to the help session before spawn so HelpSessionService can kill it on displacement (#7509)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -2329,7 +2371,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("refuses to spawn an assistant PTY when markTerminalForToken returns false (#7509)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockMarkTerminalForToken.mockReturnValue(false);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2375,7 +2417,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it("merges DAINTREE_ASSISTANT_SCRATCH_DIR into spawn env for a help launch (#7947)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetAssistantScratchEnv.mockImplementation((token) =>
       token === "help-token"
         ? { DAINTREE_ASSISTANT_SCRATCH_DIR: "/var/user-data/assistant-scratch/abc/sess-1" }
@@ -2450,7 +2492,7 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
     };
     mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
     mockGetProjectById.mockReturnValue(null);
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(true);
     mockCurrentPort.mockReturnValue(45454);
@@ -2485,7 +2527,7 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
     expect(mockPreparePaneConfig).toHaveBeenCalledWith({
       paneId: "assistant-pane",
       port: 45454,
-      tier: "action",
+      tier: "core",
     });
     expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
@@ -2785,7 +2827,7 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     mockGetProjectById.mockImplementation((id: string) =>
       id === "p1" || id === "p2" ? { id, path: tmpDir, name: id } : null
     );
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(true);
     mockCurrentPort.mockReturnValue(45454);

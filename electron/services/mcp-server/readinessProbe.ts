@@ -2,7 +2,6 @@ import http from "node:http";
 // From the allowlists config, not `./shared.js` — this module is on the eager
 // boot path (HelpSessionService value-imports it) and `shared.js` value-imports
 // the MCP SDK's `types.js`, which builds the full zod protocol schemas.
-import { ACTIONS_LIST_TOOL } from "../../../shared/config/helpAssistantTierAllowlists.js";
 
 export const PROBE_MAX_ATTEMPTS = 3;
 export const PROBE_BASE_DELAY_MS = 50;
@@ -22,6 +21,14 @@ export interface ProbeOptions {
 interface InitializeResult {
   sessionId: string;
 }
+
+/**
+ * The renderer-backed tool whose presence in `tools/list` proves the manifest
+ * reached the listing. It has to be on every tool set a probed bearer can
+ * hold — a help session at `core` lists a fraction of what `full` does — so
+ * it is one the `core` set carries, not a discovery tool that only `full` has.
+ */
+export const READINESS_PROBE_TOOL = "actions.getContext";
 
 /**
  * Active readiness probe — POSTs an MCP `initialize` request to the bound
@@ -433,10 +440,10 @@ function sendSseInitialize(port: number, bearerToken: string, timeoutMs: number)
         (tool) =>
           tool &&
           typeof tool === "object" &&
-          (tool as Record<string, unknown>).name === ACTIONS_LIST_TOOL
+          (tool as Record<string, unknown>).name === READINESS_PROBE_TOOL
       );
       if (!hasManifestBackedTool) {
-        settle(() => reject(new Error("tools/list response missing actions.list")));
+        settle(() => reject(new Error(`tools/list response missing ${READINESS_PROBE_TOOL}`)));
         return;
       }
       settle(() => resolve());

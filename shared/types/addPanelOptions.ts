@@ -11,6 +11,7 @@ import type {
   FileBrowserTreeSnapshot,
   SessionLostReason,
   PanelRestoreRecovery,
+  TerminalScratchpad,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -211,6 +212,11 @@ export interface AddPanelOptionsBase {
    * resurrect a pane or start a second process in it.
    */
   replacesRestoreRecovery?: boolean;
+  /**
+   * PTY-only. The terminal's Scratchpad (#12835), carried by restore. A live
+   * panel's own notes outrank this when the call lands on an existing record.
+   */
+  scratchpad?: TerminalScratchpad;
   /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →

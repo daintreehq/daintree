@@ -48,6 +48,12 @@ interface CommitPanelProps {
   skipPushConfirm: boolean;
   /** Persist the per-worktree opt-out preference. Called only when the user confirms the push. */
   onSetSkipPushConfirm: (value: boolean) => void;
+  /**
+   * The staging status on screen is the cached snapshot seeded at open and has
+   * not been re-read yet. Commit and push wait for the live read so they never
+   * act on a file list or branch that may have moved; typing stays open.
+   */
+  isVerifying?: boolean;
 }
 
 export function CommitPanel({
@@ -68,6 +74,7 @@ export function CommitPanel({
   pushTargetBranch,
   skipPushConfirm,
   onSetSkipPushConfirm,
+  isVerifying = false,
 }: CommitPanelProps) {
   const [isCommitting, setIsCommitting] = useState(false);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
@@ -85,6 +92,7 @@ export function CommitPanel({
   const subjectLine = commitMessage.split("\n")[0] || "";
   const hasLineOverflow = /.{73,}/.test(commitMessage);
   const isBusy = isCommitting || isPushing;
+  const actionsBusy = isBusy || isVerifying;
   const canCommit =
     stagedCount > 0 && commitMessage.trim().length > 0 && !isDetachedHead && !hasConflicts;
 
@@ -168,7 +176,7 @@ export function CommitPanel({
   );
 
   const handleCommit = useCallback(async () => {
-    if (!canCommit || isBusy) return;
+    if (!canCommit || actionsBusy) return;
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     setIsCommitting(true);
@@ -181,10 +189,10 @@ export function CommitPanel({
       setIsCommitting(false);
       actionInFlightRef.current = false;
     }
-  }, [canCommit, isBusy, commitMessage, onCommit, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, commitMessage, onCommit, onCommitMessageChange]);
 
   const handleCommitAndPush = useCallback(async () => {
-    if (!canCommit || isBusy) return;
+    if (!canCommit || actionsBusy) return;
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     try {
@@ -195,14 +203,14 @@ export function CommitPanel({
     } finally {
       actionInFlightRef.current = false;
     }
-  }, [canCommit, isBusy, commitMessage, onCommitAndPush, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, commitMessage, onCommitAndPush, onCommitMessageChange]);
 
   const handlePrimaryClick = useCallback(() => {
     if (isBlocked) {
       focusBlocker();
       return;
     }
-    if (isBusy) return;
+    if (actionsBusy) return;
     if (hasRemote) {
       // D2 confirmation: every remote push is a shared-state mutation. Show
       // the commit message + target branch preview unless the user has opted
@@ -221,7 +229,7 @@ export function CommitPanel({
     }
   }, [
     isBlocked,
-    isBusy,
+    actionsBusy,
     hasRemote,
     pushDestination,
     skipPushConfirm,
@@ -540,10 +548,10 @@ export function CommitPanel({
                       focusBlocker();
                       return;
                     }
-                    if (isBusy) return;
+                    if (actionsBusy) return;
                     void handleCommit();
                   }}
-                  aria-disabled={!canCommit || isBusy || undefined}
+                  aria-disabled={!canCommit || actionsBusy || undefined}
                   className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                 >
                   {isCommitting ? (
@@ -557,7 +565,7 @@ export function CommitPanel({
                   variant="default"
                   size="sm"
                   onClick={handlePrimaryClick}
-                  aria-disabled={!canCommit || isBusy || undefined}
+                  aria-disabled={!canCommit || actionsBusy || undefined}
                   className={cn("flex-1", DISABLED_CTA_CLASSES)}
                 >
                   {isPushing ? (
@@ -582,7 +590,7 @@ export function CommitPanel({
                 variant="default"
                 size="sm"
                 onClick={handlePrimaryClick}
-                aria-disabled={!canCommit || isBusy || undefined}
+                aria-disabled={!canCommit || actionsBusy || undefined}
                 className={cn("flex-1", DISABLED_CTA_CLASSES)}
               >
                 {isCommitting ? (

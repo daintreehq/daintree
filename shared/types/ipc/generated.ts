@@ -934,13 +934,9 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./mcpServer.js").McpLogRecord[];
   };
-  "mcp-server:get-pane-wake-enabled": {
-    args: [];
-    result: boolean;
-  };
-  "mcp-server:get-pane-watch-state": {
+  "mcp-server:get-pane-notify-state": {
     args: [terminalId: string];
-    result: import("../terminalWatch.js").PaneWatchState | null;
+    result: import("../terminalNotify.js").PaneNotifyState | null;
   };
   "mcp-server:get-runtime-state": {
     args: [];
@@ -1021,19 +1017,15 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
-  "mcp-server:set-pane-wake-enabled": {
-    args: [enabled: boolean];
-    result: boolean;
-  };
   "mcp-server:set-port": {
     args: [port: number | null];
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
   "mcp-server:set-session-tier": {
-    args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
-    result: { sessionId: string; tier: "action" | "workbench" | "system" };
+    args: [payload: { sessionId: string; tier: import("./maps.js").HelpAssistantTier }];
+    result: { sessionId: string; tier: import("./maps.js").HelpAssistantTier };
   };
-  "mcp-server:stop-pane-watches": {
+  "mcp-server:stop-pane-notices": {
     args: [terminalId: string];
     result: void;
   };
@@ -1045,14 +1037,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../menu.js").ShowContextMenuPayload];
     result: string | null;
   };
-  "milestones:get": {
-    args: [];
-    result: Record<string, boolean>;
-  };
-  "milestones:mark-shown": {
-    args: [milestoneId: string];
-    result: void;
-  };
   "onboarding:checklist-dismiss": {
     args: [];
     result: void;
@@ -1060,10 +1044,6 @@ export interface GeneratedIpcInvokeMap {
   "onboarding:checklist-get": {
     args: [];
     result: import("./maps.js").ChecklistState;
-  };
-  "onboarding:checklist-mark-celebration-shown": {
-    args: [];
-    result: void;
   };
   "onboarding:checklist-mark-item": {
     args: [item: import("./maps.js").ChecklistItemId];

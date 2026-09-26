@@ -328,6 +328,50 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     await expect(promise).rejects.toBeInstanceOf(SessionBindingError);
     await expect(promise).rejects.toThrow(/Do not retry/);
   });
+
+  // A workflow with more than ten calls in flight to one view (parallel waits
+  // and notices) tripped Node's MaxListeners warning when every request added
+  // its own `destroyed` listener.
+  it("shares one destroyed listener across many in-flight dispatches, and rejects them all", async () => {
+    const wc = makeWebContents(506);
+    mockWebContentsRegistry.set(506, wc);
+
+    const promises = Array.from({ length: 12 }, () =>
+      bridge.dispatchActionForWebContents(506, "actions.list", {}, false)
+    );
+    for (const p of promises) p.catch(() => {});
+    await Promise.resolve();
+
+    expect(wc.destroyedListenerCount()).toBe(1);
+    wc.triggerDestroyed();
+    for (const p of promises) {
+      await expect(p).rejects.toBeInstanceOf(SessionBindingError);
+    }
+  });
+
+  it("drops the shared destroyed listener once the last in-flight dispatch settles", async () => {
+    const wc = makeWebContents(507, {
+      onSend: (channel, payload) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        queueMicrotask(() =>
+          mockIpcMain.emit(
+            CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+            { sender: { id: 507 } },
+            { requestId: payload.requestId, result: { ok: true, result: null } }
+          )
+        );
+      },
+    });
+    mockWebContentsRegistry.set(507, wc);
+
+    await Promise.all(
+      Array.from({ length: 3 }, () =>
+        bridge.dispatchActionForWebContents(507, "actions.list", {}, false)
+      )
+    );
+
+    expect(wc.destroyedListenerCount()).toBe(0);
+  });
 });
 
 describe("rendererBridge — per-WebContents manifest cache (#9887)", () => {

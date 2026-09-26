@@ -215,17 +215,13 @@ export function registerWorktreeServiceActions(
       id: "worktree.setActive",
       title: "Set active worktree",
       description:
-        "Switch which worktree is the active one, changing the default target for everything scoped to 'the current worktree' and moving what the user sees. Call this deliberately — subsequent actions that omit a worktree will follow it, so switching mid-task can silently retarget later work.",
+        "Switch the active worktree, moving what the user sees and the default target of every later call that omits a worktree. Switching mid-task can silently retarget later work.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        worktreeId: z
-          .string()
-          .describe(
-            "Identifies the worktree to make active, using an id from the worktree-listing capability. Everything later scoped to the current worktree follows this."
-          ),
+        worktreeId: z.string().describe("Worktree id from the worktree listing."),
       }),
       run: async ({ worktreeId }) => {
         await worktreeClient.setActive(worktreeId);

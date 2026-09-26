@@ -770,13 +770,10 @@ export const CHANNELS = {
    * key rotation (revoke-all) stays a separate action (#8778).
    */
   MCP_SERVER_DISCONNECT_BEARER: "mcp-server:disconnect-bearer",
-  /** Whether terminal watches may wake the watching pane (#12491). */
-  MCP_SERVER_GET_PANE_WAKE_ENABLED: "mcp-server:get-pane-wake-enabled",
-  MCP_SERVER_SET_PANE_WAKE_ENABLED: "mcp-server:set-pane-wake-enabled",
-  /** One pane's terminal-watch state, for its chrome to hydrate on mount (#12491). */
-  MCP_SERVER_GET_PANE_WATCH_STATE: "mcp-server:get-pane-watch-state",
-  /** The pane chrome's "stop": every watch the pane holds goes (#12491). */
-  MCP_SERVER_STOP_PANE_WATCHES: "mcp-server:stop-pane-watches",
+  /** One pane's pending terminal notices, for its chrome to hydrate on mount. */
+  MCP_SERVER_GET_PANE_NOTIFY_STATE: "mcp-server:get-pane-notify-state",
+  /** The pane chrome's "stop": every notice the pane has pending goes. */
+  MCP_SERVER_STOP_PANE_NOTICES: "mcp-server:stop-pane-notices",
   /**
    * Hand a running terminal to an orchestrating agent pane, or take it back
    * (#12490). Renderer-only by construction: no action or MCP tool reaches
@@ -858,15 +855,10 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
-  ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
   ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
   ONBOARDING_TOUR_DISMISS_INVITE: "onboarding:tour-dismiss-invite",
   ONBOARDING_TOUR_SET_PROGRESS: "onboarding:tour-set-progress",
   ONBOARDING_TOUR_SET_MUTED: "onboarding:tour-set-muted",
-
-  // Milestone channels
-  MILESTONES_GET: "milestones:get",
-  MILESTONES_MARK_SHOWN: "milestones:mark-shown",
 
   // Shortcut Hints channels
   SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",

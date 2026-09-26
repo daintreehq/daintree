@@ -1,3 +1,4 @@
+import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import {
   Suspense,
   lazy,
@@ -113,12 +114,11 @@ import { useWorktreeSidebarKeyboard, type SidebarKeyboardItem } from "./useWorkt
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import type { WorktreeActions } from "@/hooks/useWorktreeActions";
 
-export function preloadNewWorktreeDialog() {
-  return import("@/components/Worktree/NewWorktreeDialog");
-}
-const LazyNewWorktreeDialog = lazy(() =>
-  preloadNewWorktreeDialog().then((m) => ({ default: m.NewWorktreeDialog }))
+const LazyNewWorktreeDialog = lazyWithPreload(
+  () => import("@/components/Worktree/NewWorktreeDialog"),
+  (m) => m.NewWorktreeDialog
 );
+export const preloadNewWorktreeDialog = LazyNewWorktreeDialog.preload;
 const LazyFleetPickerPalette = lazy(() =>
   import("@/components/Fleet/FleetPickerPalette").then((m) => ({
     default: m.FleetPickerPalette,
@@ -130,6 +130,8 @@ const LazyRecipeEditor = lazy(() =>
 const LazyRecipeManager = lazy(() =>
   import("@/components/TerminalRecipe/RecipeManager").then((m) => ({ default: m.RecipeManager }))
 );
+
+const SIDEBAR_DEFER_FILTER_MIN_WORKTREES = 60;
 
 function formatButtonTitle(label: string, shortcut?: string | null): string {
   return shortcut ? `${label} (${shortcut})` : label;
@@ -692,7 +694,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Lag the expensive filtering work behind the input so keystrokes stay
   // responsive. `liveQuery` updates instantly (input + urgent UI state); the
   // filtering memos consume `deferredQuery`, which yields to input events.
-  const deferredQuery = useDeferredValue(liveQuery);
+  // Only for a large sidebar: with a few dozen worktrees the filter costs a
+  // millisecond and deferring it just paints the keystroke a frame before the
+  // list answers it.
+  const laggedQuery = useDeferredValue(liveQuery);
+  const deferredQuery =
+    deferredWorktrees.length > SIDEBAR_DEFER_FILTER_MIN_WORKTREES ? laggedQuery : liveQuery;
 
   const isSortDisabledPrevRef = useRef(isGroupedByType || liveQuery.trim().length > 0);
   useEffect(() => {

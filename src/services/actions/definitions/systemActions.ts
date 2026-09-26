@@ -53,9 +53,7 @@ const CopyTreeStatsSchema = z
     unmatchedSelector: z
       .enum(COPY_TREE_UNMATCHED_SELECTORS)
       .optional()
-      .describe(
-        "Which supplied selector matched no files. For a folder, add '/**' to the pattern or use scopePaths instead."
-      ),
+      .describe("Selector that matched no files. For a folder, add '/**' or use scopePaths."),
     truncated: z.boolean().optional().describe("A budget dropped or cut short some files"),
     truncatedCount: z.number().optional(),
     truncatedBy: z
@@ -145,9 +143,7 @@ function requireGeneratedFile(result: CopyTreeResult): { filePath: string; outpu
 const copyTreeRunNameField = z
   .string()
   .optional()
-  .describe(
-    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words, for example 'auth flow context'. Omitted, the notification is unlabelled and the history entry keeps or derives its own label."
-  );
+  .describe("2-4 word label ('auth flow context') for the copy-tree history and notification.");
 
 /**
  * The completion title for a copy-tree run, labelled when the caller named it.
@@ -367,7 +363,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List slash commands",
       description:
-        "List the slash commands an agent CLI offers, including any the project defines locally. Use this to discover what a given agent can be driven with before sending it a command. An empty list means the agent exposes none, whereas naming a project that is not open fails.",
+        "List the slash commands an agent CLI offers, including project-local ones, before driving the agent with one. An empty list means it has none; a project that is not open fails.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -466,7 +462,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree context",
       description:
-        "Bundle a worktree's file tree and selected file contents into a context dump on disk, and return its path. Use it to hand a large codebase context to something that can read a file; inject into a terminal when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it, and read it promptly: it is pruned by age.",
+        "Bundle a worktree's file tree and selected contents into a context file on disk and return its path; never inline, often tens of MB. To give an agent context, inject into its terminal instead. Check the budget flags before trusting it, and read it promptly: it is pruned by age.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
@@ -484,7 +480,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           .boolean()
           .optional()
           .describe(
-            "Also return a bounded head of the bundle in `content`. Capped well under the tool-result limit; `contentTruncated` reports when it was cut. The file at `filePath` always holds the whole bundle."
+            "Also return a bounded head of the bundle in `content`; `contentTruncated` says if it was cut. The file always holds the whole bundle."
           ),
       }).optional(),
       resultSchema: CopyTreeGenerateResultSchema,
@@ -543,7 +539,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
             //
             // "Agent", not "Assistant", and deliberately so. `dispatchSource`
             // cannot identify WHICH agent: useMcpBridge dispatches every MCP
-            // origin as "agent", and this action sits in WORKBENCH_TIER_TOOLS,
+            // origin as "agent", and this action sits in the `full` tool set,
             // which a normal Claude pane reaches through its own per-pane
             // bearer token (terminal/lifecycle.ts mints one for every Claude
             // launch when the project's MCP tier is on). Naming the in-app
@@ -595,7 +591,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate and copy context",
       description:
-        "Bundle a worktree's context to a file and onto the system clipboard, replacing what the user had copied. Selection mixes exact files with globs, so this assembles a curated bundle rather than the whole worktree. Agent and MCP callers must name the worktree, not rely on the active one. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
+        "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user copied: the file on macOS and Linux, its path on Windows. Agent and MCP callers must name the worktree. Never returned inline; check the budget flags for completeness.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
@@ -612,7 +608,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       },
       argsSchema: withWorktreeLocation({
         options: CopyTreeOptionsSchema.optional().describe(
-          "Selection, exclusion, formatting, and size-budget settings for the bundle."
+          "Selection, exclusion, formatting and size budgets."
         ),
         name: copyTreeRunNameField,
       }).optional(),
@@ -691,7 +687,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.injectToTerminal",
       title: "Inject context to terminal",
       description:
-        "Bundle a worktree's context and write it straight into a terminal, which is how an agent is given a large codebase context. The context goes to the terminal and never comes back in the result, so read the budget flags to tell whether the bundle was complete. This types a potentially enormous payload into a live pane, so target an idle terminal.",
+        "Bundle a worktree's context and type it straight into a terminal, the way to give an agent a large codebase context. Only budget flags come back, so check them for completeness. Target an idle terminal: the payload can be enormous.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
@@ -699,7 +695,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       keywords: ["context", "inject", "dump"],
       argsSchema: z.object({
         terminalId: z.string(),
-        worktreeId: z.string().optional().describe("Worktree ID. Defaults to the active worktree."),
+        worktreeId: z.string().optional().describe("Worktree id (default: active worktree)."),
         options: CopyTreeOptionsSchema.optional(),
         name: copyTreeRunNameField,
       }),

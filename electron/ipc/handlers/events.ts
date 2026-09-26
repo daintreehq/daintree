@@ -70,8 +70,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // Broadcast by the MCP server handlers whenever a hand-over starts or ends.
   "terminal:adoptions-changed": "external",
 
-  // Sent project-scoped by the MCP terminal-watch service (#12491).
-  "terminal:watch-state": "external",
+  // Sent project-scoped by the MCP terminal-notify service.
+  "terminal:notify-state": "external",
 
   // Agent session journaled (relayed from TypedEventBus; emitted by the main
   // close paths and bridged from the pty-host's trash-expiry capture)

@@ -168,7 +168,7 @@ vi.mock("../persistence/auditRingStore.js", () => ({
   },
 }));
 
-const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "core" | "full">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
@@ -817,7 +817,7 @@ describe("McpServerService", () => {
       },
     });
     await service.start(window);
-    paneTokenTiers.set("pane-token", "system");
+    paneTokenTiers.set("pane-token", "full");
     const port = service.currentPort!;
 
     const pane = await connectClient(port, { Authorization: "Bearer pane-token" });
@@ -981,7 +981,7 @@ describe("McpServerService", () => {
     const { window } = createMockWindow();
     await service.start(window);
 
-    service.setHelpTokenValidator((token) => (token === "help-token" ? "action" : false));
+    service.setHelpTokenValidator((token) => (token === "help-token" ? "core" : false));
 
     const externalStatus = await requestSseStatus(service.currentPort!, {
       Authorization: "Bearer external-secret",
@@ -1006,7 +1006,7 @@ describe("McpServerService", () => {
 
     let isLive = true;
     service.setHelpTokenValidator((token) =>
-      token === "rotating-token" && isLive ? "action" : false
+      token === "rotating-token" && isLive ? "core" : false
     );
 
     const before = await requestSseStatus(service.currentPort!, {
@@ -1043,7 +1043,7 @@ describe("McpServerService", () => {
       dispatchAction: () => ({ ok: true, result: "ok" }),
     });
     await service.start(win.window);
-    service.setHelpTokenValidator((token) => (token === "help-token" ? "action" : false));
+    service.setHelpTokenValidator((token) => (token === "help-token" ? "core" : false));
     service.setHelpSessionWebContentsResolver((token) =>
       token === "help-token" ? win.webContents.id : null
     );
@@ -1126,7 +1126,7 @@ describe("McpServerService", () => {
       ["help-A", winA.webContents.id],
       ["help-B", winB.webContents.id],
     ]);
-    service.setHelpTokenValidator((token) => (tokenToWcId.has(token) ? "action" : false));
+    service.setHelpTokenValidator((token) => (tokenToWcId.has(token) ? "core" : false));
     service.setHelpSessionWebContentsResolver((token) => tokenToWcId.get(token) ?? null);
 
     const a = await connectClient(service.currentPort!, { Authorization: "Bearer help-A" });
@@ -1244,7 +1244,8 @@ describe("McpServerService", () => {
 
     await service.start(combinedRegistry);
 
-    service.setHelpTokenValidator((token) => (token === "help-A" ? "action" : false));
+    // `full`, because the probe below is `actions.list`, which core does not carry.
+    service.setHelpTokenValidator((token) => (token === "help-A" ? "full" : false));
     service.setHelpSessionWebContentsResolver((token) =>
       token === "help-A" ? winA.webContents.id : null
     );
@@ -1299,12 +1300,12 @@ describe("McpServerService", () => {
     });
 
     await service.start(winA.window);
-    // `action`, not `system`: since #12116 this is the DEFAULT tier for
-    // worktree.delete, so authenticating here makes the assertions below —
-    // unconfirmed dispatch, host-resolved confirm, client elicitation ignored —
-    // the regression sentinel for the promotion. At a cumulative wider tier
-    // they would stay green even if the floor moved back.
-    service.setHelpTokenValidator((token) => (token === "help-A" ? "action" : false));
+    // `full`: the unscoped delete sits there while core carries only the owned
+    // form, so this is the lowest tier the assistant can call it at. The
+    // assertions below — unconfirmed dispatch, host-resolved confirm, client
+    // elicitation ignored — must hold at that floor, where no tier waives the
+    // dialog.
+    service.setHelpTokenValidator((token) => (token === "help-A" ? "full" : false));
     service.setHelpSessionWebContentsResolver((token) =>
       token === "help-A" ? winA.webContents.id : null
     );
@@ -1358,7 +1359,7 @@ describe("McpServerService", () => {
     await service.start(combinedRegistry);
 
     // Help routing is configured but the external bearer doesn't match it.
-    service.setHelpTokenValidator((token) => (token === "help-A" ? "action" : false));
+    service.setHelpTokenValidator((token) => (token === "help-A" ? "core" : false));
     service.setHelpSessionWebContentsResolver((token) =>
       token === "help-A" ? winA.webContents.id : null
     );

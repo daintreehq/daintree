@@ -40,7 +40,6 @@ describe("forgeProviderHealthStore", () => {
       rateLimitResetAt: resetAt,
       rateLimitMultiplier: 1,
       tokenUnhealthy: false,
-      tokenBannerDismissed: false,
       tokenHealth: null,
       providerName: null,
       pluginId: null,
@@ -71,7 +70,6 @@ describe("forgeProviderHealthStore", () => {
       rateLimitResetAt: 1_700_000_000_000,
       rateLimitMultiplier: 1,
       tokenUnhealthy: false,
-      tokenBannerDismissed: false,
       tokenHealth: null,
       providerName: null,
       pluginId: null,
@@ -82,7 +80,6 @@ describe("forgeProviderHealthStore", () => {
       rateLimitResetAt: 1_700_000_500_000,
       rateLimitMultiplier: 1,
       tokenUnhealthy: true,
-      tokenBannerDismissed: false,
       tokenHealth: null,
       providerName: null,
       pluginId: null,
@@ -244,24 +241,6 @@ describe("forgeProviderHealthStore", () => {
     expect(gh.providerName).toBe("GitHub");
     expect(gh.pluginId).toBe("daintree.github");
     expect(gh.tokenUnhealthy).toBe(true);
-  });
-
-  it("clears the banner dismissal on a fresh expiry but not on repeated unhealthy pushes", () => {
-    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true);
-    useForgeProviderHealthStore.getState().dismissTokenBanner(BUILTIN_GITHUB_PROVIDER_ID);
-
-    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true);
-    expect(
-      selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
-        .tokenBannerDismissed
-    ).toBe(true);
-
-    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, false);
-    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true);
-    expect(
-      selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
-        .tokenBannerDismissed
-    ).toBe(false);
   });
 
   describe("removeProvider (#10842)", () => {

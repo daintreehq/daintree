@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { findWireStrippedKeywords } from "@shared/utils/mcpWireSchema";
+import { HELP_TIER_CUMULATIVE } from "@shared/config/helpAssistantTierAllowlists";
 import { measureWireSurface, type WireTool } from "./helpers/wireSurface";
 import { TerminalSubmissionRecordSchema } from "../definitions/schemas";
 
@@ -59,8 +60,16 @@ const MAX_PROPERTY_DESCRIPTION_BYTES = 320;
  * already carries, reused verbatim rather than worded afresh. Bringing that under
  * would mean cutting its unknown-id caveat from every tool that shares it — the
  * protected content the target is not allowed to buy back.
+ *
+ * 50 → 42 for the core/full split, measured at 42. Nothing was trimmed: eight
+ * over-target descriptions left with the tools that carried them, which are on
+ * no in-app tool set any more — `forge.openRepo`'s `projectId` above and its
+ * three `forge.open*` siblings, `agent.terminal`'s `focusPolicy`,
+ * `git.getFileDiff`'s `status`, `terminal.killAll`'s `confirmed` and
+ * `terminal.killBatch`'s `terminalIds`.
  */
-const MAX_PROPERTIES_OVER_TARGET = 50;
+// 42 → 3 after description trim, measured at 3.
+const MAX_PROPERTIES_OVER_TARGET = 3;
 
 /**
  * Total bytes spent above {@link PROPERTY_DESCRIPTION_TARGET_BYTES}, summed over
@@ -69,8 +78,14 @@ const MAX_PROPERTIES_OVER_TARGET = 50;
  * Paired with the count because the count alone is gameable: the same thirty
  * descriptions can each grow from 161 B to 319 B without moving it. Together
  * they bound both how many descriptions run long and how far they run.
+ *
+ * 3_000 → 2_200 for the core/full split, measured at 2_170 B (2_557 B before
+ * it). The same eight descriptions as the count above took 387 B of excess off
+ * the surface with them, which would otherwise have been left as headroom for
+ * the next long description to spend without anyone deciding it should.
  */
-const MAX_EXCESS_PROPERTY_BYTES = 3_000;
+// 2_200 → 400 after description trim, measured at 366 B.
+const MAX_EXCESS_PROPERTY_BYTES = 400;
 
 /** Above this a tool is almost always polymorphic and wants splitting. */
 const MAX_TOOL_PARAMS_BYTES = 1_500;
@@ -98,11 +113,6 @@ const OVERSIZED_PARAMS_ALLOWLIST: Readonly<Record<string, string>> = {
   // into it, which is two round trips and a partially-created panel to clean up
   // on failure.
   "agent.launch": "single-round-trip launch; splitting it leaks a half-created panel on failure",
-  // Forge list filters are wide because the underlying forge query is wide;
-  // every property maps to one query parameter rather than to a mode.
-  "forge.listIssues": "flat filter set over one forge query, not a polymorphic mode switch",
-  "forge.listPRs": "flat filter set over one forge query, not a polymorphic mode switch",
-  "workflow.startWorkOnIssue": "composite entry point; the arguments are one workflow's inputs",
   "worktree.createWithRecipe": "composite create-plus-launch; splitting is the plain create tool",
 };
 
@@ -129,7 +139,6 @@ const OVERSIZED_PROPERTY_ALLOWLIST: Readonly<Record<string, string>> = Object.fr
         "properties.options.properties.always",
         "properties.options.properties.scopePaths",
         "properties.options.properties.includePaths",
-        "properties.options.properties.filter",
       ].map((path) => [
         `${tool} :: ${path}`,
         "CopyTreeOptions precedence rules; every clause is regression-pinned (#11722, #11750)",
@@ -512,7 +521,16 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the background — without it a supervisor reads a string of expired waits
   // on a backgrounded project as "no PR yet". The property descriptions were
   // cut to the target before measuring.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_300;
+  // 63_300 → 63_400 for `waitForReply`, measured at 63_355 B. An api-key
+  // client has no pane to notify, so a send or launch that holds its call
+  // until the agent answers and returns the reply is the only way it gets one
+  // without polling; the argument pair and the `reply` output field are what
+  // the external surface pays for that.
+  // 63_400 → 53_100 after description trim, measured at 53_083 B.
+  // 53_100 → 53_150: `agent.launch`'s `reply` is nullable and always emitted,
+  // like its other fields, so a strict client never sees a missing key
+  // (measured at 53_119 B).
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 53_150;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -635,13 +653,45 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // In-app only, on the action tier, so the external ceiling above does not
   // move. The spend is its 257 B description, the `panelId` argument, and the
   // output schema: the scheduling outcome is read back as structured content.
-  const MAX_COHORT_PAYLOAD_BYTES = 227_300;
+  // 227_300 → 133_800 for the core/full split, measured at 133_792 B across 79
+  // tools (227_075 B across 181 before it). The workbench/action/system ladder
+  // became two tool sets, and every tool on neither — git, forge writes and the
+  // `forge.open*` family, file reads, portal, theme and settings writes, session
+  // bookmarks, the recipe editor, fleet arming and the bulk kills — is off MCP
+  // entirely, so the cohort is the `full` set plus the owned twins an agent pane
+  // is served in place of the unscoped ids. Lowered rather than left: 93 KB of
+  // headroom would let the surface grow back to its old size without a single
+  // raise having to be argued. The external ceiling above does not move — that
+  // list is unchanged.
+  // 133_800 → 129_800 for terminal notices, measured at 129_791 B across 76
+  // tools. The four watch tools and their output schemas left MCP; in their
+  // place are `terminal.notifyWhenIdle` on core and a `notify` argument on the
+  // three submit paths. The external ceiling above does not move: an api-key
+  // client has no pane to notify, so `notify` is not advertised to it.
+  // 129_800 → 132_000 for the three batch tools, measured at 131_984 B. As
+  // with the description total, `terminal.sendKeys(Owned)` and `replyLines`
+  // were fitted under the old ceiling by trimming; the batch tools replace a
+  // call per participant per round, so a four-agent vote costs 4 calls
+  // instead of 12. They carry no output schema, which keeps each near 700 B.
+  // The external ceiling does not move.
+  // 132_000 → 135_000 for `waitForReply`, measured at 134_866 B: the argument
+  // pair on the three single send/launch tools and the two batches, and the
+  // `reply` field on three output schemas. It replaces the notice-then-read
+  // round trip — or Codex sleeping and polling, as a live run did — with one
+  // call that returns every reply, which is what makes a vote or a fan-out
+  // two calls instead of a dozen.
+  // 135_000 → 113_400 after description trim, measured at 113_320 B.
+  const MAX_COHORT_PAYLOAD_BYTES = 113_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
   it("keeps the third-party client surface within budget", async () => {
     const tools = await surface();
-    const total = tools.filter((t) => t.external).reduce((sum, t) => sum + wireBytes(t), 0);
+    // Measured as an api-key client receives it: arguments that need a pane of
+    // the caller's own are not advertised to that tier.
+    const total = tools
+      .filter((t) => t.external)
+      .reduce((sum, t) => sum + t.descriptionBytes + t.externalParamsBytes + t.outputBytes, 0);
 
     expect(total).toBeLessThanOrEqual(MAX_EXTERNAL_PAYLOAD_BYTES);
   });
@@ -655,9 +705,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
 
   it("measures a surface that is actually there", async () => {
     // Guards the guard: a harness that silently returned nothing would satisfy
-    // every ceiling above while proving the opposite of what it claims.
+    // every ceiling above while proving the opposite of what it claims. The
+    // floor is the `full` tool set, since the cohort is that set plus the owned
+    // twins and the external roster, both of which may overlap it.
     const tools = await surface();
-    expect(tools.length).toBeGreaterThan(100);
+    expect(tools.length).toBeGreaterThanOrEqual(HELP_TIER_CUMULATIVE.full.length);
     expect(tools.filter((t) => t.external).length).toBeGreaterThan(15);
   });
 });

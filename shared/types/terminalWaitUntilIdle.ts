@@ -81,7 +81,7 @@ export const WAIT_UNTIL_IDLE_TRACKING_STATES: readonly WaitUntilIdleTrackingStat
 // Carried on both wait tools, so every byte here is spent twice on the
 // advertised surface — keep it to the three arms and what separates them.
 const TRACKING_STATE_DESCRIPTION =
-  "Separates an idle agent from a session that is gone: 'tracked' = a mapping is held, which is not proof of liveness or completion; 'closed' = a kill was observed; 'unknown' = no record kept (a plain shell, a poll that raced the spawn, or evicted history).";
+  "'tracked': a mapping is held, not proof of liveness or completion; 'closed': a kill was observed; 'unknown': no record (a plain shell, a poll racing the spawn, or evicted history).";
 
 /** `lastHandback` for the hand-written wait output schemas (#12488). */
 const LAST_HANDBACK_OUTPUT_SCHEMA: Record<string, unknown> = {
@@ -173,7 +173,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       enum: [...WAIT_UNTIL_IDLE_IDLE_REASONS],
       description:
-        "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
+        "'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once ended, 'unknown' untracked. Only the ended states carry an exit code.",
     },
     trackingState: {
       type: "string",
@@ -184,7 +184,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       enum: ["prompt", "question", "approval", "error"],
       description:
-        "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt, or the fallback when nothing else matched — confirm before driving; 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
+        "Only when idleReason is 'waiting_for_user'. 'prompt': empty input prompt, or the fallback when nothing else matched; confirm before driving. 'question': the agent asks the user. 'approval': a permission selector needs a choice. 'error': stopped on a blocking error (auth, rate limit, network, failed command).",
     },
     previousBusyState: { type: "string", enum: ["working", "idle"] },
     lastTransitionAt: { type: "number" },
@@ -193,17 +193,15 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
     exitCode: {
       type: ["number", "null"],
       description:
-        "Process exit code, present only when idleReason is 'completed' or 'exited'. null = signal-terminated with no numeric code.",
+        "Only when idleReason is 'completed' or 'exited'. null = signal-terminated with no numeric code.",
     },
     exitSignal: {
       type: "number",
-      description:
-        "OS signal number that terminated the process, when applicable (completed/exited only).",
+      description: "Terminating OS signal number, once ended.",
     },
     timedOut: {
       type: "boolean",
-      description:
-        "True when the wait elapsed with the agent still working. Call again to keep waiting — it is not a failure.",
+      description: "The wait elapsed with the agent still working. Call again; not a failure.",
     },
   },
   required: ["terminalId", "busyState", "trackingState", "timedOut"],
@@ -211,7 +209,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
   // Kept under the 400-byte tool-description budget (mcpWireBudget.test.ts).
-  "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot with `includeOutput` to poll without blocking; all three can report `lastOutputChangeAt`, not a hang verdict. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState`.";
+  "Block until the agent in one terminal stops working. For several, use the batched wait; to poll without blocking, a status snapshot. A timeout is normal and means still working. A closed terminal also reads as idle, so check `trackingState`.";
 
 // === Batched wait (fan-out orchestration) ===
 
@@ -300,7 +298,7 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
           settled: {
             type: "boolean",
             description:
-              "True once this row satisfied the wait. Gone terminals settle so the batch cannot hang; that is not a claim work completed, so read trackingState.",
+              "This row satisfied the wait. Gone terminals settle too, which is not completion; read trackingState.",
           },
         },
         required: ["terminalId", "busyState", "trackingState", "settled"],
@@ -314,4 +312,4 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
   // Kept under the 400-byte tool-description budget (mcpWireBudget.test.ts).
-  "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both can report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.";
+  "Block until the first of several agents stops working, or all of them do: the fan-out wait when agents finish at different speeds. A timeout means not met yet. A gone terminal settles too, so read `trackingState`.";

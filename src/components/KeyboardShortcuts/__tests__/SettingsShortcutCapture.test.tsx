@@ -26,6 +26,7 @@ vi.mock("@/services/KeybindingService", async () => {
 vi.mock("@/lib/platform", () => ({
   isMac: vi.fn(() => false),
   isWindows: vi.fn(() => false),
+  isLinux: vi.fn(() => false),
 }));
 
 vi.mock("@/services/ActionService", () => ({

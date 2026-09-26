@@ -37,6 +37,7 @@ import {
 } from "@/controllers/helpSessionControllerRegistry";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
+import { HelpAssistantAgentChooser } from "./HelpAssistantAgentChooser";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { HelpPanelFooter } from "./HelpPanelFooter";
 import { FigureRail } from "./FigureRail";
@@ -228,6 +229,7 @@ export function HelpPanel({
     setWidth,
     setOpen,
     setAutoLaunchEnabled,
+    setPreferredAgent,
     dismissIntro,
     clearDroppedPreferredAgent,
   } = useHelpPanelStore(
@@ -250,6 +252,7 @@ export function HelpPanel({
       setWidth: s.setWidth,
       setOpen: s.setOpen,
       setAutoLaunchEnabled: s.setAutoLaunchEnabled,
+      setPreferredAgent: s.setPreferredAgent,
       dismissIntro: s.dismissIntro,
       clearDroppedPreferredAgent: s.clearDroppedPreferredAgent,
     }))
@@ -1318,7 +1321,7 @@ export function HelpPanel({
   // The agent the idle empty state's "Start assistant" CTA would launch — the
   // user's preference, or the sole installed assistant backend. Mirrors the
   // controller's own auto-launch eligibility so the CTA is shown only when a
-  // single unambiguous target exists; otherwise the user is sent to settings.
+  // single unambiguous target exists; with several, the empty state asks.
   const launchableAgentId =
     preferredAgentId ??
     (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
@@ -1353,6 +1356,17 @@ export function HelpPanel({
       });
     },
     [controller, launchableAgentId, setAutoLaunchEnabled]
+  );
+
+  // First-run choice when several installed agents could run the assistant:
+  // the pick is stored as the default, then launched like "Start assistant".
+  const handleChooseAssistant = useCallback(
+    (chosenAgentId: string) => {
+      setPreferredAgent(chosenAgentId);
+      setAutoLaunchEnabled(true);
+      controller.launch({ agentId: chosenAgentId, replaceExisting: true });
+    },
+    [controller, setAutoLaunchEnabled, setPreferredAgent]
   );
 
   // Recovery resume after the eviction/crash path killed the assistant PTY on a
@@ -1744,6 +1758,13 @@ export function HelpPanel({
                       ))}
                     </div>
                   )}
+                </div>
+              ) : supportedInstalledAgentIds.length > 1 ? (
+                <div className="w-full max-w-[34ch]">
+                  <HelpAssistantAgentChooser
+                    agentIds={supportedInstalledAgentIds}
+                    onChoose={handleChooseAssistant}
+                  />
                 </div>
               ) : (
                 <p className="text-xs text-text-secondary max-w-[32ch]">

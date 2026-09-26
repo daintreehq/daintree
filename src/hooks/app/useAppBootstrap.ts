@@ -4,7 +4,6 @@ import { useCrashRecoveryGate } from "./useCrashRecoveryGate";
 import { useAppHydration } from "./useAppHydration";
 import { useShortcutHints } from "./useShortcutHints";
 import { useGettingStartedChecklist } from "./useGettingStartedChecklist";
-import { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 import { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 import { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 import { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
@@ -29,7 +28,14 @@ import {
   preloadPanelPalette,
   preloadSendToAgentPalette,
   preloadQuickCreatePalette,
+  preloadPanelDialogHost,
+  preloadWorktreeOverviewModal,
+  preloadPilotView,
+  preloadShortcutReferenceDialog,
+  preloadThemePalette,
+  preloadPortalDock,
 } from "@/lazyPanels";
+import { preloadCommonPanes } from "@/panels/registry";
 
 /**
  * Composes the app's cold-start orchestration: batched boot payload, crash
@@ -115,8 +121,8 @@ export function useAppBootstrap() {
     return () => unsubscribe?.();
   }, []);
   // Defers the post-hydration housekeeping IPC reads (shortcut-hint counts,
-  // milestones, forge-recommendation plugin/remotes probes) out of the
-  // synchronous isStateLoaded effect flush: their sends would otherwise land
+  // forge-recommendation plugin/remotes probes) out of the synchronous
+  // isStateLoaded effect flush: their sends would otherwise land
   // on main ahead of the loaded-frame paint and compete with the
   // deferred-services drain. The flag flips from the background-priority task
   // below, so the gated hooks hydrate at idle; each reconciles current store
@@ -124,9 +130,7 @@ export function useAppBootstrap() {
   const [idleHousekeepingReady, setIdleHousekeepingReady] = useState(false);
   useShortcutHints(isStateLoaded && idleHousekeepingReady);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
-  const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
-  useUpdateListener(onboardingOverlayActive);
-  useOrchestrationMilestones(isStateLoaded && idleHousekeepingReady);
+  useUpdateListener(gettingStarted.visible);
   useAgentWaitingNudge(isStateLoaded);
   useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
@@ -152,6 +156,17 @@ export function useAppBootstrap() {
       void preloadPanelPalette();
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
+      // Everyday surfaces whose first open otherwise suspends into React's
+      // 300ms reveal throttle: the panel dialog host (review hub, file and
+      // diff dialogs), the pane kinds, overview, all-agents view, shortcut
+      // reference, theme picker and portal.
+      preloadPanelDialogHost().catch(() => {});
+      preloadCommonPanes().catch(() => {});
+      preloadWorktreeOverviewModal().catch(() => {});
+      preloadPilotView().catch(() => {});
+      preloadShortcutReferenceDialog().catch(() => {});
+      preloadThemePalette().catch(() => {});
+      preloadPortalDock().catch(() => {});
       // Warm the shared Radix overlay primitives chunk (`radix-deferred`) so the
       // ProjectSwitcherPalette popover and context menus are ready on first
       // interaction in a freshly loaded project view. Otherwise this chunk is

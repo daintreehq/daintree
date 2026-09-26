@@ -6,22 +6,22 @@ import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { PaneWatchState, TerminalWatchDelivery } from "@shared/types/terminalWatch";
+import type { PaneNotifyState, TerminalNotifyDelivery } from "@shared/types/terminalNotify";
 
 /**
- * One pane's terminal-watch state (#12491), as main last reported it.
+ * One pane's pending terminal notices, as main last reported them.
  *
  * Subscribes before fetching, and keeps whichever carries the higher revision,
  * so a snapshot that lands after a push can never roll it back. Not a store:
  * nothing outside the pane reads it, and main holds the truth — a remount or a
  * rebuilt project view just asks again.
  */
-export function usePaneWatchState(terminalId: string): PaneWatchState | null {
-  const [state, setState] = useState<PaneWatchState | null>(null);
+export function usePaneNotifyState(terminalId: string): PaneNotifyState | null {
+  const [state, setState] = useState<PaneNotifyState | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const accept = (next: PaneWatchState | null) => {
+    const accept = (next: PaneNotifyState | null) => {
       if (cancelled) return;
       setState((current) => {
         if (next === null) return current?.terminalId === terminalId ? current : null;
@@ -34,11 +34,11 @@ export function usePaneWatchState(terminalId: string): PaneWatchState | null {
     // honest thing to show: nothing here can be acted on.
     let off: (() => void) | undefined;
     try {
-      off = terminalClient.onWatchState((payload) => {
+      off = terminalClient.onNotifyState((payload) => {
         if (payload.terminalId === terminalId) accept(payload);
       });
       window.electron.mcpServer
-        .getPaneWatchState(terminalId)
+        .getPaneNotifyState(terminalId)
         .then(accept)
         .catch(() => {});
     } catch {
@@ -55,12 +55,12 @@ export function usePaneWatchState(terminalId: string): PaneWatchState | null {
 
 type Tone = "quiet" | "warning";
 
-function describeDelivery(delivery: TerminalWatchDelivery): { text: string; tone: Tone } {
+function describeDelivery(delivery: TerminalNotifyDelivery): { text: string; tone: Tone } {
   switch (delivery.status) {
     case "idle":
-      return { text: "Nothing new since the last wake.", tone: "quiet" };
+      return { text: "Nothing to deliver yet.", tone: "quiet" };
     case "scheduled":
-      return { text: "Something changed. A wake is on its way.", tone: "quiet" };
+      return { text: "A terminal finished. The notice is on its way.", tone: "quiet" };
     case "held":
       if (delivery.reason === "typing") {
         return {
@@ -69,7 +69,7 @@ function describeDelivery(delivery: TerminalWatchDelivery): { text: string; tone
         };
       }
       if (delivery.reason === "interval") {
-        return { text: "Held briefly to keep wakes spaced out.", tone: "quiet" };
+        return { text: "Held briefly to keep notices spaced out.", tone: "quiet" };
       }
       return { text: "Held until this pane finishes its turn.", tone: "quiet" };
     case "blocked":
@@ -87,40 +87,42 @@ function describeDelivery(delivery: TerminalWatchDelivery): { text: string; tone
       }
       return { text: "Not sent: no agent is waiting at this pane's prompt.", tone: "warning" };
     case "outstanding":
-      return { text: "Woken. Waiting for the agent to read what changed.", tone: "quiet" };
+      return { text: "Delivered. The agent is reading it.", tone: "quiet" };
     case "failed":
       return {
-        text: "The last wake couldn't be confirmed, so no more are sent until the agent reads what changed.",
+        text: "The last notice couldn't be confirmed, so it goes out again after this pane's next turn.",
         tone: "warning",
       };
   }
 }
 
 /**
- * Visible on a pane whose agent holds terminal watches (#12491): Daintree may
- * type one line into this pane's prompt when the watched terminals change.
- * Self-gating, and the only control over it the user needs — stopping ends
- * every watch the pane holds.
+ * Visible on a pane whose agent asked to be told when other terminals stop
+ * working: Daintree may type one line into this pane's prompt. Self-gating,
+ * and the only control over it the user needs — stopping drops every notice
+ * the pane has pending.
  */
-export function TerminalWatchChip({ terminalId }: { terminalId: string }) {
-  const state = usePaneWatchState(terminalId);
+export function TerminalNotifyChip({ terminalId }: { terminalId: string }) {
+  const state = usePaneNotifyState(terminalId);
   const [stopping, setStopping] = useState(false);
 
   const stop = useCallback(() => {
     setStopping(true);
     window.electron.mcpServer
-      .stopPaneWatches(terminalId)
+      .stopPaneNotices(terminalId)
       .catch((err: unknown) => {
-        logWarn("Failed to stop pane watches", { error: formatErrorMessage(err, "") });
+        logWarn("Failed to stop pane notices", { error: formatErrorMessage(err, "") });
       })
       .finally(() => setStopping(false));
   }, [terminalId]);
 
-  if (state === null || state.watchCount === 0) return null;
+  if (state === null || (state.pendingCount === 0 && state.readyCount === 0)) return null;
 
   const { text, tone } = describeDelivery(state.delivery);
-  const watched = state.watchedTerminalCount;
-  const noun = watched === 1 ? "terminal" : "terminals";
+  const pending = state.pendingCount;
+  const noun = pending === 1 ? "terminal" : "terminals";
+  const heading =
+    pending > 0 ? `Waiting on ${pending} ${noun}` : "A notice is waiting to be delivered";
 
   return (
     <Popover>
@@ -131,21 +133,19 @@ export function TerminalWatchChip({ terminalId }: { terminalId: string }) {
             "inline-flex items-center gap-1 shrink-0 text-xs font-sans bg-overlay-soft px-1.5 py-0.5 rounded-full border border-divider hover:text-text-primary transition-colors",
             tone === "warning" ? "text-status-warning" : "text-text-secondary"
           )}
-          aria-label={`Watching ${watched} ${noun}; this pane may be woken`}
-          data-testid="terminal-watch-chip"
+          aria-label={`${heading}; Daintree may type a notice into this pane`}
+          data-testid="terminal-notify-chip"
         >
           <Radar className="w-3 h-3" aria-hidden="true" />
-          <span className="tabular-nums">{watched}</span>
+          <span className="tabular-nums">{pending > 0 ? pending : state.readyCount}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 p-3">
         <div className="flex flex-col gap-2">
-          <span className="text-xs font-medium text-text-primary">
-            Watching {watched} {noun}
-          </span>
+          <span className="text-xs font-medium text-text-primary">{heading}</span>
           <p className="text-xs text-text-secondary">
-            When they change, Daintree types one line into this pane's prompt while it sits idle,
-            pointing the agent at what it saw.
+            The agent asked to be told when they stop working. Daintree types one line into this
+            pane's prompt while it sits idle.
           </p>
           <p
             className={cn(
@@ -158,7 +158,7 @@ export function TerminalWatchChip({ terminalId }: { terminalId: string }) {
           </p>
           <div className="flex justify-end">
             <Button variant="secondary" size="xs" onClick={stop} disabled={stopping}>
-              Stop watching
+              Stop notices
             </Button>
           </div>
         </div>

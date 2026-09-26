@@ -203,7 +203,7 @@ function displayNotificationValue(key: string, value: unknown): string | undefin
 let defaultShortcutDescriptions: Map<string, string> | undefined;
 function shortcutLabel(actionId: string): string {
   defaultShortcutDescriptions ??= new Map(
-    buildDefaultKeybindings(process.platform === "win32")
+    buildDefaultKeybindings(process.platform === "win32", process.platform === "linux")
       .filter((b) => typeof b.description === "string" && b.description !== "")
       .map((b) => [b.actionId, b.description as string])
   );

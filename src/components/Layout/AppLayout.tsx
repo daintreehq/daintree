@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, Suspense, lazy, type ReactNode } from "react";
+import { LazyPortalDock } from "@/lazyPanels";
 import { createPortal, flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
 import { Toolbar } from "./Toolbar";
@@ -99,9 +100,7 @@ const LazyDemoCaptureBridge = lazy(() =>
 const LazyThemeBrowser = lazy(() =>
   import("../ThemeBrowser/ThemeBrowser").then((m) => ({ default: m.ThemeBrowser }))
 );
-const LazyPortalDock = lazy(() =>
-  import("../Portal/PortalDock").then((m) => ({ default: m.PortalDock }))
-);
+
 // Preload only in demo mode so the chunks resolve before first mount (no
 // Suspense flash). In production the gate is false, so this block never runs and
 // the (still-emitted) demo chunks are never fetched. The `typeof window` guard

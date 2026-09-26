@@ -119,7 +119,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.delete",
       title: "Delete worktree",
       description:
-        "Delete a linked worktree and remove its directory from disk. By default it refuses when the worktree has uncommitted or untracked changes; forcing it past that destroys them irreversibly. The main worktree cannot be deleted. Confirm the target and make sure anything worth keeping is committed or pushed first.",
+        "Delete a linked worktree and its directory. Refuses uncommitted or untracked changes unless forced, which destroys them irreversibly. The main worktree cannot be deleted. Commit or push anything worth keeping first.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
@@ -212,7 +212,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.deleteOwned",
       title: "Delete owned worktree",
       description:
-        "Delete a worktree this session itself created, removing its directory from disk after the user confirms. Only worktrees created by this connection can be deleted; anything else is refused. It will not force past uncommitted or untracked changes, delete the branch, or close terminals it does not own — commit or close those first.",
+        "Delete a worktree this session created, removing its directory after the user confirms. Anything else is refused. It never forces past uncommitted or untracked changes, deletes the branch, or closes terminals it does not own; commit or close those first.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
@@ -228,9 +228,7 @@ export function registerWorktreeCreateActions(
         worktreeId: z
           .string()
           .min(1)
-          .describe(
-            "The worktree to delete, as the `worktreeId` this session received when it created the worktree."
-          ),
+          .describe("The `worktreeId` this session got when creating the worktree."),
       }),
       run: async () => {
         throw new Error(

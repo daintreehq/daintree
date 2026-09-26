@@ -1402,6 +1402,47 @@ describe("agent dispatch target binding (#11532)", () => {
 
       expect(spies.updateTitle).toHaveBeenCalledWith("explicit-panel", "", "automation");
     });
+
+    // The runbook confirmed every rename with a second terminal.list, only to
+    // learn whether a hand-set title had kept its place.
+    it.each([
+      { userLocked: false, expected: { title: "build", applied: true } },
+      { userLocked: true, expected: { title: "my title", applied: false } },
+    ])(
+      "reports the title the tab shows (user lock: $userLocked)",
+      async ({ userLocked, expected }) => {
+        setGuardState();
+        const run = setupActions();
+        let title = "my title";
+        const base = panelStoreMock.getState.getMockImplementation()!;
+        panelStoreMock.getState.mockImplementation(() => {
+          const state = base() as { panelsById: Record<string, unknown> };
+          return {
+            ...state,
+            updateTitle: (_id: string, name: string) => {
+              if (!userLocked) title = name.trim();
+            },
+            panelsById: {
+              ...state.panelsById,
+              "explicit-panel": {
+                id: "explicit-panel",
+                location: "grid",
+                title,
+                titleMode: userLocked ? "user" : "custom",
+              },
+            },
+          };
+        });
+
+        const result = await run(
+          "terminal.rename",
+          { terminalId: "explicit-panel", name: "build " },
+          { dispatchSource: "agent" }
+        );
+
+        expect(result).toEqual({ terminalId: "explicit-panel", ...expected });
+      }
+    );
   });
 
   describe("terminal.info.get guard composition", () => {

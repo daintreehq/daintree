@@ -121,6 +121,14 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       });
       return true;
 
+    case "agent-handback-observed":
+      events.emit("agent:handback-observed", {
+        terminalId: event.terminalId,
+        handback: event.handback,
+        timestamp: event.timestamp,
+      });
+      return true;
+
     case "agent-rate-limit-observed":
       events.emit("agent:rate-limit-observed", {
         terminalId: event.terminalId,

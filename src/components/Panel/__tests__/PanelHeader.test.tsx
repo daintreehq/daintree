@@ -498,6 +498,57 @@ describe("PanelHeader", () => {
     const findMenuButton = (menu: HTMLElement, label: string) =>
       Array.from(menu.querySelectorAll("button")).find((btn) => btn.textContent?.trim() === label);
 
+    describe("scratchpad (#12835)", () => {
+      const showScratchpad = vi.fn();
+
+      function storeTerminal(scratchpad?: unknown, kind = "terminal") {
+        mockHasPty = kind === "terminal";
+        mockStoreState = {
+          ...mockStoreState,
+          showScratchpad,
+          panelsById: { "test-panel": { id: "test-panel", kind, cwd: "/p", scratchpad } },
+        };
+      }
+
+      it("offers Show scratchpad on a terminal without one, and opens it", () => {
+        storeTerminal();
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        findMenuButton(screen.getByTestId("overflow-menu"), "Show scratchpad")!.click();
+
+        expect(showScratchpad).toHaveBeenCalledWith("test-panel");
+        expect(screen.queryByTestId("panel-expand-scratchpad")).toBeNull();
+      });
+
+      it("offers nothing while the scratchpad is already open", () => {
+        storeTerminal({ content: "", collapsed: false });
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        expect(
+          findMenuButton(screen.getByTestId("overflow-menu"), "Show scratchpad")
+        ).toBeUndefined();
+        expect(screen.queryByTestId("panel-expand-scratchpad")).toBeNull();
+      });
+
+      it("keeps an expand control in the header while collapsed", () => {
+        storeTerminal({ content: "notes", collapsed: true });
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        const expand = screen.getByTestId("panel-expand-scratchpad");
+        fireEvent.pointerDown(expand);
+        expand.click();
+
+        expect(showScratchpad).toHaveBeenCalledWith("test-panel");
+      });
+
+      it("offers no scratchpad on a panel that is not a terminal", () => {
+        storeTerminal(undefined, "browser");
+        render(<PanelHeader {...makeProps({ kind: "browser" })} />);
+
+        expect(screen.queryByText("Show scratchpad")).toBeNull();
+      });
+    });
+
     it("always renders the overflow button (Rename/Duplicate/Trash always available)", () => {
       render(<PanelHeader {...makeProps()} />);
       expect(screen.getByLabelText("More panel actions")).toBeDefined();

@@ -21,9 +21,9 @@ import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { ConfirmationStagedError } from "./actions/confirmationStaged";
 import { UnactionableTargetError } from "./actions/unactionableTarget";
 import {
-  WORKBENCH_TIER_TOOLS,
-  ACTION_TIER_ADDONS,
-  SYSTEM_TIER_ADDONS,
+  CORE_TIER_TOOLS,
+  FULL_TIER_ADDONS,
+  toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 import {
@@ -47,14 +47,14 @@ const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential|p
 const MAX_ARG_PAYLOAD_SIZE = 1024;
 
 /**
- * Every action a model can be shown, at any assistant tier. Derived from the
- * live allowlists so a newly exposed action picks up the description rules
- * without a second list to keep in step.
+ * Every action a model can be shown, at either in-app tier and from either
+ * origin. Derived from the live allowlists so a newly exposed action picks up
+ * the description rules without a second list to keep in step.
  */
 const LLM_EXPOSED_ACTION_IDS = new Set<string>([
-  ...WORKBENCH_TIER_TOOLS,
-  ...ACTION_TIER_ADDONS,
-  ...SYSTEM_TIER_ADDONS,
+  ...CORE_TIER_TOOLS,
+  ...FULL_TIER_ADDONS,
+  ...toNonRendererOwnedTools([...CORE_TIER_TOOLS, ...FULL_TIER_ADDONS]),
 ]);
 
 /**
@@ -99,13 +99,17 @@ export function validateDefinitionInvariants(definition: AnyActionDefinition): s
       !definition.argsSchema.safeParse({}).success
     : rawSchemaRequiresArgs(definition.rawInputSchema);
 
+  // Core's reads: the cohort this check covered when the read-only `workbench`
+  // tier held them. Widening it to core's commands is a separate call, since
+  // every example rides `_meta.examples` on each turn's tool list.
   if (
     requiresArgs &&
-    (WORKBENCH_TIER_TOOLS as readonly string[]).includes(definition.id) &&
+    definition.kind === "query" &&
+    (CORE_TIER_TOOLS as readonly string[]).includes(definition.id) &&
     (!definition.examples || definition.examples.length === 0)
   ) {
     violations.push(
-      `Action "${definition.id}" is a workbench-tier arg-requiring action with no examples. ` +
+      `Action "${definition.id}" is a core-tier arg-requiring query with no examples. ` +
         `Examples improve MCP model accuracy by showing concrete arg shapes.`
     );
   }

@@ -125,12 +125,12 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     getEffectiveCombo: vi.fn((actionId: string) => {
-      if (actionId === "voiceInput.toggle") return "Cmd+Shift+V";
+      if (actionId === "voiceInput.toggle") return "Cmd+.";
       if (actionId === "voiceInput.toggleAssistant") return "Cmd+Shift+Alt+V";
       return undefined;
     }),
     getEffectiveCombos: vi.fn((actionId: string) => {
-      if (actionId === "voiceInput.toggle") return ["Cmd+Shift+V"];
+      if (actionId === "voiceInput.toggle") return ["Cmd+."];
       if (actionId === "voiceInput.toggleAssistant") return ["Cmd+Shift+Alt+V"];
       return [];
     }),
@@ -756,7 +756,7 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     return { macro, help, panel };
   }
 
-  it("routes Cmd+Shift+V to the assistant terminal when the assistant is focused", async () => {
+  it("routes the dictation shortcut to the assistant terminal when the assistant is focused", async () => {
     setupGlobals();
     const { macro, help, panel } = await importMocks();
     macro.isAssistantFocused.mockReturnValue(true);
@@ -949,6 +949,223 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("Start the Daintree Assistant") })
     );
+  });
+});
+
+describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  type VoiceState = {
+    status: string;
+    activeTarget: { panelId: string } | null;
+    lockedTarget: { panelId: string } | null;
+  };
+  type PanelState = { focusedId: string | null; panelsById: Record<string, unknown> };
+
+  function hasMockState<T>(mod: object): mod is { __state: T } {
+    return "__state" in mod;
+  }
+
+  async function arrange(options: {
+    status: string;
+    activeTarget?: { panelId: string } | null;
+    recordingMode?: "toggle" | "push-to-talk";
+  }) {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: options.recordingMode ?? "toggle",
+    });
+    const { windowListeners } = setupGlobals(electron);
+
+    const panel = await import("@/store/panelStore");
+    if (!hasMockState<PanelState>(panel)) throw new Error("panelStore mock lacks __state");
+    panel.__state.focusedId = "panel-b";
+    panel.__state.panelsById = {
+      "panel-a": { id: "panel-a", title: "Recording", location: "grid" },
+      "panel-b": { id: "panel-b", title: "Focused", location: "grid" },
+    };
+
+    const voiceModule = await import("@/store/voiceRecordingStore");
+    if (!hasMockState<VoiceState>(voiceModule)) {
+      throw new Error("voiceRecordingStore mock lacks __state");
+    }
+    const voiceState = voiceModule.__state;
+    voiceState.status = options.status;
+    voiceState.activeTarget =
+      options.activeTarget === undefined ? { panelId: "panel-a" } : options.activeTarget;
+    voiceState.lockedTarget = null;
+    const finishSession = vi.mocked(voiceModule.useVoiceRecordingStore.getState().finishSession);
+    finishSession.mockClear();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    return {
+      voiceRecordingService,
+      voiceState,
+      panelState: panel.__state,
+      windowListeners,
+      finishSession,
+      stopSpy,
+      startSpy,
+      toggleSpy,
+    };
+  }
+
+  for (const status of ["connecting", "recording", "paused", "reconnecting", "finishing"]) {
+    it(`stops a ${status} session on another panel instead of retargeting to focus`, async () => {
+      const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({ status });
+
+      await voiceRecordingService.toggleFocusedPanel();
+
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", { preserveLiveText: true });
+      expect(startSpy).not.toHaveBeenCalled();
+      expect(toggleSpy).not.toHaveBeenCalled();
+    });
+  }
+
+  it("aborts the arming window from a different panel without opening the mic", async () => {
+    const { voiceRecordingService, finishSession, stopSpy, startSpy, toggleSpy } = await arrange({
+      status: "arming",
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(finishSession).toHaveBeenCalledWith({
+      nextStatus: "idle",
+    });
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("stops a session that is still recording elsewhere even when dictation is locked", async () => {
+    const { voiceRecordingService, voiceState, stopSpy, toggleSpy } = await arrange({
+      status: "recording",
+    });
+    voiceState.lockedTarget = { panelId: "panel-b" };
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("stops the session when the assistant owns focus", async () => {
+    const macro = await import("@/store/macroFocusStore");
+    const isAssistantFocused = vi.mocked(macro.isAssistantFocused);
+    isAssistantFocused.mockReturnValue(true);
+    const { voiceRecordingService, stopSpy, toggleSpy } = await arrange({ status: "recording" });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).not.toHaveBeenCalled();
+    isAssistantFocused.mockReturnValue(false);
+  });
+
+  it("stops rather than starts in push-to-talk mode when a session runs elsewhere", async () => {
+    const { voiceRecordingService, stopSpy, startSpy } = await arrange({
+      status: "recording",
+      recordingMode: "push-to-talk",
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  it("starts in the focused panel when idle", async () => {
+    const { voiceRecordingService, stopSpy, toggleSpy } = await arrange({
+      status: "idle",
+      activeTarget: null,
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
+
+  it("reads focus at the moment of the press when starting from idle", async () => {
+    const { voiceRecordingService, panelState, toggleSpy } = await arrange({
+      status: "idle",
+      activeTarget: null,
+    });
+
+    const pending = voiceRecordingService.toggleFocusedPanel();
+    panelState.focusedId = "panel-a";
+    await pending;
+
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
+
+  it("does not send a stop on push-to-talk keyup after the press aborted arming", async () => {
+    const { voiceRecordingService, windowListeners, stopSpy } = await arrange({
+      status: "arming",
+      recordingMode: "push-to-talk",
+    });
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.matchesEvent).mockReturnValue(true);
+
+    const down = { code: "Period", key: ".", repeat: false, metaKey: true };
+    for (const listener of windowListeners["keydown"] ?? []) listener(down);
+    await voiceRecordingService.toggleFocusedPanel();
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
+
+    expect(stopSpy).not.toHaveBeenCalled();
+    vi.mocked(keybindingService.matchesEvent).mockReset();
+  });
+
+  it("cancels a pending retarget start when joining a stop already in flight", async () => {
+    const { voiceRecordingService, stopSpy } = await arrange({ status: "finishing" });
+    stopSpy.mockRestore();
+    let releaseDrain: () => void = () => {};
+    Reflect.set(
+      voiceRecordingService,
+      "stopPromise",
+      new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      })
+    );
+    const before: unknown = Reflect.get(voiceRecordingService, "startRequestId");
+
+    const pending = voiceRecordingService.toggleFocusedPanel();
+    releaseDrain();
+    await pending;
+
+    expect(Reflect.get(voiceRecordingService, "startRequestId")).not.toBe(before);
+  });
+
+  it("leaves explicit toggle(target) retargeting intact for panel mic buttons", async () => {
+    const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({
+      status: "recording",
+    });
+    toggleSpy.mockRestore();
+
+    await voiceRecordingService.toggle({ panelId: "panel-b" });
+
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(startSpy).toHaveBeenCalledWith({ panelId: "panel-b" });
   });
 });
 
@@ -1402,7 +1619,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
-      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
     );
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1418,20 +1635,20 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     expect(keydownListeners.length).toBeGreaterThan(0);
     expect(keyupListeners.length).toBeGreaterThan(0);
 
-    // Simulate the PTT keydown (Cmd+Shift+V).
+    // Simulate the PTT keydown (Cmd+.).
     const downEvent = {
-      code: "KeyV",
-      key: "V",
+      code: "Period",
+      key: ".",
       repeat: false,
       metaKey: true,
-      shiftKey: true,
+      shiftKey: false,
       altKey: false,
       ctrlKey: false,
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(downEvent);
 
     // Simulate the keyup of the same key.
-    const upEvent = { code: "KeyV" } as unknown as KeyboardEvent;
+    const upEvent = { code: "Period" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(upEvent);
 
     expect(stopSpy).toHaveBeenCalledWith(
@@ -1446,7 +1663,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
 
     const { keybindingService } = await import("@/services/KeybindingService");
     vi.mocked(keybindingService.getEffectiveCombos).mockImplementation((actionId: string) =>
-      actionId === "voiceInput.toggle" ? ["Cmd+Shift+V", "Cmd+Shift+U"] : []
+      actionId === "voiceInput.toggle" ? ["Cmd+.", "Cmd+Shift+U"] : []
     );
     vi.mocked(keybindingService.matchesEvent).mockImplementation(
       (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+U" && e.code === "KeyU"
@@ -1478,7 +1695,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
-      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
     );
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1493,17 +1710,17 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const keyupListeners = windowListeners["keyup"] ?? [];
 
     const downEvent = {
-      code: "KeyV",
-      key: "V",
+      code: "Period",
+      key: ".",
       repeat: false,
       metaKey: true,
-      shiftKey: true,
+      shiftKey: false,
       altKey: false,
       ctrlKey: false,
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(downEvent);
 
-    // KeyV keyup never arrives (macOS swallows it); only MetaLeft keyup fires.
+    // Period keyup never arrives (macOS swallows it); only MetaLeft keyup fires.
     const metaUpEvent = { code: "MetaLeft" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(metaUpEvent);
 
@@ -1518,7 +1735,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
-      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
     );
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1534,18 +1751,18 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
 
     // Only the repeating keydown fires — pttActiveKeyCode must not be set.
     const repeatEvent = {
-      code: "KeyV",
-      key: "V",
+      code: "Period",
+      key: ".",
       repeat: true,
       metaKey: true,
-      shiftKey: true,
+      shiftKey: false,
       altKey: false,
       ctrlKey: false,
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(repeatEvent);
 
     // Now release — keyup should NOT fire stop since no PTT session is tracked.
-    const upEvent = { code: "KeyV" } as unknown as KeyboardEvent;
+    const upEvent = { code: "Period" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(upEvent);
 
     expect(stopSpy).not.toHaveBeenCalled();
@@ -1559,7 +1776,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
-      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
     );
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1575,11 +1792,11 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     expect(blurListeners.length).toBeGreaterThan(0);
 
     const downEvent = {
-      code: "KeyV",
-      key: "V",
+      code: "Period",
+      key: ".",
       repeat: false,
       metaKey: true,
-      shiftKey: true,
+      shiftKey: false,
       altKey: false,
       ctrlKey: false,
     } as unknown as KeyboardEvent;
@@ -1662,7 +1879,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
-      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
     );
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1677,11 +1894,11 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const keyupListeners = windowListeners["keyup"] ?? [];
 
     const downEvent = {
-      code: "KeyV",
-      key: "V",
+      code: "Period",
+      key: ".",
       repeat: false,
       metaKey: true,
-      shiftKey: true,
+      shiftKey: false,
       altKey: false,
       ctrlKey: false,
     } as unknown as KeyboardEvent;
@@ -1691,8 +1908,8 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     for (const listener of keyupListeners) listener({ code: "KeyA" } as unknown as KeyboardEvent);
     expect(stopSpy).not.toHaveBeenCalled();
 
-    // KeyV release does stop.
-    for (const listener of keyupListeners) listener({ code: "KeyV" } as unknown as KeyboardEvent);
+    // Period release does stop.
+    for (const listener of keyupListeners) listener({ code: "Period" } as unknown as KeyboardEvent);
     expect(stopSpy).toHaveBeenCalled();
   });
 
@@ -1744,7 +1961,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
-      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
     );
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1759,11 +1976,11 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const keyupListeners = windowListeners["keyup"] ?? [];
 
     const downEvent = {
-      code: "KeyV",
-      key: "V",
+      code: "Period",
+      key: ".",
       repeat: false,
       metaKey: true,
-      shiftKey: true,
+      shiftKey: false,
       altKey: false,
       ctrlKey: false,
     } as unknown as KeyboardEvent;

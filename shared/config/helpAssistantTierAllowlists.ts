@@ -2,402 +2,280 @@ import type { HelpAssistantTier } from "../types/ipc/maps.js";
 import type { BuiltInActionId } from "../types/actions.js";
 
 export const ACTIONS_LIST_TOOL = "actions.list";
-const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 
-export const WORKBENCH_TIER_TOOLS = [
-  ACTIONS_LIST_TOOL,
+/**
+ * The two in-app tool sets, smallest first. Every help session and every agent
+ * pane with Daintree MCP enabled runs at one of them.
+ */
+export const HELP_ASSISTANT_TIERS = [
+  "core",
+  "full",
+] as const satisfies readonly HelpAssistantTier[];
+
+export const DEFAULT_HELP_ASSISTANT_TIER: HelpAssistantTier = "core";
+
+/**
+ * Map a stored tier onto the current pair. Settings written before the
+ * core/full split carry the old three-rung ladder; `workbench` and `action`
+ * read as `core` and `system` as `full`, so nothing on disk has to be
+ * rewritten. Anything unrecognised is `null`.
+ */
+export function normalizeHelpAssistantTier(value: unknown): HelpAssistantTier | null {
+  switch (value) {
+    case "core":
+    case "full":
+      return value;
+    case "workbench":
+    case "action":
+      return "core";
+    case "system":
+      return "full";
+    default:
+      return null;
+  }
+}
+
+/**
+ * The orchestration surface: create worktrees, launch agents, prompt them,
+ * read and wait on them, move and close them. It is the default because it
+ * covers what the Daintree assistant and its runbooks actually call — terminal
+ * reads, sends and launches are nearly all real traffic — and every tool here
+ * is re-sent to the model on each turn, so what is not needed for that loop
+ * belongs in `full`.
+ */
+export const CORE_TIER_TOOLS = [
   "actions.getContext",
   "actions.search",
   "actions.getSchema",
   // Reports the caller's own tool surface as data (#11549) — a read of what
-  // `tools/list` already told this session, so it grants nothing the caller
-  // does not already hold and belongs at the lowest tier.
+  // `tools/list` already told this session, so it grants nothing.
   "mcp.surface",
-
-  "project.getAll",
-  // Discovery counterpart to `project.getAll` that also covers scratches and
-  // reports cross-window view presence (#12307). Admitted here as well as
-  // externally: the external tier must never reach past what the in-app
-  // assistant already can.
+  // Workspace ids are minted by Daintree and cannot be reconstructed from
+  // outside it (#12307). Identity only.
   "workspace.list",
-  "project.getCurrent",
-  "project.getSettings",
-  "project.getStats",
-  "project.detectRunners",
 
   "worktree.list",
-  "worktree.getCurrent",
-  "worktree.listBranches",
-  "worktree.getDefaultPath",
-  "worktree.getAvailableBranch",
-  // Read-only, and the counterpart to the setup state every worktree listing
-  // now carries: a caller that can see `running` must be able to wait for it.
+  // Daintree's own creator: copies project config, initializes submodules and
+  // runs setup. A recipe is optional.
+  "worktree.createWithRecipe",
+  // A caller that can see setup `running` must be able to wait for it.
   "worktree.waitUntilReady",
-  // Same argument for the PR every listing carries: a caller that can see a PR
-  // appear must be able to wait for it rather than poll the listing (#12717).
+  // Waits on the PR Daintree already detects, so a queue can start the next
+  // agent once this one has opened its PR without polling the forge (#12717).
   "worktree.waitForPullRequest",
-  "worktree.resource.status",
-  "worktree.compareDiff",
-  "worktree.reviewReadiness",
+  // The counterpart to creation, and only that: it deletes a worktree this
+  // session created and refuses everything else (#11909). Keeps
+  // `danger: "confirm"`, so a human still approves it.
+  "worktree.deleteOwned",
+  // `worktree.createWithRecipe` takes a recipe id, and nothing else says what
+  // the ids are.
+  "recipe.list",
 
-  "files.search",
-  "file.view",
-  // Read is contained to the project + its worktrees inside the action itself
-  // (fileActions.ts) — never an arbitrary-path read.
-  "file.read",
-  "file.openPanel",
-
-  "copyTree.generate",
+  "agent.launch",
+  // One prompt to every named agent in one call, each run as `agent.launch`.
+  "agent.launchMany",
+  // `agent.launch` accepts user- and plugin-contributed agent ids; only Daintree
+  // knows the effective registry and live launchability.
+  "agent.listAvailable",
+  // Preset ids are generated, merged from settings, `.daintree/presets/` and
+  // CCR discovery; without this the launch argument is undiscoverable (#11859).
+  "agent.listPresets",
 
   "terminal.list",
-  "terminal.getOutput",
   "terminal.getStatus",
-  // Read-only, and scoped to panels this session created (#12479). Here for the
-  // subset invariant — the external tier carries it and may not reach past the
-  // assistant — and because a read of an agent the assistant launched itself
-  // is the lowest-privilege thing the assistant does with one.
+  "terminal.getOutput",
+  // What an agent this session launched last said (#12479). Scoped to panels
+  // the session created.
   "terminal.readLastMessageOwned",
-
-  // Read-only snapshot of the user's supervised fleet broadcast run (#10930).
-  // Observability only — dispatching a broadcast stays off the MCP surface.
-  "fleet.getRunStatus",
-
-  "browser.getConsoleMessages",
-  "portal.listTabs",
-
-  "agent.getState",
-  "agent.listToolbar",
-  "agent.listAvailable",
-  "agent.listPresets",
-  "agentSessionHistory.list",
-  // Read-only bookmark metadata (#11288) — same workbench tier as the history
-  // listing. The mutations sit at action tier (#11908); listing stays here so a
-  // read-only session can still see what has been kept.
-  "session.bookmarks.list",
-
-  "agentSettings.get",
-  "keybinding.getOverrides",
-
+  // Reaches any panel, so sessions that are not Daintree's own assistant get
+  // `terminal.sendCommandOwned` in its place — see `OWNED_TWIN_TOOLS`.
+  "terminal.sendCommand",
+  // A message per terminal in one call; each item runs as the send (owned
+  // for a pane), so it reaches exactly what the single call would.
+  "terminal.sendCommandMany",
+  "terminal.waitUntilIdle",
+  "terminal.waitUntilIdleBatch",
+  // The asynchronous twin of the waits: returns at once, and types one line
+  // into the caller's own prompt when the terminal stops working. The send
+  // tools' `notify` flag does the same for the prompt they carry.
+  "terminal.notifyWhenIdle",
+  // Stop a turn without losing the conversation (#12338).
+  "terminal.interruptOwned",
+  // Answers a CLI's own dialog (trust, permission, a selection) that a
+  // submitted prompt cannot: a send types text and Enter, which picks whatever
+  // is highlighted. Swapped for `terminal.sendKeysOwned` outside the assistant.
+  "terminal.sendKeys",
+  // Swapped for `terminal.closeOwned` outside the assistant, like the send.
+  "terminal.close",
+  // Several closes in one call, each run as the close above (owned for a pane).
+  "terminal.closeMany",
+  "terminal.moveToWorktree",
+  // Brings a panel this session created into view (#12315).
+  "terminal.revealOwned",
+  "terminal.rename",
+  // Read-only. How much usage is left lives only in each CLI's own view, and
+  // the command that opens it is only typed after this confirms it exists.
   "slashCommands.list",
-
-  "skills.search",
-  "skills.load",
-
-  "git.getProjectPulse",
-  "git.getFileDiff",
-  "git.listCommits",
-  "git.getStagingStatus",
-
-  "forge.getRepoStats",
-  "forge.listIssues",
-  "forge.listPRs",
-  "forge.getIssue",
-  "forge.listIssueComments",
-  "forge.getChecks",
-  "forge.getPR",
-  // The plural counterpart, at the same tier as the singular read it replaces
-  // for a known set. Admitting one without the other is what produced the
-  // N-call fan-out this exists to remove.
-  "forge.getPRs",
-  "forge.getCIStatus",
-
-  "workflow.prepBranchForReview",
-
-  "system.checkCommand",
-  "system.checkDirectory",
-  "system.getResourceProfileSnapshot",
-
-  "cliAvailability.get",
-
-  "hibernation.getConfig",
-
-  "notifications.recent",
-  "errors.recent",
-
-  // Reads for the plugin-authoring loop (#12214). Both are pure reads — one
-  // parses a manifest already on disk, the other reports why a plugin is in the
-  // state it is in — and an agent writing a plugin needs them from the lowest
-  // tier it might be running at, since the alternative is guessing at a schema
-  // it cannot see.
-  "plugin.validate",
-  "plugin.diagnostics",
 
   "help.displayImage",
 ] as const satisfies readonly BuiltInActionId[];
 
-export const ACTION_TIER_ADDONS = [
-  // Carried here for the subset invariant alone: the external tier must never
-  // reach past the in-app assistant (#12340). The assistant has no reconnect
-  // problem to solve — it is in-process — but an action it cannot call while
-  // an api-key client can is the drift that invariant exists to catch.
-  "terminal.setClientMetadata",
-  "worktree.createWithRecipe",
+/**
+ * Added on top of `core`. Everything an orchestrator reaches for less often —
+ * recipes and workflows, project checks, forge and git reads, context bundles,
+ * diagnostics, worktree resources, the plugin-authoring loop.
+ *
+ * Deliberately absent from both sets, and so from MCP entirely: git writes and
+ * most git reads, forge writes and browser openers, file reads, UI navigation
+ * and layout, theme and settings writes, session bookmarks, the recipe editor,
+ * fleet arming, and bulk kills. An agent has its own shell and forge CLI for
+ * repository work, and the rest is the user's to drive from the UI.
+ * `agentSettings.get` is out too: its result carries launch flags and preset
+ * payloads that can hold credentials.
+ */
+export const FULL_TIER_ADDONS = [
+  ACTIONS_LIST_TOOL,
+  "worktree.getCurrent",
   "worktree.setActive",
-  "worktree.refresh",
-  // Cleaning up a worktree the assistant just finished with is ordinary
-  // orchestration, not a privilege escalation (#12116). Admission is all this
-  // tier grants: the action is `danger: "confirm"`, so an unconfirmed dispatch
-  // is still sent to the renderer for a native ConfirmDialog, and a force whose
-  // live target resolves to D3 still escalates to the typed-name gate (#12115)
-  // even under a grant. The one thing that skips the per-call modal is an
-  // explicit native automation grant, which is a user pre-authorisation and was
-  // never gated on tier. Note this is the UNSCOPED delete: it reaches any
-  // eligible worktree in the project, not only ones the session made.
-  // `worktree.create` stays at `system` for a reason that does not apply here —
-  // see the note on it below.
+  // The unscoped delete: it reaches any eligible worktree in the project, not
+  // only ones the session made, so it sits here while the owned form is core.
+  // `danger: "confirm"`, and a force whose target resolves to D3 still
+  // escalates to the typed-name gate (#12115) even under a grant.
   "worktree.delete",
-  // The session-scoped form of `worktree.delete` (#11909), carried here for the
-  // same subset invariant as `terminal.closeOwned`. It tracks the tier of the
-  // delete it delegates to, and is the narrower of the two: ownership is
-  // verified in main, and `force`, `deleteBranch` and `closeTerminals` are
-  // absent from its schema and stripped from the delegated call.
-  "worktree.deleteOwned",
+  "worktree.reviewReadiness",
+  "worktree.resource.status",
   "worktree.resource.provision",
   "worktree.resource.pause",
   "worktree.resource.resume",
-  // Sits with its lifecycle siblings rather than above them (#12116). The
-  // teardown command is project-defined and may destroy a remote resource, so
-  // it keeps `danger: "confirm"` — the tier decides reachability, the danger
-  // class decides approval. Worth knowing when reading the deletes above: they
-  // run this same teardown implicitly, before removing the tree.
+  // The teardown command is project-defined and may destroy a remote resource,
+  // so it keeps `danger: "confirm"`. The deletes run it implicitly too.
   "worktree.resource.teardown",
 
-  // `terminal.inject` and `terminal.sendCommand` reach any panel, so both are
-  // withheld from every session that is not Daintree's own assistant — see
-  // `RENDERER_OWNED_ORIGIN_ONLY_TOOLS` below.
-  "terminal.inject",
-  "terminal.new",
-  "terminal.sendCommand",
-  // The session-scoped forms of that pair (#12407), and the only way an agent
-  // pane's own bearer submits text or injects context into a terminal that is
-  // already open. Redundant for the assistant, which keeps the unscoped pair,
-  // but carried here for the same subset invariant as `terminal.closeOwned`:
-  // the external tier may not reach past what the assistant can.
-  "terminal.sendCommandOwned",
-  "terminal.injectOwned",
-  "terminal.close",
-  // The session-scoped form of the line above (#11909). Redundant for this
-  // caller — the assistant already holds the unrestricted `terminal.close` and
-  // has a human watching — but the external tier must stay a subset of what the
-  // assistant can reach, and that invariant is asserted rather than assumed
-  // (`tierAuth.test.ts`, "authorizes nothing the in-app assistant cannot
-  // already reach"). Listing it here keeps the direction of the cut honest.
-  "terminal.closeOwned",
-  // Carried here for the same subset invariant (#12315): the external tier must
-  // never reach past the in-app assistant. Close to redundant for this caller —
-  // it is pinned to the view the user is already looking at — but the invariant
-  // is asserted rather than assumed, and the direction of the cut has to stay
-  // honest. It tracks `pilot.openRun`, which it delegates to.
-  "terminal.revealOwned",
-  // Carried here for that same subset invariant (#12338). The assistant has the
-  // interactive fleet interrupt sitting beside it and a human watching, so this
-  // adds nothing it could not already do — but the external tier may not reach
-  // past what the assistant can, and that is asserted rather than assumed
-  // (`tierAuth.test.ts`, "authorizes nothing the in-app assistant cannot
-  // already reach"). Listing it keeps the direction of the cut honest.
-  "terminal.interruptOwned",
-  "terminal.closeAll",
-  "terminal.kill",
-  "terminal.killBatch",
-  "terminal.killAll",
-  "terminal.restart",
-  "terminal.moveToDock",
-  "terminal.moveToGrid",
-  "terminal.moveToWorktree",
-  "terminal.toggleDock",
-  "terminal.rename",
-  TERMINAL_WAIT_UNTIL_IDLE_TOOL,
-  "terminal.waitUntilIdleBatch",
-  // The event-driven counterpart to the waits (#12491): a pane registers what
-  // to watch and is woken instead of polling. Off the external surface on
-  // purpose — an api-key client has no pane to wake.
-  "terminal.registerWatch",
-  "terminal.listWatches",
-  "terminal.getWatchEvents",
-  "terminal.cancelWatch",
-
-  "recipe.list",
-  "recipe.run",
-  // Editor handoffs (#11908). Safe because they only put a draft on screen for
-  // the user to review — the write half (`recipe.saveToRepo`, `recipe.delete`)
-  // is deliberately absent from every tier, so the assistant can propose a
-  // recipe but never commit one to `.daintree/recipes/` on its own.
-  "recipe.editor.open",
-  "recipe.editor.openFromLayout",
-
-  // Withheld from non-assistant sessions with the unscoped input pair above.
-  "copyTree.injectToTerminal",
-
-  "file.openInEditor",
-
-  "agent.launch",
-  "agent.terminal",
-  "agent.focusNextWaiting",
-  "agent.focusNextWorking",
-  "agent.focusNextAgent",
-  "agent.focusPreviousAgent",
-
-  // Session continuity (#11908). Resume spawns a pane, so it belongs beside the
-  // other spawn tools rather than with the workbench-tier listings it reads
-  // from. The bookmark mutations are reversible and project-scoped; the two
-  // that remove something a person can see — a live pane, a durable bookmark —
-  // keep `danger: "confirm"` and are gated by the renderer's own dialog, which
-  // the first-party assistant is pinned to a window for.
+  // Resume spawns a pane; the record owns its launch directory (#11908).
+  "agentSessionHistory.list",
   "agentSessionHistory.resume",
-  "session.bookmarkAndClose",
-  "session.bookmark.promote",
-  "session.bookmark.rename",
-  "session.bookmark.delete",
 
-  "panel.focus",
+  "terminal.new",
+  "terminal.inject",
+  "terminal.kill",
+  "terminal.restart",
+  "terminal.closeAll",
+  // Orchestrator-owned metadata about a panel (#12340). Bounded, invisible in
+  // the UI, and confers no ownership.
+  "terminal.setClientMetadata",
 
+  "recipe.run",
   "workflow.startWorkOnIssue",
-  "workflow.focusNextAttention",
-
-  "browser.navigate",
-  "browser.openUrl",
-  "browser.captureScreenshot",
-
-  "devPreview.reloadPreview",
-  "devPreview.restart",
-  "devPreview.promoteToPortal",
-
-  "portal.openUrl",
-  "portal.newTab",
-  "portal.toggle",
-  "portal.toggleDevDashboard",
-
-  "app.theme.pick",
-  "app.theme.browser.open",
-  "app.theme.toggle",
-
-  "project.update",
-  "project.saveSettings",
-  "project.muteNotifications",
-  // Runs a project-declared command as a real child process. Read-only
-  // workbench sessions detect runners but must not execute them.
+  "workflow.prepBranchForReview",
+  "project.detectRunners",
+  // Runs a project-declared command as a real child process.
   "project.runCheck",
 
-  // Re-runs project plugin discovery and reconciliation — the write half of the
-  // authoring loop whose reads sit at workbench. It restarts running code, so a
-  // read-only session must not reach it, but within a project it does nothing a
-  // reopen would not (#12214).
+  "git.getProjectPulse",
+  "forge.getPR",
+  "forge.listPRs",
+  "forge.getIssue",
+  "forge.listIssues",
+  "forge.getCIStatus",
+
+  "copyTree.generate",
+  "copyTree.injectToTerminal",
+  // Puts a file on the clipboard with the project's own CopyTree policy, the
+  // same way on every platform (#11722). Its blast radius is a clipboard
+  // overwrite, which `actionRiskBand` bands `destructive-local`.
+  "copyTree.generateAndCopyFile",
+
+  "skills.search",
+  "skills.load",
+  // Read-only snapshot of the user's fleet broadcast run (#10930). Dispatching
+  // a broadcast stays off MCP.
+  "fleet.getRunStatus",
+
+  "browser.getConsoleMessages",
+  "devPreview.reloadPreview",
+  "devPreview.restart",
+  "errors.recent",
+  "notifications.recent",
+
+  // The plugin-authoring loop (#12214, #12611): two reads, a project reload
+  // and a single-view remount that stages the user's confirm on unsaved work.
+  "plugin.validate",
+  "plugin.diagnostics",
   "plugin.reloadProject",
-  // Remounts one plugin view, the same as the user's Reload panel. It discards
-  // view state the plugin never persisted, so a read-only session must not
-  // reach it; a view reporting unsaved work stages the user's confirm (#12611).
   "plugin.reloadPanel",
 ] as const satisfies readonly BuiltInActionId[];
 
-export const SYSTEM_TIER_ADDONS = [
-  // Deliberately above `worktree.createWithRecipe`, which is heavier but
-  // confined to the current project because it derives its own root. This one
-  // takes an explicit root that is not validated against the session's
-  // project, so an action-tier overlay could create a tree in another repo.
-  // System keeps it there, so every help agent — the Daintree Assistant
-  // included — reaches it only at an explicitly selected `system` tier or
-  // through a scoped grant (#11880, #11907).
-  "worktree.create",
+/**
+ * Tools that act on any panel or worktree a listing returns, paired with the
+ * form scoped to what the calling session created (#11909, #12407).
+ *
+ * The tool sets name the unscoped id. Daintree's own assistant keeps it — it
+ * runs pinned to the window the user is watching, and prompting agents the
+ * user launched is most of what it is asked to do. Every other session gets
+ * the owned form in its place: an agent pane's own bearer, whose origin is
+ * `external`, could otherwise type into or close a neighbouring shell, and an
+ * agent running in a read-only sandbox would then be running commands as the
+ * user. That is not a sandbox — a session holding `terminal.new` can still open
+ * a shell — but it stops the authority reaching panels the session did not
+ * open.
+ */
+export const OWNED_TWIN_TOOLS = {
+  "terminal.sendCommand": "terminal.sendCommandOwned",
+  "terminal.inject": "terminal.injectOwned",
+  "terminal.close": "terminal.closeOwned",
+  "terminal.sendKeys": "terminal.sendKeysOwned",
+  "worktree.delete": "worktree.deleteOwned",
+} as const satisfies Partial<Record<BuiltInActionId, BuiltInActionId>>;
 
-  "terminal.arm",
-  "terminal.disarm",
-  "terminal.disarmAll",
-
-  "copyTree.generateAndCopyFile",
-
-  "git.stageFile",
-  "git.unstageFile",
-  "git.stageAll",
-  "git.unstageAll",
-  "git.commit",
-  "git.push",
-  "git.fetch",
-
-  "forge.openIssues",
-  "forge.openPRs",
-  "forge.openCommits",
-  "forge.openRepo",
-  "forge.openIssue",
-  "forge.openPR",
-  "forge.assignIssue",
-  "forge.unassignIssue",
-  "forge.approvePR",
-  "forge.requestChanges",
-  "forge.dismissReview",
-  "forge.requestReviewers",
-  "forge.createPR",
-  "forge.closePR",
-  "forge.reopenPR",
-  "forge.mergePR",
-  "forge.convertPRToDraft",
-  "forge.markPRReadyForReview",
-  "forge.commentOnPR",
-  "forge.editPR",
-  "forge.createIssue",
-  "forge.closeIssue",
-  "forge.reopenIssue",
-  "forge.editIssue",
-  "forge.addIssueComment",
-  "forge.addIssueLabel",
-  "forge.removeIssueLabel",
-  // `forge.validateToken` is deliberately absent from every tier. It takes a
-  // raw forge access token as an argument, and a tool argument IS model
-  // context: even though ActionService redacts it from audit summaries and
-  // logs, admitting the tool means the credential has to be composed in the
-  // model channel to be sent. Token entry stays a UI-owned flow — the Test
-  // button in the provider settings tab dispatches it directly as
-  // `source: "user"`, which no tier gates. The action is also
-  // `mcpVisibility: "hidden"` so a future allowlist edit cannot re-advertise it
-  // by accident.
+/**
+ * Unscoped tools with no owned form, reserved for Daintree's own assistant
+ * surfaces — `help` and `assistant-pane` sessions — for the reason above.
+ * Withheld from every other session at discovery and at dispatch.
+ */
+export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
+  "copyTree.injectToTerminal",
+  "terminal.kill",
+  "terminal.restart",
+  "terminal.closeAll",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
- * Terminal input that can land in any panel, reserved for Daintree's own
- * assistant surfaces — `help` and `assistant-pane` sessions (#12407).
- *
- * The ladder tiers above are not only the assistant's. A Claude pane launched
- * in a project with Daintree MCP enabled gets its own bearer at the project's
- * tier, and that session's origin is `external`. Granting it these would let an
- * agent running in a read-only sandbox, or one that asks before every command,
- * type into a neighbouring shell and run whatever it likes as the user. So the
- * tier decides which of these a session could reach, and the origin decides
- * whether it reaches them at all: every session that is not renderer-owned is
- * admitted against its tier with these removed, at discovery and at dispatch.
- *
- * What such a session keeps is the owned form — input only into a terminal it
- * created, checked against the main-process ownership ledger. That is not a
- * sandbox: a session holding `terminal.new` can still open a shell and run
- * commands in it. It is what stops that authority reaching panels the session
- * did not open.
- *
- * The assistant keeps the unscoped pair because sending a prompt to an agent
- * the user launched is most of what it is asked to do, and it runs pinned to
- * the window the user is looking at.
+ * The surface a session whose origin is not renderer-owned is admitted
+ * against: each unscoped tool swapped for its owned twin, and the reserved
+ * tools removed. Order-preserving and duplicate-free, so `full` — which carries
+ * both `worktree.delete` and core's `worktree.deleteOwned` — collapses to one.
  */
-export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
-  "terminal.sendCommand",
-  "terminal.inject",
-  "copyTree.injectToTerminal",
-] as const satisfies readonly BuiltInActionId[];
+export function toNonRendererOwnedTools(ids: readonly string[]): string[] {
+  const reserved = new Set<string>(RENDERER_OWNED_ORIGIN_ONLY_TOOLS);
+  const twins: Readonly<Record<string, string>> = OWNED_TWIN_TOOLS;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (reserved.has(id)) continue;
+    const mapped = twins[id] ?? id;
+    if (seen.has(mapped)) continue;
+    seen.add(mapped);
+    out.push(mapped);
+  }
+  return out;
+}
 
 /**
  * Tools added at each tier on top of the previous one. Useful for the
  * blast-radius preview UI which shows the incremental capability change.
  */
 export const HELP_TIER_INCREMENTAL: Record<HelpAssistantTier, readonly string[]> = {
-  workbench: WORKBENCH_TIER_TOOLS,
-  action: ACTION_TIER_ADDONS,
-  system: SYSTEM_TIER_ADDONS,
+  core: CORE_TIER_TOOLS,
+  full: FULL_TIER_ADDONS,
 };
 
 /**
- * Cumulative static allow-list per tier — every tool that tier permits before
- * a live grant widens the session.
+ * Cumulative static allow-list per tier, as Daintree's own assistant sees it —
+ * every tool that tier permits before a live grant widens the session.
  */
 export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> = {
-  workbench: WORKBENCH_TIER_TOOLS,
-  action: [...WORKBENCH_TIER_TOOLS, ...ACTION_TIER_ADDONS],
-  system: [...WORKBENCH_TIER_TOOLS, ...ACTION_TIER_ADDONS, ...SYSTEM_TIER_ADDONS],
+  core: CORE_TIER_TOOLS,
+  full: [...CORE_TIER_TOOLS, ...FULL_TIER_ADDONS],
 };
 
 /**
@@ -406,17 +284,11 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
  *
  * Operational risk, not minimum tier. The preview intersects this list with the
  * tier being previewed, so the same tool is called out wherever it first
- * becomes reachable — which is why #12116 could not leave this keyed to
- * `system`: promoting the worktree deletes would otherwise have made them
- * invisible at the tier that newly grants them, which is the one tier where a
- * user is deciding whether to grant them at all.
+ * becomes reachable. All three run project-defined teardown — arbitrary
+ * commands from `.daintree/config.json`, and resource teardown that can destroy
+ * a remote devbox. The two delete variants then remove the tree as well.
  */
 export const HIGH_BLAST_RADIUS_TOOLS: readonly string[] = [
-  "git.push",
-  "git.commit",
-  // All three run project-defined teardown — arbitrary commands from
-  // `.daintree/config.json`, and resource teardown that can destroy a remote
-  // devbox. The two delete variants then remove the tree as well.
   "worktree.delete",
   "worktree.deleteOwned",
   "worktree.resource.teardown",
