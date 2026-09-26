@@ -4,7 +4,6 @@ import { useCrashRecoveryGate } from "./useCrashRecoveryGate";
 import { useAppHydration } from "./useAppHydration";
 import { useShortcutHints } from "./useShortcutHints";
 import { useGettingStartedChecklist } from "./useGettingStartedChecklist";
-import { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 import { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 import { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 import { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
@@ -115,8 +114,8 @@ export function useAppBootstrap() {
     return () => unsubscribe?.();
   }, []);
   // Defers the post-hydration housekeeping IPC reads (shortcut-hint counts,
-  // milestones, forge-recommendation plugin/remotes probes) out of the
-  // synchronous isStateLoaded effect flush: their sends would otherwise land
+  // forge-recommendation plugin/remotes probes) out of the synchronous
+  // isStateLoaded effect flush: their sends would otherwise land
   // on main ahead of the loaded-frame paint and compete with the
   // deferred-services drain. The flag flips from the background-priority task
   // below, so the gated hooks hydrate at idle; each reconciles current store
@@ -124,9 +123,7 @@ export function useAppBootstrap() {
   const [idleHousekeepingReady, setIdleHousekeepingReady] = useState(false);
   useShortcutHints(isStateLoaded && idleHousekeepingReady);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
-  const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
-  useUpdateListener(onboardingOverlayActive);
-  useOrchestrationMilestones(isStateLoaded && idleHousekeepingReady);
+  useUpdateListener(gettingStarted.visible);
   useAgentWaitingNudge(isStateLoaded);
   useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();

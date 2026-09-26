@@ -23,7 +23,6 @@ export { useThemeBrowserSettingsBridge } from "./useThemeBrowserSettingsBridge";
 export { useErrorRetry } from "./useErrorRetry";
 export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
 export { useAgentActivityBroadcast } from "./useAgentActivityBroadcast";
-export { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";

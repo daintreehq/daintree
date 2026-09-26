@@ -72,7 +72,6 @@ import {
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
-  LazyCelebrationConfetti,
 } from "./lazyPanels";
 
 interface ModalHostLayerProps {
@@ -980,17 +979,6 @@ export function ModalHostLayer({
         {isPilotOpen && (
           <Suspense fallback={null}>
             <LazyPilotView />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="CelebrationConfetti"
-        resetKeys={[Number(gettingStarted.showCelebration)]}
-      >
-        {gettingStarted.showCelebration && (
-          <Suspense fallback={null}>
-            <LazyCelebrationConfetti />
           </Suspense>
         )}
       </ErrorBoundary>

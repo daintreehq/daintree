@@ -58,7 +58,6 @@ import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHist
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
-import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
 import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRecommendation.preload.js";
@@ -2932,8 +2931,6 @@ function buildElectronApi(): ElectronAPI {
         callback: (state: IpcEventMap["onboarding:checklist-push"]) => void
       ): (() => void) => _typedOn(CHANNELS.ONBOARDING_CHECKLIST_PUSH, callback),
     },
-
-    milestones: buildMilestonesPreloadBindings(_unwrappingInvoke),
 
     shortcutHints: buildShortcutHintsPreloadBindings(_unwrappingInvoke),
 

@@ -53,7 +53,6 @@ const gettingStarted: GettingStartedChecklistState = {
   visible: false,
   collapsed: false,
   checklist: null,
-  showCelebration: false,
   dismiss: () => {},
   toggleCollapse: () => {},
   notifyOnboardingComplete: () => {},

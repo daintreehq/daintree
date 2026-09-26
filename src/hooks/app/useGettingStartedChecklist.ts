@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useReducedMotion } from "framer-motion";
 import { isElectronAvailable } from "../useElectron";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -12,6 +11,10 @@ import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+
+function isChecklistComplete(checklist: ChecklistState): boolean {
+  return Object.values(checklist.items).every(Boolean);
+}
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -31,7 +34,6 @@ export interface GettingStartedChecklistState {
   visible: boolean;
   collapsed: boolean;
   checklist: ChecklistState | null;
-  showCelebration: boolean;
   dismiss: () => void;
   toggleCollapse: () => void;
   notifyOnboardingComplete: () => void;
@@ -69,23 +71,17 @@ function reconcileCurrentState(
   }
 }
 
-const CELEBRATION_CLEAR_MS = 1500;
-
 export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStartedChecklistState {
   const [checklist, setChecklist] = useState<ChecklistState | null>(null);
   const [onboardingCompleted, setOnboardingCompleted] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [forceShow, setForceShow] = useState(false);
-  const [showCelebration, setShowCelebration] = useState(false);
   const checklistRef = useRef(checklist);
   // Auto-collapse the checklist to its minimized state once, after the user is
   // clearly engaged (launched an agent AND interacted with a panel). Mount-
   // scoped so Help > Getting Started can always reopen it: a forced show sets
   // the latch (below) so it won't be re-collapsed against the user's intent.
   const hasAutoCollapsed = useRef(false);
-
-  const prefersReducedMotion = useReducedMotion();
-  const celebrationClearMs = prefersReducedMotion ? 0 : CELEBRATION_CLEAR_MS;
 
   useEffect(() => {
     checklistRef.current = checklist;
@@ -103,21 +99,12 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     const prev = checklistRef.current;
     if (!prev || prev.dismissed || prev.items[item]) return;
 
-    const updatedItems = { ...prev.items, [item]: true };
-    const allDone = Object.values(updatedItems).every(Boolean);
-    const next: ChecklistState = allDone
-      ? { ...prev, items: updatedItems, celebrationShown: true }
-      : { ...prev, items: updatedItems };
-
+    const next: ChecklistState = { ...prev, items: { ...prev.items, [item]: true } };
     setChecklist(next);
     checklistRef.current = next;
-
-    if (allDone && !prev.celebrationShown) {
-      setShowCelebration(true);
-      safeFireAndForget(window.electron.onboarding.markChecklistCelebrationShown(), {
-        context: "Marking onboarding celebration shown",
-      });
-    }
+    // Finishing the last item lets the checklist go away, even when Help >
+    // Getting Started had forced it open.
+    if (isChecklistComplete(next)) setForceShow(false);
   }, []);
 
   const dismiss = useCallback(() => {
@@ -299,13 +286,6 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       .catch((err) => logError("Failed to notify onboarding complete", err));
   }, [markItem]);
 
-  // Auto-clear celebration after animation completes
-  useEffect(() => {
-    if (!showCelebration) return;
-    const timer = setTimeout(() => setShowCelebration(false), celebrationClearMs);
-    return () => clearTimeout(timer);
-  }, [showCelebration, celebrationClearMs]);
-
   // Setup is settled once the user finishes the wizard OR declines it from the
   // welcome banner. Gating on completion alone meant "Not now" on the banner
   // hid the checklist for good — the one path that most needs a next step.
@@ -316,13 +296,16 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   const hasProject = useProjectStore((s) => s.currentProject !== null);
   const setupSettled = onboardingCompleted || setupBannerDismissed || hasProject;
 
-  const visible = checklist !== null && (forceShow || (setupSettled && !checklist.dismissed));
+  // Hidden once complete without persisting a dismissal, so Help > Getting
+  // Started can still reopen it.
+  const visible =
+    checklist !== null &&
+    (forceShow || (setupSettled && !checklist.dismissed && !isChecklistComplete(checklist)));
 
   return {
     visible,
     collapsed,
     checklist,
-    showCelebration,
     dismiss,
     toggleCollapse,
     notifyOnboardingComplete,
