@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -13,6 +14,7 @@ import {
   attachCommandFor,
   buildAttachArgs,
   buildCatArgs,
+  closeSshMaster,
   closeSshMasters,
   isStreamLocalRefusal,
   buildForwardArgs,
@@ -549,5 +551,43 @@ describe("closing masters when the app quits", () => {
     ]);
     await closeSshMasters(1_000);
     expect(exits).toHaveLength(3);
+  });
+
+  it("keeps one entry per host when they share the %C template, and forgetting one host drops only its own", async () => {
+    await closeSshMasters();
+    // Short enough that every host gets the shared `cm-%C` spelling.
+    const clientDir = mkdtempSync("/tmp/rhm-");
+    try {
+      expect(controlPathFor(clientDir, "studio")).toBe(controlPathFor(clientDir, "bigbox"));
+      expect(controlPathFor(clientDir, "studio")).toContain("%C");
+      const exits: string[] = [];
+      const spawner: SshSpawner = (args) => {
+        const child = new FakeChild();
+        if (args.includes("exit")) exits.push(args.at(-1)!);
+        child.finish(255, "", "no\n");
+        return child;
+      };
+      for (const target of ["studio", "bigbox", "mini"]) {
+        const transport = new SshTransport({ target, clientDir, spawn: spawner });
+        await expect(transport.open(new AbortController().signal)).rejects.toBeInstanceOf(
+          TransportError
+        );
+      }
+      const forgotten: string[] = [];
+      await closeSshMaster(
+        async (_command, args) => {
+          forgotten.push(args.at(-1)!);
+          return { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false };
+        },
+        clientDir,
+        "bigbox",
+        1_000
+      );
+      expect(forgotten).toEqual(["bigbox"]);
+      await closeSshMasters(1_000);
+      expect(exits.sort()).toEqual(["mini", "studio"]);
+    } finally {
+      rmSync(clientDir, { recursive: true, force: true });
+    }
   });
 });
