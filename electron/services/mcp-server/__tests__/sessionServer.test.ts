@@ -980,6 +980,83 @@ describe("terminal notices", () => {
       });
     });
 
+    it("holds a waitForReply send open and returns the agent's reply with the send", async () => {
+      const bind = vi.fn();
+      const wait = vi.fn(() => ({
+        bind,
+        cancel: vi.fn(),
+        promise: Promise.resolve({
+          terminalId: "t-a",
+          outcome: "handback" as const,
+          reply: { text: "Fact: honey", lineCount: 1, truncated: false },
+        }),
+      }));
+      const { dispatchAction, start } = notifyDeps({ origin: "help" }, { replyWaiter: { wait } });
+      const server = await start("session-wait-send");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "one fact", waitForReply: true, waitSeconds: 60 },
+      });
+
+      expect(dispatchAction.mock.calls[0]?.[1]).toEqual({ terminalId: "t-a", command: "one fact" });
+      expect(wait).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalId: "t-a", timeoutMs: 60_000 })
+      );
+      expect(bind).toHaveBeenCalledWith("t-a", "tok-1");
+      expect(result.structuredContent).toMatchObject({
+        sent: true,
+        reply: { outcome: "handback", reply: { text: "Fact: honey" } },
+      });
+    });
+
+    it("sends every item before waiting, then returns each item's reply", async () => {
+      const order: string[] = [];
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => {
+        const { terminalId } = args as { terminalId: string };
+        order.push(`send ${terminalId}`);
+        return {
+          result: {
+            ok: true,
+            result: { sent: true, terminalId, submissionToken: `tok-${terminalId}` },
+          },
+        };
+      });
+      const wait = vi.fn((options: { terminalId?: string }) => {
+        order.push(`wait ${options.terminalId}`);
+        return {
+          bind: vi.fn(),
+          cancel: vi.fn(),
+          promise: Promise.resolve({
+            terminalId: options.terminalId ?? "",
+            outcome: "settled" as const,
+            reply: { text: `vote from ${options.terminalId}`, lineCount: 1, truncated: false },
+          }),
+        };
+      });
+      const { start } = notifyDeps({ origin: "help" }, { dispatchAction, replyWaiter: { wait } });
+      const server = await start("session-wait-batch");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: "t-a", command: "ballot" },
+            { terminalId: "t-b", command: "ballot" },
+          ],
+          waitForReply: true,
+        },
+      });
+
+      expect(order).toEqual(["wait t-a", "send t-a", "wait t-b", "send t-b"]);
+      expect(result.structuredContent).toMatchObject({
+        results: [
+          { target: "t-a", ok: true, reply: { reply: { text: "vote from t-a" } } },
+          { target: "t-b", ok: true, reply: { reply: { text: "vote from t-b" } } },
+        ],
+      });
+    });
+
     it("rejects malformed batch arguments before any item runs", async () => {
       const { dispatchAction, start } = notifyDeps({ origin: "help" });
       const server = await start("session-batch-invalid");

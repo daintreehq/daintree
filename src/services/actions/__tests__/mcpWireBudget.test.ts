@@ -525,7 +525,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the background — without it a supervisor reads a string of expired waits
   // on a backgrounded project as "no PR yet". The property descriptions were
   // cut to the target before measuring.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_300;
+  // 63_300 → 63_400 for `waitForReply`, measured at 63_355 B. An api-key
+  // client has no pane to notify, so a send or launch that holds its call
+  // until the agent answers and returns the reply is the only way it gets one
+  // without polling; the argument pair and the `reply` output field are what
+  // the external surface pays for that.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -669,7 +674,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // call per participant per round, so a four-agent vote costs 4 calls
   // instead of 12. They carry no output schema, which keeps each near 700 B.
   // The external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 132_000;
+  // 132_000 → 135_000 for `waitForReply`, measured at 134_866 B: the argument
+  // pair on the three single send/launch tools and the two batches, and the
+  // `reply` field on three output schemas. It replaces the notice-then-read
+  // round trip — or Codex sleeping and polling, as a live run did — with one
+  // call that returns every reply, which is what makes a vote or a fan-out
+  // two calls instead of a dozen.
+  const MAX_COHORT_PAYLOAD_BYTES = 135_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

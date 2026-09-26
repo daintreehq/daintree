@@ -179,6 +179,7 @@ export interface HttpLifecycleDeps {
   isTerminalIdInUse: (terminalId: string) => boolean;
   /** Terminal notices. Absent, `terminal.notifyWhenIdle` and `notify: true` answer not-eligible. */
   terminalNotify?: import("./terminalNotify.js").TerminalNotifyHandlers;
+  replyWaiter?: Pick<import("./replyWaiter.js").ReplyWaiterService, "wait">;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -2144,6 +2145,7 @@ export class HttpLifecycle {
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
+      ...(this.deps.replyWaiter !== undefined ? { replyWaiter: this.deps.replyWaiter } : {}),
       ...(this.deps.terminalNotify !== undefined
         ? { terminalNotify: this.deps.terminalNotify }
         : {}),

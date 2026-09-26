@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { NotifyReplyLinesSchema } from "./terminalNotify.js";
+import { WaitSecondsSchema } from "./replyWait.js";
 
 /**
  * Batched forms of the two calls an orchestration repeats per participant:
@@ -21,6 +22,11 @@ const notifyFields = {
     .describe("As on the single call: each agent's notice quotes its reply when it finishes."),
   handback: z.boolean().optional().describe("As on the single call, for each item."),
   replyLines: NotifyReplyLinesSchema,
+  waitForReply: z
+    .boolean()
+    .optional()
+    .describe("Hold the call until every agent finishes; each result has its `reply`."),
+  waitSeconds: WaitSecondsSchema,
 };
 
 export const AgentLaunchManyArgsSchema = z.object({
@@ -71,4 +77,6 @@ export interface BatchItemOutcome {
   ok: boolean;
   result?: unknown;
   error?: unknown;
+  /** With `waitForReply`: how the wait for this item's agent ended, and its reply. */
+  reply?: unknown;
 }

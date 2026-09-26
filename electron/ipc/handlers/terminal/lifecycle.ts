@@ -3,6 +3,7 @@
  */
 
 import crypto from "crypto";
+import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../../../shared/types/replyWait.js";
 import os from "os";
 import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
@@ -615,6 +616,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // provision-time preference; only the assistant's own CLI reads it.
       if (launchAgentId === "daintree-assistant" && helpSessionService.getDebugLogging(helpToken)) {
         spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_DEBUG_LOG: "1" };
+      }
+      // A `waitForReply` send holds its call until the agent answers, and
+      // Claude Code's own MCP call timeout would cut it off first.
+      if (launchAgentId === "claude" && spawnEnv?.MCP_TOOL_TIMEOUT === undefined) {
+        spawnEnv = { ...(spawnEnv ?? {}), MCP_TOOL_TIMEOUT: String(HELP_MCP_TOOL_TIMEOUT_MS) };
       }
       // Honor the agent's `supports.permissionBypass` declaration: only
       // append the dangerous flag when the agent has opted in. Agents that

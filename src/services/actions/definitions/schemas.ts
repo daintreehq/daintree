@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AwaitedReplySchema } from "@shared/types/replyWait";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
 import {
   LAST_OUTPUT_CHANGE_AT_DESCRIPTION,
@@ -606,6 +607,7 @@ export const TerminalSendCommandResultSchema = z.object({
       "Pass this and `terminalId` to the terminal-status capability to see how far the submission got. Retained for the last 32 per terminal; lost if the terminal restarts."
     ),
   message: z.string(),
+  reply: AwaitedReplySchema.optional(),
 });
 
 export const TerminalStatusResultSchema = z.object({

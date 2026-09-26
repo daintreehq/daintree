@@ -38,6 +38,7 @@ import {
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
+import { AwaitedReplySchema, WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
   hasSystemPromptOverride,
@@ -391,6 +392,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // a launch with no agent to watch.
       notify: z.boolean().optional().describe(NOTIFY_ARG_DESCRIPTION),
       replyLines: NotifyReplyLinesSchema,
+      waitForReply: WaitForReplySchema,
+      waitSeconds: WaitSecondsSchema,
       systemPrompt: z
         .string()
         .max(SYSTEM_PROMPT_MAX_LENGTH)
@@ -485,6 +488,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       worktreePath: z.string().nullable(),
       branch: z.string().nullable(),
       cwd: z.string().nullable(),
+      reply: AwaitedReplySchema.optional(),
     }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {

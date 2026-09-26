@@ -148,7 +148,12 @@ import {
   type PendingNotify,
   type TerminalNotifyHandlers,
 } from "./terminalNotify.js";
-import { NotifyReplyLinesSchema } from "../../../shared/types/terminalNotify.js";
+import {
+  NOTIFY_REPLY_LINES_DEFAULT,
+  NotifyReplyLinesSchema,
+} from "../../../shared/types/terminalNotify.js";
+import { REPLY_WAIT_DEFAULT_SECONDS, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
+import type { ReplyWait, ReplyWaiterService } from "./replyWaiter.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -523,20 +528,59 @@ const BATCH_TOOLS: Record<string, BatchTool<unknown>> = {
   }),
 };
 
+/**
+ * Tie a waiter to the terminal and submission a dispatch reported, or settle
+ * it at once when the send or launch did not happen.
+ */
+function bindWait(result: CallToolResult, wait: ReplyWait): void {
+  const parsed = resultValue(result);
+  const value =
+    parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+  const terminalId = typeof value?.terminalId === "string" ? value.terminalId : undefined;
+  const failed =
+    result.isError === true ||
+    terminalId === undefined ||
+    value?.launched === false ||
+    (value?.spawnStatus !== undefined && value.spawnStatus !== null);
+  if (failed) {
+    wait.cancel();
+    return;
+  }
+  const token = typeof value?.submissionToken === "string" ? value.submissionToken : undefined;
+  wait.bind(terminalId, token);
+}
+
+/** A send's or launch's result with the reply it waited for. */
+async function attachReply(result: CallToolResult, wait: ReplyWait): Promise<CallToolResult> {
+  bindWait(result, wait);
+  const reply = await wait.promise;
+  if (reply.terminalId === "") return result;
+  const base = resultValue(result);
+  const value = {
+    ...(base !== null && typeof base === "object" ? (base as Record<string, unknown>) : {}),
+    reply,
+  };
+  return buildToolCallResult(value, {
+    structuredContent: value as unknown as Record<string, unknown>,
+  }) as CallToolResult;
+}
+
+/** A call's value: its structured content, else its JSON text, else the text. */
+function resultValue(result: CallToolResult): unknown {
+  if (result.structuredContent !== undefined) return result.structuredContent;
+  const first = result.content?.[0];
+  const text = first !== undefined && first.type === "text" ? first.text : undefined;
+  if (text === undefined) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
 /** One item's result, as structured content when the call carried it. */
 function batchItemOutcome(target: string, result: CallToolResult): BatchItemOutcome {
-  let value: unknown = result.structuredContent;
-  if (value === undefined) {
-    const first = result.content?.[0];
-    const text = first !== undefined && first.type === "text" ? first.text : undefined;
-    if (text !== undefined) {
-      try {
-        value = JSON.parse(text);
-      } catch {
-        value = text;
-      }
-    }
-  }
+  const value = resultValue(result);
   return result.isError === true
     ? { target, ok: false, error: value }
     : { target, ok: true, result: value };
@@ -555,26 +599,45 @@ function batchItemOutcome(target: string, result: CallToolResult): BatchItemOutc
 function prepareNotifyDispatch(
   actionId: string,
   args: unknown
-): { dispatchArgs: unknown; notify: boolean; replyLines?: number } {
+): {
+  dispatchArgs: unknown;
+  notify: boolean;
+  replyLines?: number;
+  waitForReply: boolean;
+  waitSeconds?: number;
+} {
   if (
     !NOTIFY_SEND_TOOLS.has(actionId) ||
     args === null ||
     typeof args !== "object" ||
     Array.isArray(args)
   ) {
-    return { dispatchArgs: args, notify: false };
+    return { dispatchArgs: args, notify: false, waitForReply: false };
   }
-  const { notify, replyLines, ...rest } = args as Record<string, unknown>;
-  if (typeof notify !== "boolean") return { dispatchArgs: args, notify: false };
-  // A malformed `replyLines` stays in the forwarded arguments so the
-  // renderer's schema rejects the call, the same as a malformed `notify`.
+  const { notify, replyLines, waitForReply, waitSeconds, ...rest } = args as Record<
+    string,
+    unknown
+  >;
+  // A malformed argument stays in the forwarded arguments so the renderer's
+  // schema rejects the call; a well-formed one is main's and goes no further.
   const parsedLines = NotifyReplyLinesSchema.safeParse(replyLines);
-  const sendArgs = parsedLines.success ? rest : { ...rest, replyLines };
+  const parsedWait = WaitSecondsSchema.safeParse(waitSeconds);
+  const sendArgs: Record<string, unknown> = { ...rest };
+  if (notify !== undefined && typeof notify !== "boolean") sendArgs.notify = notify;
+  if (!parsedLines.success) sendArgs.replyLines = replyLines;
+  if (waitForReply !== undefined && typeof waitForReply !== "boolean") {
+    sendArgs.waitForReply = waitForReply;
+  }
+  if (!parsedWait.success) sendArgs.waitSeconds = waitSeconds;
   return {
     dispatchArgs: actionId === AGENT_LAUNCH_TOOL ? args : sendArgs,
-    notify,
+    notify: notify === true,
     ...(parsedLines.success && parsedLines.data !== undefined
       ? { replyLines: parsedLines.data }
+      : {}),
+    waitForReply: waitForReply === true && !NOTIFY_KEY_TOOLS.has(actionId),
+    ...(parsedWait.success && parsedWait.data !== undefined
+      ? { waitSeconds: parsedWait.data }
       : {}),
   };
 }
@@ -819,6 +882,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * not-eligible.
    */
   terminalNotify?: TerminalNotifyHandlers;
+  /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
+  replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**
    * The caller's own pane, from its credential: a pane bearer's terminal, or
    * the terminal a help session is bound to. Null for everything else — an
@@ -1017,6 +1082,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyDisplayImage,
     workspaceBinding,
     terminalNotify,
+    replyWaiter,
     resolveOwnPane,
     requestApproval,
   } = deps;
@@ -1374,7 +1440,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     );
     // A send's or launch's `notify` is decided here and taken off the forwarded
     // copy the same way; see `prepareNotifyDispatch`.
-    const { dispatchArgs, notify, replyLines } = prepareNotifyDispatch(actionId, listDispatchArgs);
+    const { dispatchArgs, notify, replyLines, waitForReply, waitSeconds } = prepareNotifyDispatch(
+      actionId,
+      listDispatchArgs
+    );
+    // Armed inside the dispatch, once the owned target is resolved, and read
+    // after it: the reply joins whatever result the dispatch built.
+    let replyWait: ReplyWait | undefined;
     // The follow-up a `notify: true` call set up before dispatch. Completed
     // with the envelope once the action returns, and cancelled by the shared
     // `finally` on every other way out, so a refused or failed call never
@@ -2388,18 +2460,57 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           emitToolCallStarted(false);
           const results: BatchItemOutcome[] = [];
+          const batchArgs = parsed.data as {
+            waitForReply?: boolean;
+            waitSeconds?: number;
+            replyLines?: number;
+          };
+          // Every item is sent first and waited on together, so the call lasts
+          // as long as the slowest agent, not the sum of them.
+          const waits: Array<ReplyWait | undefined> = [];
           for (const item of batch.expand(parsed.data, rendererOwnedOrigin)) {
+            const wait =
+              batchArgs.waitForReply === true && replyWaiter !== undefined
+                ? replyWaiter.wait({
+                    ...(item.tool === AGENT_LAUNCH_TOOL ? {} : { terminalId: item.target }),
+                    since: Date.now(),
+                    replyLines: batchArgs.replyLines ?? NOTIFY_REPLY_LINES_DEFAULT,
+                    timeoutMs: (batchArgs.waitSeconds ?? REPLY_WAIT_DEFAULT_SECONDS) * 1_000,
+                    signal: extra.signal,
+                  })
+                : undefined;
             const itemResult = await handleCallTool(
               { method: "tools/call", params: { name: item.tool, arguments: item.args } },
               extra
             );
+            if (wait !== undefined) bindWait(itemResult, wait);
+            waits.push(wait);
             results.push(batchItemOutcome(item.target, itemResult));
           }
+          const replies = await Promise.all(waits.map((wait) => wait?.promise));
+          replies.forEach((reply, index) => {
+            const entry = results[index];
+            if (entry !== undefined && reply !== undefined && reply.terminalId !== "") {
+              entry.reply = reply;
+            }
+          });
           const value = { results };
           outcome = { kind: "result", value: { ok: true, result: value } };
           return buildToolCallResult(value, {
             structuredContent: value as unknown as Record<string, unknown>,
           }) as CallToolResult;
+        }
+
+        if (waitForReply && replyWaiter !== undefined) {
+          replyWait = replyWaiter.wait({
+            ...(actionId === AGENT_LAUNCH_TOOL
+              ? {}
+              : { terminalId: ownedResourceId ?? readStringArg(args, "terminalId") }),
+            since: Date.now(),
+            replyLines: replyLines ?? NOTIFY_REPLY_LINES_DEFAULT,
+            timeoutMs: (waitSeconds ?? REPLY_WAIT_DEFAULT_SECONDS) * 1_000,
+            signal: extra.signal,
+          });
         }
 
         // `notify: true` on a send or launch: the notice is set up here, before
@@ -3237,7 +3348,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       );
     }
 
-    return await dispatchPromise;
+    const toolResult = await dispatchPromise;
+    return replyWait === undefined
+      ? toolResult
+      : await attachReply(toolResult as CallToolResult, replyWait);
   };
   server.setRequestHandler(CallToolRequestSchema, handleCallTool);
 

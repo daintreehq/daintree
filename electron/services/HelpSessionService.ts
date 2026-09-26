@@ -1,5 +1,6 @@
 // eager-import-allow: reads help-session state via store.get synchronously
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../shared/types/replyWait.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
@@ -1401,6 +1402,9 @@ export class HelpSessionService {
         `mcp_servers.daintree.url="http://127.0.0.1:${port}/mcp"`,
         "-c",
         `mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"`,
+        // A `waitForReply` call stays open until the agent answers.
+        "-c",
+        `mcp_servers.daintree.tool_timeout_sec=${HELP_MCP_TOOL_TIMEOUT_MS / 1_000}`,
         ...approve("daintree")
       );
     }

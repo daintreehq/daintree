@@ -40,6 +40,7 @@ import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { handleTerminalGetStatusViewless } from "./mcp-server/terminalStatus.js";
 import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
 import { TerminalNotifyService, paneNotifyKey } from "./mcp-server/terminalNotify.js";
+import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
@@ -98,6 +99,7 @@ export class McpServerService {
   private readonly httpLifecycle: HttpLifecycle;
   /** Notices an orchestrating pane asked for, and the lines that deliver them. */
   private readonly terminalNotify: TerminalNotifyService;
+  private readonly replyWaiter: ReplyWaiterService;
   /**
    * Resolver injected by `HelpSessionService` after construction. Returns
    * the help-session id bound to a terminal id, or null when the terminal
@@ -260,6 +262,21 @@ export class McpServerService {
         }),
     });
 
+    this.replyWaiter = new ReplyWaiterService({
+      getPtyClient: () => getPtyClient(),
+      onStateChanged: (listener) =>
+        events.on("agent:state-changed", (payload) => listener(payload)),
+      onHandbackObserved: (listener) =>
+        events.on("agent:handback-observed", (payload) =>
+          listener(payload.terminalId, payload.handback)
+        ),
+      onKilled: (listener) =>
+        events.on("agent:killed", (payload) => {
+          if (payload.terminalId) listener(payload.terminalId);
+        }),
+      onTrashed: (listener) => events.on("terminal:trashed", (payload) => listener(payload.id)),
+    });
+
     this.httpLifecycle = new HttpLifecycle({
       sessionStore: this.sessionStore,
       auditService: this.auditService,
@@ -338,6 +355,7 @@ export class McpServerService {
       // collision check needs: a panel store only knows its own (#12407).
       isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
       terminalNotify: this.terminalNotify,
+      replyWaiter: this.replyWaiter,
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       getCachedManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
@@ -746,6 +764,8 @@ export class McpServerService {
   async stop(): Promise<void> {
     // Nothing could read the observations a wake would point at.
     this.terminalNotify.disposeAll();
+    // Open waits return what they have rather than hang on a server going away.
+    this.replyWaiter.dispose();
     await this.httpLifecycle.stop();
     // The stop rejects every pending request, so the leases those requests own
     // have no one left to release them. Holding them would pin their views

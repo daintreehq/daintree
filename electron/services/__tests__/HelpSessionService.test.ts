@@ -3042,6 +3042,8 @@ describe("HelpSessionService", () => {
         "-c",
         'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
         "-c",
+        "mcp_servers.daintree.tool_timeout_sec=1860",
+        "-c",
         'mcp_servers.daintree.default_tools_approval_mode="approve"',
         "-c",
         'mcp_servers.daintree-docs.transport="http"',

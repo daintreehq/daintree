@@ -207,6 +207,61 @@ const SCENARIOS: Scenario[] = [
     },
   },
   {
+    id: "multi-worktree",
+    project: INVENTORY_PROJECT,
+    messages: [
+      "Make two new worktrees: in one, have Claude make parseCsv handle quoted commas; in the other, have Codex make applyMovement refuse to take stock below zero. Tell me when both have a change ready.",
+      "Which of the two is done, and what did each change?",
+    ],
+    timeoutMs: 25 * 60_000,
+    check: ({ worktreeCount, metrics }) => {
+      expect(worktreeCount, "two worktrees were not created").toBeGreaterThanOrEqual(3);
+      expect(metrics.launched).toEqual(expect.arrayContaining(["claude", "codex"]));
+    },
+  },
+  {
+    id: "review-relay",
+    project: INVENTORY_PROJECT,
+    messages: [
+      "Ask Codex to review src/stock.js for bugs without changing anything, then pass its findings to Claude and have Claude fix them here. Tell me what changed.",
+    ],
+    timeoutMs: 20 * 60_000,
+    check: ({ metrics }) => {
+      expect(metrics.launched).toEqual(expect.arrayContaining(["claude", "codex"]));
+      expect(
+        metrics.toolCalls.some((c) => /sendCommand/.test(`${c.name} ${c.input}`)),
+        "the findings were never relayed"
+      ).toBe(true);
+    },
+  },
+  {
+    id: "debate",
+    project: INVENTORY_PROJECT,
+    messages: [
+      "Have Claude and Codex debate whether this project should replace parseCsv with a CSV library. Two rounds each, short answers, then summarise where they landed.",
+    ],
+    timeoutMs: 15 * 60_000,
+    check: ({ finalText, metrics }) => {
+      expect(metrics.launched).toEqual(expect.arrayContaining(["claude", "codex"]));
+      expect(finalText).toMatch(/librar/i);
+    },
+  },
+  {
+    id: "cleanup",
+    project: INVENTORY_PROJECT,
+    messages: [
+      "Start Claude and Codex and ask each for a one-line summary of README.md.",
+      "Thanks. Close all the agents now.",
+    ],
+    timeoutMs: 12 * 60_000,
+    check: ({ workers }) => {
+      expect(
+        workers.filter((t) => !t.isTrashed),
+        "agents were left open"
+      ).toEqual([]);
+    },
+  },
+  {
     id: "worktree-task",
     project: INVENTORY_PROJECT,
     messages: [
