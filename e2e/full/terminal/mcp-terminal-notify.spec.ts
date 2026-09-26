@@ -307,9 +307,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
     await sendFakeAgentCommand(binDir, "idle", T_MEDIUM, workerId);
     await expect
       .poll(() => noticesFor(binDir, assistantId), { timeout: T_NOTICE, intervals: [500, 1000] })
-      .toEqual([
-        `Daintree: terminal ${workerId} stopped working, now waiting at its prompt. Check it with terminal.getStatus.`,
-      ]);
+      .toEqual([`Daintree: terminal ${workerId} stopped working, now waiting at its prompt.`]);
     expect(noticesFor(binDir, otherLaneId)).toEqual([]);
     expect(noticesFor(binDir, workerId)).toEqual([]);
   });
@@ -333,7 +331,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
       })
       .toBe(2);
     expect(noticesFor(binDir, assistantId)[1]).toBe(
-      `Daintree: terminal ${workerId} stopped working, now waiting at its prompt. Your note: "run the reviewer next". Check it with terminal.getStatus.`
+      `Daintree: terminal ${workerId} stopped working, now waiting at its prompt. Your note: "run the reviewer next".`
     );
 
     // A terminal that is not working answers at once and arms nothing.
@@ -368,7 +366,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
       })
       .toBe(3);
     expect(noticesFor(binDir, assistantId)[2]).toBe(
-      `Daintree: terminal ${workerId} stopped working, now waiting at its prompt. Check it with terminal.getStatus.`
+      `Daintree: terminal ${workerId} stopped working, now waiting at its prompt.`
     );
 
     // A terminal in the project now on screen is not one the assistant may
