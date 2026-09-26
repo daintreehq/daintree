@@ -1,15 +1,17 @@
+import { useState } from "react";
 import { LayoutGrid } from "lucide-react";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
-import { useProjectStore } from "@/store/projectStore";
 import { PluginParitySummary } from "../PluginParitySummary";
 import { PortsView } from "../PortsView";
 import { useHostList } from "../hostList";
 import { buildHostMenuRows, clientPlatform } from "../hostModel";
 import { switchToHost } from "../hostSwitching";
+import { useHostProjectLists } from "../hostProjects";
+import { HostAddProjectDialog } from "./HostAddProjectDialog";
 import { HostCard } from "./HostCard";
 import { HostFleetTargets } from "./HostFleetTargets";
 import { isLive } from "./overviewModel";
@@ -28,7 +30,7 @@ interface HostsOverviewDialogProps {
 export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
   const hostList = useHostList();
   const history = useHostMetricsStore((state) => state.history);
-  const openCloneRepoDialog = useProjectStore((state) => state.openCloneRepoDialog);
+  const [addingTo, setAddingTo] = useState<{ hostId: HostId; name: string } | null>(null);
   const windowHostId = getViewHostId() ?? LOCAL_HOST_ID;
   const rows = buildHostMenuRows(hostList.hosts, {
     localPlatform: clientPlatform(),
@@ -36,15 +38,17 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
     localSummary: history.get(LOCAL_HOST_ID)?.[0] ?? hostList.localSummary,
   });
 
+  const projectLists = useHostProjectLists(rows.filter(isLive).map((row) => row.hostId));
+
   const switchTo = (hostId: HostId, isCurrent: boolean, newWindow: boolean) => {
     if (isCurrent && !newWindow) return;
     onClose();
     void switchToHost(hostId, newWindow);
   };
 
-  const addProject = () => {
+  const openProject = (hostId: HostId, projectId: string, newWindow: boolean) => {
     onClose();
-    openCloneRepoDialog();
+    void switchToHost(hostId, newWindow, projectId);
   };
 
   return (
@@ -67,19 +71,29 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
                 row={row}
                 history={history.get(row.hostId) ?? EMPTY_HISTORY}
                 onSwitch={(newWindow) => switchTo(row.hostId, row.isCurrent, newWindow)}
+                projects={isLive(row) ? projectLists.get(row.hostId) : undefined}
+                onOpenProject={(projectId, newWindow) =>
+                  openProject(row.hostId, projectId, newWindow)
+                }
               >
                 <PluginParitySummary
                   hostId={row.hostId}
                   connected={!row.isLocal && row.connection?.status === "connected"}
                 />
-                {row.isCurrent ? (
+                {!row.isCurrent && isLive(row) && (
+                  <HostFleetTargets hostId={row.hostId} hostName={row.name} />
+                )}
+                {isLive(row) && (
                   <div>
-                    <Button variant="outline" size="sm" onClick={addProject}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Add a project on ${row.name}`}
+                      onClick={() => setAddingTo({ hostId: row.hostId, name: row.name })}
+                    >
                       Add project…
                     </Button>
                   </div>
-                ) : (
-                  isLive(row) && <HostFleetTargets hostId={row.hostId} hostName={row.name} />
                 )}
               </HostCard>
             ))}
@@ -87,6 +101,17 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
           <PortsView hostId={windowHostId === LOCAL_HOST_ID ? undefined : windowHostId} />
         </div>
       </AppDialog.BodyScroll>
+      {addingTo && (
+        <HostAddProjectDialog
+          hostId={addingTo.hostId}
+          hostName={addingTo.name}
+          onClose={() => setAddingTo(null)}
+          onOpened={(result) => {
+            setAddingTo(null);
+            openProject(result.hostId, result.projectId, false);
+          }}
+        />
+      )}
     </AppDialog>
   );
 }

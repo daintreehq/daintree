@@ -245,6 +245,28 @@ describe("project.openOnHost", () => {
     releaseHost?.();
   });
 
+  it("carries a placed worktree and the new-window choice into the dialog, and names the request", async () => {
+    withDialogHost();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    const worktree = {
+      newBranch: "feature/placed",
+      baseBranch: "main",
+      fromRemote: false,
+      useExistingBranch: false,
+      relativePath: "../repo-worktrees/feature-placed",
+      recipeId: "setup",
+    };
+    const result = await registry.get("project.openOnHost")!().run(
+      { hostId: "studio-01", projectId: "p1", newWindow: true, worktree },
+      { projectId: "p1" } as ActionContext
+    );
+    const request = currentHostSwitchRequest()!;
+    expect(request).toMatchObject({ toHostId: "studio-01", newWindow: true, worktree });
+    expect(result).toEqual({ requestId: request.id });
+    releaseHost?.();
+  });
+
   it("uses the project folder for a project other than the window's", async () => {
     withDialogHost();
     const registry: ActionRegistry = new Map();

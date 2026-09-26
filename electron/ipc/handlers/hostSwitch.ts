@@ -3,16 +3,22 @@ import type { IpcContext } from "../types.js";
 import { requireRemoteService } from "../../remote/runtime.js";
 import { HOST_SWITCH_METHOD_CHANNELS } from "./hostSwitch.preload.js";
 import type {
+  HostProjectPresence,
   HostSwitchCheckDestinationPayload,
   HostSwitchExecutePayload,
   HostSwitchExecuteResult,
+  HostSwitchListDirectoryPayload,
+  HostSwitchLocatePayload,
   HostSwitchOpPayload,
+  HostSwitchPickerRootsPayload,
   HostSwitchPlan,
   HostSwitchPlanPayload,
   HostSwitchPreparation,
   HostSwitchStatus,
+  HostSwitchSuggestClonePayload,
 } from "../../../shared/types/ipc/hostSwitch.js";
 import type { DestinationCheck } from "../../../shared/types/ipc/projectMatch.js";
+import type { HostDirectoryListing, HostPickerRoots } from "../../../shared/types/ipc/hostFiles.js";
 
 /**
  * Getting a project onto another host through git. The Shell runs the steps
@@ -52,6 +58,27 @@ export const hostSwitchNamespace = defineIpcNamespace({
       HOST_SWITCH_METHOD_CHANNELS.status,
       async (payload: HostSwitchOpPayload): Promise<HostSwitchStatus> =>
         requireRemoteService("hostSwitchService").status(payload)
+    ),
+    locate: op(
+      HOST_SWITCH_METHOD_CHANNELS.locate,
+      async (ctx: IpcContext, payload: HostSwitchLocatePayload): Promise<HostProjectPresence[]> =>
+        requireRemoteService("hostSwitchService").locate(ctx, payload),
+      { withContext: true }
+    ),
+    suggestCloneDestination: op(
+      HOST_SWITCH_METHOD_CHANNELS.suggestCloneDestination,
+      async (payload: HostSwitchSuggestClonePayload): Promise<DestinationCheck> =>
+        requireRemoteService("hostSwitchService").suggestCloneDestination(payload)
+    ),
+    listDirectory: op(
+      HOST_SWITCH_METHOD_CHANNELS.listDirectory,
+      async (payload: HostSwitchListDirectoryPayload): Promise<HostDirectoryListing> =>
+        requireRemoteService("hostSwitchService").listDirectory(payload)
+    ),
+    pickerRoots: op(
+      HOST_SWITCH_METHOD_CHANNELS.pickerRoots,
+      async (payload: HostSwitchPickerRootsPayload): Promise<HostPickerRoots> =>
+        requireRemoteService("hostSwitchService").pickerRoots(payload)
     ),
     cancel: op(
       HOST_SWITCH_METHOD_CHANNELS.cancel,

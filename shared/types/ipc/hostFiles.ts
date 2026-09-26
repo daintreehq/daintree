@@ -37,4 +37,9 @@ export interface HostPickRequest {
   defaultPath?: string;
   /** File-mode extension filters, as the native dialog takes them. */
   filters?: Array<{ name: string; extensions: string[] }>;
+  /**
+   * Browse this host instead of the window's own (a project being opened or
+   * cloned on another host). Only renderer-made requests set it.
+   */
+  hostId?: string;
 }

@@ -3,6 +3,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { HostSwitchDialog } from "./HostSwitchDialog";
 import { runPendingHostSetup } from "./pendingHostSetup";
 import {
+  completeHostSwitchRequest,
   currentHostSwitchRequest,
   dismissHostSwitchRequest,
   registerHostSwitchDialogHost,
@@ -43,6 +44,7 @@ export function HostSwitchDialogHost() {
       key={request.id}
       request={request}
       onClose={() => dismissHostSwitchRequest(request.id)}
+      onComplete={() => completeHostSwitchRequest(request.id)}
     />
   );
 }

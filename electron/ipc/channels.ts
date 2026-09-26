@@ -1292,6 +1292,10 @@ export const CHANNELS = {
   HOST_SWITCH_EXECUTE: "host-switch:execute",
   HOST_SWITCH_STATUS: "host-switch:status",
   HOST_SWITCH_CANCEL: "host-switch:cancel",
+  HOST_SWITCH_LOCATE: "host-switch:locate",
+  HOST_SWITCH_SUGGEST_CLONE_DESTINATION: "host-switch:suggest-clone-destination",
+  HOST_SWITCH_LIST_DIRECTORY: "host-switch:list-directory",
+  HOST_SWITCH_PICKER_ROOTS: "host-switch:picker-roots",
 
   // Remote Hosts: projectMatch (host).
   PROJECT_MATCH_FIND: "project-match:find",

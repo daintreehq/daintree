@@ -90,7 +90,12 @@ describe("with no host added", () => {
     const { container } = render(
       <>
         <HostsOverviewMount />
-        <LazyWorktreePlacementRow projectId="p1" onLeave={() => {}} />
+        <LazyWorktreePlacementRow
+          projectId="p1"
+          rootPath="/p1"
+          getDraft={() => null}
+          onLeave={() => {}}
+        />
         <LazyOtherHostsWorktrees onNavigate={() => {}} />
       </>
     );

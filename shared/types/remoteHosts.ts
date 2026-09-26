@@ -212,6 +212,7 @@ export type OperationKind =
   | "git-push"
   | "git-clone"
   | "project-clone-and-open"
+  | "project-worktree-place"
   | "copytree"
   | "worktree-create"
   | "file-upload"

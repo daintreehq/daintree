@@ -6,9 +6,11 @@ import { HANDSHAKE, makeSummary } from "./fixtures";
 
 const { hostList, dispatch } = vi.hoisted(() => ({
   hostList: { hosts: [] as HostListEntry[], localSummary: null as unknown },
-  dispatch: vi.fn(async (..._args: unknown[]): Promise<{ ok: boolean; error?: unknown }> => ({
-    ok: true,
-  })),
+  dispatch: vi.fn(
+    async (..._args: unknown[]): Promise<{ ok: boolean; result?: unknown; error?: unknown }> => ({
+      ok: true,
+    })
+  ),
 }));
 
 vi.mock("../../hostList", () => ({
@@ -19,7 +21,49 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 vi.mock("../hostMetricsFeed", () => ({ startHostMetricsFeed: () => () => {} }));
 
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
-import { WorktreePlacementRow } from "../WorktreePlacementRow";
+import {
+  _resetHostSwitchRequestsForTesting,
+  completeHostSwitchRequest,
+  currentHostSwitchRequest,
+  dismissHostSwitchRequest,
+  registerHostSwitchDialogHost,
+  requestHostSwitch,
+} from "@/components/HostSwitch/hostSwitchRequests";
+import {
+  WorktreePlacementRow,
+  placedRelativePath,
+  type PlacementDraft,
+} from "../WorktreePlacementRow";
+
+const ROOT = "/Users/greg/Projects/daintree";
+const DRAFT: PlacementDraft = {
+  newBranch: "feature/placed",
+  baseBranch: "develop",
+  fromRemote: false,
+  useExistingBranch: false,
+  path: "/Users/greg/Projects/daintree-worktrees/feature-placed",
+  recipeId: "setup",
+};
+const getDraft = () => DRAFT;
+
+/** What the real action does with the args: open the switch dialog, answer with its id. */
+async function openOnHostLikeTheAction(
+  _id: unknown,
+  args: unknown
+): Promise<{ ok: boolean; result?: unknown }> {
+  const { hostId, projectId, worktree } = args as {
+    hostId: string;
+    projectId: string;
+    worktree: unknown;
+  };
+  const requestId = requestHostSwitch({
+    toHostId: hostId,
+    projectId,
+    worktreePath: null,
+    worktree: worktree as never,
+  });
+  return { ok: true, result: { requestId } };
+}
 
 function entry(id: string, cpuPercent: number, connected = true): HostListEntry {
   return {
@@ -46,7 +90,10 @@ function entry(id: string, cpuPercent: number, connected = true): HostListEntry 
 }
 
 beforeEach(() => {
-  dispatch.mockClear();
+  dispatch.mockReset();
+  dispatch.mockImplementation(openOnHostLikeTheAction);
+  _resetHostSwitchRequestsForTesting();
+  registerHostSwitchDialogHost();
   useHostMetricsStore.getState().reset();
   hostList.hosts = [entry("studio-01", 70), entry("studio-02", 5), entry("away", 0, false)];
   useHostMetricsStore.getState().apply(
@@ -64,6 +111,8 @@ describe("WorktreePlacementRow", () => {
     render(
       <WorktreePlacementRow
         projectId="p1"
+        rootPath={ROOT}
+        getDraft={getDraft}
         onLeave={() => {}}
         onElsewhereChange={onElsewhereChange}
       />
@@ -75,12 +124,14 @@ describe("WorktreePlacementRow", () => {
     expect(onElsewhereChange).toHaveBeenLastCalledWith(false);
   });
 
-  it("lets the user take the suggestion and hands the project over to that host", async () => {
+  it("creates the form's worktree on the chosen host, closing only once it exists there", async () => {
     const onLeave = vi.fn();
     const onElsewhereChange = vi.fn();
     render(
       <WorktreePlacementRow
         projectId="p1"
+        rootPath={ROOT}
+        getDraft={getDraft}
         onLeave={onLeave}
         onElsewhereChange={onElsewhereChange}
       />
@@ -90,16 +141,59 @@ describe("WorktreePlacementRow", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("worktree-placement-continue"));
     });
+    const worktree = {
+      newBranch: "feature/placed",
+      baseBranch: "develop",
+      fromRemote: false,
+      useExistingBranch: false,
+      relativePath: "../daintree-worktrees/feature-placed",
+      recipeId: "setup",
+    };
     expect(dispatch).toHaveBeenCalledWith(
       "project.openOnHost",
-      { hostId: "studio-02", projectId: "p1" },
+      { hostId: "studio-02", projectId: "p1", worktree },
       { source: "user" }
     );
-    // The dialog closes only once the host's switch dialog is up.
-    expect(onLeave).toHaveBeenCalledTimes(1);
-    expect(dispatch.mock.invocationCallOrder[0]!).toBeLessThan(
-      onLeave.mock.invocationCallOrder[0]!
+    expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "studio-02", worktree });
+    // The switch dialog is up, but nothing exists on the host yet: this dialog stays.
+    expect(onLeave).not.toHaveBeenCalled();
+    expect((screen.getByTestId("worktree-placement-continue") as HTMLButtonElement).disabled).toBe(
+      true
     );
+    act(() => completeHostSwitchRequest(currentHostSwitchRequest()!.id));
+    expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open, ready to retry, when the host's dialog is closed without creating it", async () => {
+    const onLeave = vi.fn();
+    render(
+      <WorktreePlacementRow projectId="p1" rootPath={ROOT} getDraft={getDraft} onLeave={onLeave} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+    });
+    act(() => dismissHostSwitchRequest(currentHostSwitchRequest()!.id));
+    expect(onLeave).not.toHaveBeenCalled();
+    expect((screen.getByTestId("worktree-placement-continue") as HTMLButtonElement).disabled).toBe(
+      false
+    );
+  });
+
+  it("sends nothing while the form is invalid", async () => {
+    render(
+      <WorktreePlacementRow
+        projectId="p1"
+        rootPath={ROOT}
+        getDraft={() => null}
+        onLeave={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+    });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("keeps the dialog open and names the host when the handoff fails", async () => {
@@ -108,7 +202,9 @@ describe("WorktreePlacementRow", () => {
       error: { code: "EXECUTION_ERROR", message: "No view can show the host switch dialog" },
     });
     const onLeave = vi.fn();
-    render(<WorktreePlacementRow projectId="p1" onLeave={onLeave} />);
+    render(
+      <WorktreePlacementRow projectId="p1" rootPath={ROOT} getDraft={getDraft} onLeave={onLeave} />
+    );
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
     await act(async () => {
       fireEvent.click(screen.getByTestId("worktree-placement-continue"));
@@ -119,16 +215,34 @@ describe("WorktreePlacementRow", () => {
     expect(error.textContent).toBe(
       "Couldn't open this project on studio-02. Check that it's connected and retry."
     );
-    // Retrying is the same button, and a success then closes the dialog.
+    // Retrying is the same button, and the worktree existing on the host then closes the dialog.
     await act(async () => {
       fireEvent.click(screen.getByTestId("worktree-placement-continue"));
     });
+    act(() => completeHostSwitchRequest(currentHostSwitchRequest()!.id));
     expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
   it("renders nothing until another host exists", () => {
     hostList.hosts = [];
-    const { container } = render(<WorktreePlacementRow projectId="p1" onLeave={() => {}} />);
+    const { container } = render(
+      <WorktreePlacementRow projectId="p1" rootPath={ROOT} getDraft={getDraft} onLeave={() => {}} />
+    );
     expect(container.textContent).toBe("");
+  });
+});
+
+describe("placedRelativePath", () => {
+  it("carries a sibling or nested worktree path relative to the project folder", () => {
+    expect(placedRelativePath(ROOT, "/Users/greg/Projects/daintree-worktrees/x")).toBe(
+      "../daintree-worktrees/x"
+    );
+    expect(placedRelativePath(ROOT, `${ROOT}/.worktrees/x`)).toBe(".worktrees/x");
+  });
+
+  it("leaves anything elsewhere to the host's own pattern", () => {
+    expect(placedRelativePath(ROOT, "/tmp/x")).toBeNull();
+    expect(placedRelativePath(ROOT, ROOT)).toBeNull();
+    expect(placedRelativePath(ROOT, "")).toBeNull();
   });
 });

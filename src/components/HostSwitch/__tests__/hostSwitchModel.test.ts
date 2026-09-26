@@ -4,6 +4,8 @@ import {
   candidateRelation,
   describeBranchHandoff,
   describeCloneFailure,
+  describePlacedWorktree,
+  destinationInFolder,
   hostDisplayName,
   initialView,
 } from "../hostSwitchModel";
@@ -139,5 +141,36 @@ describe("initialView and hostDisplayName", () => {
     const hosts = [{ descriptor: { id: "studio-01", name: "Studio" } }];
     expect(hostDisplayName("local", hosts, "This Mac")).toBe("This Mac");
     expect(hostDisplayName("studio-01", hosts, "This Mac")).toBe("Studio");
+  });
+});
+
+describe("destinationInFolder", () => {
+  it("puts the clone's folder inside the picked one, unless the picked one is it", () => {
+    expect(destinationInFolder("/data/repos", "/home/g/Projects/daintree", "x")).toBe(
+      "/data/repos/daintree"
+    );
+    expect(destinationInFolder("/data/daintree/", "/home/g/Projects/daintree", "x")).toBe(
+      "/data/daintree"
+    );
+    expect(destinationInFolder("/", "", "daintree")).toBe("/daintree");
+  });
+});
+
+describe("describePlacedWorktree", () => {
+  it("names the base branch and where the worktree goes on the host", () => {
+    const base = {
+      newBranch: "feature/x",
+      baseBranch: "develop",
+      fromRemote: true,
+      useExistingBranch: false,
+      relativePath: "../daintree-worktrees/feature-x",
+      recipeId: null,
+    };
+    expect(describePlacedWorktree(base, "studio-01")).toBe(
+      "New branch from develop on the remote, at ../daintree-worktrees/feature-x beside the project."
+    );
+    expect(
+      describePlacedWorktree({ ...base, useExistingBranch: true, relativePath: null }, "studio-01")
+    ).toBe("Checks out the existing branch on studio-01, where studio-01 puts new worktrees.");
   });
 });

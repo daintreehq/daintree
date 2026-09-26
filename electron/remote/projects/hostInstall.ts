@@ -20,12 +20,15 @@ import {
   CheckOutSchema,
   DescribeSourceSchema,
   EmptySchema,
+  IdentifySchema,
+  ListDirectorySchema,
   MatchSchema,
   OpIdSchema,
   OpenSchema,
   ProjectLinkMethod,
   PushBranchSchema,
   StartCloneSchema,
+  StartPlaceWorktreeSchema,
   SuggestDestinationSchema,
   type LinkDestinationCheck,
 } from "./linkMethods.js";
@@ -85,6 +88,7 @@ interface DestinationGrant {
 export class ProjectHostGrants {
   private readonly destinations = new Map<string, DestinationGrant>();
   private readonly checkouts = new Map<string, number>();
+  private readonly placements = new Map<string, { expiresAt: number; usedBy: string | null }>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -125,8 +129,33 @@ export class ProjectHostGrants {
     this.checkouts.delete(checkoutKey(projectId, branch));
   }
 
+  /** The session opened this project here: it may place one new worktree in it. */
+  offerPlacement(projectId: string): void {
+    this.prune();
+    const existing = this.placements.get(projectId);
+    if (existing && existing.usedBy === null) {
+      existing.expiresAt = this.now() + GRANT_TTL_MS;
+      return;
+    }
+    this.placements.set(projectId, { expiresAt: this.now() + GRANT_TTL_MS, usedBy: null });
+    trim(this.placements);
+  }
+
+  /** Spend the placement for `projectId` on operation `opId`; a resend of that same start is not a second use. */
+  usePlacement(projectId: string, opId: string): boolean {
+    this.prune();
+    const grant = this.placements.get(projectId);
+    if (!grant) return false;
+    if (grant.usedBy !== null) return grant.usedBy === opId;
+    grant.usedBy = opId;
+    return true;
+  }
+
   private prune(): void {
     const now = this.now();
+    for (const [projectId, grant] of this.placements) {
+      if (grant.expiresAt <= now) this.placements.delete(projectId);
+    }
     for (const [token, grant] of this.destinations) {
       if (grant.expiresAt <= now) this.destinations.delete(token);
     }
@@ -283,8 +312,36 @@ export function attachProjectsHost(
     if (opened.canCheckOutBranch && p.branch) {
       grants.offerCheckout(opened.projectId, p.branch);
     }
+    grants.offerPlacement(opened.projectId);
     return opened;
   });
+  on(ProjectLinkMethod.START_PLACE_WORKTREE, StartPlaceWorktreeSchema, (p) => {
+    // Like a checkout: a view of the project this session drives, or the
+    // placement this host offered when the session opened the project —
+    // and then only while no other window holds the project's lease.
+    const bound = boundTo(p.projectId);
+    if (bound.length > 0) {
+      requireDriving(p.projectId, bound);
+    } else {
+      const holder = authority.holderEndpointId(p.projectId);
+      if (holder !== null && (sessionId === null || !isSessionEndpoint(sessionId, holder))) {
+        throw drivenElsewhere();
+      }
+      if (!grants.usePlacement(p.projectId, p.opId)) throw notAttached();
+    }
+    // Registered synchronously, so a status call right after this answer finds the record.
+    void service.placeWorktree(p).catch(() => {});
+    return null;
+  });
+  on(ProjectLinkMethod.IDENTIFY, IdentifySchema, (p) => service.identify(p));
+  on(ProjectLinkMethod.FIND, MatchSchema, (p) => service.find(p));
+  // The same listings Daintree's picker reads in a window on this host.
+  on(ProjectLinkMethod.LIST_DIRECTORY, ListDirectorySchema, async (p) =>
+    (await import("../../ipc/handlers/hostFiles.js")).listHostDirectory(p)
+  );
+  on(ProjectLinkMethod.PICKER_ROOTS, EmptySchema, async () =>
+    (await import("../../ipc/handlers/hostFiles.js")).getHostPickerRoots()
+  );
   on(ProjectLinkMethod.CHECK_OUT, CheckOutSchema, async (p) => {
     const bound = boundTo(p.projectId);
     const offered = bound.length === 0 && grants.hasCheckout(p.projectId, p.branch);
