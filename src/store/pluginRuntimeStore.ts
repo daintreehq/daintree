@@ -148,9 +148,23 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
     return false;
   }
 
-  unsubscribe = plugin.onProvenanceChanged(() => {
+  const offProvenance = plugin.onProvenanceChanged(() => {
     void pullPluginRuntimeSnapshot(set);
   });
+  // Project plugins come and go without a provenance change: trusting a
+  // folder, muting or reloading one pushes a project-plugins snapshot instead,
+  // and a surface naming one of them would otherwise keep reading its bare id.
+  const events = window.electron?.events;
+  const offProjectPlugins =
+    typeof events?.on === "function"
+      ? events.on("plugin:project-plugins-changed", () => {
+          void pullPluginRuntimeSnapshot(set);
+        })
+      : undefined;
+  unsubscribe = () => {
+    offProvenance();
+    offProjectPlugins?.();
+  };
   return true;
 }
 
