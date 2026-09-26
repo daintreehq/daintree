@@ -46,9 +46,8 @@ const DEFAULT_RETRIES = 5;
 const CONFLICT_CODES = new Set(["REVISION_MISMATCH", "TARGET_EXISTS", "TARGET_UNAVAILABLE"]);
 
 /**
- * The host's error code. In-process callers get it on `code`; an error that
- * crossed the plugin worker port keeps only its message, which starts with the
- * same token.
+ * The host's error code, from `code` (set in process and carried across the
+ * worker port) or, failing that, the message's leading token.
  */
 function hostErrorCode(error: unknown): string | null {
   if (error === null || typeof error !== "object") return null;

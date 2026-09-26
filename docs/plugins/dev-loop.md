@@ -57,7 +57,7 @@ Alongside the usual template files it emits:
 
 **`dist/` is the load contract.** Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json` — a project opening must not run a build. So `dist/` is committed, and the generated `.gitignore` force-includes it with `!dist/` and `!dist/**`: most repositories ignore `dist/` at the root, and that pattern would otherwise swallow the plugin's build output, leaving a plugin that silently fails to load on every other checkout. Both negations are needed — `!dist/` re-includes the directory so git descends into it at all, `!dist/**` re-includes the files against a parent rule that matches contents (`dist/*`, `**/dist/**`). Rebuild and commit `dist/` in the same commit as the source change.
 
-The one case the generated file cannot fix is a project that ignores `.daintree/` itself: git never descends far enough to read it. Un-ignore `.daintree/plugins/` at the project root instead. `git check-ignore -v .daintree/plugins/<name>/dist/index.js` answers this in one command — no output means the file is tracked.
+The one case the generated file cannot fix is a project that ignores `.daintree/` itself: git never descends far enough to read it. Un-ignore `.daintree/plugins/` at the project root instead. `git check-ignore --no-index .daintree/plugins/<name>/dist/index.js` answers the ignore half — no output and exit 1 means nothing ignores the file — and `git ls-files --error-unmatch` the tracked half. Leave `-v` off the first: it prints a matching negation too, so a correctly rescued file shows `!dist/**` and exits 0. [`daintree-plugin doctor`](#daintree-plugin-doctor-projectroot) runs both.
 
 ### The edit loop
 
@@ -267,7 +267,7 @@ describe("plan-from-issue", () => {
 });
 ```
 
-`createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, channel names, quick-pick items) and gates `getAgentState` / `sendToActiveAgent` on the `capabilities` you pass in, so a malformed call fails the test rather than the app. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) lists what the mock deliberately does not model — process handles, filesystem containment, git, the manifest gates — so a test that passes against it is not proof the real host will accept the plugin.
+`createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, channel names, quick-pick items) and gates the agent APIs (`getAgentState`, `agents.list`, `sendToActiveAgent`, `sendToAgent`) on the `capabilities` you pass in, so a malformed call fails the test rather than the app. `host.db` runs against real SQLite files, `host.fs` against an in-memory tree, and `sendToAgent` against the panes you seed. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) is the full reference — every option, recorder and `simulate*` driver — and lists what the mock deliberately does not model: consent prompts, filesystem containment, process handles, git, the manifest gates. A test that passes against it is not proof the real host will accept the plugin.
 
 ### Testing a raw-ESM project plugin
 
@@ -279,14 +279,15 @@ import { pathToFileURL } from "node:url";
 import { describe, it, expect } from "vitest";
 import { createMockHost } from "@daintreehq/plugin-sdk/testing";
 
-const ctx = { projectId: "p1", worktreeId: "w1", webContentsId: 1, pluginId: "acme.dashboard" };
+// A real project id is 64 hex characters. With a project-shaped key the mock's
+// pluginInfo and panelKindId behave exactly as they do for a project plugin.
+const PROJECT_ID = "a".repeat(64);
+const PLUGIN_ID = `project__${PROJECT_ID}__acme.dashboard`;
+const ctx = { projectId: PROJECT_ID, worktreeId: "w1", webContentsId: 1, pluginId: PLUGIN_ID };
 
 describe("worker", () => {
   it("answers read-file with the file's text", async () => {
-    const host = createMockHost({
-      pluginId: "acme.dashboard",
-      capabilities: ["fs:project-read", "fs:project-write"],
-    });
+    const host = createMockHost({ pluginId: PLUGIN_ID, projectRoot: "/proj" });
     await host.fs.writeFile("/proj/notes.md", "# hi"); // seeds the in-memory fs
 
     const { activate } = await import(pathToFileURL("dist/index.mjs").href);
@@ -294,6 +295,20 @@ describe("worker", () => {
 
     const { handler } = host.registeredHandlers.find((h) => h.channel === "read-file")!;
     await expect(handler(ctx, { path: "/proj/notes.md" })).resolves.toBe("# hi");
+  });
+
+  it("opens its own panel from the Open command", async () => {
+    const host = createMockHost({ pluginId: PLUGIN_ID, projectRoot: "/proj" });
+    // dispatch reaches only your own actions by default; answer the built-in.
+    host.setDispatchResult("panel.openPluginPanel", { ok: true, result: { panelId: "p1" } });
+    const { activate } = await import(pathToFileURL("dist/index.mjs").href);
+    await activate(host);
+
+    await host.dispatch(`${PLUGIN_ID}.open`);
+    expect(host.dispatchedActions).toContainEqual({
+      actionId: "panel.openPluginPanel",
+      args: { kind: host.panelKindId("main") },
+    });
   });
 });
 ```
@@ -330,6 +345,17 @@ it("renders the worktree name it pulls on mount", async () => {
   expect(root.textContent).toContain("feature-x");
 });
 ```
+
+### Testing a data contract
+
+For an app whose data agents also edit, the test worth having is the one that plays the agent: change the data the way the contract in your `AGENTS.md` tells an agent to, and assert the panel's answer follows.
+
+- **Files.** Write the new record with `host.fs.writeFile` (or change one directly), then `host.simulateFsWatch(path)` and assert what the worker pushed in `host.postToPanelCalls`. A watcher registered with `debounceMs` fires on a real timer, so use `vi.useFakeTimers()` and advance past it before asserting. Race a panel edit against an "agent" edit to the same file — write between your handler's read and its write — and assert the agent's line survives: that is the test that proves the handler uses `editFile` or `expectedRevision` rather than a blind write.
+- **SQLite.** `createMockHost({ databases: { directory } })` backs each id with a real file, so open it a second time with `node:sqlite`'s `DatabaseSync` exactly as an agent's `sqlite3` session would, insert a row the contract allows and one it forbids, and assert that the first reaches the panel through `onDidChange` and the second is refused by your `CHECK` or `RAISE` with the message the contract promises. Your migrations and `definitions` run for real, so the same test catches a view that stopped adding up.
+- **Your arithmetic.** Import the pure module (`dist/core.mjs`) the panel and `scripts/*-report.mjs` share and test it directly with the awkward cases agents get wrong — a streak across a missed day, a week that straddles a month, a total with a refund in it.
+- **Hand-off.** Seed `agents` with a pane that can draft and one that cannot, drive `simulateSendToAgentPick`, and assert your view is told `drafted`, `cancelled` or `refused` rather than assuming success.
+
+The mock grants every capability except the agent ones and never raises a consent prompt, so the refused-consent path — a `PERMISSION_REQUIRED:` rejection from the first write — has to be tested by making the call throw yourself.
 
 A headless-Daintree Playwright harness for full-lifecycle E2E (contribution registration, MCP spawn) is planned but does not exist yet — `@daintreehq/plugin-sdk/testing` is the in-memory mock only; there is no Electron-backed entry point today.
 

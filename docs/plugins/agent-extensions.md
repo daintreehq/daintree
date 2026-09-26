@@ -160,7 +160,7 @@ export async function activate(host: PluginHostApi) {
 }
 ```
 
-`plugins/sample-project/acme.ledger` is a working project plugin built on this surface.
+`plugins/sample-project/acme.ledger` is a working project plugin built on this surface. Copy its roster and argument checks; its storage opens `node:sqlite` by hand because it predates [`host.db`](./host-api.md#db--host-managed-sqlite), which a new plugin should use instead.
 
 What the host does with the roster:
 
@@ -180,6 +180,8 @@ Declaring an endpoint exposes nothing. It reaches an agent only when all of thes
 4. **The agent is Claude Code, launched after the endpoint was turned on.** Each Claude launch in the project is handed one entry per enabled endpoint in the Daintree-owned `--mcp-config` file it already receives, whether or not the project's Daintree MCP tier is on. Other agent CLIs, the in-app Daintree Assistant, and help sessions are not handed plugin endpoints today.
 
 The agent sees your tools under a server key Daintree derives from the manifest and endpoint ids (`daintree-<manifest>-<endpoint>`, sanitised, and shortened with a hash past 25 characters), so Claude names a tool `mcp__<server key>__<tool>`. Tool names are capped at 32 characters to keep that inside Claude's 64-character limit.
+
+Because only Claude Code launches are handed endpoints, and only once the user turns one on, an endpoint is an addition to a project app's data path, never the whole of it. Every agent can read and write files and run `sqlite3`, so the data itself, the contract in the plugin's `AGENTS.md` and a report script are what every agent reaches; the endpoint gives the agents that have it a safer, validated way to do the same. See [Patterns → Write the data contract down](./patterns.md#write-the-data-contract-down).
 
 Turning an endpoint off revokes every live credential for it in that project, and running agents lose the tools on their next request. Unloading the plugin — disable, uninstall, project close, trust revoke, reload — does the same for all its endpoints.
 
@@ -285,6 +287,7 @@ This keeps Daintree's skill system compatible with any agent that speaks MCP —
 | Provide a checklist or step-by-step | Skill |
 | Share knowledge that travels cleanly across projects | Skill |
 | Ship a tool with a project, committed to its repository | Agent MCP endpoint — the only one of the three a `scope: "project"` plugin may declare |
+| Hand one record — a card, a message — to an agent for the user to instruct | `host.sendToAgent` or a drag, not MCP — see [Patterns → Hand work to an agent](./patterns.md#hand-work-to-an-agent) |
 
 Plugins often combine them — for example, a Linear plugin might serve terminal agents its issue tools through an agent MCP endpoint and ship a skill that teaches the agent the team's preferred ticket planning format.
 

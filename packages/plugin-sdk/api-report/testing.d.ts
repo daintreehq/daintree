@@ -1814,23 +1814,6 @@ type PluginSettingsScope = "user" | "project" | "local";
  */
 type PluginStorageScope = "user" | "project" | "worktree";
 /**
- * Persistent, plugin-scoped key/value settings exposed on
- * {@link PluginHostApi.settings}. Values are stored as JSON at
- * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
- * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope),
- * with `chmod 0o600` applied on POSIX. Settings declared `type: "secret"` are
- * encrypted at rest through the OS keychain (Electron `safeStorage`), and are
- * never stored under the project root: a project-scoped secret lives in this
- * machine's per-project local file instead (see {@link PluginSettingsScope}).
- * With no keychain available a secret write is refused rather than stored in
- * plaintext. Non-secret values are always plaintext JSON — do not store
- * credentials in non-secret keys.
- *
- * `scope` defaults to `"user"`. Project scope resolves the active project at
- * call time, so it tracks project switches: `get` returns `undefined` and `set`
- * throws when no project is active.
- */
-/**
  * Options accepted by long-running host calls (filesystem reads/writes, git
  * reads and mutations, the on-demand worktree-status accessor). Carries an
  * optional {@link AbortSignal} so a plugin can cancel a call it no longer needs
@@ -1854,6 +1837,24 @@ interface PluginHostCallOptions {
 interface PluginHostSubscriptionOptions {
     debounceMs?: number;
 }
+/**
+ * Persistent, plugin-scoped key/value settings exposed on
+ * {@link PluginHostApi.settings}. Values are stored as JSON at
+ * `~/.daintree/plugin-settings/{pluginId}.json` (user scope; a project
+ * plugin's `pluginId` is its per-project instance key),
+ * `<projectRoot>/.daintree/plugin-settings/{manifestId}.json` (project scope,
+ * committed with the repository) or this machine's per-project local file
+ * (local scope), with `chmod 0o600` applied on POSIX. Settings declared
+ * `type: "secret"` are encrypted at rest through the OS keychain (Electron
+ * `safeStorage`) and never stored under the project root. With no keychain
+ * available a secret write is refused rather than stored in plaintext.
+ * Non-secret values are always plaintext JSON — do not store credentials in
+ * non-secret keys.
+ *
+ * Omitting `scope` targets the key's declared scope (`"user"` for an
+ * undeclared key). While nothing is stored — or, for a project-bound scope,
+ * no project is available — `get` resolves to the declared `default`.
+ */
 interface SettingsApi {
     /**
      * Read a setting. While nothing is stored — or, for `"project"` scope, no
@@ -1881,13 +1882,13 @@ interface SettingsApi {
      * declared scope, else `"user"`). The callback fires with the new value after
      * each `set` that changes it, and with the declared `default` (or
      * `undefined`) when the stored value is cleared. Edits
-     * made to the JSON file by other processes do NOT fire until the plugin
-     * reloads. Must be called during `activate()` — subscribing is revoke-guarded.
+     * made to the JSON file by other processes never fire (a later `get` reads
+     * them). Must be called during `activate()` — subscribing is revoke-guarded.
      * Resolves to a disposer; calling it more than once is a no-op. All
      * subscriptions are automatically disposed when the plugin is unloaded.
      *
      * @throws {Error} If called after activation resolves or times out — the host
-     *   is revoked and the subscription is rejected (the promise rejects).
+     *   is revoked, and the call throws synchronously.
      */
     onDidChange<T = unknown>(key: string, callback: (value: T | undefined) => void, scope?: PluginSettingsScope): Promise<() => void>;
     /**
@@ -1949,13 +1950,13 @@ interface StorageApi {
     /**
      * Subscribe to in-process writes of `key` in `scope` (default `"user"`). The
      * callback fires with the new value after each `set`/`delete` that changes it.
-     * Edits made to the JSON file by other processes do NOT fire until the plugin
-     * reloads. Must be called during `activate()` — subscribing is revoke-guarded.
+     * Edits made to the JSON file by other processes never fire (a later `get` reads
+     * them). Must be called during `activate()` — subscribing is revoke-guarded.
      * Resolves to a disposer; calling it more than once is a no-op. All
      * subscriptions are automatically disposed when the plugin is unloaded.
      *
      * @throws {Error} If called after activation resolves or times out — the host
-     *   is revoked and the subscription is rejected (the promise rejects).
+     *   is revoked, and the call throws synchronously.
      */
     onDidChange<T = unknown>(key: string, callback: (value: T | undefined) => void, scope?: PluginStorageScope): Promise<() => void>;
 }

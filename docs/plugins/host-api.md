@@ -4,6 +4,21 @@ The host API is the runtime surface a plugin's `activate` function receives. It 
 
 The canonical import source is `@daintreehq/plugin-sdk` (`npm install --save-dev @daintreehq/plugin-sdk`). Types referenced here live in that package, which re-exports them from `shared/types/plugin-sdk.ts`; inside the Daintree repo the workspace link resolves the same imports to the local build.
 
+This page is the reference: every member, its gates and its failure modes. For a walkthrough of building a plugin that is really an application, see [Building apps](./building-apps.md).
+
+## Contents
+
+- Conventions: [Calling conventions](#calling-conventions) · [Activation](#activation) · [`PluginHostApi`](#pluginhostapi) · [Errors and error codes](#errors-and-error-codes) · [Capabilities and consent](#capabilities-and-consent) · [Identity](#identity--pluginid-plugininfo-panelkindid)
+- Registration: [`registerAction`](#registeraction) · [`registerHandler` and `broadcastToRenderer`](#registerhandler-and-broadcasttorenderer) · [`postToPanel`](#posttopanel) · [`registerForgeProvider`](#registerforgeprovider) · [File decorations](#registerfiledecorationprovider-and-invalidatefiledecorations) · [`mcp.registerTools`](#mcpregistertools)
+- Observation: [Worktrees](#worktree-observation) · [Agent state](#agent-observation) · [Panel lifecycle](#ondidchangepanellifecycle) · [`onDidWake`](#ondidwake)
+- Panels and actions: [`reloadPanel`](#reloadpanel) · [`setPanelBadge`](#setpanelbadge) · [`dispatch`](#dispatch) · [`actions`](#actions--built-in-action-catalog)
+- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`agents.list`](#agentslist--the-projects-agent-panes)
+- State: [`settings`](#settings) · [`storage`](#storage--private-keyvalue-storage) · [`db`](#db--host-managed-sqlite)
+- UI: [`logger`](#logger) · [`showToast`](#showtoast) · [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)
+- System: [`process`](#process--managed-child-processes) · [`fs`](#fs--host-mediated-scope-contained-filesystem) · [`git`](#git--host-mediated-git-scoped-to-a-worktree) · [`clipboard`](#clipboard--host-mediated-os-clipboard) · [`system`](#system--open-and-reveal-files-in-your-own-scope) · [`documents`](#documents--render-html-to-pdf)
+- SDK entries: [React hooks](#react-hooks--daintreehqplugin-sdkreact) · [File listings](#file-listings--daintreehqplugin-sdkfiles) · [Data files](#data-files--daintreehqplugin-sdkdata)
+- Lifecycle and testing: [Disposables](#disposables) · [Testing against a mock host](#testing-against-a-mock-host) · [What's not exposed](#whats-not-exposed) · [Process model](#process-model-and-memory)
+
 ## Calling conventions
 
 Every callback a plugin hands the host has a fixed shape, and the one for `registerHandler` is the one every first plugin gets wrong. The whole set, in one place:
@@ -15,7 +30,9 @@ Every callback a plugin hands the host has a fixed shape, and the one for `regis
 | `registerHandler(channel, schema, handler)` (typed) | `(ctx, args)` | Same order; `args` is the single, schema-parsed payload. |
 | `postToPanel(channel, payload)` | view: `on(pluginId, channel, cb)` receives `payload` | Broadcast. Subscriptions are keyed by plugin and channel only, so it reaches every `on` subscriber your plugin has on that channel, across all of its panel kinds. `usePluginEvent` in a bundled view. |
 | `postToPanel(channel, payload, panelId)` | view: `onPanel(pluginId, channel, panelId, cb)` receives `payload` | One instance only, disjoint from the broadcast. `usePluginPanelEvent` in a bundled view. |
-| `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One frozen argument. A listener that throws three times in a row is unsubscribed. |
+| `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One argument. A listener that throws is logged; see [Disposables](#disposables) for which ones are unsubscribed after three failures in a row. |
+| `db` handle `onDidChange(cb)` | `({ origin })` | Frozen. Returns its disposer synchronously, not a Promise. |
+| `fs.watch(paths, cb, options?)` | `(changedPath)` | The absolute path that changed. |
 | Filesystem-convention command, `src/{id}.js` | `(args)` | Installed plugins only; a project plugin registers from `activate()` instead. |
 
 An argument-less handler ignores both parameters and works whichever way it was written, which is why the bug in an argument-taking one hides: the panel looks healthy and only the buttons that pass something do nothing. If a handler's first parameter has a `webContentsId`, it is reading the context.
@@ -65,7 +82,10 @@ The returned cleanup function (if any) runs when the plugin is unloaded — duri
 
 ```ts
 interface PluginHostApi {
+  // Identity — static, readable forever
   readonly pluginId: string;
+  readonly pluginInfo: PluginIdentity;
+  panelKindId(bareId: string): string;
 
   // Action / command registration
   registerAction(descriptor: PluginActionContribution, handler: ActionHandler): Promise<void>;
@@ -144,7 +164,8 @@ interface PluginHostApi {
   // The project's agent panes — gated on `agent:read`
   readonly agents: PluginAgentsApi;
 
-  // Settings (user-facing, schema-declared) + private storage (machine-owned)
+  // Settings (user-facing, schema-declared; get/set/onDidChange/open/missingRequired)
+  // + private storage (machine-owned)
   readonly settings: SettingsApi;
   readonly storage: StorageApi;
   // Host-managed SQLite, declared in contributes.databases
@@ -157,14 +178,19 @@ interface PluginHostApi {
   showToast(options: PluginToastOptions): Promise<void>;
   showQuickPick(
     items: PluginQuickPickItem[],
-    options: PluginQuickPickOptions & { canSelectMany: true }
+    options: PluginQuickPickOptions & { canSelectMany: true },
+    callOptions?: PluginHostCallOptions
   ): Promise<PluginQuickPickItem[] | undefined>;
   showQuickPick(
     items: PluginQuickPickItem[],
-    options?: PluginQuickPickOptions
+    options?: PluginQuickPickOptions,
+    callOptions?: PluginHostCallOptions
   ): Promise<PluginQuickPickItem | undefined>;
-  showInputBox(options?: PluginInputBoxOptions): Promise<string | undefined>;
-  showConfirm(options: PluginConfirmOptions): Promise<boolean>;
+  showInputBox(
+    options?: PluginInputBoxOptions,
+    callOptions?: PluginHostCallOptions
+  ): Promise<string | undefined>;
+  showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
 
   // Managed child processes — gated on the `shell:exec` capability
   readonly process: PluginProcessApi;
@@ -184,11 +210,11 @@ interface PluginHostApi {
 
 The authoritative definition is `PluginHostApi` in `shared/types/plugin.ts`, re-exported through `shared/types/plugin-sdk.ts`. The block above is a readable summary — where it disagrees with the type, the type wins.
 
-Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-running calls (`getWorktreeStatus`, `fs.*` except `writeFile`, `appendFile` and `mkdir`, all of `git.*`) and carries an optional `signal: AbortSignal` so a call whose consumer has gone away can be cancelled. `PluginHostSubscriptionOptions` is the trailing argument on `onDidChangeWorktrees` and carries `debounceMs`, which coalesces a burst into one trailing callback — the host re-emits the worktree set on every git-status poll, so a UI-updating plugin should almost always pass one. Values under ~50 ms are clamped up; `0` or omitted means fire on every change.
+Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-running calls (`getWorktreeStatus`, `fs.*` except `writeFile`, `appendFile` and `mkdir`, all of `git.*`, `sendToAgent`, and the three prompts) and carries an optional `signal: AbortSignal` so a call whose consumer has gone away can be cancelled. An already-aborted signal rejects before any work and an abort mid-flight rejects with the signal's reason — except on the prompts, where an abort dismisses the dialog and resolves as a cancel (`undefined` / `false`), and `sendToAgent`, where it resolves `{ status: "cancelled" }` while the picker is still open. `PluginHostSubscriptionOptions` is the trailing argument on `onDidChangeWorktrees` and carries `debounceMs`, which coalesces a burst into one trailing callback — the host re-emits the worktree set on every git-status poll, so a UI-updating plugin should almost always pass one. Values under ~50 ms are clamped up; `0` or omitted means fire on every change.
 
-Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous `logger` accessor is the lone exception — its `info`/`warn`/`error` calls return `void`.
+Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous exceptions are `logger` (its `info`/`warn`/`error` calls return `void`), `pluginInfo` and `panelKindId` (static data), and a database handle's `onDidChange`, which returns its disposer directly.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `reloadPanel`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` and `storage.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. Everything else is deliberately NOT revoke-guarded — `postToPanel`, `setPanelBadge`, `reloadPanel`, the worktree and agent reads, `invalidateFileDecorations`, `showToast`, the prompts, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `settings.get`/`set`/`open`/`missingRequired`, `storage.get`/`set`/`delete`, `db.*` (including a handle's `onDidChange`), `process.spawn`, `fs.*` (including `watch`), `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `logger`. Plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op or an empty answer after unload — except the ones that act on disk or on a process, which reject: new `fs.*`, `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `db.*` calls with a `PLUGIN_UNLOADED:` message, `process.spawn` and `settings.open` with a plain "plugin is no longer loaded" one. A database handle the host closed at unload rejects `DB_CLOSED`, and in a worker any call still outstanding when the worker is torn down rejects "Plugin dev worker disposed" (see [Worker and in-process differences](#worker-and-in-process-differences)). `pluginId`, `pluginInfo` and `panelKindId` are static data and keep working even after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
 **Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
 
@@ -198,7 +224,100 @@ await host.postToPanel("build-status", status).catch((err) => host.logger.error(
 
 A liveness no-op (the plugin already unloaded) still resolves cleanly — only a genuine validation error (empty channel, malformed badge shape) rejects.
 
-This split is encoded in the type surface, not just in prose: the revoke-guarded host methods are factored into a `PluginActivationApi` sub-interface that `PluginHostApi extends` (`settings.onDidChange` stays on `SettingsApi`, since the `settings` accessor itself is post-activation-safe). Each revoke-guarded method also carries a `@throws` JSDoc tag describing the revoke condition, so it shows up on hover in your editor. The `host` passed to `activate()` stays typed as the full `PluginHostApi` (every method is callable during activation); `PluginActivationApi` is exported from `@daintreehq/plugin-sdk` for the narrower case where you want a helper to accept only the registration window and have the post-activation methods be statically absent.
+This split is encoded in the type surface, not just in prose: the revoke-guarded host methods are factored into a `PluginActivationApi` sub-interface that `PluginHostApi extends` (`settings.onDidChange` and `storage.onDidChange` stay on `SettingsApi` and `StorageApi`, since those accessors are otherwise post-activation-safe). Each revoke-guarded method also carries a `@throws` JSDoc tag describing the revoke condition, so it shows up on hover in your editor. The `host` passed to `activate()` stays typed as the full `PluginHostApi` (every method is callable during activation); `PluginActivationApi` is exported from `@daintreehq/plugin-sdk` for the narrower case where you want a helper to accept only the registration window and have the post-activation methods be statically absent.
+
+## Errors and error codes
+
+A host call that fails for a reason a plugin can act on names the reason with a code. Branch on the code, never on the rest of the message, which is prose and changes.
+
+Where the code lives depends on the error. Most coded errors carry it on `err.code` **and** as the first token of `err.message` (`"REVISION_MISMATCH: …"`). The older gates — capability, containment, liveness, argument checks — put it in the message prefix only, and `PROJECT_VIEW_UNAVAILABLE` is the reverse: on `err.code`, not in the message. `code` and, for a revision conflict, `currentRevision` survive the trip from main to a plugin worker, so a worker plugin sees the same fields an in-process one does; nothing else on the error object crosses — no `name`, `cause`, subclass or other property. Read both places:
+
+```ts
+function hostErrorCode(err: unknown): string | undefined {
+  if (!(err instanceof Error)) return undefined;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "string") return code;
+  return /^([A-Z][A-Z_]+):/.exec(err.message)?.[1];
+}
+```
+
+Node's own filesystem errors (`ENOENT`, `ENOTDIR`, `EISDIR`, `EACCES`) reach you the same way, with Node's `code`. An aborted `signal` rejects with the signal's reason — Node's `AbortError` unless you aborted with your own `Error`.
+
+| Code | Where | Raised by | Meaning → what to do |
+| --- | --- | --- | --- |
+| `PERMISSION_REQUIRED` | message | every capability-gated call (see [below](#capabilities-and-consent)), a typed `registerHandler`'s `requires` | The capability is not in `manifest.capabilities`, or the just-in-time prompt was denied, timed out or could not be shown (the message says which). Declare the capability; for a refusal, tell the user and let them retry — never loop. |
+| `PATH_NOT_ALLOWED` | message (`fs`, `git`, `system`, `documents`); both (`db`) | path arguments, `git` pathspecs, a database's resolved location | Outside every declared root, a `..` or symlink escape, a git pathspec that is absolute, uses `..` or `:` magic, or a project database inside `.git`. Fix the path or `scopes.fs.allowedPaths`; not retryable. |
+| `REVISION_MISMATCH` | both, plus `currentRevision` | `fs.writeFile` with `expectedRevision` | The file changed since you read it. Enter a conflict state with `currentRevision`, or re-read, re-apply and retry ([`editFile`](./data-helpers.md#conflict-checked-edits) does this). |
+| `TARGET_EXISTS` | both | `fs.writeFile` with `expectedRevision: null`; `fs.mkdir` over a non-directory | Someone created it first. Re-read and decide. |
+| `TARGET_UNAVAILABLE` | both | `fs` reads and writes, `appendFile`, `mkdir`, `documents.renderPdf`, `db.open`, `db` reopen, `backup` | The target is missing where a revision was expected, moved or was replaced mid-call, or is not a regular file (a FIFO, device or directory). Usually a race with a replace: re-read and retry. |
+| `TARGET_IS_SYMLINK` | both | `fs` reads and writes, `renderPdf` input and output, a database file, a backup destination | The leaf is, or became, a symlink. Refused by design. |
+| `INVALID_PATH` | message | `system.openPath` / `showItemInFolder`, `documents.renderPdf` | Inside your scope but missing, or the output's parent directory does not exist, or `htmlPath` is not a file. Create it first. |
+| `VALIDATION` | message (`clipboard`, `renderPdf` options); both (`db`) | argument checks | An authoring mistake: wrong type, unknown option, a readonly open with `migrations`, a backup onto the database itself or a journal-named file. Fix the call. |
+| `PAYLOAD_TOO_LARGE` | message; both for a PDF over the cap | `clipboard.writeText` (8 MiB), `clipboard.writeImage` (20 MiB), `renderPdf` `htmlPath` (5 MiB) and output (50 MiB) | Send less. Inline `html` over 5 MiB is `VALIDATION`. |
+| `PLUGIN_UNLOADED` | message; `dispatch` result code | `fs`, `git`, `clipboard`, `system`, `documents`, `db` after unload | You are being torn down; stop. |
+| `PROJECT_VIEW_UNAVAILABLE` | `code` only | `dispatch` and the prompts from a project plugin; `settings.open` folds it into its message | Your project has no live window. Try again when it is open. (`agents.list` and `actions.*` answer empty instead, and `sendToAgent` refuses with `project-unavailable`.) |
+| `NO_ACTIVE_AGENT` | message | `sendToActiveAgent` | No agent terminal can take the input. Tell the user, or use `sendToAgent`. |
+| `SCHEMA_ERROR` | message | a typed `registerHandler` channel | Args or result failed the schema; reaches the view's `useHostChannel` `error`. |
+| `COMMIT_MESSAGE_REQUIRED` | message | `git.commit` | Empty message. The host never derives one. |
+| `DB_NOT_DECLARED` | message | `db.resolve`, `db.open` | The id is not in `contributes.databases`. |
+| `DB_NOT_FOUND` | both | a `readonly` `db.resolve` / `db.open` | The file (or its directory) does not exist yet. Show an empty state, or open writable once. |
+| `DB_READONLY` | both | `run`, `exec`, `transaction` on a readonly handle | Open without `readonly` to write. |
+| `DB_SCHEMA_TOO_NEW` | both | `db.open` | `user_version` is past your migration list — a newer copy of the plugin wrote it. Do not guess; ask the user to update. |
+| `DB_MIGRATION_FAILED` | both | `db.open` | A migration threw and was rolled back. The message names it. |
+| `DB_DEFINITIONS_FAILED` | both | `db.open` | `definitions` threw and was rolled back. |
+| `DB_MULTIPLE_STATEMENTS` | both | `query`, `get`, `run`, `columns` | SQL follows the first statement. Use `exec` for a batch. |
+| `DB_STATEMENT_NOT_ALLOWED` | both | every statement, `migrations`, `definitions` | SQL that would reach another file (`ATTACH`, `DETACH`, `VACUUM INTO`, a directory pragma). Use `backup` for a copy. |
+| `DB_CLOSED` | both | any call on a closed handle | Open it again. |
+| `DB_UNSUPPORTED` | both | `columns`, `backup` | The runtime's `node:sqlite` lacks the feature, or this host cannot approve a backup destination. |
+| `SQLITE_UNAVAILABLE` | both | the first `db.open` | The runtime has no `node:sqlite`. |
+| `PROJECT_UNAVAILABLE` | both | `db` for a `"project"` database | The plugin has no project to put the file in. |
+| `DESTINATION_HAS_JOURNAL` | both | `backup`, the panel menu's **Back up data…** | A `-wal`, `-shm` or `-journal` file sits beside the destination and SQLite would replay it into the copy. Choose another destination. |
+| `RENDER_BUSY` | both | `documents.renderPdf` | Too many of your calls are waiting on consent or rendering. Retry later. |
+| `RENDER_TIMEOUT` | both | `documents.renderPdf` | Not finished within 30 seconds of taking a render slot. |
+| `RENDER_FAILED` | both | `documents.renderPdf` | The page failed to load or print. |
+| `RENDER_CANCELLED` | both | `documents.renderPdf` | The plugin unloaded while the call was queued or rendering. |
+| `FRONTMATTER_INVALID` | `code` (SDK) | `parseFrontmatter`, `updateFrontmatter` | See [Data helpers](./data-helpers.md#frontmatter); the error carries `line` and `column`. |
+
+`dispatch` does not throw for a refused action: it resolves `{ ok: false, error: { code } }` with an `ActionErrorCode` — see [`dispatch`](#dispatch). `sendToAgent` resolves a refusal too, with a `reason` rather than a code.
+
+## Capabilities and consent
+
+A capability is declared in `manifest.capabilities` and checked on every call — an undeclared one rejects with `PERMISSION_REQUIRED` before anything else happens. Some also raise a **just-in-time consent** prompt the first time the plugin uses them. The prompt offers a remembered grant or a one-time approval; a remembered grant is keyed by plugin and capability, and for a project plugin by project too, so approving one project's copy never answers for another's. Concurrent first uses share one prompt. Built-in plugins skip consent. A call's arguments are validated before the prompt, so a malformed call can never bank a grant.
+
+| Capability | Unlocks | Consent |
+| --- | --- | --- |
+| `agent:read` | `getAgentState`, `onDidChangeAgentState`, `agents.list` | — |
+| `agent:input` | `sendToActiveAgent`, `sendToAgent` | First use |
+| `fs:project-read`, `fs:user-data-read` | `fs` reads, `readdir`, `stat`, `watch`; `renderPdf`'s `htmlPath`; `system.*` (read or write of the root class) | — |
+| `fs:project-write`, `fs:user-data-write` | `fs.writeFile`, `appendFile`, `mkdir`; `renderPdf`'s output; `db` handle `backup` destination | First write, per root class |
+| `fs:project-write` | A `location: "project"` database — required by the manifest check, which also limits it to `"scope": "project"` plugins | The first writable `db.open` / `db.resolve`: the same grant as `fs.writeFile`. A `"local"` database and a `readonly` open need none. |
+| `git:read` | `git.status`, `git.diff`, and `git.commit` (for its preview) | — |
+| `git:write` | `git.add`, `git.commit` | First mutation |
+| `shell:exec` | `process.spawn` | First spawn |
+| `clipboard:read` | `clipboard.readText` | — |
+| `clipboard:write` | `clipboard.writeText`, `writeImage` | — |
+| `mcp:expose` | `mcp.registerTools` and `contributes.agentMcp` | — (the user enables each endpoint per project) |
+
+No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, the prompts, `postToPanel`, `setPanelBadge`, `reloadPanel`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
+
+## Identity — `pluginId`, `pluginInfo`, `panelKindId`
+
+```ts
+host.pluginInfo;
+// { instanceId, manifestId: "acme.board", origin: "project", projectId, projectRoot }
+await host.dispatch("panel.openPluginPanel", { kind: host.panelKindId("board") });
+```
+
+`pluginId` is the key this instance is registered under. For an installed plugin that is the manifest id; for a project plugin it is an instance key that also encodes the project, so never parse it. `pluginInfo` gives you the parts instead, frozen when the host was built:
+
+| Field | Notes |
+| --- | --- |
+| `instanceId` | Byte-identical to `pluginId`. |
+| `manifestId` | `publisher.name` — the id to write into anything the repository sees, since a project id is machine-local. |
+| `origin` | `"project"` for a `.daintree/plugins` plugin, `"global"` otherwise. |
+| `projectId`, `projectRoot` | The owning project and its absolute root, or both `null` for an installed or built-in plugin. |
+
+`panelKindId(bareId)` turns one of your own `contributes.panels[].id` values into the runtime kind id that `panel.openPluginPanel` expects — `{manifestId}.{bareId}` for a global plugin, `project:{projectId}/{manifestId}/{bareId}` for a project plugin — from the host's own binding, so the same code works under either. It is synchronous and throws on an empty id. All three stay readable after unload.
 
 ## `registerAction`
 
@@ -477,7 +596,7 @@ Two things this surface deliberately does **not** carry. It omits the internal r
 
 **Treat the state as an observation, not a fact.** Agent state comes from passive PTY output heuristics and is frequently wrong. Surface what the host saw; don't build a control flow that assumes it.
 
-`getAgentState` is NOT revoke-guarded (callable from timers, resolves `null` after unload); `onDidChangeAgentState` is — subscribe during `activate()`. A throwing listener is quarantined after three consecutive failures, as with every host subscription.
+`getAgentState` is NOT revoke-guarded (callable from timers, resolves `null` after unload); `onDidChangeAgentState` is — subscribe during `activate()`. A throwing listener is logged; see [Disposables](#disposables) for when it is unsubscribed.
 
 ## `onDidChangePanelLifecycle`
 
@@ -733,7 +852,7 @@ await host.sendToActiveAgent("/compact", { submit: true });
 
 The host resolves the target itself, preferring the focused/visible agent terminal, then a `waiting` agent, then the most recently active agent terminal in the active project. `options.submit` defaults to `false` — the **stage-only**, default-safe mode: the text is pasted into the agent's input for the user to review and submit, with no Enter appended. Pass `{ submit: true }` to append Enter and execute immediately.
 
-First use raises a just-in-time consent prompt (like `shell:exec`); a granted consent covers later calls. `sendToActiveAgent` is NOT revoke-guarded — call it from timers and subscription callbacks — but it becomes a no-op once the plugin is unloaded. It throws `PERMISSION_REQUIRED:` if the plugin did not declare `agent:input` or the user denies consent, and `NO_ACTIVE_AGENT:` if no agent terminal is available to receive the input.
+First use raises a just-in-time consent prompt (like `shell:exec`); a remembered grant covers later calls. `sendToActiveAgent` is NOT revoke-guarded — call it from timers and subscription callbacks — but it becomes a no-op once the plugin is unloaded. It throws `PERMISSION_REQUIRED:` if the plugin did not declare `agent:input` or the user denies consent, and `NO_ACTIVE_AGENT:` if no agent terminal is available to receive the input.
 
 For handing a piece of work to an agent the user chooses, use [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) instead: it drafts where the user can see it and never submits.
 
@@ -807,40 +926,55 @@ host.logger.warn("Rate limited, backing off");
 host.logger.error("Token expired");
 ```
 
-Lines are mirrored to the host console prefixed with `[plugin:{pluginId}]` and retained so they can be folded into an error report on demand. Calls return `void`, never throw, and never reject — an unserializable `fields` payload is coerced to a string rather than thrown. `logger` is NOT revoke-guarded; writes become a silent no-op after unload.
+Lines are mirrored to the host console prefixed with `[plugin:{pluginId}]` and retained so they can be folded into an error report on demand. Calls return `void` and never reject. In process an unserializable `fields` payload is coerced to a string rather than thrown; in a worker the call is posted over a `MessagePort`, so a `fields` value that cannot be structured-cloned (a function, a class instance with methods) throws `DataCloneError` synchronously — log plain data. `logger` is NOT revoke-guarded; writes become a silent no-op after unload.
 
 ## `settings`
 
-Persistent, plugin-scoped key/value settings. Reads, writes, and subscribes.
+User-facing configuration: declared in [`contributes.settings`](./contribution-points.md#settings-schema--shipped), rendered as a form in Settings, and read by your code. For state the user never edits, use [`storage`](#storage--private-keyvalue-storage). No capability and no consent.
 
 ```ts
-// Current value, or the declared default while unset (scope: the key's declared scope)
-const token = await host.settings.get<string>("linear.apiToken");
+const token = await host.settings.get<string>("apiToken"); // declared default while unset
+await host.settings.set("defaultTeam", "engineering");
 
-// Update
-await host.settings.set("linear.defaultTeam", "engineering");
+// In activate(): subscribing is revoke-guarded
+const dispose = await host.settings.onDidChange("apiToken", (value) => reconnect(value));
 
-// Subscribe to changes (await the disposer)
-const dispose = await host.settings.onDidChange("linear.apiToken", (newValue) => {
-  reconnect(newValue);
-});
-```
-
-Leave `scope` out and `get`, `set` and `onDidChange` all use the key's declared scope — `"user"` for a key your manifest doesn't declare — so the manifest is the one place a scope is written down; an explicit scope that conflicts with the declaration throws. While nothing is stored, `get` resolves to the key's declared `default` (a fresh copy each time), or `undefined` when it declares none, and clearing a value from the settings form fires `onDidChange` with that same default. `project` scope resolves the active project at call time, so it tracks project switches: with no project active, `get` reads as unset and `set` throws. `set` rejects `undefined` and non-JSON-serializable values; when the manifest declares `contributes.settings`, an undeclared key is rejected. Reads notice when the settings file changed on disk — a `git pull` or branch switch that rewrites the committed project file is picked up by the next `get`, and the next write keeps it rather than restoring an older copy — but `onDidChange` fires only on writes made through Daintree.
-
-**Sending the user to your settings.** Don't build a settings screen into a panel; send the user to the one home your settings already have:
-
-```ts
 // Gate on setup, then take the user straight to what's missing
-const missing = await host.settings.missingRequired(); // e.g. ["apiKey"]
+const missing = await host.settings.missingRequired(); // e.g. ["apiToken"]
 if (missing.length > 0) await host.settings.open(missing[0]);
 ```
 
-`open(key?)` shows your plugin's settings where they live — the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a `project` / `local` key — and scrolls to and briefly highlights `key` when it names a declared setting. It always opens your own plugin's settings, and a project plugin's open in its own project's window. It resolves once the request reaches the renderer; it rejects when no window can show it, or when the destination is Project settings and no project is open. It is the same `plugin.openSettings` action your panels' **Plugin settings…** menu entry dispatches.
+| Member | Notes |
+| --- | --- |
+| `get(key, scope?)` | The stored value; while nothing is stored, the key's declared `default` (a fresh copy each call), or `undefined` when it declares none. A stored `null` reads as `null`. |
+| `set(key, value, scope?)` | Rejects `undefined` and anything `JSON.stringify` cannot represent; the value is stored as its JSON round-trip, so `NaN` becomes `null`. When the manifest declares any settings, an undeclared key is rejected. `set` does **not** check the declared `type`, `min`/`max` or enum `options` — the form enforces those, so validate your own writes. There is no delete: only the user can clear a value, from the form. |
+| `onDidChange(key, cb, scope?)` | Revoke-guarded. Fires after a `set` or a form edit that changes the stored JSON, with the new value — or with the declared `default` when the user clears it. An edit made to the file outside Daintree never fires it. |
+| `open(key?)` | Shows your settings where they live and, when `key` names a declared setting, scrolls to it and highlights it briefly. See below. |
+| `missingRequired()` | Your declared `required: true` settings that are still unset, in manifest order. See below. |
 
-`missingRequired()` lists your declared `required: true` settings that are still unset, in manifest order. A `default` never counts as set, a secret counts once a value is stored (checked without decrypting it), and a `project`-scoped key with no project to read is missing. A key whose settings file can't be read is listed too, since you couldn't read it either; the others are still answered. While the list is non-empty, your open panels and surfaces show a "needs setup" strip above their content, so a panel doesn't need to draw its own.
+**Scopes.** A key's scope is set once, in its declaration:
 
-**Storage:** values are stored as JSON at `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope), with `chmod 0o600` applied on POSIX. `secret`-typed settings (#9167) are encrypted at rest through the OS keychain (macOS Keychain / Windows DPAPI / Linux libsecret-kwallet via Electron `safeStorage`) — the value is persisted as a tagged ciphertext envelope, and the `host.settings.get`/`set` API shape is unchanged (encryption is transparent to your plugin). A secret is never stored under the project root: a `scope: "project"` secret is still read, written, and subscribed to as `"project"`, but its value lives in this machine's per-project local file (`~/.daintree/plugin-settings/local/{projectId}/{pluginId}.json`), so it is never committed and each collaborator enters their own. When no keychain is available (e.g. a headless Linux box without a secret service), `set` on a secret rejects rather than storing it in plaintext, and the settings UI says secrets can't be saved. Non-secret settings are stored as plaintext JSON — never put a credential in one.
+| Scope | Stored at | Use for |
+| --- | --- | --- |
+| `"user"` (default) | `~/.daintree/plugin-settings/{pluginId}.json` | One value for every project. |
+| `"project"` | `<projectRoot>/.daintree/plugin-settings/{manifestId}.json` | A value committed with the repository, shared by every clone. |
+| `"local"` | `~/.daintree/plugin-settings/local/{projectId}/{pluginId}.json` | Per project and per machine, never committed — an interpreter path, a local port. |
+
+`{pluginId}` is the instance id (for a project plugin it encodes the project); the committed file uses the manifest id so no machine-local id reaches the repository. Files are written atomically with mode `0600` on POSIX.
+
+Leave `scope` out and `get`, `set` and `onDidChange` all use the key's declared scope — `"user"` for an undeclared key — so the manifest is the one place a scope is written down. An explicit scope that conflicts with the declaration throws. `get` and `onDidChange` accept an undeclared key; `set` refuses one once the manifest declares settings.
+
+A project plugin's `"project"` and `"local"` scopes always mean its own project. An installed plugin's resolve the active project at call time, so they follow project switches; with no project active, `get` returns the declared default and `set` throws.
+
+**Changes on disk.** Every read checks the file's identity (inode, size, modification time), so a `git pull` or branch switch that rewrites the committed project file is picked up by the next `get`, and the next `set` merges into the fresh file rather than writing a stale copy back. No `onDidChange` fires for such a change — re-read when it matters (for example on [`onDidWake`](#ondidwake) or when a panel mounts).
+
+**Secrets.** A `type: "secret"` setting is encrypted at rest through the OS keychain (Electron `safeStorage`); the API is unchanged. A secret is never stored under the project root: a `"project"`-scoped secret is still read, written and subscribed to as `"project"`, but its value lives in the `"local"` file, so it is never committed and each collaborator enters their own. With no keychain available — a headless Linux box, or Chromium's `basic_text` backend — `set` rejects rather than storing plaintext, and the form says secrets can't be saved. Keep secrets to strings: a number or object reads back from `get` as its JSON text, while `onDidChange` delivers the value you passed. Non-secret settings are plaintext JSON — never put a credential in one.
+
+**`open(key?)`.** Don't build a settings screen into a panel; send the user to the one home your settings already have. An installed plugin's `"user"` settings open in the plugin manager; a project plugin's settings, and any `"project"` or `"local"` key, open in Project settings → Plugins — in the project plugin's own window. An undeclared `key` is ignored. It resolves once the request reaches the renderer, and rejects when no window can show it, when the destination is Project settings and no project is open, or once the plugin has unloaded. It is the same `plugin.openSettings` action your panels' **Plugin settings…** menu entry dispatches.
+
+**`missingRequired()`.** A declared `default` never counts as set; a stored `null` or `""` counts as unset; a secret counts once a value is stored (checked without decrypting it); a `"project"` or `"local"` key with no project to read is missing; and a key whose file can't be read is listed too, since you couldn't read it either, without hiding the others. While the list is non-empty, your open panels and surfaces show a "needs setup" strip above their content that opens the setting, so a panel doesn't need to draw its own.
+
+**Your own settings view.** A setting declared `editor: "view"` is left out of the generated form and edited by your `location: "settings"` view instead, through the same `get` and `set` — see [Views → A settings section](./views.md#a-settings-section).
 
 ## `storage` — private key/value storage
 
@@ -855,7 +989,7 @@ await host.storage.delete("lastSyncCursor");
 await host.storage.set("draft", text, "worktree");
 ```
 
-Three scopes — `"user"` (default), `"project"`, `"worktree"` — stored as plaintext JSON at `~/.daintree/plugin-storage/{pluginId}.json`, `<projectRoot>/.daintree/plugin-storage/{pluginId}.json`, or `<worktreePath>/.daintree/plugin-storage/{pluginId}.json` (`chmod 0o600` on POSIX). **No secret encryption — never store credentials here** (use a `type: "secret"` setting for those). The `"project"` / `"worktree"` scopes resolve the active project / worktree at call time: `get` and `delete` are a no-op (returning `undefined` / void) and `set` throws when no project / worktree is active. `set` rejects `undefined` and non-JSON-serializable values. `onDidChange(key, cb, scope?)` fires on in-process writes only and is the one revoke-guarded member — subscribe during `activate()`. The rest of `storage` is NOT revoke-guarded.
+Three scopes — `"user"` (default), `"project"`, `"worktree"` — stored as plaintext JSON at `~/.daintree/plugin-storage/{pluginId}.json`, `<projectRoot>/.daintree/plugin-storage/{manifestId}.json`, or `<worktreePath>/.daintree/plugin-storage/{manifestId}.json` (`chmod 0o600` on POSIX). **No secret encryption — never store credentials here** (use a `type: "secret"` setting for those). The `"project"` / `"worktree"` scopes resolve at call time — for an installed plugin the active project and worktree, for a project plugin its own project and that project's active worktree: `get` and `delete` are a no-op (returning `undefined` / void) and `set` throws when no project / worktree is active. `set` rejects `undefined` and non-JSON-serializable values. `onDidChange(key, cb, scope?)` fires on in-process writes only and is the one revoke-guarded member — subscribe during `activate()`. The rest of `storage` is NOT revoke-guarded.
 
 **Reads stay fresh across a scope switch.** Storage is read through a per-path cache, but the host keeps it coherent for you. When the active worktree changes, the host invalidates the cache for `"worktree"`-scoped entries, so the next `get` reads the new worktree's file rather than a stale value. `"project"` scope is implicitly fresh — a different project resolves to a different file path, hence a different cache entry — and `"user"` scope is process-global and never evicted. You never have to manage cache invalidation yourself.
 
@@ -889,43 +1023,63 @@ await db.run("INSERT INTO tx (date, amount_cents, category) VALUES (:date, :cent
 db.onDidChange(() => void host.postToPanel("ledger-changed", null));
 ```
 
-The queries run in your plugin's own process, over the runtime's built-in `node:sqlite`; only the location is resolved by the host. Every method returns a Promise except `onDidChange`, which returns its disposer directly.
+The queries run in your plugin's own process, over the runtime's built-in `node:sqlite`; only the location is resolved by the host. Every method returns a Promise except a handle's `onDidChange`, which returns its disposer directly. `host.db` is not revoke-guarded; open handles close when the plugin unloads or reloads.
 
 | Member | Notes |
 | --- | --- |
-| `resolve(id)` | The declared database's `{ id, location, path, projectRelativePath, journalMode }`, without opening it. Hand `path` (or `projectRelativePath`) to agents. |
-| `open(id, { migrations?, definitions?, readonly? })` | Creates the file and its directory if needed and returns a handle. Rejects `DB_NOT_DECLARED` for an id not in `contributes.databases`. With `readonly: true` it creates nothing (SQLite may still add `-wal`/`-shm` sidecars when reading a file an agent switched to WAL mode), asks for no consent, and refuses `run` / `exec` / `transaction` with `DB_READONLY` — the mode for a dashboard over data agents write; a missing file rejects `DB_NOT_FOUND`. |
-| `query(sql, params?)` / `get(sql, params?)` | All rows / the first row, as plain objects. `params` is an array for `?` placeholders or an object for `:name`, `$name`, `@name`. |
+| `db.resolve(id, { readonly? })` | The declared database's `{ id, location, path, projectRelativePath, journalMode }` without opening it — hand `path` (or `projectRelativePath`) to agents. By default it prepares the location for writing: it creates the directory and, for a `"project"` database, raises the write consent the first time. With `readonly: true` it only locates an existing file (`DB_NOT_FOUND` otherwise). |
+| `db.open(id, { migrations?, definitions?, readonly? })` | Resolves as above, creates the file if needed, applies the policy and schema below, and returns a handle. `DB_NOT_DECLARED` for an id not in `contributes.databases`. |
+| `readonly: true` | Creates nothing, asks for no consent, and refuses `run`, `exec` and `transaction` with `DB_READONLY`; SQLite itself refuses a write a query attempts. It cannot be combined with `migrations` or `definitions` (`VALIDATION`), and a missing file rejects `DB_NOT_FOUND`. SQLite may still add `-wal` / `-shm` sidecars when reading a file an agent switched to WAL mode. The mode for a dashboard over data agents write. |
+| `query(sql, params?)` / `get(sql, params?)` | All rows / the first row (or `undefined`), as plain objects keyed by column name. `params` is an array for `?` placeholders or an object for `:name`, `$name`, `@name`; values are `string`, `number`, `bigint`, `null` or `Uint8Array`. |
 | `run(sql, params?)` | One statement that returns no rows; resolves `{ changes, lastInsertRowid }`. |
 | `exec(sql)` | One or more statements with no parameters. |
-| `columns(sql)` | The result columns (`name`, source `table` / `column`, declared `type`) without running the statement — headers for a result with no rows. |
+| `columns(sql)` | The result columns (`name`, source `table` / `column`, declared `type`, each `null` for an expression) without running the statement — headers for a result with no rows. |
 | `transaction(fn)` | `BEGIN IMMEDIATE`, `fn(tx)`, `COMMIT` — rolled back if `fn` throws. Use the `tx` you are handed: calling the outer handle inside `fn` waits for the transaction and deadlocks. |
-| `backup(destPath)` | A consistent snapshot written with SQLite's online backup, then moved into place atomically; resolves `{ path, bytes }`. The destination is checked exactly like `host.fs.writeFile` (declared roots or your data directory, `fs:*-write`, first-use consent, no symlink). It is refused when it names the database itself or one of its `-wal` / `-shm` / `-journal` files (`VALIDATION`), and when a `-wal`, `-shm` or `-journal` file already sits beside it (`DESTINATION_HAS_JOURNAL`) — SQLite would replay that into the copy the next time it is opened. The way to give a sync folder such as Dropbox a copy — never put the live file there. For a copy the user asks for, you need nothing: your panels' **Back up data…** menu entry does it for every declared database (see [Databases](./contribution-points.md#databases--shipped)). |
+| `backup(destPath)` | A consistent snapshot, resolved as `{ path, bytes }`. See [Backups](#backups). |
 | `onDidChange(cb)` | `cb({ origin: "self" \| "external" })`, coalesced. Returns a disposer. |
-| `close()` | Idempotent. Open handles are also closed when the plugin unloads or reloads. |
+| `id`, `location`, `readonly` | The id, the frozen resolved location, and whether the handle is readonly. |
+| `close()` | Idempotent; waits for queued calls. Any later call rejects `DB_CLOSED`. |
 
-**Open it lazily.** A `"project"` database is a file in the repository, so the first `open` (or `resolve`) raises the same one-time `fs:project-write` consent prompt as a first `host.fs.writeFile`, before the host creates the directory or the file. Do not await it inside `activate()` — a prompt the user has not answered yet would run the activation past its 5-second budget. Open it from the first handler that needs it and keep the promise, dropping it if the open fails so a declined prompt can be asked again: `let ledger; const db = () => (ledger ??= host.db.open("ledger", { migrations }).catch((err) => { ledger = undefined; throw err; }));`. A `"local"` database needs no consent.
+**Where the file lives.** A `"project"` database defaults to `<projectRoot>/.daintree/data/{manifestId}/{id}.db`, or the declaration's `path`; only a project plugin can declare one, and it must declare `fs:project-write`. A `"local"` database is `databases/{id}.db` inside your plugin data directory, out of the repository.
 
-**What the host does on open.** Resolves the path — and re-resolves it before reopening a replaced file — against your bound project root (or your data directory for `"local"`), refusing a symlinked ancestor that escapes it and a symlinked file (`PATH_NOT_ALLOWED`, `TARGET_IS_SYMLINK`). Opens the file with foreign keys enforced and a 5-second busy timeout, and applies the declared journal mode. Then runs your migrations: migration `n` runs when `PRAGMA user_version` is `n`, in its own transaction, and bumps the version. Append new migrations; never edit a shipped one. A file whose version is higher than your list was written by a newer copy of the plugin and is refused (`DB_SCHEMA_TOO_NEW`) rather than guessed at. A failed migration is rolled back and rejects `DB_MIGRATION_FAILED`.
+**Open it lazily.** A `"project"` database is a file in the repository, so the first writable `open` (or `resolve`) raises the same one-time `fs:project-write` consent prompt as a first `host.fs.writeFile`, before the host creates the directory or the file. Do not await it inside `activate()` — a prompt the user has not answered yet would run the activation past its 5-second budget. Open it from the first handler that needs it and keep the promise, dropping it if the open fails so a declined prompt can be asked again: `let ledger; const db = () => (ledger ??= host.db.open("ledger", { migrations }).catch((err) => { ledger = undefined; throw err; }));`. A `"local"` database and a readonly open need no consent.
 
-**`definitions`** is SQL applied after the migrations, in one transaction, whenever its text differs from what the file last received — the home for views and triggers, which you want to change freely without a numbered migration or a data wipe. Write it to be idempotent: `DROP VIEW IF EXISTS on_hand; CREATE VIEW on_hand AS …`. The host records a hash of the applied text in a small `_daintree_meta` table inside the database, so an open with unchanged definitions never rewrites the file (a committed database does not show as modified just because a panel opened). The hash is kept per schema version, so they are also re-applied on the first open after `user_version` changes — recreating a table in a migration drops its triggers — even when the process stopped between committing the migration and applying them. A view or trigger dropped by hand stays dropped until one of those happens. Tell agents in your data contract to leave `_daintree_meta` alone. A failure rolls back and rejects `DB_DEFINITIONS_FAILED`.
+**What the host does on open.** Resolves the path against your bound project root (or your data directory for `"local"`), refusing a symlinked ancestor that escapes it, a path inside `.git` (`PATH_NOT_ALLOWED`), a symlinked file (`TARGET_IS_SYMLINK`) and anything that is not a regular file (`TARGET_UNAVAILABLE`); a `"project"` database for a plugin with no project rejects `PROJECT_UNAVAILABLE`. It opens the file with foreign keys enforced and a 5-second busy timeout, and — on every writable open — sets the declared journal mode, so an agent that ran `PRAGMA journal_mode=WAL` cannot leave committed data in a `-wal` sidecar that a commit of the `.db` alone misses. Then it runs your migrations: migration `n` (0-based) runs when `PRAGMA user_version` is `n`, in its own `BEGIN IMMEDIATE` transaction, and bumps the version to `n + 1`; the version is read under the write lock, so two processes opening the file at once never both run a migration. Append new migrations; never edit or reorder a shipped one. A file whose version is higher than your list was written by a newer copy of the plugin and is refused (`DB_SCHEMA_TOO_NEW`) rather than guessed at. A failed migration is rolled back and rejects `DB_MIGRATION_FAILED`.
 
-**Change detection.** An agent writing the file with the `sqlite3` CLI is a different process, invisible to your connection's own bookkeeping. While any `onDidChange` listener is attached, the handle watches the file's directory and polls once a second. It compares `PRAGMA data_version`, which advances only when _another_ connection commits, and the file's inode, which changes when the file is replaced by `git checkout`, `git stash` or a restore script. A replaced file is reopened transparently before the next statement, so a long-lived handle never keeps reading an unlinked inode. Your own `run`, `exec` and committed transactions announce themselves as `"self"`, schema changes such as `CREATE VIEW` included.
+**`definitions`** is SQL applied after the migrations, in one transaction, whenever its text differs from what the file last received — the home for views and triggers, which you want to change freely without a numbered migration or a data wipe. Write it to be idempotent: `DROP VIEW IF EXISTS on_hand; CREATE VIEW on_hand AS …`. The host records a hash of the applied text in a small `_daintree_meta` table inside the database (created only when you use `definitions`), so an open with unchanged definitions never rewrites the file — a committed database does not show as modified just because a panel opened. The hash covers the schema version, so definitions are also re-applied on the first open after `user_version` changes — recreating a table in a migration drops its triggers — even when the process stopped between committing the migration and applying them. A view or trigger dropped by hand stays dropped until one of those happens. Tell agents in your data contract to leave `_daintree_meta` alone. A failure rolls back and rejects `DB_DEFINITIONS_FAILED`.
 
-**One statement per call.** `query`, `get`, `run` and `columns` compile exactly one statement; SQL after it rejects with `DB_MULTIPLE_STATEMENTS` instead of being silently dropped. Use `exec` for a batch. Queries run synchronously in your plugin's process: a runaway query stalls your plugin (never Daintree) until it finishes, and cannot be interrupted yet.
+**Change detection.** An agent writing the file with the `sqlite3` CLI is a different process, invisible to your connection's own bookkeeping. While any `onDidChange` listener is attached, the handle watches the file's directory and polls once a second; the watcher stops when the last listener is disposed. It compares `PRAGMA data_version`, which advances only when _another_ connection commits, and the file's device and inode, which change when the file is replaced by `git checkout`, `git stash` or a restore script. A replaced or deleted file is reopened transparently before the next statement — re-resolved and re-contained first, with the migrations run again (a deleted file is recreated) — and announced as `"external"`, so a long-lived handle never keeps reading an unlinked inode. Your own commits announce themselves as `"self"`: `run`, `exec`, committed transactions, a write made through `query` (`INSERT … RETURNING`), and schema changes such as `CREATE VIEW` that change no rows. A rolled-back transaction announces nothing. A listener that throws is logged and stays subscribed.
 
-**One file per database.** SQL that would open or create another file is refused with `DB_STATEMENT_NOT_ALLOWED` on every handle, readonly included, and in `migrations` and `definitions`: `ATTACH`, `DETACH`, `VACUUM INTO`, `load_extension()`, and `PRAGMA temp_store_directory` / `data_store_directory`. Those would reach files outside the declared location without the containment and consent the host applies to it. A plain `VACUUM` is fine. For a copy, use `backup`.
+**One statement per call.** `query`, `get`, `run` and `columns` compile exactly one statement; SQL after it (other than whitespace, semicolons and comments) rejects with `DB_MULTIPLE_STATEMENTS` instead of being silently dropped. Use `exec` for a batch. Queries run synchronously in your plugin's process: a runaway query stalls your plugin (never Daintree) until it finishes, and cannot be interrupted.
+
+**One file per database.** SQL that would open or create another file is refused with `DB_STATEMENT_NOT_ALLOWED` on every handle, readonly included, and in `migrations`, `definitions` and `exec`: `ATTACH`, `DETACH`, `VACUUM INTO`, and `PRAGMA temp_store_directory` / `data_store_directory`. Those would reach files outside the declared location without the containment and consent the host applies to it. The connection also runs an authorizer that denies the same statements and the `load_extension()` function; a call to that function fails with SQLite's own "not authorized" error rather than a `DB_*` code, and `node:sqlite` never enables extension loading anyway. A plain `VACUUM` is fine. For a copy, use `backup`.
 
 **Integers are exact.** An integer that fits in a JavaScript number (up to `Number.MAX_SAFE_INTEGER`, 2^53 − 1) comes back as a `number`; one past that comes back as a `bigint`, in rows and in `run`'s `lastInsertRowid`, rather than being rounded. A `bigint` does not mix with `number` arithmetic and `JSON.stringify` throws on it, so convert deliberately before serialising one. Bind a `bigint` parameter to write one. Store money as integer cents.
 
-**Calls are serialised per handle.** A statement issued while a transaction is running waits for it, so a panel refresh can never read half of a multi-row write.
+**Calls are serialised per handle.** A statement issued while a transaction is running waits for it, so a panel refresh can never read half of a multi-row write. Separate handles to the same file are separate connections and are not serialised with each other — SQLite's own locking and the busy timeout apply.
 
-**Agents are first-class writers.** The design assumes an agent edits the same file directly. Two habits make that safe:
+### Backups
+
+`backup(destPath)` writes a consistent snapshot with SQLite's online backup, staged in a fresh `.daintree-backup-*` directory beside the destination and then renamed into place, so a reader or a sync client never sees a half-written copy. The destination is approved exactly like a `host.fs.writeFile` target — absolute, inside your declared roots or your data directory, the matching `fs:*-write` capability, first-use consent, no symlink leaf — and checked again just before the rename:
+
+| Refusal | Code |
+| --- | --- |
+| The database itself, or one of its `-wal` / `-shm` / `-journal` files (by name, case-insensitively, or by identity) | `VALIDATION` |
+| A name ending in `-wal`, `-shm` or `-journal` | `VALIDATION` |
+| A symlink at the destination | `TARGET_IS_SYMLINK` |
+| Something other than a regular file at the destination, or a directory on the way that moved after approval | `TARGET_UNAVAILABLE` |
+| A `-wal`, `-shm` or `-journal` file already beside the destination — SQLite would replay it into the copy the next time it is opened | `DESTINATION_HAS_JOURNAL` |
+
+It is the way to give a sync folder such as Dropbox a copy — never put the live file there. For a copy the user asks for, you need nothing: your panels' **Back up data…** menu entry does it for every declared database under the same rules (see [Databases](./contribution-points.md#databases--shipped)).
+
+### Agents are first-class writers
+
+The design assumes an agent edits the same file directly. Two habits make that safe:
 
 - **Put integrity in the schema, not in your code.** The `sqlite3` CLI does not enforce foreign keys unless a session asks for it, and agents never do, so a `REFERENCES` clause only binds your own writes. Use `CHECK` constraints and `BEFORE INSERT` / `BEFORE UPDATE` triggers with `RAISE(ABORT, '<what to do instead>')` — the agent sees the message and corrects itself.
 - **Describe the schema where the agent will read it.** Column comments in the `CREATE TABLE` survive into `sqlite3 <file> .schema`, which is the first thing an agent runs. Point to the file from your plugin's `AGENTS.md` by its `projectRelativePath`.
 
-**What it does not do.** There is no remote or synced backend yet: the file is where the declaration says, and a sync folder should receive a copy (an export), never the live file.
+**What it does not do.** There is no remote or synced backend: the file is where the declaration says, and a sync folder should receive a copy, never the live file.
 
 ## `showToast`
 
@@ -1005,7 +1159,7 @@ await handle.restart();
 handle.kill();
 ```
 
-`host.process` lets a process- or task-orchestrator plugin (dev server, CI runner, watcher) spawn and supervise real child processes instead of hijacking a user terminal. It is **capability-gated twice**: a `spawn` from a plugin that did not declare `shell:exec` rejects with a `PERMISSION_REQUIRED:` error, and the first spawn a plugin actually makes raises a [just-in-time consent dialog](./trust-model.md#2-host-side-policy-input-load-bearing) the user must approve — a denial rejects with the same prefix. A granted, pinned consent covers later spawns; built-in plugins skip the prompt. Concurrent first-use spawns coalesce onto one dialog rather than stacking. Argv is passed verbatim (no shell, so no shell-injection surface).
+`host.process` lets a process- or task-orchestrator plugin (dev server, CI runner, watcher) spawn and supervise real child processes instead of hijacking a user terminal. It is **capability-gated twice**: a `spawn` from a plugin that did not declare `shell:exec` rejects with a `PERMISSION_REQUIRED:` error, and the first spawn a plugin actually makes raises a [just-in-time consent dialog](./trust-model.md#2-host-side-policy-input-load-bearing) the user must approve — a denial rejects with the same prefix. A remembered grant covers later spawns; built-in plugins skip the prompt. Concurrent first-use spawns coalesce onto one dialog rather than stacking. Argv is passed verbatim (no shell, so no shell-injection surface).
 
 The returned `PluginProcessHandle` carries `id`, `kill()` (clean `SIGTERM`, then `SIGKILL` after a grace period), `restart()` (respawns with the same command/args/cwd/env, reusing the id and bumping a restart counter), and `onExit`/`onCrash` lifecycle subscriptions carrying the real exit code/signal — `onCrash` fires only on an unexpected (non-zero / signalled) exit you did not request. The child's stdout/stderr stream to your panels over `postToPanel("process", …)` keyed by the handle id; subscribe with `plugin.on(pluginId, "process")` in your view and discriminate on the event `kind` (`stdout` / `stderr` / `exit` / `crash`, or `data` for the single merged stream a `"pty"` child produces).
 
@@ -1224,7 +1378,7 @@ Pass exactly one of `html` or `htmlPath`. An unknown option, a wrong type, a mar
 
 A call goes through two bounded phases. While the consent prompt is open it holds no render slot and no clock runs — the prompt goes at the user's pace — but a plugin may have at most two calls waiting on it; a third rejects with `RENDER_BUSY:`. Once consent is given the call takes a render slot, and a plugin with two calls already holding slots, or a call arriving when eight are held in total, rejects with `RENDER_BUSY:`. At most two renders run at once across all plugins and the rest queue. The 30-second limit starts when the slot is taken and covers reading `htmlPath`, the queue wait and the render (`RENDER_TIMEOUT:`); a page that fails to load or print rejects with `RENDER_FAILED:`, and a call still queued or rendering when the plugin unloads is cancelled (`RENDER_CANCELLED:`). The window is destroyed on every path.
 
-`createMockHost` records each call in `documentsRenderPdfCalls` and writes a small placeholder (`%PDF-1.4 …`) to its in-memory filesystem at `outputPath`, so a plugin that reads, lists or opens its export afterwards sees a file. Nothing is rendered, and only the argument shape and an in-memory `htmlPath` are checked. `host.documents` is NOT revoke-guarded.
+`createMockHost` records each call in `documentsRenderPdfCalls` and writes a small placeholder (`%PDF-1.4 …`) to its in-memory filesystem at `outputPath`, so a plugin that reads, lists or opens its export afterwards sees a file. Nothing is rendered: the options go through the host's own validator, and `htmlPath` must exist in the in-memory filesystem. `host.documents` is NOT revoke-guarded.
 
 ## React hooks — `@daintreehq/plugin-sdk/react`
 
@@ -1326,21 +1480,30 @@ Daintree's own file browser imports the same modules from the same package, so t
 
 ## Data files — `@daintreehq/plugin-sdk/data`
 
-For plugins whose data is files in the repository: `parseFrontmatter` / `stringifyFrontmatter` / `updateFrontmatter` (YAML frontmatter, with an editor that changes only the keys you name and preserves every other byte), `parseJsonl` / `stringifyJsonlLine` (bad lines reported, not thrown), `contentRevision` (the revision `fs.writeFile` compares), and `editFile(host, path, transform)`, which wraps the read → transform → `writeFile({ expectedRevision })` → retry-on-conflict loop above. A zero-build worker imports it with no install — the plugin worker serves this entry, `/files` and the root from a copy shipped with the app when the plugin has none of its own. See [Data helpers](./data-helpers.md).
+For plugins whose data is files in the repository. Everything here runs in a worker and in a view alike, and only `editFile` does I/O, through the `host.fs` it is handed:
+
+| Export | What it does |
+| --- | --- |
+| `parseFrontmatter`, `stringifyFrontmatter` | YAML frontmatter in and out, with the body kept byte-for-byte. |
+| `updateFrontmatter` | Changes only the top-level keys you name and preserves every other byte; refuses an edit that would lose a tag or break an alias. |
+| `FrontmatterError` | What the frontmatter functions throw, with `code: "FRONTMATTER_INVALID"`, `line` and `column`. |
+| `parseJsonl`, `stringifyJsonlLine` | JSON Lines, with bad lines reported rather than thrown. |
+| `contentRevision` | The revision `fs.writeFile` compares, computed with Web Crypto. |
+| `editFile(host, path, transform)` | The read → transform → `writeFile({ expectedRevision })` → retry-on-conflict loop. |
+
+A zero-build worker imports it with no install — the plugin worker serves this entry, `/files` and the root from a copy shipped with the app when the plugin has none of its own. Signatures and behaviour are in [Data helpers](./data-helpers.md).
 
 ## Disposables
 
 Anything that takes a callback and returns a cleanup function follows the VS Code-style Disposable pattern. You can safely ignore the return value — the plugin's disposal cascade cleans everything up on unload. If you need explicit control (e.g., unsubscribe from a worktree change listener after a one-shot reaction), keep the reference and call it.
 
-**Throwing listeners are quarantined.** A listener callback you pass to `onDidChangeAgentState`, `storage.onDidChange`, or `settings.onDidChange` runs inside the host's event dispatch. If it throws (synchronously or by rejecting), the host logs the failure with a running counter (`1/3`, `2/3`, …) and keeps the subscription alive. After three _consecutive_ failures it auto-unsubscribes the listener so a broken or adversarial callback can't spam the log forever. A single successful invocation resets the counter to zero, so a listener that fails only intermittently is never removed. Dispatch is fire-and-forget — a throw never propagates back into the host's own work or another plugin's listeners.
+**Throwing listeners are quarantined in process.** A listener you pass to `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` or `storage.onDidChange` runs inside the host's event dispatch. If it throws (synchronously or by rejecting), an in-process host logs the failure with a running counter (`1/3`, `2/3`, …) and keeps the subscription alive; after three _consecutive_ failures it unsubscribes the listener so a broken callback can't spam the log forever. A single successful invocation resets the counter, so a listener that fails only intermittently is never removed. The worktree subscriptions, `fs.watch` callbacks and database `onDidChange` listeners are only logged, and so is every listener in a worker plugin, which never quarantines. Either way dispatch is fire-and-forget — a throw never propagates back into the host's own work or another plugin's listeners.
 
 See [Architecture → Lifecycle](./architecture.md#lifecycle) for how disposal works internally.
 
 ## Testing against a mock host
 
-`createMockHost` returns a `PluginHostApi` backed by in-memory state, so a unit test can run your `activate()` (and your handlers) without Electron and assert what it called. It validates argument shapes the way the real host does — `registerAction` descriptors (id grammar, kind, danger, required strings), `showToast` message/type/`durationMs` bounds, `setPanelBadge` shape, `postToPanel`/`broadcastToRenderer` channel format, `showQuickPick` item arrays, `fs.watch` arguments, and `git.commit`'s non-empty message — so a malformed call fails the test the way it would fail in the app. `fs.writeFile` honours the checked-write contract (`expectedRevision`, `TARGET_EXISTS`, `REVISION_MISMATCH`), `fs.readFileWithRevision` returns the revision a write accepts, `fs.appendFile` appends to the stored text, `fs.readdir` lists what earlier writes and `fs.mkdir` calls created, and `storage`'s `worktree` scope is isolated per active worktree.
-
-It ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK, which re-exports the implementation from `shared/testing/createMockHost.ts` along with its record types, and installs from npm with the rest of the package.
+`createMockHost(options?)` returns a `PluginHostApi & MockHostState` backed by in-memory state, so a unit test can run your `activate()` (and your handlers) without Electron and assert what it called. It ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK, which re-exports the implementation from `shared/testing/createMockHost.ts`, and installs from npm with the rest of the package.
 
 ```ts
 import { createMockHost } from "@daintreehq/plugin-sdk/testing";
@@ -1352,24 +1515,71 @@ await activate(host);
 expect(host.registeredActions).toHaveLength(1);
 expect(host.postToPanelCalls[0]).toMatchObject({ channel: "build-status" });
 
-// Capability gating matches production: getAgentState needs `agent:read`,
-// sendToActiveAgent needs `agent:input`.
+// Capability gating matches production for the agent APIs:
 await expect(host.sendToActiveAgent("hi")).rejects.toThrow(/PERMISSION_REQUIRED/);
 ```
 
-Pass `capabilities` to restrict the declared capability set (the default is permissive — `agent:read` + `agent:input`) and assert the `PERMISSION_REQUIRED` rejection a plugin missing one would hit; pass `hasActiveAgent: false` to assert the `NO_ACTIVE_AGENT` rejection from `sendToActiveAgent`. Pass `agents` to seed the panes `agents.list()` reports and `sendToAgent({ terminalId })` resolves against (a pane with `canDraft: false` refuses with its `draftRefusal`), and `simulateSendToAgentPick(terminalId | null)` to answer the picker; every call lands in `sentToAgentCalls` with its result. The recording arrays come in two shapes. `registeredActions`, `registeredForgeProviders`, `registeredFileDecorationProviders` and `registeredMcpTools` hold the **current** registrations, not a history: re-registering the same id replaces the earlier entry in place, and disposing a provider or MCP roster removes it. The call records — `registeredHandlers`, `postToPanelCalls`, `shownToasts`, `dispatchedActions`, `setPanelBadgeCalls`, `showQuickPickCalls`, `spawnCalls`, `fsWriteCalls`, `fsAppendCalls`, `fsMkdirCalls`, `gitCommitCalls`, and the rest — are append-only, in call order. `simulate*` helpers drive worktree, agent-state, panel-lifecycle, wake and `fs.watch` events into your subscribers.
+It validates argument shapes the way the real host does — `registerAction` descriptors (id grammar, kind, danger, required strings), `showToast` message/type/`durationMs` bounds, `setPanelBadge` shape, `postToPanel` channel format, `showQuickPick` item arrays, `fs.watch` options, `sendToAgent` text, title and ids, `documents.renderPdf` options (with the host's own validator), and `git.commit`'s non-empty message — so a malformed call fails the test the way it would fail in the app.
 
-**What the mock does not do.** It has no manifest model and no processes behind it, so a test that passes against it is not proof the real host will accept the plugin. The gaps, from `shared/testing/createMockHost.ts`:
+### Options
 
-- `process.spawn` records the call and returns an inert handle: `kill`, `restart`, `write` and `resize` are no-ops, and `onData` / `onExit` / `onCrash` never fire.
-- `fs` is an in-memory map of text. No path containment and no symlink modelling. A directory exists when `mkdir` made it (with every ancestor), when something stored sits beneath it, or when it is a worktree path you passed; `appendFile` refuses a directory target and a missing parent (except inside the mock's data dir — the `pluginDataDir` option, defaulting to the host's `~/.daintree/plugin-data/<pluginId>`), while `writeFile` does not check parents. `simulateFsWatch` reaches a watcher only for its watched path and that path's direct children — or anything beneath it for a `recursive` watch — and a `debounceMs` watcher receives one trailing callback on a timer, so drive it with fake timers.
-- `git.status` returns no files, `git.diff` returns `""`, `git.add` does nothing, and `git.commit` records the call and answers a synthetic `mock-N` hash.
-- The typed `registerHandler(channel, schema, handler)` overload discards the schema — nothing validates a payload against it.
-- `registerForgeProvider`, `registerFileDecorationProvider` and `mcp.registerTools` skip the manifest-declaration gates (`contributes.forgeProviders` / `fileDecorationProviders` / `agentMcp` and `mcp:expose`), `mcp.registerTools` neither enforces the roster budget nor compiles the schemas, so a recorded `execute` called with arguments its `inputSchema` forbids still runs where the real host would refuse the call, and `invalidateFileDecorations` accepts any non-empty scope, declared or not.
-- Only `getAgentState`, `agents.list`, `sendToActiveAgent` and `sendToAgent` are capability-gated, and `sendToAgent` raises no consent prompt and draws no picker. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system` and `documents` run without `shell:exec`, `fs:*`, `git:write` or any just-in-time consent.
-- `settings` only knows declared scopes when you pass `manifestSettings`, and even then only `get` honours them — `set` writes to whatever scope you name. `onDidChangeWorktrees` ignores `debounceMs`.
-- `logger.info` / `warn` / `error` are no-ops: nothing is printed and nothing is recorded.
-- There is no activation lifecycle: registrations made before a throwing `activate()` are not rolled back, and no `revoke` ever runs, so a handle keeps working after the point at which the real host would have cut it off.
+| Option | Default | Effect |
+| --- | --- | --- |
+| `pluginId` | `"test.mock"` | `host.pluginId`. A `project__{projectId}__{manifestId}` key makes it a project plugin, and `pluginInfo` / `panelKindId` follow from it with the real parsers. |
+| `projectRoot` | `/projects/{projectId}` | `pluginInfo.projectRoot` for a project `pluginId`; ignored for a global one. |
+| `pluginDataDir` | `~/.daintree/plugin-data/{pluginId}` | Inside it, `fs.writeFile` and `fs.appendFile` create missing parents, as the host does for your data directory. |
+| `capabilities` | `["agent:read", "agent:input"]` | The declared set the agent APIs check. |
+| `hasActiveAgent` | `true` | `false` makes `sendToActiveAgent` reject `NO_ACTIVE_AGENT`. |
+| `agents` | `[]` | The panes `agents.list()` returns and `sendToAgent({ terminalId })` resolves against. |
+| `activeWorktree`, `worktrees`, `worktreesResult` | `null`, `[]`, derived | What the worktree reads return. Worktree roots also count as existing directories in the mock `fs`, and the active one keys `"worktree"` storage. |
+| `manifestSettings` | none | Your `contributes.settings` declarations. With them, `get`, `set` and `onDidChange` follow declared scopes (a conflicting scope throws), `get` returns declared defaults, and `missingRequired` works; without them, scopes are whatever you pass and nothing is required. |
+| `settings`, `storage` | empty | Starting values per scope (`user` / `project` / `local`; `user` / `project` / `worktree`). |
+| `databases` | temp directory, any id | `{ directory?, declared?, journalMode? }` for `host.db`. Each id is a real SQLite file run through the same handle code as production, so migrations, `definitions`, readonly, `DB_*` codes and `onDidChange` behave for real. Pass `declared` to get `DB_NOT_DECLARED` for anything else. |
+| `dispatch` | built-in routing | A resolver for `host.dispatch`. By default a dispatch reaches your own registered actions and answers `NOT_FOUND` otherwise. |
+| `reloadPanel` | lifecycle-derived | A resolver for `host.reloadPanel`. By default the answer follows the phases you pushed with `simulatePanelLifecycleChange`. |
+
+There is no option to seed files; write them with `host.fs.writeFile` (which records the call in `fsWriteCalls`).
+
+### Recorders
+
+All are read-only arrays in call order.
+
+- **Current registrations**, not a history — re-registering the same id replaces the entry in place, and disposing a provider or MCP roster removes it: `registeredActions`, `registeredForgeProviders`, `registeredFileDecorationProviders`, `registeredMcpTools` (with each tool's `execute`, so a test can call a tool directly).
+- **Append-only call records:** `registeredHandlers`, `broadcastCalls`, `postToPanelCalls` (`panelId` is `null` for a broadcast), `shownToasts`, `dispatchedActions` (every call, including `settings.open`, recorded as `plugin.openSettings`), `sentToActiveAgentCalls`, `sentToAgentCalls` (`{ text, options, result }`), `invalidationCalls`, `setPanelBadgeCalls`, `reloadPanelCalls`, `showQuickPickCalls`, `showInputBoxCalls`, `showConfirmCalls`, `spawnCalls`, `fsWriteCalls`, `fsAppendCalls` (the appended text only), `fsMkdirCalls`, `gitCommitCalls`, `clipboardWriteCalls`, `clipboardWriteImageCalls` (byte lengths), `systemOpenPathCalls`, `systemShowItemCalls`, `documentsRenderPdfCalls`.
+
+Calls that fail validation, and prompts or `sendToAgent` calls whose signal was already aborted, are not recorded.
+
+### Driving it
+
+| Method | Effect |
+| --- | --- |
+| `simulateActiveWorktreeChange(snapshot \| null)` | Sets the active worktree and notifies `onDidChangeActiveWorktree`. |
+| `simulateWorktreesChange(snapshots)` | Replaces the list and notifies `onDidChangeWorktrees` (the mock ignores `debounceMs`). |
+| `simulateWorktreesResult(result \| null)` | Forces what `getWorktreesResult()` answers; `null` goes back to deriving it. Notifies nobody. |
+| `simulateAgentStateChange(snapshot)` | Sets what `getAgentState()` returns and notifies `onDidChangeAgentState`. |
+| `simulateAgentsChange(panes)` | Replaces what `agents.list()` returns. |
+| `simulateSendToAgentPick(terminalId \| null)` | What the picker "chooses" when `sendToAgent` has no `terminalId`; `null` (the default) cancels. A pane with `canDraft: false` refuses with its `draftRefusal`, an unknown one with `unknown-terminal`. |
+| `simulatePanelLifecycleChange(event)` | Notifies `onDidChangePanelLifecycle` and updates the phases `reloadPanel` reads. |
+| `simulateSystemWake(event)` | Notifies `onDidWake`. |
+| `simulateFsWatch(changedPath)` | Fires the watchers whose path is `changedPath` or its parent — or any ancestor, for a `recursive` watch. A `debounceMs` watcher gets one trailing callback on a real timer, so drive it with fake timers. |
+| `simulateQuickPickResponse(result)`, `simulateInputBoxResponse(result)`, `simulateConfirmResponse(result)` | What the next prompts resolve (`undefined`, `undefined`, `false` by default). |
+| `setDispatchResult(actionId, result)` | A fixed `dispatch` answer for one id, ahead of the `dispatch` option. |
+| `seedActionCatalog(entries)` | Replaces the catalog behind `actions.list` / `get` / `canDispatch`. |
+
+### What the mock does not do
+
+It has no manifest model and no processes behind it, so a test that passes against it is not proof the real host will accept the plugin. The gaps, from `shared/testing/createMockHost.ts`:
+
+- **Capabilities and consent.** Only `getAgentState`, `agents.list`, `sendToActiveAgent` and `sendToAgent` check `capabilities`. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system`, `documents`, `db` and `mcp` run without their capabilities. No just-in-time consent is modelled anywhere, and `sendToAgent` draws no picker.
+- **`fs`** is an in-memory map of text with no containment and no symlinks. A directory exists when `mkdir` made it (with every ancestor), when something stored sits beneath it, or when it is a worktree root; a path holding a file is never a directory. `appendFile` refuses a directory target and a missing parent (outside `pluginDataDir`); `writeFile` does not check parents. A missing file rejects with an `ENOENT:` message but no `err.code`. `stat` reports `isDirectory` only for `mkdir`-made directories and never throws; `readdir` of a missing directory resolves `[]`; `size` in a detailed listing is the string length, not bytes, and `mtimeMs` is `0`. `watch` validates `allowMissing` but otherwise ignores it.
+- **`db`** always reports `location: "local"`, and `backup` approves any absolute destination — the fs gate is not modelled.
+- **`documents.renderPdf`** renders nothing: it validates the options, requires an in-memory `htmlPath`, and writes a small `%PDF-1.4` placeholder to `outputPath` so a plugin that reads or lists its export sees a file. That write is not in `fsWriteCalls`, and the parent directory is not checked.
+- **`process.spawn`** records the call and returns an inert handle: `kill`, `restart`, `write` and `resize` are no-ops, and `onData` / `onExit` / `onCrash` never fire.
+- **`git.status`** returns no files, `git.diff` returns `""`, `git.add` does nothing, and `git.commit` answers a synthetic `mock-N` hash.
+- **Registration gates.** The typed `registerHandler(channel, schema, handler)` overload discards the schema, so nothing validates a payload against it. `registerHandler` does not refuse a colon in the channel (only `postToPanel` does), so pin that rule with your own test. `registerForgeProvider`, `registerFileDecorationProvider` and `mcp.registerTools` skip the manifest-declaration gates; `mcp.registerTools` neither enforces the roster budget nor compiles the schemas; `invalidateFileDecorations` accepts any non-empty scope.
+- **Subscriptions.** Nothing is replayed on subscribe, `onDidChangeWorktrees` ignores `debounceMs`, and a throwing listener is never quarantined.
+- **`logger`** calls are no-ops: nothing is printed and nothing is recorded.
+- **Lifecycle.** Registrations made before a throwing `activate()` are not rolled back, and no revoke ever runs, so a handle keeps working after the point at which the real host would have cut it off.
 
 ## What's not exposed
 
@@ -1391,3 +1601,23 @@ User-installed plugins — whether sideloaded, installed from a `.dntr` or URL, 
 You should still keep teardown-able work inside `activate()` and its returned cleanup rather than module scope — that's the disposal contract — but you are not paying a per-reload memory penalty for getting it wrong, because the worker is discarded wholesale.
 
 The one behavior to design around: **`registerForgeProvider` is a no-op out-of-process.** A forge provider's `parseRemote` and URL builders are synchronous and can't cross the async MessagePort, so forge providers are usable only by Daintree's **built-in** plugins — the exception to the worker model. Built-ins activate in-process via `import()` because they're trusted, app-bundled, and never unloaded. (An in-process built-in module is never evicted from V8's cache, but since built-ins are never uninstalled that residue is inert.) See [Architecture → Activation](./architecture.md#activation).
+
+### Worker and in-process differences
+
+The worker host implements the same `PluginHostApi`, but some checks run in main, across the port, rather than at your call site. What a worker plugin sees differently from a built-in:
+
+- **Registration errors arrive late.** A worker checks only the shape of a registration locally (non-empty ids and channels, function handlers, the MCP roster). The deeper checks — a colon in a `registerHandler` channel, a typed channel's `requires` capabilities, an action descriptor's grammar, an undeclared file-decoration provider or `agentMcp` endpoint, `mcp:expose` — run in main and fail the activation by name instead of throwing where you called. A `try`/`catch` around the `await` does not see them.
+- **Some runtime validation only logs.** An invalid `setPanelBadge` shape or an undeclared `invalidateFileDecorations` scope resolves in a worker and is logged in main; in process it rejects. An empty `panelId` rejects on both.
+- **A failed subscription is silent.** `settings.onDidChange` / `storage.onDidChange` with a conflicting scope, or `onDidChangeAgentState` without `agent:read`, throws synchronously in process. In a worker only the revoked-host check throws; the rest is logged in main and you get a disposer whose callback never fires.
+- **Arguments must structured-clone.** A worker sends every call over a `MessagePort`. A call that returns a Promise rejects with `DataCloneError` on an uncloneable argument, but the fire-and-forget ones — `logger.*`, `postToPanel`, `broadcastToRenderer`, `setPanelBadge`, the `register*` calls — throw it synchronously, `logger` included. In process, `logger` coerces an unserializable `fields` payload to a string and `showQuickPick` narrows items to their declared fields.
+- **Errors are rebuilt.** Only `message`, `code` and `currentRevision` survive the port (see [Errors](#errors-and-error-codes)); a failed `appendFile`'s bytes-written count does not. In the other direction, an error your action, handler or provider throws reaches main as its message only.
+- **Aborts settle locally.** For `fs.*`, `git.*` and `getWorktreeStatus` the worker rejects with an `AbortError` the moment the signal fires, while main may still finish the operation — a `git.add` or `git.commit` can land after you saw the abort. A prompt aborted in a worker resolves its dismiss value at once. `sendToAgent` is the exception: an abort only asks main to dismiss an unanswered picker, and the call resolves with what actually happened. An already-aborted signal short-circuits in a worker before any validation, capability check or consent; in process those still run first.
+- **After unload.** A worker's pending and later calls reject with `Plugin dev worker disposed`, except the ones with documented fallbacks (`getWorktreesResult`, `reloadPanel`, `actions.*`, `agents.list`, `sendToAgent`, the prompts), which answer them on both hosts. In process, the reads degrade to `null` / `[]` and `showToast` / `sendToActiveAgent` become no-ops.
+- **Listeners are never quarantined** in a worker; each throw is logged ([Disposables](#disposables)).
+- **`pluginInfo`** is a structured-cloned copy in a worker, not frozen.
+- **`host.db`** resolves the location and approves a backup destination in main, but opens `node:sqlite` in the worker, so queries, `transaction`, `onDidChange` and the backup's snapshot never cross the port.
+- **`host.fs.watch`** runs the watcher in main and delivers events over the port.
+- **`registerForgeProvider`** is a no-op that logs a warning (above).
+- **Built-in only:** `fsForWorkspace` and `fs.readFileBounded` exist on the built-in host type and never in a worker.
+
+The worker runs with a 256 MB heap, a minimal allowlisted environment rather than Daintree's own, and its working directory set to the plugin's directory.

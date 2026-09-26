@@ -109,23 +109,6 @@ declare function stringifyJsonlLine(value: unknown): string;
 declare function contentRevision(content: string | Uint8Array): Promise<string>;
 
 /**
- * Persistent, plugin-scoped key/value settings exposed on
- * {@link PluginHostApi.settings}. Values are stored as JSON at
- * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
- * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope),
- * with `chmod 0o600` applied on POSIX. Settings declared `type: "secret"` are
- * encrypted at rest through the OS keychain (Electron `safeStorage`), and are
- * never stored under the project root: a project-scoped secret lives in this
- * machine's per-project local file instead (see {@link PluginSettingsScope}).
- * With no keychain available a secret write is refused rather than stored in
- * plaintext. Non-secret values are always plaintext JSON — do not store
- * credentials in non-secret keys.
- *
- * `scope` defaults to `"user"`. Project scope resolves the active project at
- * call time, so it tracks project switches: `get` returns `undefined` and `set`
- * throws when no project is active.
- */
-/**
  * Options accepted by long-running host calls (filesystem reads/writes, git
  * reads and mutations, the on-demand worktree-status accessor). Carries an
  * optional {@link AbortSignal} so a plugin can cancel a call it no longer needs

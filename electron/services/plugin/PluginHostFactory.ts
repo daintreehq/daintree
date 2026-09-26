@@ -2409,9 +2409,9 @@ function sha256Hex(bytes: Uint8Array): string {
 }
 
 /**
- * A `host.fs` target refusal (#12323). The code rides on the error object for
- * in-process callers and prefixes the message for callers behind a boundary
- * that keeps only the message.
+ * A `host.fs` target refusal (#12323). The code rides on the error object —
+ * in process and, since the worker port carries it, in a plugin worker — and
+ * also prefixes the message for the renderer bridge, which keeps only that.
  */
 function fsTargetError(code: PluginFsWriteErrorCode, message: string): Error & { code: string } {
   const error = new Error(`${code}: ${message}`) as Error & { code: string };

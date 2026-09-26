@@ -120,14 +120,16 @@ export const PanelContributionObjectSchema = z
   .strict();
 
 /**
- * The validated `contributes.panels` entry: the object base plus a cross-field
- * rule. `hasPty: true` with an explicit `dockable: false` is rejected — a
+ * The validated `contributes.panels` entry: the object base plus cross-field
+ * rules. `hasPty: true` with an explicit `dockable: false` is rejected — a
  * PTY-backed plugin kind renders through `TerminalPane` and its kind collapses
  * to the built-in dockable `terminal` at creation (`addPanel.ts`), so the
- * opt-out could never be honored and would silently vanish. Plugin PTY kinds
- * are unsupported in v1 anyway; surface the conflict to the author at
- * manifest-write time instead of swallowing it at runtime (#11375). `hasPty`
- * has already defaulted to `false` here, so an omitted `hasPty` never trips it.
+ * opt-out could never be honored and would silently vanish; surface the
+ * conflict to the author at manifest-write time instead of swallowing it at
+ * runtime (#11375). `hasPty` with menu entries is rejected for the same reason: a
+ * PTY kind uses the terminal menus, where the entries would never show.
+ * `hasPty` has already defaulted to `false` here, so an omitted `hasPty` never
+ * trips either.
  */
 export const PanelContributionSchema = PanelContributionObjectSchema.superRefine((panel, ctx) => {
   if (panel.hasPty === true && panel.dockable === false) {
