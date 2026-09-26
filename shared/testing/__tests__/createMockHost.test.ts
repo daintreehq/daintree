@@ -1526,6 +1526,27 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(host.fsWriteCalls.map((c) => c.path)).toEqual(["/data/invoice.html"]);
     });
 
+    it("validates options exactly as the real host does", async () => {
+      const host = createMockHost();
+      await expect(
+        host.documents.renderPdf({ html: "<p/>", outputPath: "relative/a.pdf" })
+      ).rejects.toThrow(/outputPath must be an absolute path/);
+      await expect(
+        host.documents.renderPdf({
+          html: "<p/>",
+          outputPath: "/data/a.pdf",
+          pageSize: "B5" as never,
+        })
+      ).rejects.toThrow(/pageSize must be one of/);
+      await expect(
+        host.documents.renderPdf({
+          html: "x".repeat(5 * 1024 * 1024 + 1),
+          outputPath: "/data/a.pdf",
+        })
+      ).rejects.toThrow(/byte limit/);
+      expect(host.documentsRenderPdfCalls).toEqual([]);
+    });
+
     it("refuses the argument shapes the real host refuses, recording nothing", async () => {
       const host = createMockHost();
       await expect(host.documents.renderPdf({ outputPath: "/data/a.pdf" })).rejects.toThrow(

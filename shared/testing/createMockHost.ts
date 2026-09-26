@@ -15,6 +15,7 @@ import {
 } from "../types/plugin.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
+import { validateRenderPdfOptions } from "../utils/pluginPdfOptions.js";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { join as joinPath } from "node:path";
@@ -1918,21 +1919,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     // No Chromium here, so nothing is rendered: the call is recorded and a
     // placeholder PDF lands in the in-memory fs, so a plugin that reads,
-    // lists or opens its export afterwards sees a file. Only the argument
-    // shape and an in-memory `htmlPath` are checked; the full validation,
+    // lists or opens its export afterwards sees a file. Options go through
+    // the real host's validator and an `htmlPath` must exist in the mock fs;
     // containment and gating live in the real host and are tested there.
     documents: {
       async renderPdf(options) {
-        const fail = (message: string): never => {
-          throw new Error(`VALIDATION: mock documents.renderPdf: ${message}`);
-        };
-        if (typeof options !== "object" || options === null) fail("options must be an object");
-        if ((options.html === undefined) === (options.htmlPath === undefined)) {
-          fail("exactly one of html or htmlPath is required");
-        }
-        if (typeof options.outputPath !== "string" || !/\.pdf$/i.test(options.outputPath)) {
-          fail("outputPath must end in .pdf");
-        }
+        // The real host's own validator, so a plugin's export test fails on
+        // exactly what Daintree refuses.
+        validateRenderPdfOptions(pluginId, options);
         if (options.htmlPath !== undefined && !fsFiles.has(options.htmlPath)) {
           throw new Error(`INVALID_PATH: mock fs has no file "${options.htmlPath}"`);
         }

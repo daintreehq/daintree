@@ -254,6 +254,22 @@ describe("createDocumentRequestFilter", () => {
     expect(await allow(`${pathToFileURL(root).href}/../secret.txt`)).toBe(false);
   });
 
+  it("admits the snapshot free once, then charges repeat requests for it against the budget", async () => {
+    const { root, main } = await setup();
+    const size = (await fs.stat(main)).size;
+    const allow = createDocumentRequestFilter({
+      mainFile: main,
+      resourceRoot: root,
+      maxResourceBytes: size * 2,
+    });
+    const url = pathToFileURL(main).href;
+    expect(await allow(url)).toBe(true);
+    // Re-requested as a subresource under fresh query strings, it pays each time.
+    expect(await allow(`${url}?a`)).toBe(true);
+    expect(await allow(`${url}?b`)).toBe(true);
+    expect(await allow(`${url}?c`)).toBe(false);
+  });
+
   it("cancels a missing file rather than guessing where it would resolve", async () => {
     const { root, main } = await setup();
     const allow = createDocumentRequestFilter({ mainFile: main, resourceRoot: root });
@@ -312,6 +328,17 @@ describe("prepareSnapshotHtml", () => {
     expect(out.startsWith(`<meta charset="utf-8">`)).toBe(true);
     expect(out).toContain(`<base href="file:///docs/invoices/">`);
     expect(out.indexOf("<base")).toBeLessThan(out.indexOf("<p>x</p>"));
+  });
+
+  it("drops a link whose rel hides a hint behind character references", () => {
+    const html = [
+      `<link rel="pre&#99;onnect" href="https://evil.example">`,
+      `<link rel="dns&#x2d;prefetch" href="//evil.example">`,
+      `<link rel="stylesheet" href="a.css">`,
+    ].join("");
+    const out = prepareSnapshotHtml(html, null);
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain(`<link rel="stylesheet" href="a.css">`);
   });
 
   it("strips resource hints the request filter cannot see and keeps stylesheets", () => {
