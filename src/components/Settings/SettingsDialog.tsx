@@ -4,11 +4,11 @@ import {
   useState,
   useEffect,
   useEffectEvent,
-  useDeferredValue,
   useLayoutEffect,
   useMemo,
   useRef,
   useContext,
+  memo,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { LayoutGroup, m } from "framer-motion";
@@ -50,6 +50,7 @@ import {
   projectTabIcons,
   getSettingsNavGroups,
   preloadAllSettingsTabs,
+  isSettingsTabLoaded,
   scopeForTab,
   contentScopeForTab,
   isSettingsTab,
@@ -77,6 +78,7 @@ import {
   SettingsValidationContext,
 } from "./SettingsValidationRegistry";
 import { SettingsFlushProvider, SettingsFlushContext } from "./SettingsFlushRegistry";
+import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -257,7 +259,6 @@ function SettingsDialogInner({
   };
   const [activeSubtabs, setActiveSubtabs] = useState<Partial<Record<SettingsTab, string>>>({});
   const [searchQuery, setSearchQuery] = useState("");
-  const deferredQuery = useDeferredValue(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const setPortalOpen = usePortalStore((state) => state.setOpen);
   const setTab = useSettingsStore((s) => s.setTab);
@@ -503,23 +504,24 @@ function SettingsDialogInner({
     onClose();
   };
 
+  // Filtered in the keystroke's own render, not behind useDeferredValue: the
+  // index is ~150 entries and a pass costs about a millisecond, so deferring
+  // it only painted the search mode a frame before its results.
   const searchResults = useMemo(
     () =>
-      filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, {
+      filterSettings(SETTINGS_SEARCH_INDEX, searchQuery, {
         modifiedTabs,
         modifiedSettingIds,
         scope: activeScope,
         hasProject,
       }),
-    [deferredQuery, modifiedTabs, modifiedSettingIds, activeScope, hasProject]
+    [searchQuery, modifiedTabs, modifiedSettingIds, activeScope, hasProject]
   );
 
-  const cleanSearchQuery = useMemo(() => parseQuery(deferredQuery).cleanQuery, [deferredQuery]);
+  const cleanSearchQuery = useMemo(() => parseQuery(searchQuery).cleanQuery, [searchQuery]);
 
   const matchCounts = useMemo(() => countMatchesPerTab(searchResults), [searchResults]);
 
-  // Use live searchQuery for mode switching to avoid deferred split-brain;
-  // deferredQuery drives the expensive filtering computation only.
   const isSearching = searchQuery.trim().length > 0;
 
   const [panelSettled, markPanelInteracted] = usePanelSettled(
@@ -564,7 +566,7 @@ function SettingsDialogInner({
 
   useEffect(() => {
     setActiveResultIndex(-1);
-  }, [deferredQuery]);
+  }, [searchQuery]);
 
   const searchComboboxAria = settingsSearchComboboxAria(
     searchResults,
@@ -609,11 +611,18 @@ function SettingsDialogInner({
 
   const handleNavSelect = (tab: SettingsTab) => {
     setFocusedNavTab(null);
+    const cannotSuspend = visitedTabs.has(tab) || isSettingsTabLoaded(tab);
     markTabVisited(tab);
     setSearchQuery("");
     setScrollToSection(null);
     setHiddenSettingBanner(null);
-    startTransition(() => setActiveTab(tab));
+    // A visited tab only un-hides, and a first visit whose chunk has already
+    // loaded (the dialog preloads every tab at idle) mounts without
+    // suspending — so either switches in the click's own commit. A transition
+    // there only painted the old tab for one more frame. A cold chunk keeps
+    // the transition, which holds the current tab instead of flashing blank.
+    if (cannotSuspend) setActiveTab(tab);
+    else startTransition(() => setActiveTab(tab));
   };
 
   const handleScopeSwitch = (scope: SettingsScope) => {
@@ -905,7 +914,7 @@ function SettingsDialogInner({
               <div role="region" aria-label="Search results">
                 <SearchResults
                   results={searchResults}
-                  query={deferredQuery}
+                  query={searchQuery}
                   cleanQuery={cleanSearchQuery}
                   onResultClick={handleResultClick}
                   activeIndex={activeResultIndex}
@@ -1012,7 +1021,12 @@ function SettingsDialogInner({
                             entry={entry as LazySettingsTabEntry}
                             activeSubtabs={activeSubtabs}
                             setActiveSubtabs={setActiveSubtabs}
-                            onClose={handleClose}
+                            // Only the tab that uses it gets it: `handleClose` is
+                            // rebuilt with the project form, and handing it to
+                            // every tab would defeat LazyTabContent's memo.
+                            onClose={
+                              (entry as LazySettingsTabEntry).needsOnClose ? handleClose : undefined
+                            }
                             onSettingsChange={onSettingsChange}
                             isActive={isActive && !isSearching}
                             scrollToSectionId={scrollToSection}
@@ -1070,7 +1084,12 @@ function SettingsDialogInner({
   );
 }
 
-function LazyTabContent({
+// Memoized: the panel list is rebuilt whenever search starts or the settled
+// state flips, and without this every visited tab re-rendered on the first
+// keystroke of a search even though only the active one changes.
+const LazyTabContent = memo(LazyTabContentImpl);
+
+function LazyTabContentImpl({
   entry,
   activeSubtabs,
   setActiveSubtabs,
@@ -1083,7 +1102,7 @@ function LazyTabContent({
   entry: LazySettingsTabEntry;
   activeSubtabs: Partial<Record<SettingsTab, string>>;
   setActiveSubtabs: React.Dispatch<React.SetStateAction<Partial<Record<SettingsTab, string>>>>;
-  onClose: () => void;
+  onClose?: () => void;
   onSettingsChange?: () => void;
   isActive: boolean;
   scrollToSectionId: string | null;
@@ -1872,6 +1891,7 @@ export function SearchResults({
   projectLabel,
 }: SearchResultsProps) {
   const activeRef = useRef<HTMLButtonElement>(null);
+  const renderLimit = useProgressiveRenderLimit(results.length, query, activeIndex);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -1922,7 +1942,7 @@ export function SearchResults({
         aria-label="Search results"
         className="space-y-1"
       >
-        {results.map((result, index) => {
+        {results.slice(0, renderLimit).map((result, index) => {
           const crumbs = resultBreadcrumb(result);
           return (
             <button

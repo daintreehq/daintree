@@ -6,6 +6,16 @@ export interface UseAnimatedPresenceOptions {
   onAnimateOut?: () => void;
   animationDuration?: number;
   minimumDisplayDuration?: number;
+  /**
+   * Present and visible in the same render that opens. The default flips
+   * `shouldRender` from an effect and `isVisible` on the following animation
+   * frame, so the enter transition has a rendered "from" state to leave — at
+   * the cost of one or two frames in which the opened surface shows nothing.
+   * A consumer that opts in declares its enter "from" state with
+   * `@starting-style` (Tailwind `starting:`) instead, and the transition
+   * starts in the first frame. Not combinable with `minimumDisplayDuration`.
+   */
+  syncEnter?: boolean;
 }
 
 export interface UseAnimatedPresenceReturn {
@@ -18,6 +28,7 @@ export function useAnimatedPresence({
   onAnimateOut,
   animationDuration,
   minimumDisplayDuration,
+  syncEnter = false,
 }: UseAnimatedPresenceOptions): UseAnimatedPresenceReturn {
   const [isVisible, setIsVisible] = useState(false);
   const [shouldRender, setShouldRender] = useState(false);
@@ -65,6 +76,7 @@ export function useAnimatedPresence({
         minDurationTimeoutRef.current = null;
       }
       setShouldRender(true);
+      if (syncEnter) return cleanup;
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
         if (minimumDisplayDurationRef.current != null) {
@@ -112,7 +124,12 @@ export function useAnimatedPresence({
     }
 
     return cleanup;
-  }, [isOpen, cleanup]);
+  }, [isOpen, cleanup, syncEnter]);
 
+  if (syncEnter) {
+    // Keep rendering through the exit: `shouldRender` state stays true until
+    // the close timer clears it.
+    return { isVisible: isOpen, shouldRender: isOpen || shouldRender };
+  }
   return { isVisible, shouldRender };
 }

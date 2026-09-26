@@ -272,6 +272,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -872,4 +873,8 @@ describe("ReviewHub", () => {
       expect(screen.queryByTestId("conflict-panel")).toBeNull();
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

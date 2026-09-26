@@ -58,6 +58,64 @@ interface LocalCommitsDropdownProps {
 }
 
 const PAGE_SIZE = 30;
+
+const HASH_QUERY_RE = /^[0-9a-f]{4,40}$/i;
+
+// Last unsearched first page per `cwd branch` scope. The commits pill unmounts
+// its content on close, so without this every open waited on a fresh git read
+// before showing a row; with it the reopen paints the last page at once and
+// the open-time fetch revalidates it in place.
+const firstPageCache = new Map<string, GitCommit[]>();
+const FIRST_PAGE_CACHE_LIMIT = 16;
+
+/** Test seam: the cache is module state and would otherwise leak across cases. */
+export function resetCommitsFirstPageCacheForTests(): void {
+  firstPageCache.clear();
+}
+
+function rememberFirstPage(scopeKey: string, items: GitCommit[]): void {
+  firstPageCache.delete(scopeKey);
+  firstPageCache.set(scopeKey, items);
+  if (firstPageCache.size > FIRST_PAGE_CACHE_LIMIT) {
+    const oldest = firstPageCache.keys().next().value;
+    if (oldest !== undefined) firstPageCache.delete(oldest);
+  }
+}
+
+function commitMatchesQuery(commit: GitCommit, lowerQuery: string): boolean {
+  if (HASH_QUERY_RE.test(lowerQuery) && commit.hash.toLowerCase().startsWith(lowerQuery)) {
+    return true;
+  }
+  return (
+    commit.message.toLowerCase().includes(lowerQuery) ||
+    (commit.body?.toLowerCase().includes(lowerQuery) ?? false)
+  );
+}
+
+/**
+ * Rows to show while a typed query waits out the debounce. The server search
+ * (`git log --grep -i`, plus a hash-prefix lookup) is the answer; this answers
+ * the keystroke in the meantime from commits already loaded — the unsearched
+ * first page and the current results — so the list narrows as the user types
+ * instead of sitting still for the debounce and the git round trip. It never
+ * invents an empty state: with no local match the current rows stay until the
+ * server says otherwise.
+ */
+function previewCommits(query: string, current: GitCommit[], unfiltered: GitCommit[]): GitCommit[] {
+  if (!query) return unfiltered.length > 0 ? unfiltered : current;
+  const lowerQuery = query.toLowerCase();
+  const seen = new Set<string>();
+  const matches: GitCommit[] = [];
+  for (const commit of [...unfiltered, ...current]) {
+    if (seen.has(commit.hash)) continue;
+    seen.add(commit.hash);
+    if (commitMatchesQuery(commit, lowerQuery)) matches.push(commit);
+  }
+  if (matches.length > 0) return matches;
+  // An empty `current` can be an older query's answer landing mid-typing; the
+  // unsearched page says less that is wrong about the query being typed.
+  return current.length > 0 ? current : unfiltered;
+}
 const COPY_FEEDBACK_MS = 2000;
 // The push range read is capped in main; the rows it names are the only ones
 // this list marks. A row outside it is never called "pushed".
@@ -466,7 +524,18 @@ export function LocalCommitsDropdown({
   footerAction,
 }: LocalCommitsDropdownProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [data, setData] = useState<GitCommit[]>([]);
+  const [fetched, setFetched] = useState<GitCommit[]>(
+    () => firstPageCache.get(`${cwd} ${branch ?? ""}`) ?? []
+  );
+  // The last unsearched first page, kept so a search preview and a cleared
+  // query can answer from it without waiting on git.
+  const [unfiltered, setUnfiltered] = useState<GitCommit[]>(
+    () => firstPageCache.get(`${cwd} ${branch ?? ""}`) ?? []
+  );
+  // True while the rows on screen are only the cache seed — no read has
+  // confirmed them since this mount. A failed read drops a seed rather than
+  // leave stale rows standing in for the error.
+  const rowsAreSeedRef = useRef(firstPageCache.has(`${cwd} ${branch ?? ""}`));
   const [skip, setSkip] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -489,6 +558,13 @@ export function LocalCommitsDropdown({
   const loadingMoreRef = useRef(false);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
+  // The query `fetched` answers. The preview holds until rows for the typed
+  // query have actually arrived — not merely until the debounce fires, which
+  // would put the previous query's rows back on screen for the git round trip.
+  const [fetchedQuery, setFetchedQuery] = useState("");
+  const pendingQuery = searchQuery.trim();
+  const isSearchPending = pendingQuery !== fetchedQuery;
+  const data = isSearchPending ? previewCommits(pendingQuery, fetched, unfiltered) : fetched;
   const showLoadingMore = useDeferredLoading(loadingMore, UI_DOHERTY_THRESHOLD);
   // A search or retry keeps the previous rows on screen while it runs, so the
   // wait needs its own mark once it outlasts the Doherty gate.
@@ -605,9 +681,15 @@ export function LocalCommitsDropdown({
         if (gen !== fetchGenRef.current) return;
 
         if (append) {
-          setData((prev) => [...prev, ...result.items]);
+          setFetched((prev) => [...prev, ...result.items]);
         } else {
-          setData(result.items);
+          setFetched(result.items);
+          setFetchedQuery(debouncedSearch.trim());
+          rowsAreSeedRef.current = false;
+          if (!debouncedSearch && currentSkip === 0) {
+            setUnfiltered(result.items);
+            rememberFirstPage(`${cwd} ${branch ?? ""}`, result.items);
+          }
         }
         setSkip(currentSkip + result.items.length);
         setHasMore(result.hasMore);
@@ -617,6 +699,13 @@ export function LocalCommitsDropdown({
         if (append) {
           setLoadMoreError(message);
         } else {
+          if (rowsAreSeedRef.current) {
+            rowsAreSeedRef.current = false;
+            setFetched([]);
+            setUnfiltered([]);
+          }
+          // The failure answers this query: stop previewing so the error shows.
+          setFetchedQuery(debouncedSearch.trim());
           setError(message);
         }
       } finally {
@@ -672,7 +761,9 @@ export function LocalCommitsDropdown({
     if (!open) return;
 
     if (lastScopeRef.current !== null && lastScopeRef.current !== scopeKey) {
-      setData([]);
+      setFetched([]);
+      setUnfiltered([]);
+      setFetchedQuery("");
     }
     lastScopeRef.current = scopeKey;
 

@@ -100,6 +100,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -341,4 +342,8 @@ describe("ReviewHub stale visual", () => {
     const reservation = screen.getByTestId("review-hub-body-reservation");
     expect([...reservation.classList].some((c) => /^min-h-/.test(c))).toBe(false);
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

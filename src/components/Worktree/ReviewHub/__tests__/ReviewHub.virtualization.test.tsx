@@ -276,6 +276,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 /**
  * A `Virtuoso` that mounts every row but reports an arbitrary rendered range.
@@ -744,4 +745,8 @@ describe("ReviewHub windowed file list (#12241)", () => {
     // the row menu ever opened.
     await waitFor(() => screen.getByRole("menuitem", { name: /open diff/i }));
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

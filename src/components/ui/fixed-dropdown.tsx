@@ -79,6 +79,7 @@ export function FixedDropdown({
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: open,
     animationDuration: getUiTransitionDuration("exit"),
+    syncEnter: true,
   });
   const overlayStackLength = useUIStore((state) => state.overlayStack.length);
   const [overlayGraceActive, setOverlayGraceActive] = useState(false);
@@ -265,6 +266,9 @@ export function FixedDropdown({
         // cover — list them explicitly or the rise/zoom snaps.
         "transition-[opacity,translate,scale]",
         "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none motion-reduce:scale-none",
+        // Enter "from" state: @starting-style covers both a fresh mount and
+        // the Activity display:none → shown flip of a keepMounted reopen.
+        "starting:opacity-0 starting:-translate-y-0.5 starting:scale-[0.99]",
         isVisible
           ? "opacity-100 translate-y-0 scale-100"
           : "opacity-0 -translate-y-0.5 scale-[0.99]",

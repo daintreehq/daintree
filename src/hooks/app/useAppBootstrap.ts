@@ -28,7 +28,14 @@ import {
   preloadPanelPalette,
   preloadSendToAgentPalette,
   preloadQuickCreatePalette,
+  preloadPanelDialogHost,
+  preloadWorktreeOverviewModal,
+  preloadPilotView,
+  preloadShortcutReferenceDialog,
+  preloadThemePalette,
+  preloadPortalDock,
 } from "@/lazyPanels";
+import { preloadCommonPanes } from "@/panels/registry";
 
 /**
  * Composes the app's cold-start orchestration: batched boot payload, crash
@@ -149,6 +156,17 @@ export function useAppBootstrap() {
       void preloadPanelPalette();
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
+      // Everyday surfaces whose first open otherwise suspends into React's
+      // 300ms reveal throttle: the panel dialog host (review hub, file and
+      // diff dialogs), the pane kinds, overview, all-agents view, shortcut
+      // reference, theme picker and portal.
+      preloadPanelDialogHost().catch(() => {});
+      preloadCommonPanes().catch(() => {});
+      preloadWorktreeOverviewModal().catch(() => {});
+      preloadPilotView().catch(() => {});
+      preloadShortcutReferenceDialog().catch(() => {});
+      preloadThemePalette().catch(() => {});
+      preloadPortalDock().catch(() => {});
       // Warm the shared Radix overlay primitives chunk (`radix-deferred`) so the
       // ProjectSwitcherPalette popover and context menus are ready on first
       // interaction in a freshly loaded project view. Otherwise this chunk is
