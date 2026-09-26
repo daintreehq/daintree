@@ -440,7 +440,8 @@ export class PluginDevWorkerHostProxy {
     method: PluginHostCallMethod,
     params: unknown,
     graceValue: T,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { hostAnswersAbort?: boolean }
   ): Promise<T> {
     if (this.disposed) {
       return Promise.resolve(graceValue);
@@ -450,14 +451,21 @@ export class PluginDevWorkerHostProxy {
     }
     // Cancellation settles the grace value inside `call`'s abort branch, so a
     // real validation or transport error is never rewritten into a dismissal.
-    return this.call<T>(method, params, signal, { value: graceValue });
+    return this.call<T>(method, params, signal, { value: graceValue }, options?.hostAnswersAbort);
   }
 
+  /**
+   * `hostAnswersAbort` is for a call whose outcome main decides even after a
+   * cancel: the abort still reaches main as a `host-cancel`, but the caller
+   * keeps waiting for main's answer instead of being settled here, because
+   * main may already have acted and reports what actually happened.
+   */
   private call<T>(
     method: PluginHostCallMethod,
     params: unknown,
     signal?: AbortSignal,
-    grace?: { value: unknown }
+    grace?: { value: unknown },
+    hostAnswersAbort = false
   ): Promise<T> {
     if (this.disposed) {
       return Promise.reject(new Error("Plugin dev worker disposed"));
@@ -482,6 +490,15 @@ export class PluginDevWorkerHostProxy {
         onAbort = (): void => {
           const pending = this.pendingCalls.get(requestId);
           if (!pending) return;
+          if (hostAnswersAbort) {
+            try {
+              this.post({ type: "host-cancel", requestId });
+            } catch {
+              // best-effort — the call itself is still in flight, and its
+              // answer (or dispose's grace value) still settles the caller
+            }
+            return;
+          }
           this.pendingCalls.delete(requestId);
           cleanup();
           try {
@@ -947,12 +964,16 @@ export class PluginDevWorkerHostProxy {
       agents: {
         list: () => this.callWithGrace<PluginAgentPane[]>("agents.list", undefined, []),
       },
+      // A cancel is main's to answer: a targeted draft, or a picker the user
+      // already accepted, lands anyway, and settling "cancelled" here would
+      // report a draft that happened as one that did not.
       sendToAgent: (text, options, callOptions) =>
         this.callWithGrace<PluginSendToAgentResult>(
           "sendToAgent",
           { text, options },
           { status: "cancelled" },
-          callOptions?.signal
+          callOptions?.signal,
+          { hostAnswersAbort: true }
         ),
       // Imperative UI prompts (#10522). Post-activation-safe (no
       // assertActivationOpen): plugins prompt from command handlers. They use

@@ -13,6 +13,7 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
+import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -2196,5 +2197,83 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
     workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
     void bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}).catch(() => undefined);
     expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(2);
+  });
+});
+
+describe("sendToAgent cancelled from the worker after main has acted", () => {
+  /** A bridge and a worker-side proxy wired back to back, as the port wires them. */
+  function makeConnectedPair() {
+    const pair = makeBridge();
+    const proxy = new PluginDevWorkerHostProxy(
+      "acme.demo",
+      (msg) => pair.workerHost.emit("worker-message", msg),
+      {
+        instanceId: "acme.demo",
+        manifestId: "acme.demo",
+        origin: "global",
+        projectId: null,
+        projectRoot: null,
+      }
+    );
+    pair.workerHost.send.mockImplementation((msg: any) => {
+      pair.workerHost.sent.push(msg);
+      proxy.handleMessage(msg);
+      return true;
+    });
+    return { ...pair, proxy };
+  }
+
+  it("reports the draft main made rather than settling the abort as cancelled", async () => {
+    const { host, proxy } = makeConnectedPair();
+    let seenSignal: AbortSignal | undefined;
+    let answer!: (value: unknown) => void;
+    (host.sendToAgent as any).mockImplementation(
+      (_text: any, _options: any, call?: { signal?: AbortSignal }) => {
+        seenSignal = call?.signal;
+        // A targeted send is atomic on the renderer: once it is on its way the
+        // draft lands, and main reports it however the caller has since felt.
+        return new Promise((resolve) => {
+          answer = resolve;
+        });
+      }
+    );
+
+    const controller = new AbortController();
+    const result = proxy.host.sendToAgent(
+      "Card body",
+      { terminalId: "t-1" },
+      { signal: controller.signal }
+    );
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+    await flush();
+
+    controller.abort();
+    await flush();
+    // The cancel reached main, and the caller is still waiting on main's answer.
+    expect(seenSignal?.aborted).toBe(true);
+    expect(settled).toBe(false);
+
+    answer({ status: "drafted", terminalId: "t-1" });
+    await expect(result).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+  });
+
+  it("still settles as cancelled when main answers the cancel that way", async () => {
+    const { host, proxy } = makeConnectedPair();
+    (host.sendToAgent as any).mockImplementation(
+      (_text: any, _options: any, call?: { signal?: AbortSignal }) =>
+        new Promise((resolve) => {
+          call?.signal?.addEventListener("abort", () => resolve({ status: "cancelled" }));
+        })
+    );
+
+    const controller = new AbortController();
+    const result = proxy.host.sendToAgent("Card body", {}, { signal: controller.signal });
+    await flush();
+    controller.abort();
+
+    await expect(result).resolves.toEqual({ status: "cancelled" });
   });
 });
