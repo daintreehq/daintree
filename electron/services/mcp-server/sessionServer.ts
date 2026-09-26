@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -417,6 +417,29 @@ function readStringArg(args: unknown, key: string): string | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
   const value = (args as Record<string, unknown>)[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * A short, readable panel id for an MCP launch that named none (`claude-7f3a`).
+ * A model repeats a terminal id in every send, notice and close, and a UUID
+ * costs four times the tokens and gets mistyped: a live run closed the wrong id
+ * after transposing two of its hex groups.
+ */
+export function shortAgentTerminalId(
+  agentId: string | undefined,
+  isInUse: (terminalId: string) => boolean
+): string {
+  const slug =
+    (agentId ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 24) || "agent";
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const candidate = `${slug}-${randomBytes(2).toString("hex")}`;
+    if (!isInUse(candidate)) return candidate;
+  }
+  return `${slug}-${randomBytes(4).toString("hex")}`;
 }
 
 /** The listing whose `owned` filter main resolves against the ledger (#12308). */
@@ -2419,6 +2442,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // An assistant-only agent launched from a session that is not the
         // assistant would be given the assistant's own pinned bearer, and with
         // it the unscoped terminal input this session was just denied.
+        if (
+          actionId === AGENT_LAUNCH_TOOL &&
+          typeof args === "object" &&
+          args !== null &&
+          !Array.isArray(args) &&
+          readStringArg(args, "requestedId") === undefined
+        ) {
+          (args as Record<string, unknown>).requestedId = shortAgentTerminalId(
+            readStringArg(args, "agentId"),
+            deps.isTerminalIdInUse
+          );
+        }
         if (AGENT_NAMING_LAUNCH_TOOLS.has(actionId)) {
           const requestedId =
             actionId === AGENT_LAUNCH_TOOL ? readStringArg(args, "requestedId") : undefined;

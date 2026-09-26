@@ -920,6 +920,7 @@ describe("terminal notices", () => {
             name: "Fact: claude",
             notify: true,
             handback: true,
+            requestedId: expect.stringMatching(/^claude-[0-9a-f]{4}$/),
           },
         ],
         [
@@ -930,6 +931,7 @@ describe("terminal notices", () => {
             name: "Fact: codex",
             notify: true,
             handback: true,
+            requestedId: expect.stringMatching(/^codex-[0-9a-f]{4}$/),
           },
         ],
       ]);
