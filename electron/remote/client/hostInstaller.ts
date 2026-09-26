@@ -465,7 +465,16 @@ export async function runHostInstall(
 
   const staged = await stage(deps, plan, signal, report);
   report({ stage: "verifying", fraction: 0.6, message: "Checking the staged build" });
-  const marker = await verifyStaged(deps, plan, staged, signal);
+  let marker: string | null;
+  try {
+    marker = await verifyStaged(deps, plan, staged, signal);
+  } catch (err) {
+    // A build that didn't check out is never left on the host.
+    await deps.shell
+      .exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 })
+      .catch(() => {});
+    throw err;
+  }
 
   if (plan.packaging === "deb") {
     const after = await deps.probe(signal);

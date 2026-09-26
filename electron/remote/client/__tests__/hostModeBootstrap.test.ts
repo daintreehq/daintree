@@ -5,6 +5,7 @@ import {
   bootstrapHostMode,
   ENABLE_LINGER_SCRIPT,
   hostModeConfirmed,
+  REMOVE_UNIT_SCRIPT,
   linuxHandoffScript,
   MAC_ENABLE_SCRIPT,
   START_UNIT_SCRIPT,
@@ -367,5 +368,40 @@ describe("bootstrapHostMode on a headless Linux host", () => {
         now: clock(),
       })
     ).rejects.toThrow(/Host mode service \(systemctl --user\): Failed to connect to bus/);
+  });
+
+  it("removes the unit it wrote when Host mode never reads back, so nothing starts at the next login", async () => {
+    const { channel, calls } = scripted();
+    await expect(
+      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes" })), {
+        channel,
+        probe: probes([linux({ unit: "enabled", listening: true, linger: "yes" })]).probe,
+        sleep: async () => {},
+        now: clock(),
+      })
+    ).rejects.toThrow(/didn't record that it was switched on/);
+    expect(calls.at(-1)!.script).toBe(REMOVE_UNIT_SCRIPT);
+  });
+
+  it("leaves a unit alone that was there before setup", async () => {
+    const { channel, calls } = scripted((script) =>
+      script === START_UNIT_SCRIPT ? fail("Job failed") : handedOver(script)
+    );
+    await expect(
+      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
+        channel,
+        probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
+        sleep: async () => {},
+        now: clock(),
+      })
+    ).rejects.toThrow(/Couldn't start the Host mode service/);
+    expect(calls.some((c) => c.script === REMOVE_UNIT_SCRIPT)).toBe(false);
+  });
+
+  it("doesn't take a host whose listener pid wasn't seen alive as switched on", async () => {
+    const stale = await outcomeOf(
+      linux({ unit: "enabled", listening: true, state: state() }).replace("@@dt:hostpid 4242\n", "")
+    );
+    expect(hostModeConfirmed(stale)).toBe(false);
   });
 });

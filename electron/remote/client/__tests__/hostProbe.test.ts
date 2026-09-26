@@ -290,6 +290,8 @@ describe("Host mode setup read-back", () => {
     expect(script).toContain("Library/LaunchAgents/org.daintree.app.host.plist");
     expect(script).toContain("systemctl --user is-enabled daintree-host.service");
     expect(script).toContain("/dev/fuse");
+    // A crashed host leaves its socket and files behind; only a live pid is listening.
+    expect(script).toContain('kill -0 "$p"');
     expect(script).toContain("libfuse[.]so[.]2");
     // echo would rewrite backslashes in the JSON on some shells.
     expect(script).toMatch(/printf '%s %s\\n' "@@dt:hostmodestate"/);

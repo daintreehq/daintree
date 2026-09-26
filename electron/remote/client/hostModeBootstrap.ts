@@ -100,6 +100,8 @@ export function writeUnitScript(): string {
 
 export const START_UNIT_SCRIPT = `systemctl --user start ${LINUX_UNIT_NAME}`;
 export const ENABLE_LINGER_SCRIPT = "loginctl enable-linger";
+/** Undo a unit this setup wrote: nothing is left to start at the next login after a failure. */
+export const REMOVE_UNIT_SCRIPT = `systemctl --user disable --now ${LINUX_UNIT_NAME} >/dev/null 2>&1; rm -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}"; systemctl --user daemon-reload >/dev/null 2>&1; true`;
 
 /** Hand `--enable-host-mode` to the Daintree running on a Linux host; prints its exit status. */
 export function linuxHandoffScript(target: ReturnType<typeof linuxLaunchTarget>): string {
@@ -115,8 +117,8 @@ export function hostModeConfirmed(outcome: ProbeOutcome): boolean {
   const { result, parsed } = outcome;
   const state = result.hostModeState;
   if (!result.hostModeListening || !state) return false;
-  // Recorded by the process that is listening now, not left from an earlier run.
-  if (parsed?.hostPid != null && state.pid !== parsed.hostPid) return false;
+  // Recorded by the live process that is listening now, not left from an earlier run.
+  if (parsed?.hostPid == null || state.pid !== parsed.hostPid) return false;
   return (
     state.enabled &&
     state.startAtLogin &&
@@ -197,63 +199,77 @@ export async function bootstrapHostMode(
   };
 
   let lingerRefused: string | null = null;
-  if (probe.platform === "darwin") {
-    const started = await deps.channel.exec(MAC_ENABLE_SCRIPT, { timeoutMs: 30_000, signal });
-    if (started.code !== 0) {
-      throw new AppError({
-        code: "INTERNAL",
-        message: `Couldn't start Host mode: ${failureDetail(started, "ssh failed")}`,
-        userMessage: `Couldn't start Daintree on ${sshTarget}. Log in there once and open it.`,
-      });
-    }
-  } else {
-    const target = linuxLaunchTarget(probe);
-    // Without lingering the user's services stop with their last login.
-    if (probe.advice.linger !== true) {
-      const linger = await deps.channel.exec(ENABLE_LINGER_SCRIPT, { timeoutMs: 30_000, signal });
-      if (linger.code !== 0) lingerRefused = failureDetail(linger, "loginctl failed");
-    }
-    const running = probe.hostModeListening || probe.appRunning;
-    if (!running) {
-      await run(
+  // Set once this setup wrote a unit where there was none: undone if setup fails.
+  let wroteUnit = false;
+  let confirmed: ProbeOutcome;
+  try {
+    if (probe.platform === "darwin") {
+      const started = await deps.channel.exec(MAC_ENABLE_SCRIPT, { timeoutMs: 30_000, signal });
+      if (started.code !== 0) {
+        throw new AppError({
+          code: "INTERNAL",
+          message: `Couldn't start Host mode: ${failureDetail(started, "ssh failed")}`,
+          userMessage: `Couldn't start Daintree on ${sshTarget}. Log in there once and open it.`,
+        });
+      }
+    } else {
+      const target = linuxLaunchTarget(probe);
+      // Without lingering the user's services stop with their last login.
+      if (probe.advice.linger !== true) {
+        const linger = await deps.channel.exec(ENABLE_LINGER_SCRIPT, { timeoutMs: 30_000, signal });
+        if (linger.code !== 0) lingerRefused = failureDetail(linger, "loginctl failed");
+      }
+      const running = probe.hostModeListening || probe.appRunning;
+      if (!running) {
+        wroteUnit = probe.advice.hostModeUnit !== true;
+        await run(
+          deps.channel,
+          writeUnitScript(),
+          "Couldn't install the Host mode service (systemctl --user)",
+          60_000,
+          systemdUnitFor(target)
+        );
+        await run(deps.channel, START_UNIT_SCRIPT, "Couldn't start the Host mode service");
+        const up = await pollUntil((o) => o.result.hostModeListening, LISTEN_TIMEOUT_MS);
+        if (!up.result.hostModeListening) {
+          throw failed(
+            `The Host mode service started on ${sshTarget}, but Daintree didn't start listening`,
+            `see journalctl --user -u ${LINUX_UNIT_NAME} there`
+          );
+        }
+      }
+      // Unpacking an AppImage without FUSE takes a while before it can hand over.
+      const handoff = await run(
         deps.channel,
-        writeUnitScript(),
-        "Couldn't install the Host mode service (systemctl --user)",
-        60_000,
-        systemdUnitFor(target)
+        linuxHandoffScript(target),
+        "Couldn't reach Daintree on the host",
+        target.appImageExtractAndRun ? 5 * 60_000 : 120_000
       );
-      await run(deps.channel, START_UNIT_SCRIPT, "Couldn't start the Host mode service");
-      const up = await pollUntil((o) => o.result.hostModeListening, LISTEN_TIMEOUT_MS);
-      if (!up.result.hostModeListening) {
+      const code = markerValue(handoff.stdout, "handoff");
+      if (code === String(HOST_MODE_HANDOFF_NOBODY_EXIT_CODE)) {
         throw failed(
-          `The Host mode service started on ${sshTarget}, but Daintree didn't start listening`,
-          `see journalctl --user -u ${LINUX_UNIT_NAME} there`
+          `Daintree stopped running on ${sshTarget} before Host mode could be switched on`
+        );
+      }
+      if (code !== "0") {
+        throw failed(
+          `Daintree on ${sshTarget} didn't take the request`,
+          `exit status ${code ?? "?"}`
         );
       }
     }
-    // Unpacking an AppImage without FUSE takes a while before it can hand over.
-    const handoff = await run(
-      deps.channel,
-      linuxHandoffScript(target),
-      "Couldn't reach Daintree on the host",
-      target.appImageExtractAndRun ? 5 * 60_000 : 120_000
-    );
-    const code = markerValue(handoff.stdout, "handoff");
-    if (code === String(HOST_MODE_HANDOFF_NOBODY_EXIT_CODE)) {
-      throw failed(
-        `Daintree stopped running on ${sshTarget} before Host mode could be switched on`
-      );
-    }
-    if (code !== "0") {
-      throw failed(
-        `Daintree on ${sshTarget} didn't take the request`,
-        `exit status ${code ?? "?"}`
-      );
-    }
-  }
 
-  let after: ProbeOutcome = await pollUntil(hostModeConfirmed, CONFIRM_TIMEOUT_MS);
-  if (!hostModeConfirmed(after)) throw failed(unconfirmedReason(after, sshTarget));
+    confirmed = await pollUntil(hostModeConfirmed, CONFIRM_TIMEOUT_MS);
+    if (!hostModeConfirmed(confirmed)) throw failed(unconfirmedReason(confirmed, sshTarget));
+  } catch (error) {
+    if (wroteUnit) {
+      await deps.channel
+        .exec(REMOVE_UNIT_SCRIPT, { timeoutMs: 60_000, signal })
+        .catch(() => undefined);
+    }
+    throw error;
+  }
+  let after = confirmed;
   // The keychain check runs there right after; its answer belongs in the advice.
   if (after.result.hostModeState?.keychain.checked !== true) {
     const settled = await pollUntil(
