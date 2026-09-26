@@ -70,6 +70,7 @@ const HOST_CALL_METHODS = {
   "clipboard.readText": true,
   "system.openPath": true,
   "system.showItemInFolder": true,
+  "documents.renderPdf": true,
   showQuickPick: true,
   showInputBox: true,
   showConfirm: true,

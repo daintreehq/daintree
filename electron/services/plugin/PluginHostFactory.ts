@@ -9,6 +9,11 @@ import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
+import {
+  renderHtmlToPdf,
+  validateRenderPdfOptions,
+  type RenderPdfRequest,
+} from "./pluginPdfRenderer.js";
 
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
@@ -112,6 +117,8 @@ import type {
   PluginHostBinding,
   PluginMcpCaller,
   PluginMcpToolDefinition,
+  PluginDocumentsApi,
+  PluginRenderPdfResult,
 } from "../../../shared/types/plugin.js";
 import type {
   LoadedPlugin,
@@ -1691,6 +1698,9 @@ export function createHost(
     // project roots — the gap that pushed plugins into shelling out to
     // /usr/bin/open. NOT revoke-guarded, same as fs/clipboard.
     system: buildSystemApi(deps, pluginId),
+    // HTML-to-PDF export written under host.fs.writeFile's gates. NOT
+    // revoke-guarded, same as fs/system.
+    documents: buildDocumentsApi(deps, pluginId),
     // NOT revoke-guarded: plugins read/write settings throughout their
     // lifetime (IPC handlers, timers), long after activate() resolves. The
     // store is the source of truth, so a late call is harmless.
@@ -3486,6 +3496,160 @@ function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSy
         argsHash: deps.safeArgsHash([{ path: resolved }]),
         durationMs: 0,
       });
+    },
+  };
+}
+
+/**
+ * Host-mediated HTML-to-PDF export (`host.documents`). Electron's `printToPDF`
+ * lives in main, out of reach of plugin code, so without this a plugin that
+ * could render an invoice as HTML had no way to hand the user a PDF.
+ *
+ * The output is written under exactly the gates `host.fs.writeFile` applies —
+ * containment, the per-root-class write capability, JIT consent, a containment
+ * recheck and symlink-leaf refusal inside the per-path critical section, an
+ * atomic replace, and an audit record — so a PDF can land nowhere a text write
+ * could not. An `htmlPath` source is read-contained and read-gated like
+ * `fs.readFile`. The render itself lives in `pluginPdfRenderer.ts`.
+ *
+ * Stateless — the render window is torn down inside every call.
+ */
+function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginDocumentsApi {
+  const requireLoaded = (): void => {
+    if (!deps.plugins.has(pluginId)) {
+      throw new Error(
+        `PLUGIN_UNLOADED: plugin "${pluginId}" documents.renderPdf: plugin is no longer loaded`
+      );
+    }
+  };
+  const requireCapForClass = (kind: "read" | "write", rootClass: FsRootClass, what: string) => {
+    const needed = `${rootClass === "project" ? "fs:project" : "fs:user-data"}-${kind}` as const;
+    if (!deps.declaredCapabilities(pluginId).has(needed)) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" documents.renderPdf requires the "${needed}" capability for ${what} under ${rootClass} paths, which is not declared in manifest.capabilities`
+      );
+    }
+  };
+  const moved = () =>
+    fsTargetError(
+      "TARGET_UNAVAILABLE",
+      `Plugin "${pluginId}" documents.renderPdf: the output target moved while the render was running`
+    );
+  // Containment realpaths the leaf, so the requested leaf itself is inspected.
+  const refuseSymlinkLeaf = async (outputPath: string) => {
+    const leafStat = await fs
+      .lstat(path.resolve(outputPath))
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+    if (leafStat?.isSymbolicLink()) {
+      throw fsTargetError(
+        "TARGET_IS_SYMLINK",
+        `Plugin "${pluginId}" documents.renderPdf: refusing to write through a symlink`
+      );
+    }
+    return leafStat;
+  };
+
+  return {
+    renderPdf: async (rawOptions): Promise<PluginRenderPdfResult> => {
+      requireLoaded();
+      const caps = deps.declaredCapabilities(pluginId);
+      if (!caps.has("fs:project-write") && !caps.has("fs:user-data-write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" documents.renderPdf requires "fs:project-write" or "fs:user-data-write", which is not declared in manifest.capabilities`
+        );
+      }
+      // Same single consent unit as `fs.writeFile`, so a plugin already allowed
+      // to write files is not asked again for a PDF.
+      const writeCap: BuiltInPluginCapability = caps.has("fs:project-write")
+        ? "fs:project-write"
+        : "fs:user-data-write";
+      const { source, outputPath, print } = validateRenderPdfOptions(pluginId, rawOptions);
+
+      // The data dir is materialised lazily, as `fs.writeFile` does, so a first
+      // export into a plugin's own namespace does not fail containment.
+      const dataDir = deps.pluginDataDir(pluginId);
+      if (deps.isPathUnder(dataDir, path.normalize(outputPath))) {
+        requireCapForClass("write", "user-data", "the output");
+        await fs.mkdir(dataDir, { recursive: true });
+      }
+      requireLoaded();
+      const output = await containToDeclaredRoots(deps, pluginId, outputPath);
+      requireLoaded();
+      requireCapForClass("write", output.rootClass, "the output");
+      const parent = await fs.stat(path.dirname(output.resolved)).catch(() => null);
+      if (!parent?.isDirectory()) {
+        throw new Error(
+          `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: the output's parent directory does not exist: ${path.dirname(output.resolved)}`
+        );
+      }
+
+      let renderSource: RenderPdfRequest["source"];
+      let resourceRoot: string | null = null;
+      if (source.kind === "path") {
+        const input = await containToDeclaredRoots(deps, pluginId, source.htmlPath);
+        requireLoaded();
+        requireCapForClass("read", input.rootClass, "htmlPath");
+        const inputStat = await fs.stat(input.resolved).catch(() => null);
+        if (!inputStat?.isFile()) {
+          throw new Error(
+            `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: htmlPath is not a file: ${input.resolved}`
+          );
+        }
+        renderSource = { kind: "file", file: input.resolved };
+        resourceRoot = await fs.realpath(input.root);
+      } else {
+        renderSource = { kind: "html", html: source.html };
+        // Inline HTML may still reference absolute file: URLs, but only inside
+        // a root the plugin could read for itself.
+        const readCap = output.rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
+        if (caps.has(readCap)) resourceRoot = await fs.realpath(output.root);
+      }
+
+      // Checked again once the render is done; this early pass only spares a
+      // render whose write is already certain to be refused.
+      await refuseSymlinkLeaf(outputPath);
+      await ensureCapabilityConsent(deps, pluginId, writeCap);
+      requireLoaded();
+      const pdf = await renderHtmlToPdf({ source: renderSource, resourceRoot, print });
+      requireLoaded();
+
+      const revision = await runExclusive(output.resolved, async () => {
+        requireLoaded();
+        // The consent prompt, the render and the queue wait can each take long
+        // enough for the path to change, so containment is proven again here,
+        // exactly as `fs.writeFile` does.
+        const recheck = await containToDeclaredRoots(deps, pluginId, outputPath).catch(
+          (error: unknown) => {
+            if (error instanceof PluginPathNotAllowedError) throw moved();
+            throw error;
+          }
+        );
+        if (recheck.resolved !== output.resolved) throw moved();
+        const leafStat = await refuseSymlinkLeaf(outputPath);
+        const mode = leafStat ? leafStat.mode & 0o777 : undefined;
+        requireLoaded();
+        await resilientAtomicWriteFile(
+          output.resolved,
+          pdf,
+          undefined,
+          mode === undefined ? undefined : { mode }
+        );
+        return sha256Hex(pdf);
+      });
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: `documents.renderPdf:${output.resolved}`,
+        recordType: "ipc-invoke",
+        channel: "plugin:fs-write",
+        result: "success",
+        errorMessage: "",
+        argsHash: deps.safeArgsHash([{ path: output.resolved, bytes: pdf.byteLength }]),
+        durationMs: 0,
+      });
+      return { path: output.resolved, bytes: pdf.byteLength, revision };
     },
   };
 }

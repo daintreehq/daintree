@@ -159,6 +159,25 @@ await host.dispatch("file.openPanel", { path: `${videoDir}/final/teleprompter.mp
 
 Check a result: `dispatch` resolves `{ ok: false, error: { code } }` rather than throwing, and `host.actions.canDispatch(id)` tells you in advance whether an action will confirm.
 
+## Export a document
+
+Invoices, quotes, reports and contracts share one shape: fill an HTML template, render it to PDF, hand the file to the user. The template step can be yours or an agent's — an agent is good at "draft the quote for Acme from these line items" and can write the HTML straight into your plugin-data folder, which your worker then renders.
+
+```js
+const dir = `${dataDir}/invoices`; // declare fs:user-data-read + fs:user-data-write
+const htmlPath = `${dir}/${invoice.number}.html`;
+await host.fs.writeFile(htmlPath, renderInvoiceHtml(invoice)); // or let an agent write it
+const { path } = await host.documents.renderPdf({
+  htmlPath,
+  outputPath: `${dir}/${invoice.number}.pdf`,
+  pageSize: "Letter",
+  margins: { top: 0.6, bottom: 0.6, left: 0.7, right: 0.7 },
+});
+await host.system.showItemInFolder(path); // or host.system.openPath(path)
+```
+
+Keep the template self-contained. The render has JavaScript off and no network, so a logo, a web font or a stylesheet has to sit next to the HTML (relative URLs resolve from `htmlPath`, inside the same root) or be inlined as a `data:` URI; a `<link>` to a CDN renders as if it were not there. Put the paper size in `pageSize` rather than CSS `@page size`, and use `page-break-inside: avoid` on table rows so a line item never splits across pages. `renderPdf` needs the same `fs:*-write` capability and consent a `writeFile` does, so a plugin that already writes files asks for nothing new. See [Host API → documents](./host-api.md#documents--render-html-to-pdf).
+
 ## Launch an agent with a prompt
 
 A plugin can put a button on a piece of work that opens an agent in the right folder with the right first message. `agent.launch` is a safe-tier action:

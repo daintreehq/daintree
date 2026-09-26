@@ -170,6 +170,8 @@ interface PluginHostApi {
   readonly clipboard: PluginClipboardApi;
   // Open / reveal a file in the plugin's own declared fs scope
   readonly system: PluginSystemApi;
+  // HTML to PDF, written under the same gates as fs.writeFile
+  readonly documents: PluginDocumentsApi;
 }
 ```
 
@@ -1107,6 +1109,33 @@ Paths resolve against your declared `scopes.fs.allowedPaths` plus your implicit 
 
 Errors carry prefixes: `PATH_NOT_ALLOWED:` for a path that is relative, unresolvable, traversing, or outside your scope (the same containment error `host.fs` raises); `INVALID_PATH:` for a path that resolves inside your scope but doesn't exist; `PERMISSION_REQUIRED:` for a missing capability; `PLUGIN_UNLOADED:` after unload. `openPath` additionally refuses executable file types (`.app`, `.exe`, `.sh`, …), checked on both the path you passed and its realpath target so a benignly-named symlink can't become a launch primitive; `showItemInFolder` has no such deny-list, since revealing a file shows it rather than running it. Successful calls are audited (rejected ones are not — nothing reached the OS). `host.system` is NOT revoke-guarded.
 
+## `documents` — render HTML to PDF
+
+Turn HTML into a PDF file. Electron's `printToPDF` lives in the main process, out of reach of plugin code, so this is the only way a plugin can produce a PDF — an invoice, a quote, a report, a contract.
+
+```ts
+const { path, bytes, revision } = await host.documents.renderPdf({
+  htmlPath: `${dataDir}/invoices/INV-0042.html`, // or html: "<!doctype html>…" (max 5 MiB)
+  outputPath: `${dataDir}/invoices/INV-0042.pdf`,
+  pageSize: "Letter", // "A4" (default) | "Letter" | "Legal" | "A3" | "A5" | "Tabloid"
+  landscape: false,
+  printBackground: true, // default true
+  margins: { top: 0.5, bottom: 0.5, left: 0.6, right: 0.6 }, // inches, 0–3
+  pageRanges: "1-2", // omit for every page
+});
+await host.system.openPath(path);
+```
+
+Pass exactly one of `html` or `htmlPath`. An unknown option, a wrong type, a margin outside 0–3 inches or a malformed `pageRanges` rejects with `VALIDATION:` rather than being ignored. CSS `@page size` is not honoured — the paper size is `pageSize` — while `page-break-*` rules apply as they do when printing from Chrome.
+
+**The output** is gated exactly like [`fs.writeFile`](#fs--host-mediated-scope-contained-filesystem): `outputPath` must be absolute, end in `.pdf`, and resolve inside your declared roots (or your plugin-data namespace, which is created on first use); its parent directory must already exist (`INVALID_PATH:` otherwise). It needs `fs:project-write` or `fs:user-data-write` for the matched root's class, and the first write raises the same just-in-time consent prompt — one grant covers both surfaces. A symlink at the output leaf is refused with `TARGET_IS_SYMLINK`, containment is proven again once the render is done (`TARGET_UNAVAILABLE` if the target moved), and the file is replaced atomically with its mode preserved. The result's `revision` is the same sha256 `fs.writeFile` returns, so it can go straight back in as an `expectedRevision`. Writes are audited on the same trail as `fs.writeFile`.
+
+**The input.** `htmlPath` is read-contained like `fs.readFile` and needs the read capability for its root class (`fs:project-read` / `fs:user-data-read`); it must be a regular file. Relative images, stylesheets and fonts beside it resolve normally, as long as they stay inside the same allowed root. Inline `html` has no base URL — a relative reference resolves to nothing — so embed assets as `data:` URIs, or write the HTML to disk first and pass `htmlPath`. An absolute `file:` URL in inline HTML loads only inside the output's root, and only when you hold the read capability for it.
+
+**The render window** is hidden and locked down: JavaScript disabled, sandboxed, context-isolated, no Node, web security on, a throwaway in-memory session wiped after each render, every permission request denied, and navigation, popups, webviews and downloads blocked. **Nothing is fetched from the network** — every request other than a `data:` URI or a contained `file:` URL is cancelled, so remote images, web fonts and CDN stylesheets simply do not appear. Bundle what the document needs. Because JavaScript is off, a template must be fully rendered HTML; client-side charting libraries will not run. At most two renders run at once across all plugins (the rest queue); a render that takes longer than 30 seconds rejects with `RENDER_TIMEOUT:` and one whose page fails to load with `RENDER_FAILED:`. The window is destroyed on every path.
+
+`createMockHost` records each call in `documentsRenderPdfCalls` and writes a small placeholder (`%PDF-1.4 …`) to its in-memory filesystem at `outputPath`, so a plugin that reads, lists or opens its export afterwards sees a file. Nothing is rendered, and only the argument shape and an in-memory `htmlPath` are checked. `host.documents` is NOT revoke-guarded.
+
 ## React hooks — `@daintreehq/plugin-sdk/react`
 
 The `@daintreehq/plugin-sdk/react` subpath carries the renderer hooks for plugin view components. It is a separate import path so non-view code (your `main`) doesn't pull React into the main-process bundle. The runtime implementations live in the SDK package itself (`packages/plugin-sdk/src/react/`) and Daintree's own `src/hooks/` re-exports them, so plugin authors and the host run one implementation rather than two that can drift.
@@ -1243,7 +1272,7 @@ Pass `capabilities` to restrict the declared capability set (the default is perm
 - `git.status` returns no files, `git.diff` returns `""`, `git.add` does nothing, and `git.commit` records the call and answers a synthetic `mock-N` hash.
 - The typed `registerHandler(channel, schema, handler)` overload discards the schema — nothing validates a payload against it.
 - `registerForgeProvider`, `registerFileDecorationProvider` and `mcp.registerTools` skip the manifest-declaration gates (`contributes.forgeProviders` / `fileDecorationProviders` / `agentMcp` and `mcp:expose`), `mcp.registerTools` neither enforces the roster budget nor compiles the schemas, so a recorded `execute` called with arguments its `inputSchema` forbids still runs where the real host would refuse the call, and `invalidateFileDecorations` accepts any non-empty scope, declared or not.
-- Only `getAgentState` and `sendToActiveAgent` are capability-gated. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard` and `system` run without `shell:exec`, `fs:*`, `git:write` or any just-in-time consent.
+- Only `getAgentState` and `sendToActiveAgent` are capability-gated. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system` and `documents` run without `shell:exec`, `fs:*`, `git:write` or any just-in-time consent.
 - `settings` only knows declared scopes when you pass `manifestSettings`, and even then only `get` honours them — `set` writes to whatever scope you name. `onDidChangeWorktrees` ignores `debounceMs`.
 - `logger.info` / `warn` / `error` are no-ops: nothing is printed and nothing is recorded.
 - There is no activation lifecycle: registrations made before a throwing `activate()` are not rolled back, and no `revoke` ever runs, so a handle keeps working after the point at which the real host would have cut it off.

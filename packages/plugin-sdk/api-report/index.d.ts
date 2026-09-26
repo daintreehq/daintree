@@ -2232,20 +2232,6 @@ interface PluginAgentMcpContribution {
     mode: "tools";
 }
 /**
- * `contributes.databases` entry — a SQLite file the plugin opens through
- * {@link PluginDatabaseApi}. A `"project"` database lives in the repository
- * (default `.daintree/data/{manifestId}/{id}.db`, or `path` relative to the
- * project root) and requires `scope: "project"` plus `fs:project-write`; a
- * `"local"` one lives in the plugin's per-machine data directory.
- */
-interface PluginDatabaseContribution {
-    id: string;
-    description?: string;
-    location: PluginDatabaseLocationKind;
-    path?: string;
-    journalMode: "delete" | "wal";
-}
-/**
  * Who a tool call came from, as far as the host can say. Provenance, not
  * identity: the grant was issued for a launch in this terminal and project, but
  * any process that read the credential can present it. `launchAgentIdHint` is
@@ -2719,12 +2705,6 @@ interface PluginManifest {
          * rejects the key outright for any other origin.
          */
         surfaces?: SurfaceContributions;
-        /**
-         * SQLite databases opened through `host.db`. Optional in the type but
-         * always materialized by the manifest schema's `.default([])`, like
-         * `agentMcp`.
-         */
-        databases?: PluginDatabaseContribution[];
     };
 }
 /**
@@ -2934,155 +2914,6 @@ interface StorageApi {
      *   is revoked and the subscription is rejected (the promise rejects).
      */
     onDidChange<T = unknown>(key: string, callback: (value: T | undefined) => void, scope?: PluginStorageScope): Promise<() => void>;
-}
-/**
- * Where a declared database lives. `"project"` puts the file in
- * the repository, so agents in the project's terminals can read and write it
- * with the `sqlite3` CLI and it travels with a clone; `"local"` keeps it in
- * this machine's per-plugin data directory, out of the repository.
- */
-type PluginDatabaseLocationKind = "project" | "local";
-/** The resolved location of one declared database. */
-interface PluginDatabaseLocation {
-    /** The `contributes.databases[].id` this resolves. */
-    readonly id: string;
-    readonly location: PluginDatabaseLocationKind;
-    /** Absolute path of the SQLite file. May not exist until first opened. */
-    readonly path: string;
-    /** For a `"project"` database, the path relative to the project root. */
-    readonly projectRelativePath: string | null;
-    readonly journalMode: "delete" | "wal";
-}
-/** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */
-type PluginDatabaseParams = ReadonlyArray<string | number | bigint | null | Uint8Array> | Readonly<Record<string, string | number | bigint | null | Uint8Array>>;
-interface PluginDatabaseRunResult {
-    /** Rows changed by the statement. */
-    changes: number;
-    /** Rowid of the last inserted row, as a number when it fits in 2^53. */
-    lastInsertRowid: number | bigint;
-}
-/**
- * Why a database's contents may have changed. `"self"` is a commit this
- * handle made; `"external"` is anything else — an agent's `sqlite3` session,
- * another process, or the file being replaced (`git checkout`, a restore).
- */
-interface PluginDatabaseChangeEvent {
-    readonly origin: "self" | "external";
-}
-/** The statement surface shared by a database handle and a transaction. */
-interface PluginDatabaseStatements {
-    /** Every row the statement returns, as plain objects keyed by column name. */
-    query<T = Record<string, unknown>>(sql: string, params?: PluginDatabaseParams): Promise<T[]>;
-    /** The first row, or `undefined`. */
-    get<T = Record<string, unknown>>(sql: string, params?: PluginDatabaseParams): Promise<T | undefined>;
-    /**
-     * Execute one statement that returns no rows. `query`, `get`, `run` and
-     * `columns` each take exactly one statement; SQL after it rejects with
-     * `DB_MULTIPLE_STATEMENTS` rather than being silently ignored — use `exec`
-     * for a batch.
-     */
-    run(sql: string, params?: PluginDatabaseParams): Promise<PluginDatabaseRunResult>;
-    /** Execute one or more statements with no parameters (schema, pragmas). */
-    exec(sql: string): Promise<void>;
-    /**
-     * The result columns a statement would return, without running it — the
-     * headers for a result that may have no rows.
-     */
-    columns(sql: string): Promise<PluginDatabaseColumn[]>;
-}
-/** One result column of a statement, from `PluginDatabase.columns`. */
-interface PluginDatabaseColumn {
-    /** The name a row object uses for this column (after any `AS` alias). */
-    name: string;
-    /** Source table, or null for an expression. */
-    table: string | null;
-    /** Source column, or null for an expression. */
-    column: string | null;
-    /** Declared type of the source column, or null. */
-    type: string | null;
-}
-interface PluginDatabaseOpenOptions {
-    /**
-     * Open for reading only. The host neither creates the file nor its
-     * directory (SQLite itself may add `-wal`/`-shm` sidecars when reading a
-     * file in WAL mode), raises no write-consent prompt, and refuses `run`, `exec` and
-     * `transaction` with `DB_READONLY`; SQLite itself refuses any write a query
-     * attempts. `migrations` and `definitions` cannot be combined with it. A
-     * missing file rejects with `DB_NOT_FOUND`. The right mode for a dashboard
-     * over data that agents write.
-     */
-    readonly?: boolean;
-    /**
-     * Ordered schema migrations. Migration `n` (0-based) runs when the file's
-     * `PRAGMA user_version` is `n`, inside its own `BEGIN IMMEDIATE`
-     * transaction, and bumps `user_version` to `n + 1`. Append new entries;
-     * never edit or reorder shipped ones. A file whose `user_version` is higher
-     * than `migrations.length` was written by a newer copy of the plugin, and
-     * `open` rejects with `DB_SCHEMA_TOO_NEW` rather than guess.
-     */
-    migrations?: readonly string[];
-    /**
-     * SQL applied after `migrations`, in one transaction, whenever its text
-     * differs from the last applied — views and triggers, which should change
-     * without a numbered migration. Must be idempotent
-     * (`DROP VIEW IF EXISTS v; CREATE VIEW v AS …`). The applied hash is kept in
-     * a host-owned `_daintree_meta` table. A failure rolls back and rejects with
-     * `DB_DEFINITIONS_FAILED`.
-     */
-    definitions?: string;
-}
-/**
- * An open plugin database. The host sets the connection policy on open —
- * foreign keys enforced, a 5 s busy timeout, and the declared journal mode —
- * and reopens transparently when the file is replaced underneath it, so a
- * long-lived handle never keeps reading an unlinked inode.
- *
- * Calls are serialised per handle: a statement issued while a
- * {@link transaction} is running waits for it.
- */
-interface PluginDatabase extends PluginDatabaseStatements {
-    readonly id: string;
-    /** Where the file is. Hand `path` to agents; they can use `sqlite3` on it. */
-    readonly location: PluginDatabaseLocation;
-    /** Whether the handle was opened with `readonly: true`. */
-    readonly readonly: boolean;
-    /**
-     * Run `fn` inside `BEGIN IMMEDIATE` … `COMMIT`, rolling back if it throws.
-     * Use the `tx` it is handed — calling the outer handle from inside `fn`
-     * waits for the transaction to finish, and so deadlocks.
-     */
-    transaction<T>(fn: (tx: PluginDatabaseStatements) => Promise<T> | T): Promise<T>;
-    /**
-     * Fire after the database changes, including commits by other processes —
-     * the usual case being an agent writing with the `sqlite3` CLI. Coalesced:
-     * a burst of external commits delivers one event. Returns a disposer.
-     */
-    onDidChange(callback: (event: PluginDatabaseChangeEvent) => void): () => void;
-    /** Close the connection and stop change detection. Idempotent. */
-    close(): Promise<void>;
-}
-/**
- * Host-managed SQLite for plugins (`host.db`). A database is declared in
- * `contributes.databases` — which is what names the file, discloses it, and
- * decides where it lives — then opened by id. Queries run in the plugin's own
- * process over the runtime's built-in `node:sqlite`; only the location is
- * resolved by the host.
- */
-interface PluginDatabaseApi {
-    /**
-     * Resolve a declared database's location without opening it. By default
-     * this prepares the location for writing (creating the directory, and for a
-     * project database asking for write consent the first time); with
-     * `readonly: true` it only locates an existing file.
-     */
-    resolve(id: string, options?: {
-        readonly?: boolean;
-    }): Promise<PluginDatabaseLocation>;
-    /**
-     * Open (creating if needed) a declared database, apply `migrations`, and
-     * return a handle. Handles are closed automatically when the plugin unloads.
-     */
-    open(id: string, options?: PluginDatabaseOpenOptions): Promise<PluginDatabase>;
 }
 interface PluginIpcContext {
     projectId: string | null;
@@ -3729,8 +3560,8 @@ interface PluginFsStat {
 interface PluginFsWriteOptions {
     /**
      * The revision the caller last read — the sha256 hex of the file's bytes,
-     * as returned by an earlier write or by
-     * {@link PluginFsApi.readFileWithRevision}. The write is refused with
+     * as returned by an earlier write or computed by the caller from
+     * {@link PluginFsApi.readFileBytes}. The write is refused with
      * `REVISION_MISMATCH` when the file's current bytes hash differently; the
      * error carries the current revision so the caller can enter a conflict
      * state without a second read. `null` means the file must not exist yet
@@ -3742,38 +3573,6 @@ interface PluginFsWriteOptions {
 interface PluginFsWriteResult {
     /** sha256 hex of the bytes written — the caller's next `expectedRevision`. */
     revision: string;
-}
-/** Result of {@link PluginFsApi.readFileWithRevision}. */
-interface PluginFsReadWithRevisionResult {
-    /** The file's bytes decoded as UTF-8, exactly as {@link PluginFsApi.readFile} returns them. */
-    contents: string;
-    /**
-     * sha256 hex of the exact bytes read — pass it straight to
-     * {@link PluginFsWriteOptions.expectedRevision}.
-     */
-    revision: string;
-}
-/** Options for {@link PluginFsApi.watch}. */
-interface PluginFsWatchOptions extends PluginHostCallOptions {
-    /**
-     * Watch every directory beneath each path, including subdirectories created
-     * after the subscription. The callback then receives the absolute path of
-     * whatever changed at any depth. Off by default: a plain watch reports only
-     * a directory's immediate children. A non-boolean value rejects the watch.
-     *
-     * On Linux, Node implements this in JavaScript with one inotify watch per
-     * file and directory, it can report names under symlinked subdirectories,
-     * and it can stop reporting a file that is replaced by rename — see the
-     * host API docs before relying on it there.
-     */
-    recursive?: boolean;
-    /**
-     * Coalesce a burst of changes into one trailing callback fired `debounceMs`
-     * after the last change, carrying the most recent changed path. `0` /
-     * omitted delivers every event; any other value is clamped to 50–60000ms.
-     * A value that is not a finite, non-negative number rejects the watch.
-     */
-    debounceMs?: number;
 }
 /**
  * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
@@ -3825,39 +3624,6 @@ interface PluginFsApi {
      */
     readFileBytes(filePath: string, options?: PluginHostCallOptions): Promise<Uint8Array>;
     /**
-     * Read a file as UTF-8 text together with its revision — the sha256 hex of
-     * the exact bytes read, computed the same way {@link writeFile} computes the
-     * revision it returns. Hand `revision` straight to
-     * {@link PluginFsWriteOptions.expectedRevision} for a read-modify-write that
-     * refuses to clobber a change made in between. Same capability gate,
-     * containment, verified open and cancellation as {@link readFile}.
-     */
-    readFileWithRevision(filePath: string, options?: PluginHostCallOptions): Promise<PluginFsReadWithRevisionResult>;
-    /**
-     * Create a directory and any missing ancestors. Creating a directory that
-     * already exists is a no-op; a non-directory at the path rejects. Gated and
-     * consented like {@link writeFile}, and both happen before anything is
-     * created: containment is proven first, so a symlinked ancestor that
-     * resolves outside every allowed root is refused. Each missing component is
-     * then created one at a time, refused if something other than a real
-     * directory appears there, and audited individually.
-     */
-    mkdir(dirPath: string): Promise<void>;
-    /**
-     * Append UTF-8 text to a file, creating it if absent (the parent directory
-     * must already exist). Gated, consented, serialised and audited like
-     * {@link writeFile}; a symlink leaf is refused with `TARGET_IS_SYMLINK`, and
-     * a FIFO, device or directory with `TARGET_UNAVAILABLE`.
-     * The bytes land through one `O_APPEND` descriptor in one `write()` per call
-     * (a short write is completed by more), so concurrent appenders — an agent
-     * adding a line to the same JSONL file — each land at the end instead of
-     * racing a read-and-rewrite. Whole-line atomicity against another writer is
-     * a practical outcome for small lines, not a guarantee. No revision is returned: an
-     * append is meaningful without one, and computing it would mean reading the
-     * whole file back.
-     */
-    appendFile(filePath: string, contents: string): Promise<void>;
-    /**
      * Write UTF-8 text to a file, creating it if absent (parent directories must
      * already exist within scope). Rejects on a missing write capability or an
      * out-of-scope path. Recorded in the audit trail. No cancellation signal —
@@ -3901,11 +3667,9 @@ interface PluginFsApi {
      * Resolves to a disposer that tears the watcher down; all watchers are
      * automatically torn down on unload. Rejects on a missing read capability so
      * authoring mistakes surface loudly. Pass `options.signal` to abort the
-     * subscription attempt before it is wired, `options.recursive` to watch a
-     * whole subtree, and `options.debounceMs` to coalesce bursts — see
-     * {@link PluginFsWatchOptions}.
+     * subscription attempt before it is wired.
      */
-    watch(paths: string[], callback: (changedPath: string) => void, options?: PluginFsWatchOptions): Promise<() => void>;
+    watch(paths: string[], callback: (changedPath: string) => void, options?: PluginHostCallOptions): Promise<() => void>;
 }
 /** A single changed file in {@link PluginGitApi.status}. Mirrors {@link PluginWorktreeStatusFile}. */
 type PluginGitStatusFile = PluginWorktreeStatusFile;
@@ -4068,6 +3832,90 @@ interface PluginSystemApi {
      * it. The path must exist.
      */
     showItemInFolder(targetPath: string): Promise<void>;
+}
+/** Paper sizes {@link PluginDocumentsApi.renderPdf} accepts. */
+type PluginPdfPageSize = "A4" | "Letter" | "Legal" | "A3" | "A5" | "Tabloid";
+/** Page margins for {@link PluginDocumentsApi.renderPdf}, in inches (0–3 each). */
+interface PluginPdfMargins {
+    top?: number;
+    bottom?: number;
+    left?: number;
+    right?: number;
+}
+/**
+ * Options for {@link PluginDocumentsApi.renderPdf}. Exactly one of `html` or
+ * `htmlPath` is required; any other key, or a value of the wrong shape, is
+ * refused with a `VALIDATION:` error rather than ignored.
+ */
+interface PluginRenderPdfOptions {
+    /**
+     * Inline HTML, at most 5 MiB (UTF-8). The document has no base URL, so a
+     * relative reference resolves to nothing: embed images and fonts as `data:`
+     * URIs, or write the HTML to disk and pass {@link htmlPath} instead.
+     */
+    html?: string;
+    /**
+     * Absolute path to an HTML file, read-contained exactly like
+     * {@link PluginFsApi.readFile} and gated on the read capability for its root
+     * class. Relative images and stylesheets beside it resolve as long as they
+     * stay inside the same allowed root.
+     */
+    htmlPath?: string;
+    /**
+     * Absolute path of the PDF to write; must end in `.pdf` and its parent
+     * directory must exist. Contained, capability-gated, consent-gated and
+     * replaced atomically exactly like {@link PluginFsApi.writeFile}.
+     */
+    outputPath: string;
+    /** Paper size. Defaults to `"A4"`. A CSS `@page size` is not honoured. */
+    pageSize?: PluginPdfPageSize;
+    /** Landscape orientation. Defaults to `false`. */
+    landscape?: boolean;
+    /** Print CSS backgrounds and colours. Defaults to `true`. */
+    printBackground?: boolean;
+    /** Page margins in inches. Each side defaults to Chromium's 1 cm (~0.4 in). */
+    margins?: PluginPdfMargins;
+    /** Pages to keep, e.g. `"1-3, 5"`. Omitted keeps every page. */
+    pageRanges?: string;
+}
+/** Result of {@link PluginDocumentsApi.renderPdf}. */
+interface PluginRenderPdfResult {
+    /** The contained absolute path the PDF was written to. */
+    path: string;
+    /** Size of the written PDF in bytes. */
+    bytes: number;
+    /**
+     * SHA-256 hex of the written bytes — the same revision
+     * {@link PluginFsApi.writeFile} returns, so it can be passed straight back as
+     * an `expectedRevision`.
+     */
+    revision: string;
+}
+/**
+ * Host-mediated document export on {@link PluginHostApi.documents}. Rendering
+ * runs in the main process — Electron's `printToPDF` is unreachable from the
+ * plugin worker — in a hidden, sandboxed window with JavaScript disabled, a
+ * throwaway in-memory session, permissions denied, navigation and popups
+ * blocked, and the network cut off: only `data:` URIs and `file:` URLs inside
+ * a root the plugin can read load, so remote images, fonts and stylesheets are
+ * never fetched.
+ *
+ * NOT revoke-guarded, like {@link PluginFsApi}; every method rejects once the
+ * plugin unloads.
+ */
+interface PluginDocumentsApi {
+    /**
+     * Render HTML to a PDF file and resolve its path, size and revision.
+     *
+     * Gated exactly like {@link PluginFsApi.writeFile} on the output path:
+     * `fs:project-write` or `fs:user-data-write` for its root class, then the
+     * just-in-time consent prompt; a symlink at the output leaf is refused with
+     * `TARGET_IS_SYMLINK`, and a target that moves while the render runs with
+     * `TARGET_UNAVAILABLE`. Renders are capped at two at a time across all
+     * plugins; one that takes longer than 30 seconds rejects with
+     * `RENDER_TIMEOUT:`, and a page that fails to load with `RENDER_FAILED:`.
+     */
+    renderPdf(options: PluginRenderPdfOptions): Promise<PluginRenderPdfResult>;
 }
 /**
  * The revoke-guarded slice of {@link PluginHostApi}: the registration methods
@@ -4685,12 +4533,6 @@ interface PluginHostApi extends PluginActivationApi {
      */
     readonly storage: StorageApi;
     /**
-     * Host-managed SQLite databases declared in `contributes.databases`. See
-     * {@link PluginDatabaseApi}. NOT revoke-guarded: open and query from timers
-     * and callbacks. Open handles close when the plugin unloads.
-     */
-    readonly db: PluginDatabaseApi;
-    /**
      * Structured diagnostic logger backed by a bounded per-plugin ring buffer in
      * the main process. Lines are forwarded to the host console (prefixed
      * `[plugin:{pluginId}]`) and retained for the most recent ~500 entries so
@@ -4754,6 +4596,14 @@ interface PluginHostApi extends PluginActivationApi {
      * NOT revoke-guarded — same membership lifetime as {@link fs}.
      */
     readonly system: PluginSystemApi;
+    /**
+     * Host-mediated document export — HTML to PDF, rendered in the main process
+     * and written under the same gates as {@link PluginFsApi.writeFile}. See
+     * {@link PluginDocumentsApi}.
+     *
+     * NOT revoke-guarded — same membership lifetime as {@link fs}.
+     */
+    readonly documents: PluginDocumentsApi;
 }
 /**
  * Synchronous, fire-and-forget diagnostic logger handed to a plugin via
@@ -4896,4 +4746,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

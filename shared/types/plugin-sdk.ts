@@ -103,6 +103,11 @@ export type {
   PluginGitCommitResult,
   PluginClipboardApi,
   PluginSystemApi,
+  PluginDocumentsApi,
+  PluginRenderPdfOptions,
+  PluginRenderPdfResult,
+  PluginPdfPageSize,
+  PluginPdfMargins,
 } from "./plugin.js";
 
 // ── Agent MCP endpoints (host.mcp) ──────────────────────────────────
