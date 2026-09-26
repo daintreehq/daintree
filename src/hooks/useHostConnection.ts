@@ -6,7 +6,9 @@ import { isRemoteHostsSupported } from "@/lib/remoteHosts";
 import { useHostConnectionStore, isHostLinkUp } from "@/store/hostConnectionStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { resyncHostTerminals } from "@/store/hostTerminalResync";
+import { rehydrateHostProjectState } from "@/store/hostProjectRehydrate";
 import {
+  getDriveLeaseSnapshot,
   getLeaseInputBlock,
   getTerminalInputBlock,
   setDriveLeaseSnapshot,
@@ -55,6 +57,8 @@ function publishHostInputBlock(): void {
 
 let resyncRunning: Promise<void> | null = null;
 let resyncAgain = false;
+/** A pass still owed the project state, because a request that asked for it was coalesced. */
+let resyncProjectStateOwed = false;
 /**
  * Bumped by every resync request and by teardown. A pass applies what it read
  * only while this still matches, so an answer overtaken by a newer request
@@ -62,14 +66,24 @@ let resyncAgain = false;
  */
 let resyncGeneration = 0;
 
+export interface ResyncFromHostOptions {
+  /**
+   * The link came back on a fresh session, which knows nothing of the old
+   * one: the host's saved project state (panels, layout, drafts) is read back
+   * as well, not just what events would have carried.
+   */
+  freshSession?: boolean;
+}
+
 /**
  * Refetch what this view shows from its host after the host dropped events on
  * their way here or the link came back fresh. Terminal output is not part of
  * this: it resumes on its own stream. Overlapping requests coalesce into one
  * follow-up pass.
  */
-export function resyncFromHost(): Promise<void> {
+export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
+  if (options.freshSession) resyncProjectStateOwed = true;
   if (resyncRunning) {
     resyncAgain = true;
     return resyncRunning;
@@ -77,7 +91,9 @@ export function resyncFromHost(): Promise<void> {
   resyncRunning = (async () => {
     do {
       resyncAgain = false;
-      await runResyncPass();
+      const projectState = resyncProjectStateOwed;
+      resyncProjectStateOwed = false;
+      await runResyncPass(projectState);
     } while (resyncAgain);
   })().finally(() => {
     resyncRunning = null;
@@ -85,20 +101,19 @@ export function resyncFromHost(): Promise<void> {
   return resyncRunning;
 }
 
-async function runResyncPass(): Promise<void> {
+async function runResyncPass(projectState: boolean): Promise<void> {
   const projectId = getViewWorkspaceId();
   const generation = resyncGeneration;
   const isCurrent = () => generation === resyncGeneration && getViewWorkspaceId() === projectId;
+  const lease = refreshLease();
+  const terminals = projectId ? resyncHostTerminals(projectId, { isCurrent }) : Promise.resolve();
   const steps: Array<[string, () => Promise<unknown>]> = [
     ["worktrees", () => window.electron.worktree.refresh()],
     [
       "worktree topology",
       () => window.electron.worktreePort.request("reconcile-topology", { force: true }),
     ],
-    [
-      "terminals",
-      () => (projectId ? resyncHostTerminals(projectId, { isCurrent }) : Promise.resolve()),
-    ],
+    ["terminals", () => terminals],
     [
       "plugins",
       async () => {
@@ -106,14 +121,30 @@ async function runResyncPass(): Promise<void> {
         usePluginRuntimeStore.getState().refresh();
       },
     ],
-    ["drive lease", () => refreshLease()],
+    ["drive lease", () => lease],
   ];
+  if (projectState && projectId) {
+    steps.push([
+      "project state",
+      async () => {
+        // After the terminals, so the host's saved order also places the ones
+        // just adopted; after the lease, to know whose layout wins.
+        await Promise.allSettled([terminals, lease]);
+        if (!isCurrent()) return;
+        await rehydrateHostProjectState(projectId, {
+          isCurrent,
+          authoritative: getDriveLeaseSnapshot()?.drivingHere === false,
+        });
+      },
+    ]);
+  }
   const results = await Promise.allSettled(steps.map(([, step]) => step()));
   results.forEach((result, index) => {
     if (result.status === "rejected") {
       logWarn(`[HostConnection] Resync of ${steps[index]![0]} failed`, { error: result.reason });
     }
   });
+  if (projectState && !isCurrent()) resyncProjectStateOwed = true;
 }
 
 /** Bumped by every lease event and by teardown, so a slower lookup never overrides either. */
@@ -173,6 +204,17 @@ export async function takeOverDrive(projectId: string): Promise<void> {
   const view = await window.electron.driveLease.takeOver({ projectId });
   leaseGeneration += 1;
   applyLease(view);
+  // The previous driver's saved layout is the project's now; this view's was
+  // stale while it was displaced.
+  const generation = leaseGeneration;
+  void rehydrateHostProjectState(projectId, {
+    isCurrent: () => generation === leaseGeneration && getViewWorkspaceId() === projectId,
+    authoritative: true,
+  }).catch((error: unknown) => {
+    logWarn("[HostConnection] Couldn't read the project's saved state after taking over", {
+      error,
+    });
+  });
 }
 
 let syncRefs = 0;
@@ -254,7 +296,8 @@ function beginSync(): () => void {
         if (next.connection?.status === "connected" && prev.connection?.status !== "connected") {
           if (resyncPending) {
             resyncPending = false;
-            void resyncFromHost();
+            // After an explicit disconnect the link that comes back is a new session.
+            void resyncFromHost({ freshSession: true });
           } else if (getLeaseInputBlock()?.kind === "lease-unknown") {
             void refreshLease();
           }
@@ -275,7 +318,9 @@ function beginSync(): () => void {
             return;
           }
           case "resync-required":
-            if (event.hostId === hostId) void resyncFromHost();
+            if (event.hostId === hostId) {
+              void resyncFromHost({ freshSession: event.reason === "reconnected" });
+            }
             return;
           default:
             return;
@@ -420,4 +465,5 @@ export function _resetHostConnectionSyncForTesting(): void {
   syncRefs = 0;
   resyncRunning = null;
   resyncAgain = false;
+  resyncProjectStateOwed = false;
 }
