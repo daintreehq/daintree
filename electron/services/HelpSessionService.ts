@@ -1429,6 +1429,12 @@ export class HelpSessionService {
    * revokes (renderer IPC) leave the option off so "+ New session" /
    * explicit close discards the transcript as the user intended.
    */
+  /** The project a live session was provisioned for; null for an unknown or revoked one. */
+  getSessionProjectId(sessionId: string): string | null {
+    const record = this.sessionsById.get(sessionId);
+    return record && !record.revoked ? record.projectId : null;
+  }
+
   async revokeSession(sessionId: string, opts?: { captureHibernation?: boolean }): Promise<void> {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked) return;
