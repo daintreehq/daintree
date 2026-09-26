@@ -8,7 +8,12 @@ import { wrapError, wrapSuccess } from "../../../../shared/utils/ipcErrorSeriali
 import { CHANNELS } from "../../../ipc/channels.js";
 import { IpcDispatcherImpl } from "../../../ipc/dispatcher.js";
 import type { HostPickRequest } from "../../../../shared/types/ipc/hostFiles.js";
-import { createPickerSplits, installPickerSplits, type PickerSplitDeps } from "../pickers.js";
+import {
+  createPickerSplits,
+  installPickerSplits,
+  scratchFolderName,
+  type PickerSplitDeps,
+} from "../pickers.js";
 
 const REMOTE_VIEW = 5;
 const LOCAL_VIEW = 6;
@@ -193,6 +198,87 @@ describe("picker splits routing", () => {
       split({ hostId: "studio-01", webContentsId: REMOTE_VIEW, args: [[]], local, remote })
     ).resolves.toBe(true);
     expect(remote).not.toHaveBeenCalled();
+  });
+});
+
+describe("scratch save-as-project in a remote window", () => {
+  const scratch = { id: "s1", name: "Quick: test/1", path: "/home/greg/.daintree/scratches/s1" };
+
+  function call(remote: (channel?: string, args?: unknown[]) => unknown) {
+    return {
+      hostId: "studio-01",
+      webContentsId: REMOTE_VIEW,
+      args: ["s1"],
+      local: vi.fn(),
+      remote: vi.fn(async (channel?: string, args?: unknown[]) => remote(channel, args)),
+    };
+  }
+
+  it("picks a folder on the host and saves into a new folder named after the scratch", async () => {
+    const { client, deps: pickerDeps } = deps();
+    const saved = {
+      status: "saved",
+      project: { id: "p9", name: "Quick- test-1", path: "/home/greg/work/app/Quick- test-1" },
+      destinationPath: "/home/greg/work/app/Quick- test-1",
+    };
+    const split = createPickerSplits(pickerDeps)[CHANNELS.SCRATCH_SAVE_AS_PROJECT]!;
+    const c = call((channel) => (channel === CHANNELS.SCRATCH_GET_ALL ? [scratch] : saved));
+
+    await expect(split(c)).resolves.toEqual(saved);
+
+    expect(client.pickHostPaths).toHaveBeenCalledWith(
+      REMOTE_VIEW,
+      expect.objectContaining({ mode: "directory", title: 'Choose where to save "Quick: test/1"' })
+    );
+    // No channel: the host leg is scratch:save-as-project itself, with the host folder.
+    expect(c.remote).toHaveBeenLastCalledWith(undefined, [
+      "s1",
+      "/home/greg/work/app/Quick- test-1",
+    ]);
+    expect(c.local).not.toHaveBeenCalled();
+  });
+
+  it("answers cancelled when the host picker is dismissed, without asking the host to save", async () => {
+    const { client, deps: pickerDeps } = deps();
+    client.pickHostPaths.mockResolvedValueOnce(null);
+    const split = createPickerSplits(pickerDeps)[CHANNELS.SCRATCH_SAVE_AS_PROJECT]!;
+    const c = call(() => [scratch]);
+    await expect(split(c)).resolves.toEqual({ status: "cancelled" });
+    expect(c.remote).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the host's refusal", async () => {
+    const { deps: pickerDeps } = deps();
+    const split = createPickerSplits(pickerDeps)[CHANNELS.SCRATCH_SAVE_AS_PROJECT]!;
+    const c = call((channel) => {
+      if (channel === CHANNELS.SCRATCH_GET_ALL) return [scratch];
+      throw new Error("Destination folder is not empty. Choose an empty folder.");
+    });
+    await expect(split(c)).rejects.toThrow("Destination folder is not empty");
+  });
+
+  it("refuses a scratch the host doesn't have before opening the picker", async () => {
+    const { client, deps: pickerDeps } = deps();
+    const split = createPickerSplits(pickerDeps)[CHANNELS.SCRATCH_SAVE_AS_PROJECT]!;
+    await expect(split(call(() => []))).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(client.pickHostPaths).not.toHaveBeenCalled();
+  });
+
+  it("fails as disconnected when the host file client is gone", async () => {
+    const split = createPickerSplits({ client: () => undefined, copyFileToClipboard: vi.fn() })[
+      CHANNELS.SCRATCH_SAVE_AS_PROJECT
+    ]!;
+    const c = call(() => [scratch]);
+    await expect(split(c)).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(c.remote).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the folder safely", () => {
+    expect(scratchFolderName("My scratch")).toBe("My scratch");
+    expect(scratchFolderName("../../etc")).toBe("etc");
+    expect(scratchFolderName("a/b\\c")).toBe("a-b-c");
+    expect(scratchFolderName("   ")).toBe("scratch");
+    expect(scratchFolderName("...")).toBe("scratch");
   });
 });
 

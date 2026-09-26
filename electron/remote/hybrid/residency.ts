@@ -56,7 +56,11 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
     }
     if (getHostResidentProject(handle) === projectId) return;
     const project = projectStore.getProjectById(projectId);
-    if (!project) return;
+    if (!project) {
+      // A scratch (no project row, no workspace host): the project the view left is no longer held.
+      releaseProjectOnHost(workspace, handle);
+      return;
+    }
     activateProjectOnHost(workspace, project, handle).then(
       () => reportLoadStatus(endpoint, projectId, null),
       (error: unknown) => {

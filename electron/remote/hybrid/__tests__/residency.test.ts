@@ -115,6 +115,18 @@ describe("installRemoteProjectResidency", () => {
     expect(mocks.release).toHaveBeenCalledWith(workspace, -3);
   });
 
+  it("stops holding the project a view leaves for a scratch", () => {
+    const registry = fakeRegistry();
+    installRemoteProjectResidency({ registry, workspace: () => workspace });
+    const ep = endpoint(-3, "p1");
+    registry.endpoints.push(ep);
+    registry.change();
+    ep.projectId = "scratch-1";
+    registry.change();
+    expect(mocks.activate).toHaveBeenCalledTimes(1);
+    expect(mocks.release).toHaveBeenCalledWith(workspace, -3);
+  });
+
   it("reports a failed load to the view it was for", async () => {
     mocks.activate.mockRejectedValueOnce(new Error("no git"));
     const registry = fakeRegistry();

@@ -8,6 +8,8 @@ import type {
   ProjectSwitchTrace,
 } from "../../../shared/types/ipc/project.js";
 import type { EditorConfig, EditorGetConfigResult } from "../../../shared/types/editor.js";
+import type { ScratchSwitchPayload } from "../../../shared/types/ipc/scratch.js";
+import type { Scratch } from "../../../shared/types/scratch.js";
 import {
   toHostScopedKey,
   type HostDescriptor,
@@ -212,6 +214,44 @@ const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   return result;
 };
 
+/**
+ * A scratch is a workspace like a project, with no project row: the host
+ * confirms it and marks it opened; this Shell shows it in a view keyed to that
+ * host and tells that view, and only it, that it switched. The host's own
+ * current-scratch pointer describes its own windows and is left alone.
+ */
+const scratchSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote }) => {
+  const scratch = (await remote()) as Scratch | null;
+  if (!scratch || typeof scratch.id !== "string" || !scratch.id) {
+    throw new AppError({ code: "INTERNAL", message: "The host sent no scratch for the switch" });
+  }
+  const client = getRemoteService("remoteHostsClient");
+  if (!client) {
+    throw new AppError({
+      code: "HOST_DISCONNECTED",
+      message: "Remote hosts client is not running",
+    });
+  }
+  const options = (args[1] && typeof args[1] === "object" ? args[1] : {}) as SwitchOptions;
+  const key = toHostScopedKey(hostId, scratch.id);
+  const pvm = projectViewManagerOf(webContentsId);
+  if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
+  await client.switchWindowHost(senderContext(webContentsId), {
+    hostId,
+    projectId: scratch.id,
+    newWindow: false,
+  });
+  const view = pvm?.getActiveProjectId() === key ? pvm.getActiveView() : null;
+  const wc = view?.webContents;
+  if (wc && !wc.isDestroyed()) {
+    wc.send(CHANNELS.SCRATCH_ON_SWITCH, {
+      scratch,
+      switchId: randomUUID(),
+    } satisfies ScratchSwitchPayload);
+  }
+  return scratch;
+};
+
 /** Editors that open a folder or file on an SSH host through the VS Code remote URL. */
 const REMOTE_EDITOR_SCHEMES: Partial<Record<EditorConfig["id"], string>> = {
   vscode: "vscode",
@@ -375,10 +415,7 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG]: refuse(
     (host) => `Opening a folder on ${host} from this window isn't available yet.`
   ),
-  [CHANNELS.SCRATCH_SWITCH]: refuse((host) => `Scratch workspaces aren't available on ${host}.`),
-  [CHANNELS.SCRATCH_SAVE_AS_PROJECT]: refuse(
-    (host) => `Scratch workspaces aren't available on ${host}.`
-  ),
+  [CHANNELS.SCRATCH_SWITCH]: scratchSwitch,
   [CHANNELS.PLUGIN_INSTALL_FROM_FILE]: refuse(
     (host) => `Installing a plugin file from this computer on ${host} isn't available yet.`
   ),
@@ -417,6 +454,9 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.PROJECT_REOPEN,
   CHANNELS.PROJECT_GET_CURRENT,
   CHANNELS.PROJECT_CLOSE,
+  CHANNELS.SCRATCH_SWITCH,
+  // The picker split's host leg (see pickers.ts), with the folder chosen in the host picker.
+  CHANNELS.SCRATCH_SAVE_AS_PROJECT,
   CHANNELS.NOTIFICATION_SETTINGS_GET,
   CHANNELS.NOTIFICATION_SETTINGS_SET,
   CHANNELS.NOTIFICATION_SYNC_WATCHED,

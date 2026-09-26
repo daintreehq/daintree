@@ -1926,7 +1926,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "scratch:save-as-project": {
-    args: [scratchId: string];
+    args: [scratchId: string, remoteDestinationPath?: string | undefined];
     result: import("./scratch.js").ScratchSaveAsProjectResult;
   };
   "scratch:switch": {
