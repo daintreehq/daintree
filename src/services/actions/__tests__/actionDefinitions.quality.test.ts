@@ -450,7 +450,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // workbench floor for the subset invariant — the external surface may not
   // reach past the assistant's. Its 343 B is the whole of the increase, so this
   // stays the measured total rather than an allowance.
-  const MAX_COHORT_TOTAL_BYTES = 56_657;
+  // 56_657 → 57_147 for #11158's `host.switch` and `project.openOnHost` on the
+  // system tier, and off the external surface, so the external total does not
+  // move. What the prose has to carry is where a switch with no project lands
+  // (the host's remembered project, else its project list) and that the host
+  // move is confirmed in a dialog; a caller missing either reads the list or
+  // the dialog as a failure. The 490 B is exactly their two descriptions.
+  const MAX_COHORT_TOTAL_BYTES = 57_147;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

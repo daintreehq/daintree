@@ -9,6 +9,7 @@ import { HOSTS_OVERVIEW_ACTION_ID, HOSTS_SETTINGS_TAB } from "@/components/Hosts
 import { requestHostsOverview } from "@/components/Hosts/Overview/hostsOverviewRequests";
 import { ClientAppError } from "@/utils/clientAppError";
 import { getHostListSnapshot, hasRemoteHosts } from "@/components/Hosts/hostList";
+import { followSwitchResult } from "@/components/Hosts/hostSwitching";
 
 const hostIdSchema = z
   .string()
@@ -91,10 +92,14 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     id: "host.switch",
     title: "Switch host…",
     description:
-      'Switch this window to another machine running Daintree. With no args, opens the host menu. With hostId (from the host list, or "local"), switches directly; newWindow opens it in a new window instead. Fails when the host is not in the list.',
+      'Switch this window to another machine running Daintree. With no args, opens the host menu. With hostId (from the host list, or "local"), switches directly to the project this machine last had open there, or shows that host\'s project list when there is none; newWindow opens it in a new window instead. Fails when the host is not in the list.',
     category: "workspace",
     kind: "command",
-    danger: "safe",
+    // Moves the window the person is looking at to another machine: an agent
+    // (a local MCP client, or a host's through reverse dispatch) asks first.
+    danger: "confirm",
+    dangerRationale:
+      "Moves this window to another machine: the projects, terminals and agents it shows are that host's from then on.",
     scope: "renderer",
     keywords: ["host", "machine", "remote", "ssh", "server", "switch"],
     nonRepeatable: true,
@@ -107,10 +112,14 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
         return;
       }
       await assertKnownHost(parsed.hostId);
-      await window.electron.remoteHosts.switchWindowHost({
+      const result = await window.electron.remoteHosts.switchWindowHost({
         hostId: parsed.hostId,
         newWindow: parsed.newWindow ?? false,
       });
+      // With nothing to return to on that host, its project list opens for
+      // the person at this screen to pick from.
+      followSwitchResult(result);
+      return result;
     },
   }));
 

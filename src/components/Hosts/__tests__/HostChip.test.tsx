@@ -297,9 +297,46 @@ describe("HostChip", () => {
       await openMenu();
       fireEvent.click(screen.getByText("Update studio-01"));
       expect(takePendingHostUpdate()).toBe("h1");
-      expect(dispatch).toHaveBeenCalledWith("host.add", undefined, { source: "user" });
+      await waitFor(() =>
+        expect(dispatch).toHaveBeenCalledWith("host.add", undefined, { source: "user" })
+      );
     } finally {
       delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
     }
+  });
+
+  it("offers the update of a host a switch was refused for, from a window still on this machine", async () => {
+    const behind = host("h1", "studio-01", {
+      connection: {
+        status: "version-mismatch",
+        mismatch: { kind: "version", local: "1.4.0", remote: "1.3.0" },
+        remote: { ...HANDSHAKE, version: "1.3.0" },
+      },
+    });
+    await renderWithHosts([behind, host("h2", "studio-02")]);
+    const menu = await openMenu();
+    expect(menu.textContent).toContain("Update studio-01");
+    expect(menu.textContent).not.toContain("Update studio-02");
+    fireEvent.click(screen.getByText("Update studio-01"));
+    expect(takePendingHostUpdate()).toBe("h1");
+    await waitFor(() =>
+      expect(dispatch).toHaveBeenCalledWith("host.add", undefined, { source: "user" })
+    );
+  });
+
+  it("offers to update this machine once, however many hosts are ahead of it", async () => {
+    const ahead = (id: string, name: string) =>
+      host(id, name, {
+        connection: {
+          status: "version-mismatch",
+          mismatch: { kind: "version", local: "1.3.0", remote: "1.4.0" },
+          remote: { ...HANDSHAKE, version: "1.4.0" },
+        },
+      });
+    await renderWithHosts([ahead("h1", "studio-01"), ahead("h2", "studio-02")]);
+    const menu = await openMenu();
+    expect(menu.textContent?.match(/Update this machine/g)).toHaveLength(1);
+    fireEvent.click(screen.getByText("Update this machine"));
+    expect(window.electron.update.checkForUpdates).toHaveBeenCalled();
   });
 });

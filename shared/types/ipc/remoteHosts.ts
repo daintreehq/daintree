@@ -43,6 +43,18 @@ export interface SwitchWindowHostPayload {
   projectId?: string;
 }
 
+/**
+ * Where a host switch left the window. `switched`: the window shows `projectId`
+ * on `hostId` (the one asked for, or the last one this machine had open there).
+ * `window-opened`: a new window is on the host, showing its project list.
+ * `choose-project`: the host reported no project to return to, so nothing
+ * moved; the caller shows that host's project list for the window to pick from.
+ */
+export type SwitchWindowHostResult =
+  | { outcome: "switched"; hostId: HostId; projectId: string }
+  | { outcome: "window-opened"; hostId: HostId }
+  | { outcome: "choose-project"; hostId: HostId };
+
 /** A project as the host that has it lists it. Its id means something only on that host. */
 export interface HostProjectSummary {
   id: string;

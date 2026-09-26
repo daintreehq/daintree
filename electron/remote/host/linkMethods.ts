@@ -14,6 +14,10 @@ export const LinkMethod = {
   DESCRIBE_PROJECT: "host.describe-project",
   /** Shell → Host: every project the Host has, for the Shell's other-hosts listings. */
   LIST_PROJECTS: "host.list-projects",
+  /** Shell → Host: one of this Shell's windows now shows this project (or scratch). */
+  NOTE_ACTIVE_PROJECT: "host.note-active-project",
+  /** Shell → Host: the project this Shell last showed here, if the Host still has it. */
+  LAST_ACTIVE_PROJECT: "host.last-active-project",
   /** Host → Shell: these endpoints missed events; repaint them from a fresh snapshot. */
   ENDPOINT_RESYNC: "endpoint.resync",
 } as const;

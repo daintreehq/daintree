@@ -16,13 +16,12 @@ import { drivenElsewhereBy, getViewHostId } from "@/hooks/useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { actionService } from "@/services/ActionService";
 import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useProjectStore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
 import { logWarn } from "@/utils/logger";
-import { requestHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { PlatformGlyph } from "./PlatformGlyph";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
+import { hostUpdateOffer, runHostUpdate, type HostUpdateOffer } from "./hostUpdate";
 import { hasRemoteHosts, useHostList } from "./hostList";
 import { onHostMenuRequest } from "./hostMenuRequests";
 import {
@@ -39,19 +38,6 @@ import {
   updateTargetFor,
   type HostMenuRow,
 } from "./hostModel";
-
-function runUpdate(target: "host" | "local", hostId: string): void {
-  if (target === "host") {
-    // Updating a host is part of managing it, which lives in Settings → Hosts;
-    // the request opens that host's own update flow there.
-    requestHostUpdate(hostId);
-    void actionService.dispatch("host.add", undefined, { source: "user" });
-    return;
-  }
-  safeFireAndForget(window.electron.update.checkForUpdates(), {
-    context: "Checking for an update after a host build mismatch",
-  });
-}
 
 /** Take the open project to another host: the switch dialog finds or clones it there. */
 async function openProjectOnHost(hostId: string, projectId: string): Promise<void> {
@@ -111,6 +97,30 @@ function HostMenuItem({
 }
 
 /**
+ * Every update a mismatched build asks for: the window's own host first, then
+ * any other host whose switch was refused for its build. Updating this
+ * machine is offered once however many hosts ask for it.
+ */
+function hostUpdateOffers(
+  fromList: Array<HostUpdateOffer | null>,
+  current: HostUpdateOffer | null
+): HostUpdateOffer[] {
+  const offers: HostUpdateOffer[] = [];
+  let local = false;
+  for (const offer of [current, ...fromList]) {
+    if (!offer) continue;
+    if (offer.target === "local") {
+      if (local) continue;
+      local = true;
+    } else if (offers.some((seen) => seen.target === "host" && seen.hostId === offer.hostId)) {
+      continue;
+    }
+    offers.push(offer);
+  }
+  return offers;
+}
+
+/**
  * The window's host, left of the project switcher. Hidden until a host other
  * than this machine exists, and never in a build without Remote Hosts. Neutral
  * on purpose: which machine the window is on is context, not a call to act.
@@ -147,6 +157,16 @@ export function HostChip() {
   const status = hostChipStatus(isLocalWindow, connection, drivenElsewhereBy(lease));
   const statusText = hostChipStatusText(status);
   const mismatch = connection?.status === "version-mismatch" ? connection.mismatch : null;
+  const updates = hostUpdateOffers(
+    hostList.hosts.map(hostUpdateOffer),
+    mismatch && !isLocalWindow
+      ? {
+          hostId: windowHostId,
+          target: updateTargetFor(mismatch),
+          label: updateActionLabel(mismatch, name),
+        }
+      : null
+  );
   const overviewAvailable = actionService.has(HOSTS_OVERVIEW_ACTION_ID);
 
   const pick = (row: HostMenuRow, newWindow: boolean) => {
@@ -186,11 +206,15 @@ export function HostChip() {
         {rows.map((row) => (
           <HostMenuItem key={row.hostId} row={row} onPick={pick} />
         ))}
-        {mismatch && (
-          <DropdownMenuItem onSelect={() => runUpdate(updateTargetFor(mismatch), windowHostId)}>
-            {updateActionLabel(mismatch, name)}
+        {updates.map((offer) => (
+          <DropdownMenuItem
+            key={offer.target === "local" ? "local" : offer.hostId}
+            data-update-host-id={offer.hostId}
+            onSelect={() => runHostUpdate(offer.target, offer.hostId)}
+          >
+            {offer.label}
           </DropdownMenuItem>
-        )}
+        ))}
         <DropdownMenuSeparator />
         <DropdownMenuActionItem actionId="host.add">Add host…</DropdownMenuActionItem>
         {overviewAvailable && (

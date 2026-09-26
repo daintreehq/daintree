@@ -96,6 +96,8 @@ export type TransportChangeListener = (endpointIds: string[], attached: boolean)
 
 const DEFAULT_OVER_HIGH_WATER_GRACE_MS = 5_000;
 const DEFAULT_MAX_ENDPOINTS_PER_SESSION = 256;
+/** Shell machines whose last project a host remembers; the oldest is dropped first. */
+const MAX_REMEMBERED_CLIENTS = 64;
 
 interface SessionState {
   sessionId: string;
@@ -138,6 +140,7 @@ export class SessionHost {
   private readonly graceMs: number;
   private readonly maxEndpoints: number;
   private lastFrontendCount = -1;
+  private readonly lastActiveByClient = new Map<string, string>();
   private disposed = false;
 
   constructor(
@@ -169,6 +172,33 @@ export class SessionHost {
     let count = 0;
     for (const state of this.states.values()) if (state.link && !state.link.isClosed) count++;
     return count;
+  }
+
+  /**
+   * Remember which project a Shell last showed, so switching back to this host
+   * lands there. Keyed by the Shell's machine name rather than its client id:
+   * the id is minted per launch, and "the project you had open there" should
+   * outlive a restart of the Shell. Only a project this host has is kept.
+   */
+  noteActiveProject(client: ClientRef, projectId: string): void {
+    if (!this.options.describeProject?.(projectId)) return;
+    const key = client.clientName;
+    this.lastActiveByClient.delete(key);
+    this.lastActiveByClient.set(key, projectId);
+    while (this.lastActiveByClient.size > MAX_REMEMBERED_CLIENTS) {
+      const oldest = this.lastActiveByClient.keys().next().value;
+      if (oldest === undefined) break;
+      this.lastActiveByClient.delete(oldest);
+    }
+  }
+
+  /** The project the Shell last showed here, or null when it showed none or the host no longer has it. */
+  lastActiveProject(client: ClientRef): ProjectDescription | null {
+    const projectId = this.lastActiveByClient.get(client.clientName);
+    if (projectId === undefined) return null;
+    const description = this.options.describeProject?.(projectId) ?? null;
+    if (!description) this.lastActiveByClient.delete(client.clientName);
+    return description;
   }
 
   getEndpoint(sessionId: string, clientEndpointId: string): RemoteViewEndpoint | undefined {
@@ -265,6 +295,17 @@ export class SessionHost {
       ),
       link.registerCallHandler(LinkMethod.LIST_PROJECTS, EmptyPayloadSchema, () =>
         (this.options.listProjects?.() ?? []).slice(0, MAX_LISTED_PROJECTS)
+      ),
+      link.registerCallHandler(
+        LinkMethod.NOTE_ACTIVE_PROJECT,
+        DescribeProjectPayloadSchema,
+        ({ projectId }) => {
+          this.noteActiveProject(s.client, projectId);
+          return null;
+        }
+      ),
+      link.registerCallHandler(LinkMethod.LAST_ACTIVE_PROJECT, EmptyPayloadSchema, () =>
+        this.lastActiveProject(s.client)
       ),
       link.onClose(() => {
         if (s.link !== link) return;

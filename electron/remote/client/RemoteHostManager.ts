@@ -382,6 +382,26 @@ export class HostConnection {
   }
 
   /**
+   * Tell the host this Shell now shows `projectId`, so a later bare switch to
+   * the host lands on it. Best effort: a note lost with the link only means the
+   * next switch here opens the project list instead.
+   */
+  noteActiveProject(projectId: string): void {
+    const session = this.session;
+    if (!session || !session.isOpen) return;
+    session.call(LinkMethod.NOTE_ACTIVE_PROJECT, { projectId }).catch(() => {});
+  }
+
+  /** The project this Shell last showed on the host, as the host describes it now; null for none. */
+  async lastActiveProject(): Promise<ProjectDescription | null> {
+    const session = this.session;
+    if (!session || !session.isOpen) return null;
+    const answer = await session.call(LinkMethod.LAST_ACTIVE_PROJECT, null);
+    const parsed = ProjectDescriptionSchema.safeParse(answer);
+    return parsed.success ? parsed.data : null;
+  }
+
+  /**
    * A session-level method on the host, needing no view bound to it. Rejects
    * while the host can't be reached.
    */

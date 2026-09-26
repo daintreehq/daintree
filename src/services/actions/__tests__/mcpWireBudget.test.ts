@@ -635,7 +635,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // In-app only, on the action tier, so the external ceiling above does not
   // move. The spend is its 257 B description, the `panelId` argument, and the
   // output schema: the scheduling outcome is read back as structured content.
-  const MAX_COHORT_PAYLOAD_BYTES = 227_300;
+  // 227_300 → 228_250 for #11158's `host.switch` and `project.openOnHost`,
+  // measured at 228_226 B. In-app only, on the system tier, so the external
+  // ceiling above does not move. The spend is their 490 B of description and
+  // the `hostId`, `newWindow` and `projectId` arguments.
+  const MAX_COHORT_PAYLOAD_BYTES = 228_250;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

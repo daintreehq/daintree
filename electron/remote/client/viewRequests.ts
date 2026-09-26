@@ -17,10 +17,19 @@ import { registerReverseRequestMethod } from "./reverseRequests.js";
  *
  * Default deny. A host is another machine, and everything outside this list
  * reaches into this one — its clipboard (`terminal.paste`, the copy actions),
- * its filesystem and editors, its browser (`*.openPR`, external URLs), which
- * host a window is bound to, its settings and plugins — or is simply not
- * audited for a caller this Shell does not control. An action a new release
- * adds stays out until it is added here.
+ * its filesystem and editors, its browser (`*.openPR`, external URLs), its
+ * settings and plugins — or is simply not audited for a caller this Shell
+ * does not control. An action a new release adds stays out until it is added
+ * here.
+ *
+ * Three reach a little further, each on this Shell's terms:
+ * - `browser.captureScreenshot` returns the pixels of a browser panel in the
+ *   view the host already drives, as bytes; nothing lands on this clipboard.
+ * - `host.switch` is `danger: "confirm"`, so a host asking to move this window
+ *   raises this Shell's own dialog naming that host, and does nothing unless
+ *   the person here approves.
+ * - `project.openOnHost` only opens the switch dialog here; every push, clone
+ *   and switch in it is the person's own click.
  */
 export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "actions.getContext",
@@ -29,7 +38,10 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.launch",
   "agent.listAvailable",
   "agent.listPresets",
+  "browser.captureScreenshot",
   "fleet.getRunStatus",
+  "host.switch",
+  "project.openOnHost",
   "recipe.list",
   "recipe.run",
   "terminal.cancelWatch",
