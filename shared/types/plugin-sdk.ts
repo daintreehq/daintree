@@ -178,6 +178,30 @@ export type {
 export type { PluginAgentSnapshot } from "./plugin.js";
 export type { AgentState, WaitingReason } from "./agent.js";
 
+// ── Handing work to agents (host.agents, host.sendToAgent, drag) ────
+// The drag contract is runtime values a view needs at `dragstart`, so the
+// constants and the helper are value exports.
+
+export type {
+  PluginAgentPane,
+  PluginAgentsApi,
+  PluginSendToAgentOptions,
+  PluginSendToAgentResult,
+  PluginSendToAgentRefusalReason,
+} from "./plugin.js";
+export type {
+  AgentContextDragPayload,
+  AgentContextDataTransfer,
+} from "../utils/agentContextDrag.js";
+export {
+  AGENT_CONTEXT_DRAG_MIME,
+  AGENT_CONTEXT_MAX_TEXT_LENGTH,
+  AGENT_CONTEXT_MAX_TITLE_LENGTH,
+  AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH,
+  setAgentContextDragData,
+  encodeAgentContextDragPayload,
+} from "../utils/agentContextDrag.js";
+
 // ── Forge provider contract ─────────────────────────────────────────
 
 export type {

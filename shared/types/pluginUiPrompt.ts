@@ -11,16 +11,45 @@ import type {
   PluginQuickPickOptions,
   PluginInputBoxOptions,
   PluginConfirmOptions,
+  PluginSendToAgentResult,
 } from "./plugin.js";
 
-/** Discriminant for the three imperative prompt kinds. */
-export type PluginUiPromptKind = "quickPick" | "inputBox" | "confirm";
+/**
+ * Discriminant for the imperative prompt kinds. `sendToAgent` is
+ * `host.sendToAgent`: it rides this bridge because, without a `terminalId`, it
+ * is a picker the user answers — and with one it still has to reach the one
+ * renderer that owns the project's drafts.
+ */
+export type PluginUiPromptKind = "quickPick" | "inputBox" | "confirm" | "sendToAgent";
+
+/**
+ * A validated `host.sendToAgent` call on its way to the renderer. `sourceLabel`
+ * is the plugin's display name, resolved by the host rather than taken from the
+ * plugin, so the draft's heading cannot claim to come from someone else.
+ */
+export interface PluginSendToAgentRequest {
+  text: string;
+  title?: string;
+  sourceLabel: string;
+  terminalId?: string;
+  worktreeId?: string;
+}
 
 /** Kind-tagged parameters for one prompt request. */
 export type PluginUiPromptParams =
   | { kind: "quickPick"; items: PluginQuickPickItem[]; options: PluginQuickPickOptions }
   | { kind: "inputBox"; options: PluginInputBoxOptions }
-  | { kind: "confirm"; options: PluginConfirmOptions };
+  | { kind: "confirm"; options: PluginConfirmOptions }
+  | { kind: "sendToAgent"; request: PluginSendToAgentRequest };
+
+/**
+ * Whether a prompt puts a dialog in front of the user. A `sendToAgent` with a
+ * target drafts and answers at once, so it neither waits behind nor counts
+ * against the plugin's one open dialog.
+ */
+export function promptOpensDialog(params: PluginUiPromptParams): boolean {
+  return !(params.kind === "sendToAgent" && params.request.terminalId !== undefined);
+}
 
 /**
  * One prompt request sent main → renderer. `promptId` correlates the eventual
@@ -39,7 +68,12 @@ export interface PluginUiPromptRequest {
  * structured-clone IPC boundary (Electron serializes `undefined`).
  */
 export type PluginUiPromptResultValue =
-  PluginQuickPickItem | PluginQuickPickItem[] | string | boolean | undefined;
+  | PluginQuickPickItem
+  | PluginQuickPickItem[]
+  | string
+  | boolean
+  | PluginSendToAgentResult
+  | undefined;
 
 /** Renderer → main reply carrying the user's answer (fire-and-forget). */
 export interface PluginUiPromptResponse {

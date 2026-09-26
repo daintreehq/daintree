@@ -64,7 +64,11 @@ import type {
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
-import type { PanelReloadResult } from "../../../shared/types/plugin.js";
+import type {
+  PanelReloadResult,
+  PluginAgentPane,
+  PluginSendToAgentResult,
+} from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import { abortErrorFor } from "./pluginAbortError.js";
@@ -937,6 +941,19 @@ export class PluginDevWorkerHostProxy {
       // Capability check, consent prompt, active-agent resolution, and the PTY
       // write all run on the real main-side host — the worker only relays.
       sendToActiveAgent: (text, options) => this.call<void>("sendToActiveAgent", { text, options }),
+      // Listing and drafting both run on the real host in main, which owns the
+      // capability gate, the consent prompt and the project binding. Grace
+      // values match the host's own unload answers ([] / cancelled).
+      agents: {
+        list: () => this.callWithGrace<PluginAgentPane[]>("agents.list", undefined, []),
+      },
+      sendToAgent: (text, options, callOptions) =>
+        this.callWithGrace<PluginSendToAgentResult>(
+          "sendToAgent",
+          { text, options },
+          { status: "cancelled" },
+          callOptions?.signal
+        ),
       // Imperative UI prompts (#10522). Post-activation-safe (no
       // assertActivationOpen): plugins prompt from command handlers. They use
       // callWithGrace so a plugin unload mid-prompt resolves the dismiss value

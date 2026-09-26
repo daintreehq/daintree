@@ -3325,6 +3325,104 @@ interface PluginAgentSnapshot {
     readonly timestamp: number;
 }
 /**
+ * Why an agent pane will not take a drafted handoff right now. Codes, not copy:
+ * the wording belongs to whatever surface shows it.
+ *
+ * - `unknown-terminal` — no pane with that id in this project.
+ * - `not-agent` — the pane is not an agent with an input bar (a plain shell, a
+ *   demoted agent, an agent Daintree has no input bar for).
+ * - `exited` — the agent's process has ended.
+ * - `input-bar-off` — the user has the input bar switched off, so there is no
+ *   visible draft to put anything in.
+ * - `backend-unavailable` — the terminal service is disconnected or recovering.
+ * - `input-locked` — the pane's input is locked.
+ * - `restarting` — the pane is restarting.
+ * - `input-busy` — the draft is about to be submitted by dictation, which would
+ *   send the handoff with it.
+ * - `not-in-grid` — the pane is docked or in the background, where its input bar
+ *   is not on screen.
+ * - `fleet-armed` — a fleet broadcast is armed, so Enter in that draft would go
+ *   to every armed agent.
+ * - `project-unavailable` — the plugin's project has no open view.
+ * - `launch-failed` — the user chose to start a new agent and it did not start.
+ * - `prompt-open` — another picker from this plugin is already open.
+ */
+type PluginSendToAgentRefusalReason = "unknown-terminal" | "not-agent" | "exited" | "input-bar-off" | "backend-unavailable" | "input-locked" | "restarting" | "input-busy" | "not-in-grid" | "fleet-armed" | "project-unavailable" | "launch-failed" | "prompt-open";
+/**
+ * One agent pane in the plugin's project, as {@link PluginAgentsApi.list}
+ * reports it.
+ *
+ * `observedState` is what the host last read off the agent's own terminal
+ * output — a heuristic that is often wrong, never a guarantee the agent is
+ * doing (or done doing) anything. Show it as "last seen working", not as fact.
+ */
+interface PluginAgentPane {
+    /** The pane's id — what {@link PluginHostApi.sendToAgent} takes as `terminalId`. */
+    readonly terminalId: string;
+    /** The pane's title as the user sees it, e.g. `Claude: fix auth tests`. */
+    readonly title: string;
+    /** The agent running in it (`claude`, `codex`, …). */
+    readonly agentId: string;
+    /** The worktree the pane belongs to, or `null` when it has none. */
+    readonly worktree: {
+        readonly id: string;
+        readonly name: string;
+        readonly branch?: string;
+    } | null;
+    /** Last observed agent state, when there is one. An observation, not a fact. */
+    readonly observedState?: AgentState;
+    /** Whether this is the pane the user has selected. */
+    readonly isFocused: boolean;
+    /** Whether {@link PluginHostApi.sendToAgent} would draft into it right now. */
+    readonly canDraft: boolean;
+    /** Why it would not, when `canDraft` is `false`. */
+    readonly draftRefusal?: PluginSendToAgentRefusalReason;
+}
+/** `host.agents` — the agent panes in the plugin's project. */
+interface PluginAgentsApi {
+    /**
+     * The live agent panes in this plugin's project, grouped by nothing and in
+     * the order the grid holds them. A project plugin sees only its own
+     * project's agents; an installed plugin sees the project the user is looking
+     * at. Exited and demoted agents are left out. Gated on `agent:read`.
+     *
+     * Resolves `[]` when the project has no open view or once the plugin is
+     * unloaded.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare `agent:read`.
+     */
+    list(): Promise<PluginAgentPane[]>;
+}
+/** Options for {@link PluginHostApi.sendToAgent}. */
+interface PluginSendToAgentOptions {
+    /**
+     * Draft straight into this pane (an id from {@link PluginAgentsApi.list}),
+     * with no picker. Omit to let the user choose.
+     */
+    terminalId?: string;
+    /**
+     * The worktree the call is about — typically `PanelViewProps.worktreeId`.
+     * Only steers the picker: an agent there is preselected, and "New agent here"
+     * starts one there.
+     */
+    worktreeId?: string;
+    /** Heading shown above the text in the draft, e.g. a card title. At most 120 characters. */
+    title?: string;
+}
+/**
+ * How a {@link PluginHostApi.sendToAgent} call ended. `drafted` means the text
+ * is in that agent's draft and nothing was submitted.
+ */
+type PluginSendToAgentResult = {
+    status: "drafted";
+    terminalId: string;
+} | {
+    status: "cancelled";
+} | {
+    status: "refused";
+    reason: PluginSendToAgentRefusalReason;
+};
+/**
  * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
  * app's internal `notify()` surface: plugins cannot set `priority` (a
  * `priority:"low"` + `type:"error"` toast silently drops — see the lint rule at
@@ -4645,6 +4743,38 @@ interface PluginHostApi extends PluginActivationApi {
         submit?: boolean;
     }): Promise<void>;
     /**
+     * The agent panes in this plugin's project, for choosing where to hand work.
+     * Gated on `agent:read`. See {@link PluginAgentsApi}.
+     */
+    readonly agents: PluginAgentsApi;
+    /**
+     * Hand `text` to an agent: it is appended to that agent's visible draft,
+     * below anything the user already typed, as a fenced block headed by
+     * `options.title` and the plugin's name. Nothing is ever submitted — the user
+     * adds their instruction and presses Enter. There is no `submit` option.
+     *
+     * With `options.terminalId` the draft goes straight to that pane. Without it
+     * the user picks from the project's agents, grouped by worktree (an agent in
+     * `options.worktreeId` is preselected, else the focused one), or starts a new
+     * agent in that worktree or in a new worktree; the text lands in the new
+     * agent's draft once it is up.
+     *
+     * Gated on `agent:input` with the same first-use consent prompt as
+     * {@link sendToActiveAgent}. A project plugin only ever reaches its own
+     * project's panes. Never moves focus.
+     *
+     * Resolves `{ status: "drafted", terminalId }`, `{ status: "cancelled" }`
+     * (the user dismissed the picker, or the plugin unloaded), or
+     * `{ status: "refused", reason }` when the target cannot take a draft —
+     * see {@link PluginSendToAgentRefusalReason}.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `agent:input`, or the user denies the consent prompt.
+     * @throws {Error} If `text` is blank or longer than 32,768 characters, or an
+     *   option has the wrong type or length.
+     */
+    sendToAgent(text: string, options?: PluginSendToAgentOptions, callOptions?: PluginHostCallOptions): Promise<PluginSendToAgentResult>;
+    /**
      * Signal that decorations for `scope` (optionally narrowed to `paths`) have
      * changed and any renderer showing them should re-pull. Unlike the
      * `register*` methods this is NOT revoke-guarded: it is called from the
@@ -4945,6 +5075,67 @@ interface PluginActionContribution {
 }
 
 /**
+ * The contract a plugin view uses to hand a piece of work to an agent terminal
+ * by drag and drop, and the text that lands in the agent's draft when it does.
+ *
+ * Pure and dependency-free on purpose: it ships in `@daintreehq/plugin-sdk`,
+ * where a view with no build step reads it as documentation and writes the
+ * same JSON by hand, and it is the one place the renderer and the host agree on
+ * what a payload may hold and how it reads once drafted.
+ */
+/**
+ * The `dataTransfer` type an agent-context drag carries.
+ *
+ * Lowercase because Chromium lowercases custom types on the way in, so a
+ * mixed-case constant would never match what `types` reports back.
+ */
+declare const AGENT_CONTEXT_DRAG_MIME = "application/x-daintree-agent-context";
+/** Longest `text` a payload may carry, in UTF-16 code units. */
+declare const AGENT_CONTEXT_MAX_TEXT_LENGTH = 32768;
+/** Longest `title`, after trimming. */
+declare const AGENT_CONTEXT_MAX_TITLE_LENGTH = 120;
+/** Longest `source.label`, after trimming. */
+declare const AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH = 80;
+/**
+ * What a drag hands an agent: a piece of text for the user to instruct the
+ * agent about. It lands in the agent's draft as quoted material and is never
+ * submitted — the user adds their own instruction and presses Enter.
+ */
+interface AgentContextDragPayload {
+    /** Payload version. Only `1` exists. */
+    v: 1;
+    /** Short heading shown above the text, e.g. a card title. At most 120 characters. */
+    title?: string;
+    /** The content itself. Non-empty, at most 32,768 characters. */
+    text: string;
+    /** Where it came from, shown beside the title (e.g. `{ label: "Kanban" }`). */
+    source?: {
+        label?: string;
+    };
+}
+/**
+ * The slice of `DataTransfer` the SDK helper writes to. Structural so the
+ * helper type-checks without the DOM library and accepts a test double.
+ */
+interface AgentContextDataTransfer {
+    setData(format: string, data: string): void;
+    effectAllowed: string;
+}
+/**
+ * Serialise a payload for `dataTransfer.setData`. Throws a `TypeError` naming
+ * the problem when the payload would be refused at the drop, so an author finds
+ * out at `dragstart` rather than from a drop that silently does nothing.
+ */
+declare function encodeAgentContextDragPayload(payload: AgentContextDragPayload): string;
+/**
+ * Put `payload` on a drag: the agent-context type, plus `text/plain` so a drop
+ * anywhere else (an editor, another app) still receives the text. Call it from
+ * `dragstart`. Throws on an invalid payload, like
+ * {@link encodeAgentContextDragPayload}.
+ */
+declare function setAgentContextDragData(dataTransfer: AgentContextDataTransfer, payload: AgentContextDragPayload): void;
+
+/**
  * Authoring helpers for forge providers.
  *
  * Lives in `shared/` so the main process, the workspace-host UtilityProcess,
@@ -5021,4 +5212,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData };

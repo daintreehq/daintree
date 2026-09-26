@@ -193,6 +193,40 @@ describe("PluginDevWorkerHostProxy getWorktreesResult (#12174)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy agent handoff", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays agents.list and resolves with the panes", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.agents.list();
+    expect(sent.find((m) => m.type === "host-call" && m.method === "agents.list")).toBeDefined();
+    const panes = [{ terminalId: "t-1", canDraft: true }];
+    resolveCall(proxy, sent, "agents.list", panes);
+    await expect(promise).resolves.toEqual(panes);
+  });
+
+  it("relays sendToAgent with its text and options, and resolves with the result", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.sendToAgent("Card body", { title: "Fix login", worktreeId: "wt-1" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "sendToAgent");
+    expect(call).toMatchObject({
+      params: { text: "Card body", options: { title: "Fix login", worktreeId: "wt-1" } },
+    });
+    resolveCall(proxy, sent, "sendToAgent", { status: "drafted", terminalId: "t-1" });
+    await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+  });
+
+  it("answers the host's own unload values when the proxy is disposed mid-call", async () => {
+    const { proxy } = makeProxy();
+    const list = proxy.host.agents.list();
+    const send = proxy.host.sendToAgent("x");
+    proxy.dispose();
+    await expect(list).resolves.toEqual([]);
+    await expect(send).resolves.toEqual({ status: "cancelled" });
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

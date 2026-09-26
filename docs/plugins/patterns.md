@@ -193,6 +193,44 @@ await host.dispatch("agent.launch", {
 
 Once loaded, your own commands are also actions — but not MCP tools. The MCP tool lists are fixed per tier and name only Daintree's built-in actions, so an agent cannot call a plugin command back. To give agents an API, serve it from an [agent MCP endpoint](./agent-extensions.md#agent-mcp-endpoints).
 
+## Hand work to an agent
+
+The move that makes a project app agentic: pick up a kanban card, a support message, a calendar entry, and give it to one of the agents working in the project. Two routes, one destination — the agent's draft, where the user adds the instruction ("fix this", "reply to this") and presses Enter. Neither route ever submits.
+
+**Drag it onto an agent.** Make the card draggable and put the agent-context payload on the drag. No worker code, no capability:
+
+```js
+onDragStart: (event) => {
+  event.dataTransfer.setData(
+    "application/x-daintree-agent-context",
+    JSON.stringify({ v: 1, title: card.title, text: card.body, source: { label: "Kanban" } })
+  );
+  event.dataTransfer.setData("text/plain", card.body);
+},
+```
+
+Dropped on an agent's input bar or its terminal, it lands in that agent's draft and the caret follows it. A shell, a locked agent or anything else that can't take a draft refuses the drag. Details and the SDK helper: [Views → Handing work to an agent by drag](./views.md#handing-work-to-an-agent-by-drag).
+
+**Right-click → "Send to agent…".** For the menu, a button or the keyboard, call `host.sendToAgent` from your worker (it needs `agent:input` and asks the user once). Without a target the user picks the agent, grouped by worktree, or starts a new one — in this worktree or a fresh one named after the card:
+
+```js
+// worker
+host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId }) =>
+  host.sendToAgent(text, { title, worktreeId })
+);
+// view — worktreeId is PanelViewProps.worktreeId, so an agent there is offered first
+const result = await window.electron.plugin.invoke(pluginId, "sendToAgent", {
+  text: card.body,
+  title: card.title,
+  worktreeId,
+});
+if (result.status === "drafted") markCardInProgress(card, result.terminalId);
+```
+
+`result` is `drafted` (with the pane's id), `cancelled`, or `refused` with a reason the user has already been shown. To offer your own list instead, `host.agents.list()` (`agent:read`) returns the project's agent panes with their worktree and whether each can take a draft; pass the chosen `terminalId` and there is no picker.
+
+What lands, either way: the card's title (headed by your label or plugin name) and its text in a fenced block, appended below anything the user already typed. Keep `text` to what the agent needs — at most 32,768 characters — and let the agent read the rest from your data through the files or an [agent MCP endpoint](./agent-extensions.md#agent-mcp-endpoints). Never put the instruction in the text: the user writes that.
+
 ## Run a command
 
 For a long-lived process (a dev server, a watcher), `host.process.spawn` is the supervised path: it needs the `shell:exec` capability, raises a one-time consent dialog on first use, streams output to your views on the `process` channel keyed by handle id, and is killed with the plugin.

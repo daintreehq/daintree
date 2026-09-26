@@ -337,7 +337,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       handleDrop,
       resetDragState,
       isDragOverFiles,
-    } = useDragDrop(editorViewRef, cwd, onActivate);
+    } = useDragDrop(editorViewRef, cwd, onActivate, terminalId);
 
     // The dialog unmounts its body once its exit animation ends, and can close
     // under a hovering file — a slow submission collapses it mid-drag. Chromium

@@ -191,6 +191,42 @@ export default function Notes({ pluginId }) {
 
 The first `Markdown` in a session renders nothing while the async renderer loads, then the document; later ones render at once. For TypeScript, `@daintreehq/plugin-sdk` ships the module's declaration: add `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` to `compilerOptions`, and `MarkdownProps` comes with it.
 
+## Handing work to an agent by drag
+
+A card, a message or a row in your view can be dragged onto an agent terminal — its input bar or the terminal itself — and it lands in that agent's draft for the user to instruct it about. Nothing is submitted. The drag carries one app-internal type, `application/x-daintree-agent-context`, holding JSON:
+
+```ts
+{ v: 1, text: string, title?: string, source?: { label?: string } }
+```
+
+`text` is required, non-blank and at most 32,768 characters; `title` at most 120; `source.label` at most 80 (say `"Kanban"`). Set `text/plain` to the same text too, so a drop anywhere else — an editor, another app — still gets something sensible. In a hand-written view, with no build step:
+
+```js
+createElement(
+  "div",
+  {
+    draggable: true,
+    onDragStart: (event) => {
+      const payload = { v: 1, title: card.title, text: card.body, source: { label: "Kanban" } };
+      event.dataTransfer.setData("application/x-daintree-agent-context", JSON.stringify(payload));
+      event.dataTransfer.setData("text/plain", card.body);
+      event.dataTransfer.effectAllowed = "copy";
+    },
+  },
+  card.title
+);
+```
+
+A bundled view can use the SDK helper, which writes all three and throws on a payload the drop would refuse:
+
+```ts
+import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
+
+onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
+```
+
+What lands is the same block `host.sendToAgent` drafts: your `source.label` and `title` as a heading, the text fenced below, appended under whatever the user already typed. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, a locked or restarting agent, or one in an armed fleet refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — the host validates it in full and drops anything malformed. For the keyboard or menu route to the same place, see [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft).
+
 ## Resources your view owns
 
 An unmount frees what your component held and nothing it attached elsewhere. A `window` or `document` listener, an interval, an animation-frame loop, an observer never disconnected, a `Worker`, an object URL and a WebGL context all outlive it unless something releases them, and because `disposeSignal` aborts on every temporary unmount too, a view that forgets gains another set with each maximise or tab switch. WebGL runs out first: Chromium keeps a canvas's context until garbage collection and evicts the oldest once a renderer holds about sixteen.

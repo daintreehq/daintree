@@ -1131,6 +1131,10 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_GET_REQUEST: "plugin:actions-get-request",
   /** Bridge: renderer returns the single projected action entry (or null) to the main process. */
   PLUGIN_ACTIONS_GET_RESPONSE: "plugin:actions-get-response",
+  /** Bridge: main process asks the renderer for the project's agent panes (`host.agents.list`). */
+  PLUGIN_AGENTS_LIST_REQUEST: "plugin:agents-list-request",
+  /** Bridge: renderer returns the project's agent panes to the main process. */
+  PLUGIN_AGENTS_LIST_RESPONSE: "plugin:agents-list-response",
   /** Bridge: main process asks the renderer to render an imperative plugin UI prompt (#10522). */
   PLUGIN_UI_PROMPT_REQUEST: "plugin:ui-prompt-request",
   /** Bridge: renderer returns the user's answer to a plugin UI prompt (fire-and-forget). */

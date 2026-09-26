@@ -8,6 +8,8 @@ import type {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { handlePanelReloadRequest } from "@/services/plugin/pluginPanelReload";
 import type { PluginPanelReloadResponse } from "@shared/types/pluginPanelReload";
+import type { PluginAgentPane } from "@shared/types/plugin";
+import { listAgentPanes } from "@/services/agentHandoff/agentDraft";
 
 /**
  * Project an internal {@link ActionManifestEntry} onto the slim, IPC-safe
@@ -48,6 +50,8 @@ function toPluginManifestEntry(entry: ActionManifestEntry): PluginActionManifest
  *   matches `list()`'s "restricted is invisible to plugins" contract.
  * - `host.reloadPanel()` (#12610) → the panel's registered view, after
  *   re-validating the target against this renderer's live panel record.
+ * - `host.agents.list()` → this view's agent panes, read from its own panel and
+ *   worktree stores, so a project-bound plugin only ever sees its project.
  *
  * The dispatch success send sits inside the try block so a non-serializable
  * action result (a DataCloneError on `ipcRenderer.send`) is caught and replaced
@@ -115,6 +119,21 @@ export function usePluginBridge(): void {
       }
     );
 
+    // Optional-chained like the panel reload below: a preload from before the
+    // channel existed simply never asks, and main answers `[]` on its timeout.
+    const cleanupAgentsList = window.electron.pluginBridge.onAgentsListRequest?.(
+      ({ requestId }) => {
+        if (disposed) return;
+        let agents: PluginAgentPane[] = [];
+        try {
+          agents = listAgentPanes();
+        } catch {
+          // An empty answer is the documented "nothing to list" outcome.
+        }
+        window.electron.pluginBridge.sendAgentsListResponse({ requestId, agents });
+      }
+    );
+
     const cleanupPanelReload = window.electron.pluginBridge.onPanelReloadRequest?.((request) => {
       const send = (response: PluginPanelReloadResponse): void => {
         if (disposed) return;
@@ -136,6 +155,7 @@ export function usePluginBridge(): void {
       cleanupDispatch();
       cleanupActionsList();
       cleanupActionsGet();
+      cleanupAgentsList?.();
       cleanupPanelReload?.();
     };
   }, []);

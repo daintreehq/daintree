@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { EditorView as EditorViewFacet } from "@codemirror/view";
 import type { EditorView } from "@codemirror/view";
 import { hasFileDrag } from "@/lib/fileDragPayload";
+import { hasAgentContextDrag } from "@/lib/agentContextDragPayload";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
@@ -74,7 +75,13 @@ export function useEditorDomHandlers({
           // the drop still bubbles and the chip path stays the sole producer.
           // Drags carrying no file stay CodeMirror's: dropping text still
           // inserts text, and moving a selection within the input still moves.
-          return hasFileDrag(event.dataTransfer.types);
+          //
+          // An agent-context drag is claimed the same way, and for the same
+          // reason: it carries `text/plain` too, which CodeMirror would insert
+          // raw beside the block `useDragDrop` drafts — or, where the draft is
+          // refused, in place of it.
+          const types = event.dataTransfer.types;
+          return hasFileDrag(types) || hasAgentContextDrag(types);
         },
         beforeinput: (event) => {
           const latest = latestRef.current;

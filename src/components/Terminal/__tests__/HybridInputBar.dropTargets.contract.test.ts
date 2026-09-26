@@ -198,6 +198,23 @@ describe("HybridInputBar drop targets (#12570)", () => {
     expect(bound).toEqual(expect.arrayContaining(Object.values(DROP_HANDLERS)));
   });
 
+  // An agent-context drop drafts into a named pane; without the id the hook has
+  // no draft to write and refuses every such drag, silently, in both hosts.
+  it("tells useDragDrop whose draft an agent-context drop lands in", () => {
+    const source = parseBar();
+    let args: string[] = [];
+    walk(source, (node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "useDragDrop"
+      ) {
+        args = node.arguments.map((arg) => arg.getText(source));
+      }
+    });
+    expect(args[3]).toBe("terminalId");
+  });
+
   it("wraps the compact editor host in a complete drop target", () => {
     const source = parseBar();
     const target = elementWithRef(source, "inputShellRef");

@@ -136,6 +136,13 @@ interface PluginHostApi {
 
   // Agent input — gated on the `agent:input` capability
   sendToActiveAgent(text: string, options?: { submit?: boolean }): Promise<void>;
+  sendToAgent(
+    text: string,
+    options?: PluginSendToAgentOptions,
+    callOptions?: PluginHostCallOptions
+  ): Promise<PluginSendToAgentResult>;
+  // The project's agent panes — gated on `agent:read`
+  readonly agents: PluginAgentsApi;
 
   // Settings (user-facing, schema-declared) + private storage (machine-owned)
   readonly settings: SettingsApi;
@@ -181,7 +188,7 @@ Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-
 
 Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous `logger` accessor is the lone exception — its `info`/`warn`/`error` calls return `void`.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `reloadPanel`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `reloadPanel`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
 **Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
 
@@ -728,6 +735,68 @@ The host resolves the target itself, preferring the focused/visible agent termin
 
 First use raises a just-in-time consent prompt (like `shell:exec`); a granted consent covers later calls. `sendToActiveAgent` is NOT revoke-guarded — call it from timers and subscription callbacks — but it becomes a no-op once the plugin is unloaded. It throws `PERMISSION_REQUIRED:` if the plugin did not declare `agent:input` or the user denies consent, and `NO_ACTIVE_AGENT:` if no agent terminal is available to receive the input.
 
+For handing a piece of work to an agent the user chooses, use [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) instead: it drafts where the user can see it and never submits.
+
+## `sendToAgent` — hand work to an agent's draft
+
+Put a piece of work — a card, a message, a row — into an agent's draft for the user to instruct the agent about. Gated on `agent:input`, with the same first-use consent prompt as `sendToActiveAgent`. It is draft-only by design: there is no `submit` option, nothing is ever sent to the agent until the user presses Enter, and it never waits for an agent to look idle.
+
+```ts
+// Let the user pick the agent (or start one):
+const result = await host.sendToAgent(card.body, {
+  title: card.title, // heading above the text in the draft, at most 120 characters
+  worktreeId, // steers the picker — typically PanelViewProps.worktreeId
+});
+
+// Or straight into a pane you already know, e.g. from host.agents.list():
+await host.sendToAgent(card.body, { terminalId, title: card.title });
+```
+
+**What lands in the draft.** The text, fenced, under a heading made of your plugin's display name and `title` (`Acme Board: Fix login redirect`). It is appended below whatever the user has already typed, separated by a blank line — never replacing it — and the caret is left on a fresh line after it. The heading's source name comes from the host, not from you. Text is at most 32,768 characters; line endings are normalised and control characters other than tab and newline are removed.
+
+**Without `terminalId`** the user gets a picker of this project's agents, grouped by worktree, each with its last observed state (Working, Waiting — read off the terminal, often wrong). It opens on a draftable agent in `worktreeId`, else on the focused agent. Two more rows start an agent for the handoff: **New agent here** launches the user's default agent in that worktree, and **New agent in new worktree** asks for a branch name (prefilled from `title`), creates the worktree, waits for its setup, launches the agent and drafts into it — the text is never passed as the launch prompt, which the agent would submit. Agents that cannot take a draft are listed, disabled, with the reason.
+
+**With `terminalId`** there is no picker: the draft goes straight to that pane, or is refused.
+
+It resolves:
+
+| Result | When |
+| --- | --- |
+| `{ status: "drafted", terminalId }` | The text is in that agent's draft. |
+| `{ status: "cancelled" }` | The user dismissed the picker, your `signal` aborted, or the plugin unloaded. |
+| `{ status: "refused", reason }` | The target can't take a draft; the user is told why in the same moment. |
+
+`reason` is one of: `unknown-terminal`, `not-agent` (a shell, or an agent Daintree has no input bar for), `exited`, `input-bar-off` (the user's input-bar setting is off), `backend-unavailable`, `input-locked`, `restarting`, `input-busy` (dictation is about to submit that draft), `not-in-grid` (docked or backgrounded), `fleet-armed` (Enter there would broadcast to a fleet), `project-unavailable` (your project has no open view), `launch-failed` (a new agent didn't start), or `prompt-open` (you already have a picker or prompt open — one at a time, as with `showQuickPick`; a targeted call is never blocked by one).
+
+It never moves focus: a small receipt names the agent the text went to. A project plugin only reaches its own project's panes; an installed plugin reaches the project the user is looking at. It throws `PERMISSION_REQUIRED:` without `agent:input` or on a denied consent, and throws on blank or oversized text, an over-long title, or an option of the wrong type — all checked before the consent prompt. NOT revoke-guarded.
+
+**From a view.** A view has no host object; add a handler in your worker and `invoke` it — the call is gated and bound on the worker's host, where your plugin's identity is not something a view asserts:
+
+```js
+// worker
+host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId }) =>
+  host.sendToAgent(text, { title, worktreeId })
+);
+// view
+const result = await window.electron.plugin.invoke(pluginId, "sendToAgent", {
+  text: card.body,
+  title: card.title,
+  worktreeId: props.worktreeId,
+});
+```
+
+Dragging a card onto an agent terminal needs no worker at all — see [Views → Handing work to an agent by drag](./views.md#handing-work-to-an-agent-by-drag).
+
+## `agents.list` — the project's agent panes
+
+```ts
+const agents = await host.agents.list();
+// [{ terminalId, title, agentId, worktree: { id, name, branch? } | null,
+//    observedState?, isFocused, canDraft, draftRefusal? }]
+```
+
+The live agent panes in this plugin's project, in grid order — the same set the `sendToAgent` picker offers. Exited and demoted agents are left out; a docked or locked agent is listed with `canDraft: false` and its `draftRefusal`. `observedState` is the agent state Daintree last read off the terminal: an observation, often wrong, never a promise about what the agent is doing. Gated on `agent:read`; resolves `[]` when the project has no open view or the plugin has unloaded. NOT revoke-guarded.
+
 ## `logger`
 
 Structured diagnostic logger backed by a bounded per-plugin ring buffer (most recent ~500 entries) in the main process.
@@ -1272,7 +1341,7 @@ expect(host.postToPanelCalls[0]).toMatchObject({ channel: "build-status" });
 await expect(host.sendToActiveAgent("hi")).rejects.toThrow(/PERMISSION_REQUIRED/);
 ```
 
-Pass `capabilities` to restrict the declared capability set (the default is permissive — `agent:read` + `agent:input`) and assert the `PERMISSION_REQUIRED` rejection a plugin missing one would hit; pass `hasActiveAgent: false` to assert the `NO_ACTIVE_AGENT` rejection from `sendToActiveAgent`. The recording arrays come in two shapes. `registeredActions`, `registeredForgeProviders`, `registeredFileDecorationProviders` and `registeredMcpTools` hold the **current** registrations, not a history: re-registering the same id replaces the earlier entry in place, and disposing a provider or MCP roster removes it. The call records — `registeredHandlers`, `postToPanelCalls`, `shownToasts`, `dispatchedActions`, `setPanelBadgeCalls`, `showQuickPickCalls`, `spawnCalls`, `fsWriteCalls`, `fsAppendCalls`, `fsMkdirCalls`, `gitCommitCalls`, and the rest — are append-only, in call order. `simulate*` helpers drive worktree, agent-state, panel-lifecycle, wake and `fs.watch` events into your subscribers.
+Pass `capabilities` to restrict the declared capability set (the default is permissive — `agent:read` + `agent:input`) and assert the `PERMISSION_REQUIRED` rejection a plugin missing one would hit; pass `hasActiveAgent: false` to assert the `NO_ACTIVE_AGENT` rejection from `sendToActiveAgent`. Pass `agents` to seed the panes `agents.list()` reports and `sendToAgent({ terminalId })` resolves against (a pane with `canDraft: false` refuses with its `draftRefusal`), and `simulateSendToAgentPick(terminalId | null)` to answer the picker; every call lands in `sentToAgentCalls` with its result. The recording arrays come in two shapes. `registeredActions`, `registeredForgeProviders`, `registeredFileDecorationProviders` and `registeredMcpTools` hold the **current** registrations, not a history: re-registering the same id replaces the earlier entry in place, and disposing a provider or MCP roster removes it. The call records — `registeredHandlers`, `postToPanelCalls`, `shownToasts`, `dispatchedActions`, `setPanelBadgeCalls`, `showQuickPickCalls`, `spawnCalls`, `fsWriteCalls`, `fsAppendCalls`, `fsMkdirCalls`, `gitCommitCalls`, and the rest — are append-only, in call order. `simulate*` helpers drive worktree, agent-state, panel-lifecycle, wake and `fs.watch` events into your subscribers.
 
 **What the mock does not do.** It has no manifest model and no processes behind it, so a test that passes against it is not proof the real host will accept the plugin. The gaps, from `shared/testing/createMockHost.ts`:
 
@@ -1281,7 +1350,7 @@ Pass `capabilities` to restrict the declared capability set (the default is perm
 - `git.status` returns no files, `git.diff` returns `""`, `git.add` does nothing, and `git.commit` records the call and answers a synthetic `mock-N` hash.
 - The typed `registerHandler(channel, schema, handler)` overload discards the schema — nothing validates a payload against it.
 - `registerForgeProvider`, `registerFileDecorationProvider` and `mcp.registerTools` skip the manifest-declaration gates (`contributes.forgeProviders` / `fileDecorationProviders` / `agentMcp` and `mcp:expose`), `mcp.registerTools` neither enforces the roster budget nor compiles the schemas, so a recorded `execute` called with arguments its `inputSchema` forbids still runs where the real host would refuse the call, and `invalidateFileDecorations` accepts any non-empty scope, declared or not.
-- Only `getAgentState` and `sendToActiveAgent` are capability-gated. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system` and `documents` run without `shell:exec`, `fs:*`, `git:write` or any just-in-time consent.
+- Only `getAgentState`, `agents.list`, `sendToActiveAgent` and `sendToAgent` are capability-gated, and `sendToAgent` raises no consent prompt and draws no picker. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system` and `documents` run without `shell:exec`, `fs:*`, `git:write` or any just-in-time consent.
 - `settings` only knows declared scopes when you pass `manifestSettings`, and even then only `get` honours them — `set` writes to whatever scope you name. `onDidChangeWorktrees` ignores `debounceMs`.
 - `logger.info` / `warn` / `error` are no-ops: nothing is printed and nothing is recorded.
 - There is no activation lifecycle: registrations made before a throwing `activate()` are not rolled back, and no `revoke` ever runs, so a handle keeps working after the point at which the real host would have cut it off.
@@ -1292,7 +1361,7 @@ Deliberately not part of the host API:
 
 - Direct access to other plugins' state or registered handlers.
 - Access to the active user's AI-provider API keys. If a plugin needs AI calls, the user configures keys separately in settings or the plugin ships its own `secret` setting.
-- Full control of the active AI agent's runtime — driving, pausing, or resuming an agent session. That crosses the agent-config boundary (precedent #4100: never mutate user-owned agent config or session behaviour the user didn't opt into) and stays deferred. Getting a plugin's tools into an agent is the one exception, and only in the sanctioned shape: [`mcp.registerTools`](#mcpregistertools) tools reach Claude Code launches through the Daintree-owned `--mcp-config` file, never through the user's own agent config, and only in projects where the user turned the endpoint on. Passive observation is offered instead of the rest: [`getAgentState` / `onDidChangeAgentState`](#agent-observation) under `agent:read`. The one sanctioned write is text injection: [`host.sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) (gated on `agent:input`, JIT consent, stage-only by default) sends input to the active agent terminal. For everything else, `dispatch` into existing actions is the path.
+- Full control of the active AI agent's runtime — driving, pausing, or resuming an agent session. That crosses the agent-config boundary (precedent #4100: never mutate user-owned agent config or session behaviour the user didn't opt into) and stays deferred. Getting a plugin's tools into an agent is the one exception, and only in the sanctioned shape: [`mcp.registerTools`](#mcpregistertools) tools reach Claude Code launches through the Daintree-owned `--mcp-config` file, never through the user's own agent config, and only in projects where the user turned the endpoint on. Passive observation is offered instead of the rest: [`getAgentState` / `onDidChangeAgentState`](#agent-observation) under `agent:read`. The sanctioned writes are text, never control: [`host.sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) (gated on `agent:input`, JIT consent, stage-only by default) sends input to the active agent terminal, and [`host.sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) (same gate) appends to a chosen agent's visible draft and can never submit it. For everything else, `dispatch` into existing actions is the path.
 - An inbound webhook listener or a host-mediated `host.fetch`. Deferred: `scopes.network.allowedUrls` is still advisory rather than a request filter, and an inbound listener widens the attack surface in a way that wants the network-enforcement question settled first. Make outbound calls from your own `main` for now, and declare `network:fetch` with a tight `scopes.network.allowedUrls`.
 - Raw Electron main-process APIs are not _passed through_ the host — but the contained, audited equivalents are: `host.process` (managed child processes, gated on `shell:exec`), `host.fs` (scope-contained filesystem), and `host.git` (worktree-scoped git). You can still `import` Node modules directly in plugin code and the host cannot intercept that, so the host-mediated surfaces are the contained, audited path — not a seal on the un-mediated one.
 - Daintree's internal event bus. Only the specific subscriptions listed above are exposed. Broad event access would tie plugins to internal shape changes we want to be free to make.

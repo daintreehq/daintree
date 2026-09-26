@@ -203,9 +203,9 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `fs:user-data-write` | Write to `~/.daintree/` or elsewhere in the user's home |
 | `network:fetch` | Make outbound HTTP requests |
 | `agent:invoke` | Send prompts to AI agents from plugin code |
-| `agent:read` | Observe agent state (lifecycle phase, session cost/tokens on completion) |
+| `agent:read` | Observe agent state (lifecycle phase, session cost/tokens on completion) and list the project's agent panes (`host.agents.list`) |
 | `agent:register` | Register a launchable agent CLI as a selectable agent |
-| `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`; JIT consent on first use) |
+| `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`) or append it to a chosen agent's draft (`host.sendToAgent`); JIT consent on first use |
 | `git:read` | Read git state (branches, status, log) |
 | `git:write` | Make git changes (commits, branches) |
 | `clipboard:read` | Read from the system clipboard |

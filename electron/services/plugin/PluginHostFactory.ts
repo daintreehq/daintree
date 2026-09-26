@@ -78,6 +78,12 @@ import {
   type AgentStateChangePayload,
 } from "../../../shared/utils/pluginAgentSnapshot.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
+import type { PluginSendToAgentRequest } from "../../../shared/types/pluginUiPrompt.js";
+import {
+  AGENT_CONTEXT_MAX_TEXT_LENGTH,
+  AGENT_CONTEXT_MAX_TITLE_LENGTH,
+  validateAgentContextPayload,
+} from "../../../shared/utils/agentContextDrag.js";
 import type { PluginDiagnosticsLogLine } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import type {
   PluginIpcHandler,
@@ -99,6 +105,8 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginAgentSnapshot,
+  PluginSendToAgentRefusalReason,
+  PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
   PluginProcessApi,
   PluginProcessHandle,
@@ -227,6 +235,104 @@ function validateQuickPickItems(
       ...(item.detail !== undefined ? { detail: String(item.detail) } : {}),
     };
   });
+}
+
+/** Longest id `host.sendToAgent` accepts for a terminal or worktree. */
+const SEND_TO_AGENT_MAX_ID_LENGTH = 512;
+
+// A record keyed by the union so a reason added to the type without an entry
+// here fails typecheck rather than being read back as a dismissal.
+const SEND_TO_AGENT_REFUSAL_REASONS = new Set(
+  Object.keys({
+    "unknown-terminal": true,
+    "not-agent": true,
+    exited: true,
+    "input-bar-off": true,
+    "backend-unavailable": true,
+    "input-locked": true,
+    restarting: true,
+    "input-busy": true,
+    "not-in-grid": true,
+    "fleet-armed": true,
+    "project-unavailable": true,
+    "launch-failed": true,
+    "prompt-open": true,
+  } satisfies Record<PluginSendToAgentRefusalReason, true>)
+);
+
+function validateOptionalId(pluginId: string, name: string, value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > SEND_TO_AGENT_MAX_ID_LENGTH
+  ) {
+    throw new Error(
+      `Plugin "${pluginId}" sendToAgent: options.${name} must be a non-empty string of at most ${SEND_TO_AGENT_MAX_ID_LENGTH} characters`
+    );
+  }
+  return value;
+}
+
+/**
+ * Check a `host.sendToAgent` call against the drag payload's own limits and
+ * return the normalised text and title. Throws so an authoring mistake fails
+ * loudly, like the other host APIs, rather than reaching the user as a picker
+ * that drafts nothing.
+ */
+function validateSendToAgentCall(
+  pluginId: string,
+  text: unknown,
+  options: unknown
+): Omit<PluginSendToAgentRequest, "sourceLabel"> {
+  if (options !== undefined && (typeof options !== "object" || options === null)) {
+    throw new Error(`Plugin "${pluginId}" sendToAgent: options must be an object`);
+  }
+  const opts = (options ?? {}) as Record<string, unknown>;
+  if (typeof text !== "string" || text.trim().length === 0) {
+    throw new Error(
+      `Plugin "${pluginId}" sendToAgent: text must be a non-empty, non-whitespace string`
+    );
+  }
+  if (opts.title !== undefined && typeof opts.title !== "string") {
+    throw new Error(`Plugin "${pluginId}" sendToAgent: options.title must be a string`);
+  }
+  const payload = validateAgentContextPayload({ v: 1, text, title: opts.title });
+  if (payload === null) {
+    throw new Error(
+      `Plugin "${pluginId}" sendToAgent: text must hold printable content and be at most ${AGENT_CONTEXT_MAX_TEXT_LENGTH} characters, and options.title at most ${AGENT_CONTEXT_MAX_TITLE_LENGTH}`
+    );
+  }
+  const terminalId = validateOptionalId(pluginId, "terminalId", opts.terminalId);
+  const worktreeId = validateOptionalId(pluginId, "worktreeId", opts.worktreeId);
+  return {
+    text: payload.text,
+    ...(payload.title !== undefined ? { title: payload.title } : {}),
+    ...(terminalId !== undefined ? { terminalId } : {}),
+    ...(worktreeId !== undefined ? { worktreeId } : {}),
+  };
+}
+
+/**
+ * The renderer's answer, narrowed to the public result. Anything malformed
+ * reads as a dismissal: the renderer is ours, so this only guards against a
+ * response from a build that disagrees about the shape.
+ */
+function toSendToAgentResult(value: unknown): PluginSendToAgentResult {
+  if (typeof value === "object" && value !== null) {
+    const result = value as Record<string, unknown>;
+    if (result.status === "drafted" && typeof result.terminalId === "string") {
+      return { status: "drafted", terminalId: result.terminalId };
+    }
+    if (
+      result.status === "refused" &&
+      typeof result.reason === "string" &&
+      SEND_TO_AGENT_REFUSAL_REASONS.has(result.reason as PluginSendToAgentRefusalReason)
+    ) {
+      return { status: "refused", reason: result.reason as PluginSendToAgentRefusalReason };
+    }
+  }
+  return { status: "cancelled" };
 }
 
 /**
@@ -1021,6 +1127,64 @@ export function createHost(
         ptyClient.submit(terminalId, text);
       } else {
         ptyClient.stage(terminalId, text);
+      }
+    },
+    // NOT revoke-guarded, like getAgentState: plugins list agents from command
+    // handlers long after activation. The panes are read from the renderer that
+    // owns the project's panel and worktree stores — a bound host asks its own
+    // project's view and nothing else.
+    agents: {
+      list: async () => {
+        if (!isBound()) return [];
+        if (!deps.declaredCapabilities(pluginId).has("agent:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" agents.list requires "agent:read", which is not declared in manifest.capabilities`
+          );
+        }
+        try {
+          const agents = await deps.dispatcher.sendAgentsListToRenderer(boundProjectId);
+          return isBound() ? agents : [];
+        } catch (err) {
+          if (isProjectViewUnavailable(err)) return [];
+          throw err;
+        }
+      },
+    },
+    sendToAgent: async (text, options, callOptions) => {
+      // Liveness first, for the same reason as sendToActiveAgent: an unloaded
+      // plugin's declared capabilities read as empty, which would mis-report
+      // PERMISSION_REQUIRED into a stray timer.
+      if (!isBound()) return { status: "cancelled" };
+      if (!deps.declaredCapabilities(pluginId).has("agent:input")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" sendToAgent requires "agent:input", which is not declared in manifest.capabilities`
+        );
+      }
+      // Validated before the consent prompt, so a malformed call can't bank a
+      // grant and have a later one draft unprompted.
+      const request = validateSendToAgentCall(pluginId, text, options);
+      await ensureCapabilityConsent(deps, pluginId, "agent:input");
+      if (!isBound()) return { status: "cancelled" };
+      try {
+        // The prompt bridge, not a bespoke channel: without a target this is a
+        // picker the user answers, and it inherits the bridge's project
+        // targeting, unload drain and caller-signal dismissal. With a target it
+        // answers as soon as the renderer has drafted.
+        const value = await deps.promptDispatcher.requestPrompt(
+          pluginId,
+          {
+            kind: "sendToAgent",
+            request: { ...request, sourceLabel: deps.pluginDisplayName(pluginId) },
+          },
+          boundProjectId,
+          callOptions?.signal
+        );
+        return toSendToAgentResult(value);
+      } catch (err) {
+        if (isProjectViewUnavailable(err)) {
+          return { status: "refused", reason: "project-unavailable" };
+        }
+        throw err;
       }
     },
     onDidChangeActiveWorktree: (callback) => {

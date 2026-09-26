@@ -2,19 +2,33 @@ import { ipcMain, webContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
-import type {
-  PluginUiPromptParams,
-  PluginUiPromptResultValue,
+import {
+  promptOpensDialog,
+  type PluginUiPromptParams,
+  type PluginUiPromptResultValue,
 } from "../../../shared/types/pluginUiPrompt.js";
 
 /**
  * The cancel/dismiss outcome for a prompt kind: `false` for a confirm (the user
- * did not confirm), `undefined` for quick-pick / input-box (no selection). Used
- * whenever a prompt resolves without an explicit user answer — renderer gone,
- * plugin unloaded, or service disposed.
+ * did not confirm), `{ status: "cancelled" }` for a send-to-agent, `undefined`
+ * for quick-pick / input-box (no selection). Used whenever a prompt resolves
+ * without an explicit user answer — renderer gone, plugin unloaded, or service
+ * disposed.
  */
 function cancelValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResultValue {
-  return kind === "confirm" ? false : undefined;
+  if (kind === "confirm") return false;
+  if (kind === "sendToAgent") return { status: "cancelled" };
+  return undefined;
+}
+
+/**
+ * The answer for a prompt turned away because the plugin already has one open.
+ * A send-to-agent says so, since "cancelled" would claim the user dismissed a
+ * picker they never saw; the other kinds keep their dismiss value.
+ */
+function busyValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResultValue {
+  if (kind === "sendToAgent") return { status: "refused", reason: "prompt-open" };
+  return cancelValueFor(kind);
 }
 
 /**
@@ -22,7 +36,8 @@ function cancelValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResul
  * round-trip with no deadline; without a cap a buggy or adversarial plugin can
  * fire prompts faster than the user dismisses them, stacking unbounded dialogs
  * and leaking a `pending` entry each time. A second request while one is open
- * resolves immediately to the kind's cancel value instead of being sent.
+ * resolves immediately instead of being sent. Only dialogs count: a targeted
+ * send-to-agent answers without one, so it is never capped and never caps.
  */
 const MAX_PENDING_PROMPTS_PER_PLUGIN = 1;
 
@@ -39,6 +54,8 @@ interface PendingPrompt {
   pluginId: string;
   /** Value to resolve with when the prompt is cancelled rather than answered. */
   cancelValue: PluginUiPromptResultValue;
+  /** Whether it put a dialog on screen, which is what the per-plugin cap counts. */
+  opensDialog: boolean;
   /**
    * Detaches every listener this prompt registered — the WebContents
    * `destroyed` hook and the caller's `abort` hook. One combined disposer so a
@@ -150,13 +167,16 @@ export class PluginUIPromptDispatcher {
       // Enforce the per-plugin cap before sending so a runaway plugin can't stack
       // dialogs or leak `pending` entries. Checked here (not renderer-side) so the
       // guard holds regardless of renderer queue behavior.
-      let activeForPlugin = 0;
-      for (const pending of this.pending.values()) {
-        if (pending.pluginId === pluginId) activeForPlugin += 1;
-      }
-      if (activeForPlugin >= MAX_PENDING_PROMPTS_PER_PLUGIN) {
-        resolve(cancelValue);
-        return;
+      const opensDialog = promptOpensDialog(params);
+      if (opensDialog) {
+        let activeForPlugin = 0;
+        for (const pending of this.pending.values()) {
+          if (pending.pluginId === pluginId && pending.opensDialog) activeForPlugin += 1;
+        }
+        if (activeForPlugin >= MAX_PENDING_PROMPTS_PER_PLUGIN) {
+          resolve(busyValueFor(params.kind));
+          return;
+        }
       }
 
       this.ensureResponseListener();
@@ -200,6 +220,7 @@ export class PluginUIPromptDispatcher {
         webContentsId,
         pluginId,
         cancelValue,
+        opensDialog,
         cleanup,
       });
 
