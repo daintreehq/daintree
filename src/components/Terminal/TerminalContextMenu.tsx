@@ -17,6 +17,7 @@ import {
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   getPanelKindRegistrySnapshot,
   panelKindHasPty,
@@ -834,6 +835,11 @@ export function TerminalContextMenu({
         // opens then records the pane, not the unmounting item, as where focus
         // returns when it closes.
         setTimeout(() => {
+          // A context menu restores whatever was focused before the right-click,
+          // which can be another pane when the click landed on something that
+          // takes no focus. The action belongs to this panel, so it starts there.
+          const panel = document.querySelector(`[data-panel-id="${CSS.escape(terminalId)}"]`);
+          if (!panel?.contains(document.activeElement)) focusPanelInput(terminalId);
           void actionService.dispatch(pendingDispatch.actionId, pendingDispatch.args, {
             source: pendingDispatch.source,
           });

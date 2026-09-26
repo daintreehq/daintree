@@ -8,6 +8,7 @@
  * anything for a plugin view. `hasPty` gated only some of those items, so the
  * mislabeled ones survived.
  */
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, render, screen, cleanup } from "@testing-library/react";
 
@@ -679,6 +680,43 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       );
     }
   );
+
+  it("starts a deferred action in its own panel when focus was restored to another one", async () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { hasPluginDatabases: true });
+    renderMenuFor(pluginPanel);
+    const own = document.createElement("div");
+    own.dataset.panelId = pluginPanel.id;
+    own.tabIndex = -1;
+    const other = document.createElement("input");
+    document.body.append(own, other);
+    const unregister = registerPanelFocusHandler(pluginPanel.id, () => {
+      own.focus();
+      return true;
+    });
+    try {
+      findRow("Back up data…")!.click();
+      // The primitive hands focus back to what had it before the right-click.
+      other.focus();
+      let focusedAtDispatch: Element | null = null;
+      dispatch.mockImplementation(async () => {
+        focusedAtDispatch = document.activeElement;
+        return { ok: true };
+      });
+
+      await closeMenu();
+
+      expect(dispatch).toHaveBeenCalledWith(
+        "plugin.backupDatabases",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(focusedAtDispatch).toBe(own);
+    } finally {
+      unregister();
+      own.remove();
+      other.remove();
+    }
+  });
 
   it("renders Back up data… and the plugin's own items as the shared list does", () => {
     registerPluginKind(VIEW_PLUGIN_KIND, {
