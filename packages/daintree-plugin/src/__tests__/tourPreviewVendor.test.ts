@@ -90,11 +90,14 @@ describe("renderFacade", () => {
 });
 
 describe("buildVendorGraph", () => {
-  it("bundles every host specifier from the plugin's own dependencies", async () => {
+  it("bundles every packaged host specifier from the plugin's own dependencies", async () => {
     await writePlugin();
     const graph = await buildVendorGraph(tmpDir);
 
-    expect(Object.keys(graph.imports).sort()).toEqual([...HOST_IMPORTMAP_SPECIFIERS].sort());
+    // `@daintreehq/plugin-ui` has no package behind it, only the running host.
+    expect(Object.keys(graph.imports).sort()).toEqual(
+      HOST_IMPORTMAP_SPECIFIERS.filter((s) => s !== "@daintreehq/plugin-ui").sort()
+    );
     for (const url of Object.values(graph.imports)) {
       expect(graph.files.has(url.replace("/_preview/vendor/", ""))).toBe(true);
     }

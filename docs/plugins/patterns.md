@@ -137,7 +137,7 @@ useEffect(() => {
 
 ## Open files the Daintree way
 
-Don't build a markdown renderer or an audio player before checking what `host.dispatch` already reaches. All of these are `danger: "safe"` and take a `path` (absolute, or relative to `rootPath` / the project root):
+Don't build a markdown renderer or an audio player before checking what `host.dispatch` already reaches. Markdown that belongs inside your own view — a record's notes, a card's body — renders with [`Markdown` from `@daintreehq/plugin-ui`](./views.md#host-ui-components), Daintree's own renderer. A whole file goes to one of these instead; all are `danger: "safe"` and take a `path` (absolute, or relative to `rootPath` / the project root):
 
 | Action | Args | What it does |
 | --- | --- | --- |

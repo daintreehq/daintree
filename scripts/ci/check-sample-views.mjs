@@ -47,6 +47,7 @@ const ALLOWED_EXTERNALS = new Set([
   "@daintreehq/tour/react",
   "@daintreehq/tour/kit",
   "@daintreehq/tour/mock-app",
+  "@daintreehq/plugin-ui",
 ]);
 
 function run(command, args) {

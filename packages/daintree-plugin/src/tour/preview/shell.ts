@@ -16,8 +16,8 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * The page: an import map for exactly the specifiers the host serves (so a
- * scene importing anything else fails here as it would in Daintree), the
+ * The page: an import map for the React and tour specifiers the host serves (so
+ * a scene importing anything else fails here as it would in Daintree), the
  * compiled stylesheet, the tour config, and the harness.
  */
 export function renderShell(
