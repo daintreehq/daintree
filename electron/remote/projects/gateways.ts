@@ -13,8 +13,10 @@ import type {
   PlaceWorktreePayload,
   ProjectIdentity,
   ProjectMatchCandidate,
+  HostPushStatus,
   PushBranchOutcome,
   PushBranchPayload,
+  PushObservation,
   SourceProjectDescription,
   SuggestDestinationPayload,
 } from "../../../shared/types/ipc/projectMatch.js";
@@ -39,7 +41,9 @@ import {
   OperationOutcomeSchema,
   PickerRootsSchema,
   ProjectLinkMethod,
+  PushObservationSchema,
   PushOutcomeSchema,
+  PushStatusSchema,
   SourceDescriptionSchema,
   type LinkPushBranchPayload,
   type LinkStartClonePayload,
@@ -55,6 +59,10 @@ export interface HostGateway {
   describeSource(payload: DescribeSourcePayload): Promise<SourceProjectDescription>;
   /** Aborting `signal` kills the push; it then rejects with CANCELLED. */
   pushBranch(payload: LinkPushBranchPayload, signal?: AbortSignal): Promise<PushBranchOutcome>;
+  /** The host's record of a push by opId, for one whose answer was lost with the link. */
+  pushStatus(opId: string, projectId: string): Promise<HostPushStatus>;
+  /** Where the branch and the remote branch stand now, as the host sees them. */
+  observePush(payload: PushBranchPayload): Promise<PushObservation>;
   environment(): Promise<HostCloneEnvironment>;
   match(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]>;
   checkDestination(payload: CheckDestinationPayload): Promise<DestinationCheck>;
@@ -89,6 +97,13 @@ export class LocalHostGateway implements HostGateway {
   }
   pushBranch(payload: PushBranchPayload, signal?: AbortSignal) {
     return this.service.pushBranch(payload, signal);
+  }
+  /** A push on this machine never loses its answer, so there is nothing to look up. */
+  async pushStatus(): Promise<HostPushStatus> {
+    return { state: "unknown" };
+  }
+  observePush(payload: PushBranchPayload) {
+    return this.service.observePush(payload);
   }
   environment() {
     return this.service.environment();
@@ -209,6 +224,17 @@ export class RemoteHostGateway implements HostGateway {
     } finally {
       signal?.removeEventListener("abort", onAbort);
     }
+  }
+  pushStatus(opId: string, projectId: string) {
+    return this.call(ProjectLinkMethod.PUSH_STATUS, { opId, projectId }, PushStatusSchema);
+  }
+  observePush(payload: PushBranchPayload) {
+    const { projectId, worktreePath, branch, remote, remoteBranch } = payload;
+    return this.call(
+      ProjectLinkMethod.PUSH_OBSERVE,
+      { projectId, worktreePath, branch, remote, remoteBranch },
+      PushObservationSchema
+    );
   }
   environment() {
     return this.call(ProjectLinkMethod.ENVIRONMENT, null, EnvironmentSchema);

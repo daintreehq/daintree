@@ -91,6 +91,23 @@ function runStep(
   });
 }
 
+/** What the source host saw after the link came back, stated as seen. */
+export function describePushObservation(
+  result: Extract<HostSwitchExecuteResult, { kind: "push-unconfirmed" }>,
+  sourceName: string
+): string {
+  const { observed, branch, remote, remoteBranch } = result;
+  const lost = `The link to ${sourceName} dropped during the push.`;
+  if (!observed.remoteReachable) {
+    return `${lost} ${remote} didn't answer when ${sourceName} checked it afterwards.`;
+  }
+  const localTip = observed.localSha ? `is at ${observed.localSha.slice(0, 8)}` : `wasn't found`;
+  const remoteTip = observed.remoteSha
+    ? `is at ${observed.remoteSha.slice(0, 8)}`
+    : `doesn't exist on ${remote}`;
+  return `${lost} ${remote}/${remoteBranch} ${remoteTip}; ${branch} on ${sourceName} ${localTip}.`;
+}
+
 function currentHostId(): string {
   return window.__DAINTREE_HOST_ID__?.id ?? LOCAL_HOST_ID;
 }
@@ -286,6 +303,14 @@ export function HostSwitchDialog({
         title: `Couldn't push ${prep.branch} from ${sourceName}`,
         gitText: result.message,
         fix: null,
+      });
+      return false;
+    }
+    if (result?.kind === "push-unconfirmed") {
+      setFailure({
+        title: `Couldn't confirm the push of ${prep.branch} from ${sourceName}`,
+        gitText: describePushObservation(result, sourceName),
+        fix: "Check the branch on its remote before pushing again.",
       });
       return false;
     }
