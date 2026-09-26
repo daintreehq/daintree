@@ -61,6 +61,8 @@ function seedTerminal(scratchpad?: TerminalScratchpad): void {
     cwd: "/repo",
     worktreeId: "/repo",
     location: "grid",
+    cols: 80,
+    rows: 24,
     ...(scratchpad && { scratchpad }),
   };
   const file: FilePanelData = {
