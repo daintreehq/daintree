@@ -41,7 +41,7 @@ import {
   shouldRetryGpuAfterUpdate,
 } from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { shouldUseHeadlessOzone } from "../boot/hostModeLaunch.js";
+import { isAttachStdioRequested, shouldUseHeadlessOzone } from "../boot/hostModeLaunch.js";
 import {
   e2eCrashDumpsDir,
   isDemoMode,
@@ -173,7 +173,10 @@ if (headlessOzone) {
   app.commandLine.appendSwitch("ozone-platform", "headless");
   app.commandLine.appendSwitch("disable-gpu");
   if (!gpuHardwareAccelerationDisabled) app.disableHardwareAcceleration();
-  console.log("[GPU] Headless Host mode: ozone-platform=headless, GPU disabled");
+  // `--attach-stdio`'s stdout is the link: its diagnostics go to stderr.
+  (isAttachStdioRequested(process.argv) ? console.error : console.log)(
+    "[GPU] Headless Host mode: ozone-platform=headless, GPU disabled"
+  );
 } else if (process.platform === "linux") {
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
   if (process.env.XDG_SESSION_TYPE === "wayland") {

@@ -140,7 +140,6 @@ import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 import { startHostRuntime } from "./boot/hostBootstrap.js";
 import {
   HOST_MODE_HANDOFF_NOBODY_EXIT_CODE,
-  isAttachStdioRequested,
   isHostModeEnableRequested,
   isHostModeHandoffOnly,
   isHostModeRequested,
@@ -301,35 +300,11 @@ app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// `--attach-stdio` carries a Shell's link to the Daintree already running here
-// (see remote/host/attachStdio.ts). It is decided before the single-instance
-// lock: taking the lock would make it a second instance that quits and hands
-// its argv to the running one as a launch. It opens no window, touches no
-// logs and starts no backend, and exits once either side of the pipe closes.
-const attachStdio = isRemoteHostSupported() && isAttachStdioRequested(process.argv);
-if (attachStdio) {
-  if (__DAINTREE_REMOTE_HOSTS__) {
-    void import("./remote/host/attachStdioCli.js")
-      .then(({ runAttachStdioCli }) => runAttachStdioCli())
-      .then(
-        (code) => app.exit(code),
-        (error: unknown) => {
-          process.stderr.write(`daintree: attach failed: ${String(error)}\n`);
-          app.exit(1);
-        }
-      );
-  } else {
-    app.exit(1);
-  }
-}
-
 // Acquire single-instance lock before any file I/O or service initialization.
 // A second instance must not touch log files, telemetry, or crash reporters.
-const gotTheLock = attachStdio || isSmokeTest || app.requestSingleInstanceLock();
+const gotTheLock = isSmokeTest || app.requestSingleInstanceLock();
 
-if (attachStdio) {
-  // Bridging; nothing else of the app starts in this process.
-} else if (!gotTheLock) {
+if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
   app.quit();
 } else if (isRemoteHostSupported() && isHostModeHandoffOnly(process.argv)) {

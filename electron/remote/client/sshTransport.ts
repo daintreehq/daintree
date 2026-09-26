@@ -423,8 +423,10 @@ export class SshTransport implements LinkTransport {
     const controlPath = controlPathFor(clientDir, target);
     const persist = this.options.controlPersist;
 
-    const probe = await this.run(buildProbeArgs(target, controlPath, persist), signal);
+    // Recorded before the probe: ssh may leave a master behind even when the
+    // probe itself fails or is cancelled.
     noteSshMaster(controlPath, (timeoutMs) => this.exitMaster(controlPath, timeoutMs));
+    const probe = await this.run(buildProbeArgs(target, controlPath, persist), signal);
     const remote = parseProbeOutput(probe.stdout);
     if (!remote) {
       throw new TransportError("Unrecognised reply from the host", probe.stdout.trim() || null);
