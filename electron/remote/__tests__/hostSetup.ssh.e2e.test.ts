@@ -106,7 +106,7 @@ function linuxOutcome(image: string, lines: string[]): ProbeOutcome {
   return {
     parsed,
     result: {
-      sshTarget: SSH_ALIAS,
+      connection: { kind: "ssh", target: SSH_ALIAS },
       reachable: true,
       sshError: null,
       platform: parsed.platform,
@@ -331,11 +331,15 @@ describe.skipIf(!ENABLED)(
           "@@dt:hostpid 77",
         ]);
         await expect(
-          bootstrapHostMode(SSH_ALIAS, linuxOutcome(image, ["@@dt:unit yes"]), {
-            channel,
-            probe: async () => listening,
-            sleep: async () => {},
-          })
+          bootstrapHostMode(
+            { kind: "ssh", target: SSH_ALIAS },
+            linuxOutcome(image, ["@@dt:unit yes"]),
+            {
+              channel,
+              probe: async () => listening,
+              sleep: async () => {},
+            }
+          )
         ).rejects.toThrow(/didn't take the request/);
 
         expect(await fs.readFile(unitFile, "utf8")).toBe(earlier);
