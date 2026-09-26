@@ -2506,6 +2506,9 @@ async function withVerifiedReadHandle<T>(
  * said it would be. The walk is by pathname, so the window is shrunk, not
  * closed — the same limit every host.fs write documents.
  *
+ * `assertLive` runs before each directory is made: every step awaits, and a
+ * plugin unloaded partway must not go on creating the rest of its chain.
+ *
  * `hostOwned` is for the plugin data dir, a path the host chose rather than a
  * contained one: it is not realpathed, so its existing ancestors may be links
  * the user made (a symlinked `~/.daintree`) and there is no realpath to
@@ -2516,6 +2519,7 @@ async function createDirectoryChain(
   op: string,
   resolved: string,
   onCreated: (dir: string) => void,
+  assertLive: () => void,
   hostOwned = false
 ): Promise<void> {
   const lstatOrNull = (target: string) =>
@@ -2551,6 +2555,7 @@ async function createDirectoryChain(
   if (missing.length === 0) return;
 
   for (const dir of missing.reverse()) {
+    assertLive();
     try {
       await fs.mkdir(dir);
     } catch (error) {
@@ -2742,7 +2747,14 @@ function buildFsApi(
       requireWriteCapForClass(op, "user-data");
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded(op);
-      await createDirectoryChain(pluginId, op, dataDir, (dir) => auditMutation("mkdir", dir), true);
+      await createDirectoryChain(
+        pluginId,
+        op,
+        dataDir,
+        (dir) => auditMutation("mkdir", dir),
+        () => requireLoaded(op),
+        true
+      );
     }
     const { resolved, rootClass } = await containWithClass(targetPath);
     requireLoaded(op);
@@ -2756,8 +2768,12 @@ function buildFsApi(
   // A nested target inside the data dir grows its parents implicitly, so a
   // plugin can lay out its own subtree; everywhere else the parent must exist.
   const createDataDirParents = async (op: string, resolved: string): Promise<void> => {
-    await createDirectoryChain(pluginId, op, path.dirname(resolved), (dir) =>
-      auditMutation("mkdir", dir)
+    await createDirectoryChain(
+      pluginId,
+      op,
+      path.dirname(resolved),
+      (dir) => auditMutation("mkdir", dir),
+      () => requireLoaded(op)
     );
   };
   // Containment resolved before the consent prompt and the per-path queue
@@ -3059,8 +3075,12 @@ function buildFsApi(
       await runExclusive(resolved, async () => {
         requireLoaded("mkdir");
         await recheckContained("mkdir", dirPath, resolved);
-        await createDirectoryChain(pluginId, "mkdir", resolved, (dir) =>
-          auditMutation("mkdir", dir)
+        await createDirectoryChain(
+          pluginId,
+          "mkdir",
+          resolved,
+          (dir) => auditMutation("mkdir", dir),
+          () => requireLoaded("mkdir")
         );
       });
     },
@@ -3338,8 +3358,12 @@ function buildFsApi(
               continue;
             }
             try {
+              // The identity makes a replaced directory get its own watcher: a
+              // shared one kept alive by another subscriber is still bound to
+              // the old inode, and rejoining it would silently watch nothing.
               target.release = watchShared(target.resolved, withinRootOf(target.resolved), {
                 recursive,
+                identity,
               });
               target.identity = identity;
             } catch {
@@ -3361,7 +3385,9 @@ function buildFsApi(
       try {
         if (allowMissing) {
           await refreshPresence(false);
-          // An unload during that first check found no disposer to call.
+          // An unload or a cancel during that first check found no disposer to
+          // call — the caller has already given up on the result.
+          options?.signal?.throwIfAborted();
           requireLoaded("watch");
           // One check at a time: two overlapping checks could both attach and
           // leave the first shared watcher unreleased.

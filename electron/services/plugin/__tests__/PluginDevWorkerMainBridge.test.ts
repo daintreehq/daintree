@@ -1792,6 +1792,44 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(optionsOf(1)).not.toHaveProperty("debounceMs");
     });
 
+    it("forwards a supplied recursive unchanged so the host can reject a malformed one", async () => {
+      const { host, workerHost } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w6",
+        method: "fs.watch",
+        params: { subscriptionId: "fs6", paths: ["/repo"], recursive: "true" },
+      });
+      await flush();
+      expect((host.fs.watch.mock.calls[0] as unknown[])[2]).toMatchObject({ recursive: "true" });
+    });
+
+    it("disposes a watch that settles after the worker cancelled it", async () => {
+      const { host, workerHost } = makeBridge();
+      const dispose = vi.fn();
+      let settle!: (value: typeof dispose) => void;
+      host.fs.watch.mockImplementationOnce(
+        () =>
+          new Promise<typeof dispose>((resolve) => {
+            settle = resolve;
+          })
+      );
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w7",
+        method: "fs.watch",
+        params: { subscriptionId: "fs7", paths: ["/repo"] },
+      });
+      await flush();
+      workerHost.emit("worker-message", { type: "host-cancel", requestId: "w7" });
+      settle(dispose);
+      await flush();
+      expect(dispose).toHaveBeenCalledTimes(1);
+      // Nothing was kept for a later unsubscribe to find.
+      workerHost.emit("worker-message", { type: "unsubscribe", subscriptionId: "fs7" });
+      expect(dispose).toHaveBeenCalledTimes(1);
+    });
+
     it("replies with an error when the host watch rejects", async () => {
       const { host, workerHost } = makeBridge();
       host.fs.watch.mockRejectedValueOnce(new Error("PERMISSION_REQUIRED: fs:project-read"));
