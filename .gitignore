@@ -85,6 +85,7 @@ test-results/
 test-results-mechanism/
 test-results-assistant/
 test-results-plugins/
+test-results-remote-hosts/
 playwright-report/
 blob-report/
 daintree-e2e-artifacts/
