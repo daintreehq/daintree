@@ -34,10 +34,11 @@ function busyValueFor(params: PluginUiPromptParams): PluginUiPromptResultValue {
 }
 
 /**
- * What a request that opens no dialog resolves to when the renderer does not
- * answer in time. A targeted send-to-agent that never came back did not draft
- * as far as anyone can tell, and the project view that should have answered is
- * the thing that is missing.
+ * What a request that opens no dialog resolves to when the renderer never
+ * answers. Because the renderer only acts before the deadline and answers in
+ * the same task it acts in, and main waits a grace period past the deadline
+ * for that answer, silence means nothing was drafted: the project view that
+ * should have answered is what is missing.
  */
 function timeoutValueFor(params: PluginUiPromptParams): PluginUiPromptResultValue {
   if (params.kind === "sendToAgent") return { status: "refused", reason: "project-unavailable" };
@@ -62,13 +63,20 @@ const MAX_PENDING_PROMPTS_PER_PLUGIN = 1;
 export const MAX_PENDING_TARGETED_SENDS_PER_PLUGIN = 8;
 
 /**
- * How long a request that opens no dialog may wait for the renderer. It has no
- * user in the loop — the renderer answers as soon as it has drafted — so this
- * only elapses for a view that is frozen, hung or gone. The request carries the
- * deadline too, so a renderer that wakes after it drops the draft instead of
- * writing one main has already reported as refused.
+ * The deadline a request that opens no dialog carries: the renderer acts on it
+ * only before this, and drops it after. It has no user in the loop — the
+ * renderer drafts and answers in one task — so it only lapses for a view that
+ * is frozen, hung or gone.
  */
 export const IMMEDIATE_PROMPT_TIMEOUT_MS = 10_000;
+
+/**
+ * How long past that deadline main keeps waiting for the answer. A renderer
+ * that acted at the last moment has already sent its answer; this is the time
+ * it has to arrive, so main never reports "not drafted" for a draft that
+ * happened.
+ */
+export const IMMEDIATE_PROMPT_ACK_GRACE_MS = 5_000;
 
 /**
  * An imperative UI prompt awaiting its renderer response. Unlike the dispatch
@@ -224,13 +232,19 @@ export class PluginUIPromptDispatcher {
         if (!pending) return;
         pending.cleanup?.();
         this.pending.delete(promptId);
-        resolve(cancelValue);
+        resolve(opensDialog ? cancelValue : timeoutValueFor(params));
       };
       webContents.once("destroyed", onDestroyed);
 
       // Settles this one prompt when its caller goes away. Scoped by `promptId`
       // so a late abort can only ever dismiss the request it belongs to — never
       // a successor the same plugin opened after this one settled.
+      //
+      // Dialogs only. An immediate request is atomic on the renderer — it acts
+      // and answers in one task, and a cancel sent after it would arrive behind
+      // it and find nothing to stop — so resolving "cancelled" early would be a
+      // guess that can be wrong. It keeps waiting for the answer instead, which
+      // the deadline below bounds.
       const onAbort = () => {
         const pending = this.pending.get(promptId);
         if (!pending) return;
@@ -239,10 +253,12 @@ export class PluginUIPromptDispatcher {
         this.sendCancel(webContentsId, pluginId, promptId);
         resolve(cancelValue);
       };
-      signal?.addEventListener("abort", onAbort, { once: true });
+      if (opensDialog) signal?.addEventListener("abort", onAbort, { once: true });
 
       // An immediate request has no user in the loop, so an unanswered one is a
-      // stuck renderer — settle it rather than hold the caller and the entry.
+      // stuck renderer. The renderer acts only before `expiresAt`, and main
+      // waits a grace period past it for the answer, so the answer it reports
+      // is what the renderer did — never "not drafted" for a draft that landed.
       const expiresAt = opensDialog ? undefined : Date.now() + IMMEDIATE_PROMPT_TIMEOUT_MS;
       const timer = opensDialog
         ? undefined
@@ -252,7 +268,7 @@ export class PluginUIPromptDispatcher {
             pending.cleanup?.();
             this.pending.delete(promptId);
             resolve(timeoutValueFor(params));
-          }, IMMEDIATE_PROMPT_TIMEOUT_MS);
+          }, IMMEDIATE_PROMPT_TIMEOUT_MS + IMMEDIATE_PROMPT_ACK_GRACE_MS);
 
       const cleanup = () => {
         if (timer !== undefined) clearTimeout(timer);
@@ -261,7 +277,7 @@ export class PluginUIPromptDispatcher {
         } catch {
           // best-effort; webContents may already be gone
         }
-        signal?.removeEventListener("abort", onAbort);
+        if (opensDialog) signal?.removeEventListener("abort", onAbort);
       };
 
       this.pending.set(promptId, {
@@ -293,11 +309,15 @@ export class PluginUIPromptDispatcher {
    * the renderer to dismiss the open dialog. Invoked from `unloadPlugin` so a
    * plugin that is disabled/unloaded mid-prompt doesn't leave the caller's
    * promise hanging or a stranded dialog on screen.
+   *
+   * Immediate requests are left to settle on their own answer or deadline:
+   * there is nothing on screen to dismiss, and the renderer has either acted on
+   * one already or will drop it, so reporting "cancelled" now could be wrong.
    */
   cancelForPlugin(pluginId: string): void {
     let notifiedWebContentsId: number | null = null;
     for (const [promptId, pending] of [...this.pending.entries()]) {
-      if (pending.pluginId !== pluginId) continue;
+      if (pending.pluginId !== pluginId || !pending.opensDialog) continue;
       pending.cleanup?.();
       this.pending.delete(promptId);
       // Dismiss the visible dialog. One broadcast per affected window suffices —
