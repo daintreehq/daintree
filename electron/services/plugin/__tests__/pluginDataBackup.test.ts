@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -170,6 +171,25 @@ describe("backupPluginData", () => {
     // The staging directory is gone once the snapshot is renamed into place.
     expect(listTree(downloads)).toEqual(["chosen.db"]);
     expect(readLabels(localDb("ledger"))).toEqual(["rent", "coffee", "books"]);
+  });
+
+  it("publishes a whole snapshot, never a partial copy, on a disk without hard links", async () => {
+    seed(localDb("ledger"), ["rent", "coffee"]);
+    const target = path.join(downloads, "chosen.db");
+    const link = vi
+      .spyOn(fsp, "link")
+      .mockRejectedValue(Object.assign(new Error("no links here"), { code: "EPERM" }));
+    try {
+      const outcome = await backupPluginData(source([local("ledger")]), picker({ file: target }), {
+        downloadsDir: downloads,
+        now: NOW,
+      });
+      expect(outcome).toEqual({ status: "saved", pluginName: "Ledger", paths: [target] });
+    } finally {
+      link.mockRestore();
+    }
+    expect(readLabels(target)).toEqual(["rent", "coffee"]);
+    expect(listTree(downloads)).toEqual(["chosen.db"]);
   });
 
   it("copies only committed rows while another connection is mid-transaction", async () => {

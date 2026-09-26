@@ -158,7 +158,7 @@ async function locateExistingPluginDatabases(
 
 /**
  * Put the finished snapshot at `target`. Without replacement the publish is
- * exclusive — a hard link, or an exclusive copy where the disk has none — so
+ * exclusive — a hard link, or an exclusive claim renamed over where the disk has none — so
  * a file that appeared at `target` after the early check is never overwritten.
  */
 async function publishSnapshot(staged: string, target: string, replace: boolean): Promise<void> {
@@ -176,10 +176,21 @@ async function publishSnapshot(staged: string, target: string, replace: boolean)
       throw error;
     }
   }
+  // No hard links on this disk: claim the name exclusively with an empty
+  // file, then rename the finished snapshot over the claim. A reader sees
+  // nothing, an empty file or the whole snapshot — never a partial copy.
+  let claim: fs.promises.FileHandle;
   try {
-    await fsp.copyFile(staged, target, fs.constants.COPYFILE_EXCL);
+    claim = await fsp.open(target, "wx");
   } catch (error) {
     if ((error as { code?: unknown }).code === "EEXIST") throw destinationExists(target);
+    throw error;
+  }
+  await claim.close();
+  try {
+    await fsp.rename(staged, target);
+  } catch (error) {
+    await fsp.rm(target, { force: true }).catch(() => {});
     throw error;
   }
 }

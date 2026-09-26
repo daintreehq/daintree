@@ -586,7 +586,7 @@ describe("openPluginDatabase file containment", () => {
     expect(fs.existsSync(outside())).toBe(false);
   });
 
-  it("refuses directory pragmas and load_extension, and allows the words in data", async () => {
+  it("refuses directory pragmas, never loads an extension, and allows the words elsewhere", async () => {
     const db = await open({ migrations: ["CREATE TABLE t (note TEXT)"] });
     for (const name of [
       "temp_store_directory",
@@ -598,9 +598,11 @@ describe("openPluginDatabase file containment", () => {
         name
       ).rejects.toMatchObject({ code: "DB_STATEMENT_NOT_ALLOWED" });
     }
-    await expect(db.query(`SELECT load_extension('x')`)).rejects.toMatchObject({
-      code: "DB_STATEMENT_NOT_ALLOWED",
-    });
+    // Refused by SQLite itself (extension loading is never enabled) or the
+    // authorizer, whichever the runtime has.
+    await expect(db.query(`SELECT load_extension('x')`)).rejects.toThrow();
+    await db.exec("CREATE TABLE load_extension (id INTEGER)");
+    await db.query("WITH load_extension(x) AS (SELECT 1) SELECT x FROM load_extension");
     await db.run("INSERT INTO t VALUES ('please attach the receipt; then VACUUM INTO nothing')");
     expect(await db.query(`SELECT note AS "attach" FROM t`)).toHaveLength(1);
     await db.exec("VACUUM");

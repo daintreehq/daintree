@@ -261,15 +261,9 @@ function assertNoFileAccess(sql: string, id: string): void {
       const pragma = identifierText(name);
       if (pragma !== null && DIRECTORY_PRAGMAS.has(pragma)) refuse(`PRAGMA ${pragma}`);
     }
-    for (let k = at; k < statement.length - 1; k++) {
-      if (
-        identifierText(statement[k]) === "load_extension" &&
-        statement[k + 1]!.kind === "other" &&
-        statement[k + 1]!.text === "("
-      ) {
-        refuse("load_extension()");
-      }
-    }
+    // No load_extension() check: telling a call from a table or CTE of that
+    // name takes a parser, node:sqlite never enables extension loading, and
+    // the authorizer refuses the function where it exists.
   }
 }
 
