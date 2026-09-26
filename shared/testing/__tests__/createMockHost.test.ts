@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createMockHost } from "../createMockHost.js";
 import type {
   PluginActionContribution,
@@ -1393,12 +1395,32 @@ describe("createMockHost production-parity validation (#10617)", () => {
     });
 
     it("grows missing parents inside the plugin data dir, as writeFile does there", async () => {
+      const dataDir = "/home/me/.daintree/plugin-data/acme.habits";
+      const host = createMockHost({ pluginId: "acme.habits", pluginDataDir: dataDir });
+      await host.fs.appendFile(`${dataDir}/2026/log.jsonl`, "x");
+      expect((await host.fs.stat(`${dataDir}/2026`)).isDirectory).toBe(true);
+    });
+
+    it("matches the data dir at its root only, with either separator", async () => {
+      const host = createMockHost({
+        pluginId: "acme.habits",
+        pluginDataDir: "C:\\Users\\me\\.daintree\\plugin-data\\acme.habits",
+      });
+      await host.fs.appendFile(
+        "C:\\Users\\me\\.daintree\\plugin-data\\acme.habits\\2026\\log.jsonl",
+        "x"
+      );
+      // The same fragment inside a project path is not the data dir.
+      await expect(
+        host.fs.appendFile("/repo/.daintree/plugin-data/acme.habits/2026/log.jsonl", "x")
+      ).rejects.toThrow(/ENOENT/);
+    });
+
+    it("defaults the data dir to the host's location under the home directory", async () => {
       const host = createMockHost({ pluginId: "acme.habits" });
-      const log = "/home/me/.daintree/plugin-data/acme.habits/2026/log.jsonl";
-      await host.fs.appendFile(log, "x");
-      expect(
-        (await host.fs.stat("/home/me/.daintree/plugin-data/acme.habits/2026")).isDirectory
-      ).toBe(true);
+      const dataDir = join(homedir(), ".daintree", "plugin-data", "acme.habits");
+      await host.fs.appendFile(join(dataDir, "log.jsonl"), "x");
+      expect(host.fsAppendCalls).toHaveLength(1);
     });
   });
 

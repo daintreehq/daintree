@@ -15,8 +15,9 @@ import {
 } from "../types/plugin.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { join as joinPath } from "node:path";
 import { openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
@@ -310,6 +311,12 @@ export interface CreateMockHostOptions {
    * for an app-global plugin, which has no project.
    */
   projectRoot?: string;
+  /**
+   * The plugin's implicit data dir, inside which `fs.appendFile` grows
+   * missing parents the way the host does. Defaults to the same place the
+   * host uses: `~/.daintree/plugin-data/{pluginId}`.
+   */
+  pluginDataDir?: string;
   activeWorktree?: PluginWorktreeSnapshot | null;
   worktrees?: PluginWorktreeSnapshot[];
   /**
@@ -695,7 +702,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const fsWatchers = new Set<MockFsWatcher>();
 
   const parentOf = (target: string): string => {
-    const slash = target.lastIndexOf("/");
+    const slash = Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\"));
     return slash <= 0 ? "/" : target.slice(0, slash);
   };
   const trimDir = (dir: string): string =>
@@ -721,10 +728,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     }
     return chain;
   };
-  // The mock's stand-in for the host's implicit per-plugin data dir, which
-  // grows missing parents for a write inside it.
+  // The host's implicit per-plugin data dir grows missing parents for a write
+  // inside it — and only inside it, so the match is anchored at the root, not
+  // found anywhere in the path. Separators are compared as "/" so a Windows
+  // root matches either spelling.
+  const toSlashes = (target: string): string => target.replace(/\\/g, "/");
+  const mockDataDir = trimDir(
+    toSlashes(options.pluginDataDir ?? joinPath(homedir(), ".daintree", "plugin-data", pluginId))
+  );
   const isMockDataDirPath = (target: string): boolean =>
-    target.includes(`/.daintree/plugin-data/${pluginId}/`);
+    toSlashes(target).startsWith(`${mockDataDir}/`);
 
   // Resolve the declared scope for a key from the opt-in `manifestSettings`,
   // mirroring PluginSettingsManager.getDeclaredScope. Returns undefined when no

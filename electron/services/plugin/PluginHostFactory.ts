@@ -2254,27 +2254,35 @@ async function withVerifiedReadHandle<T>(
 }
 
 /**
- * Create `resolved` and every missing ancestor, one component at a time, and
- * return the directories this call created, outermost first, so each can be
- * audited. Containment has already proven the deepest existing ancestor is a
- * real directory inside scope; walking the missing tail with non-recursive
- * `mkdir` means a component that appears in the meantime is inspected rather
- * than silently followed — only a real directory is accepted, never a symlink
- * to one.
+ * Create `resolved` and every missing ancestor, one component at a time,
+ * reporting each directory to `onCreated` the moment it exists — so a failure
+ * further down the chain never leaves an earlier creation unaudited.
+ * Containment has already proven the deepest existing ancestor is a real
+ * directory inside scope; walking the missing tail with non-recursive `mkdir`
+ * means a component that appears in the meantime is inspected rather than
+ * silently followed — only a real directory is accepted, never a symlink to
+ * one.
  *
  * The final realpath compare catches an ancestor swapped for a symlink while
  * the chain was being built. It cannot un-create what landed elsewhere, but it
  * refuses to report success for a directory that is not where containment
  * said it would be. The walk is by pathname, so the window is shrunk, not
  * closed — the same limit every host.fs write documents.
+ *
+ * `hostOwned` is for the plugin data dir, a path the host chose rather than a
+ * contained one: it is not realpathed, so its existing ancestors may be links
+ * the user made (a symlinked `~/.daintree`) and there is no realpath to
+ * compare against at the end.
  */
 async function createDirectoryChain(
   pluginId: string,
   op: string,
-  resolved: string
-): Promise<string[]> {
+  resolved: string,
+  onCreated: (dir: string) => void,
+  hostOwned = false
+): Promise<void> {
   const lstatOrNull = (target: string) =>
-    fs.lstat(target).catch((error: NodeJS.ErrnoException) => {
+    (hostOwned ? fs.stat(target) : fs.lstat(target)).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return null;
       throw error;
     });
@@ -2303,22 +2311,21 @@ async function createDirectoryChain(
     if (parent === current) throw moved();
     current = parent;
   }
-  if (missing.length === 0) return [];
+  if (missing.length === 0) return;
 
-  const created: string[] = [];
   for (const dir of missing.reverse()) {
     try {
       await fs.mkdir(dir);
-      created.push(dir);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       // A concurrent creator is fine as long as what it made is a directory.
       const stat = await lstatOrNull(dir);
       if (stat === null || !stat.isDirectory()) throw moved();
+      continue;
     }
+    onCreated(dir);
   }
-  if ((await fs.realpath(resolved)) !== resolved) throw moved();
-  return created;
+  if (!hostOwned && (await fs.realpath(resolved)) !== resolved) throw moved();
 }
 
 /**
@@ -2327,8 +2334,9 @@ async function createDirectoryChain(
  * symlink on POSIX, and the descriptor is compared with the entry at the path
  * before anything is written, exactly as reads are.
  *
- * A failure after some bytes landed carries `bytesWritten` on the error so the
- * caller can audit the partial append rather than report it as nothing.
+ * A failure after some bytes landed — including a failed close after all of
+ * them were written — carries `bytesWritten` on the error so the caller can
+ * audit the partial append rather than report it as nothing.
  */
 async function appendToContainedFile(
   pluginId: string,
@@ -2359,6 +2367,7 @@ async function appendToContainedFile(
     }
     throw error;
   }
+  let written = 0;
   try {
     const opened = await assertHandleIsLeaf(pluginId, "appendFile", resolved, handle);
     if (!opened.isFile()) {
@@ -2370,7 +2379,6 @@ async function appendToContainedFile(
     // A regular file takes the whole buffer in one write; the loop only
     // matters for a short write, where each O_APPEND write still lands at
     // the end but another appender can interleave between the pieces.
-    let written = 0;
     try {
       while (written < bytes.byteLength) {
         const { bytesWritten } = await handle.write(bytes, written, bytes.byteLength - written);
@@ -2387,8 +2395,15 @@ async function appendToContainedFile(
     throw error;
   }
   // Unlike a read, a failed close after a write can mean the bytes did not
-  // land, so it is surfaced.
-  await handle.close();
+  // land, so it is surfaced — with the count, since they may well have.
+  try {
+    await handle.close();
+  } catch (error) {
+    if (written > 0 && error instanceof Error) {
+      Object.assign(error, { bytesWritten: written });
+    }
+    throw error;
+  }
 }
 
 /**
@@ -2487,8 +2502,7 @@ function buildFsApi(
       requireWriteCapForClass(op, "user-data");
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded(op);
-      const firstCreated = await fs.mkdir(dataDir, { recursive: true });
-      if (firstCreated !== undefined) auditMutation("mkdir", dataDir);
+      await createDirectoryChain(pluginId, op, dataDir, (dir) => auditMutation("mkdir", dir), true);
     }
     const { resolved, rootClass } = await containWithClass(targetPath);
     requireLoaded(op);
@@ -2502,9 +2516,9 @@ function buildFsApi(
   // A nested target inside the data dir grows its parents implicitly, so a
   // plugin can lay out its own subtree; everywhere else the parent must exist.
   const createDataDirParents = async (op: string, resolved: string): Promise<void> => {
-    for (const dir of await createDirectoryChain(pluginId, op, path.dirname(resolved))) {
-      auditMutation("mkdir", dir);
-    }
+    await createDirectoryChain(pluginId, op, path.dirname(resolved), (dir) =>
+      auditMutation("mkdir", dir)
+    );
   };
   // Containment resolved before the consent prompt and the per-path queue
   // wait; both can take long enough for the path to change underneath, so a
@@ -2783,14 +2797,15 @@ function buildFsApi(
       // missing tail, so an existing ancestor that is a symlink out of every
       // root is refused here, before anything is created.
       const { resolved } = await gateMutation("mkdir", dirPath, writeCap);
-      const created = await runExclusive(resolved, async () => {
-        requireLoaded("mkdir");
-        await recheckContained("mkdir", dirPath, resolved);
-        return createDirectoryChain(pluginId, "mkdir", resolved);
-      });
       // Only what this call made is audited; an existing directory changed
       // nothing.
-      for (const dir of created) auditMutation("mkdir", dir);
+      await runExclusive(resolved, async () => {
+        requireLoaded("mkdir");
+        await recheckContained("mkdir", dirPath, resolved);
+        await createDirectoryChain(pluginId, "mkdir", resolved, (dir) =>
+          auditMutation("mkdir", dir)
+        );
+      });
     },
     appendFile: async (filePath, contents) => {
       requireLoaded("appendFile");
