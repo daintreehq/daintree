@@ -163,15 +163,17 @@ function recordWindowSwitch(windowId: number, from: string | null, to: string): 
   history.record(to);
 }
 
-function isOpenLocalProject(projectId: string): boolean {
-  const project = projectStore.getProjectById(projectId);
+/** A local workspace a window can return to: an open project, or a scratch that still exists. */
+function isOpenLocalWorkspace(workspaceId: string): boolean {
+  if (isScratchWorkspaceId(workspaceId)) return Boolean(scratchStore.getScratchById(workspaceId));
+  const project = projectStore.getProjectById(workspaceId);
   return project !== null && project !== undefined && project.status !== "closed";
 }
 
 function lastLocalProjectId(windowId: number | null): string | null {
   if (windowId !== null) {
     for (const key of getProjectHistory(windowId).snapshot().entries) {
-      if (isLocalHostId(parseHostScopedKey(key).hostId) && isOpenLocalProject(key)) return key;
+      if (isLocalHostId(parseHostScopedKey(key).hostId) && isOpenLocalWorkspace(key)) return key;
     }
   }
   let latest: { id: string; lastOpened: number } | null = null;
@@ -184,6 +186,22 @@ function lastLocalProjectId(windowId: number | null): string | null {
 }
 
 function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
+  // This client's switches run one at a time per window, so each reads the
+  // workspace it is leaving only once the one before it has landed: two
+  // switches queued together would otherwise both record the same origin.
+  const chains = new Map<number, Promise<unknown>>();
+  const inTurn = <T>(windowId: number, task: () => Promise<T>): Promise<T> => {
+    const run = (chains.get(windowId) ?? Promise.resolve()).then(task, task);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    chains.set(windowId, settled);
+    void settled.then(() => {
+      if (chains.get(windowId) === settled) chains.delete(windowId);
+    });
+    return run;
+  };
   return {
     async openWindow() {
       if (!windowOpener) {
@@ -195,13 +213,15 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       }
       return windowOpener();
     },
-    async openRemoteProject(windowId, hostId, projectId, projectPath) {
-      const pvm = managerFor(windowId);
-      const from = pvm.getActiveProjectId();
-      const { view, isNew } = await pvm.switchToHostProject(hostId, projectId, projectPath);
-      recordWindowSwitch(windowId, from, toHostScopedKey(hostId, projectId));
-      const wc = view.webContents;
-      if (wc && !wc.isDestroyed()) hooks.onRemoteViewActivated?.(windowId, wc, isNew);
+    openRemoteProject(windowId, hostId, projectId, projectPath) {
+      return inTurn(windowId, async () => {
+        const pvm = managerFor(windowId);
+        const from = pvm.getActiveProjectId();
+        const { view, isNew } = await pvm.switchToHostProject(hostId, projectId, projectPath);
+        recordWindowSwitch(windowId, from, toHostScopedKey(hostId, projectId));
+        const wc = view.webContents;
+        if (wc && !wc.isDestroyed()) hooks.onRemoteViewActivated?.(windowId, wc, isNew);
+      });
     },
     async openLocalProject(windowId, projectId) {
       // A scratch is a workspace a view shows like a project, with no project row.
@@ -211,10 +231,12 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       if (!project) {
         throw new AppError({ code: "NOT_FOUND", message: `No local project ${projectId}` });
       }
-      const pvm = managerFor(windowId);
-      const from = pvm.getActiveProjectId();
-      await pvm.switchTo(project.id, project.path);
-      recordWindowSwitch(windowId, from, project.id);
+      await inTurn(windowId, async () => {
+        const pvm = managerFor(windowId);
+        const from = pvm.getActiveProjectId();
+        await pvm.switchTo(project.id, project.path);
+        recordWindowSwitch(windowId, from, project.id);
+      });
     },
     lastLocalProjectId,
     watchWindow(windowId, onClosed) {

@@ -57,6 +57,18 @@ vi.mock("../../services/PluginService.js", async () => ({
   pluginService: (await import("./harness/fakePluginService.js")).fakePluginService,
 }));
 
+/** This machine's scratch table, in memory: the real store is SQLite behind Electron's build. */
+const scratches = vi.hoisted(
+  () => new Map<string, { id: string; name: string; path: string; lastOpened: number }>()
+);
+vi.mock("../../services/ScratchStore.js", () => ({
+  scratchStore: {
+    getAllScratches: () => [...scratches.values()],
+    getCurrentScratch: () => null,
+    getScratchById: (id: string) => scratches.get(id) ?? null,
+  },
+}));
+
 /**
  * This Shell's MCP bridge into its views. The renderer that runs an action is
  * not in the harness; this stands in for it, answering a screenshot with real
@@ -113,7 +125,17 @@ const pvmState = vi.hoisted(() => ({
   create: null as null | ((key: string) => { webContents: unknown }),
 }));
 const fakePvm = vi.hoisted(() => {
+  // Serialized and slow to land, as the real manager's switch chain is.
+  let chain: Promise<unknown> = Promise.resolve();
   function show(key: string) {
+    const next = chain.then(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return land(key);
+    });
+    chain = next.catch(() => undefined);
+    return next;
+  }
+  function land(key: string) {
     let view = pvmState.views.get(key);
     const isNew = !view;
     if (!view) {
@@ -203,6 +225,7 @@ afterEach(async () => {
   pvmState.views.clear();
   pvmState.create = null;
   mcp.dispatched.length = 0;
+  scratches.clear();
   resetProjectHistory(shellWindow.id);
 });
 
@@ -304,6 +327,61 @@ describe("switching hosts (integration harness)", () => {
         "proj-2",
       ]);
       expect(parseHostScopedKey(REMOTE_KEY)).toEqual({ hostId: HOST_ID, projectId: "proj-1" });
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "records overlapping switches in the order they landed",
+    async () => {
+      const { local } = await startWindowOnLocalProject();
+      const client = harnessState.client!;
+      await Promise.all([
+        client.client.switchWindowHost(from(local), {
+          hostId: HOST_ID,
+          newWindow: false,
+          projectId: "proj-1",
+        }),
+        client.client.switchWindowHost(from(local), {
+          hostId: HOST_ID,
+          newWindow: false,
+          projectId: "proj-2",
+        }),
+      ]);
+      expect(pvmState.active).toBe(toHostScopedKey(HOST_ID, "proj-2"));
+      // The toggle from proj-2 leads back to proj-1, not past it.
+      expect(getProjectHistory(shellWindow.id).snapshot().entries).toEqual([
+        toHostScopedKey(HOST_ID, "proj-2"),
+        REMOTE_KEY,
+        "proj-2",
+      ]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "returns a window to the local scratch it left",
+    async () => {
+      const scratchId = "11111111-1111-4111-8111-111111111111";
+      const { harness, local } = await startWindowOnLocalProject();
+      scratches.set(scratchId, { id: scratchId, name: "Spike", path: harness.dir, lastOpened: 1 });
+      const client = harnessState.client!;
+      // The window moves from proj-2 into the scratch, then to the host.
+      await client.client.switchWindowHost(from(local), {
+        hostId: "local",
+        newWindow: false,
+        projectId: scratchId,
+      });
+      expect(pvmState.active).toBe(scratchId);
+      await client.client.switchWindowHost(from(activeView()), {
+        hostId: HOST_ID,
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await expect(
+        client.client.switchWindowHost(from(activeView()), { hostId: "local", newWindow: false })
+      ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: scratchId });
+      expect(pvmState.active).toBe(scratchId);
     },
     TEST_TIMEOUT_MS
   );

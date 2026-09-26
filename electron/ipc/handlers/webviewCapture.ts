@@ -2,7 +2,7 @@ import { webContents } from "electron";
 import { defineIpcNamespace, op } from "../define.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type { HandlerDependencies } from "../types.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
 import { WEBVIEW_CAPTURE_METHOD_CHANNELS } from "./webviewCapture.preload.js";
 
 export const webviewCaptureNamespace = defineIpcNamespace({
@@ -10,7 +10,7 @@ export const webviewCaptureNamespace = defineIpcNamespace({
   ops: {
     captureScreenshot: op(
       WEBVIEW_CAPTURE_METHOD_CHANNELS.captureScreenshot,
-      async (panelId: string) => {
+      async (ctx: IpcContext, panelId: string) => {
         // The renderer only has the panel id; resolve the live webContentsId
         // from the panel registry (populated by both browser and dev-preview
         // webviews) so this works for either panel kind.
@@ -29,6 +29,18 @@ export const webviewCaptureNamespace = defineIpcNamespace({
             code: "NOT_FOUND",
             message: "Browser webview is no longer available",
             context: { panelId, webContentsId },
+          });
+        }
+
+        // Only a panel the asking view embeds, as registration requires: the
+        // registry is process-wide, and a panel id from another window (or a
+        // host's MCP asking through a view it drives) must not read its pixels.
+        const embedder = wc.hostWebContents;
+        if (!embedder || embedder.isDestroyed() || embedder.id !== ctx.webContentsId) {
+          throw new AppError({
+            code: "NOT_FOUND",
+            message: "No browser panel is available to screenshot",
+            context: { panelId },
           });
         }
 
@@ -70,7 +82,8 @@ export const webviewCaptureNamespace = defineIpcNamespace({
           width: size.width,
           height: size.height,
         };
-      }
+      },
+      { withContext: true }
     ),
   },
 });
