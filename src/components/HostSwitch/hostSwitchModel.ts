@@ -1,5 +1,5 @@
 import type { BranchCheck, HostSwitchPreparation } from "@shared/types/ipc/hostSwitch";
-import type { ProjectMatchCandidate } from "@shared/types/ipc/projectMatch";
+import type { PlacedWorktree, ProjectMatchCandidate } from "@shared/types/ipc/projectMatch";
 import { extractHostname } from "@shared/utils/forgeHostnames";
 import { normalizeGitRemoteUrl } from "@shared/utils/gitRemoteUrl";
 
@@ -212,4 +212,28 @@ export function hostDisplayName(
 ): string {
   if (hostId === "local") return localLabel;
   return hosts.find((h) => h.descriptor.id === hostId)?.descriptor.name ?? hostId;
+}
+
+/** The placed worktree, in words: what will be created on the host, and from what. */
+export function describePlacedWorktree(worktree: PlacedWorktree, hostName: string): string {
+  const from = worktree.useExistingBranch
+    ? `Checks out the existing branch on ${hostName}`
+    : `New branch from ${worktree.baseBranch}${worktree.fromRemote ? " on the remote" : ""}`;
+  const where = worktree.relativePath
+    ? `, at ${worktree.relativePath} beside the project`
+    : `, where ${hostName} puts new worktrees`;
+  return `${from}${where}.`;
+}
+
+/**
+ * The clone destination once "Change…" picked `folder` on the host: the
+ * picked folder itself when it already carries the clone's folder name,
+ * otherwise that name inside it.
+ */
+export function destinationInFolder(folder: string, current: string, fallbackName: string): string {
+  const trimmed = current.replace(/\/+$/, "");
+  const name = trimmed.slice(trimmed.lastIndexOf("/") + 1) || fallbackName;
+  const parent = folder.replace(/\/+$/, "") || "/";
+  if (parent.slice(parent.lastIndexOf("/") + 1) === name) return parent;
+  return parent === "/" ? `/${name}` : `${parent}/${name}`;
 }

@@ -415,6 +415,15 @@ export interface GeneratedElectronAPI {
     execute(
       ...args: IpcInvokeMap["host-switch:execute"]["args"]
     ): Promise<IpcInvokeMap["host-switch:execute"]["result"]>;
+    listDirectory(
+      ...args: IpcInvokeMap["host-switch:list-directory"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:list-directory"]["result"]>;
+    locate(
+      ...args: IpcInvokeMap["host-switch:locate"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:locate"]["result"]>;
+    pickerRoots(
+      ...args: IpcInvokeMap["host-switch:picker-roots"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:picker-roots"]["result"]>;
     plan(
       ...args: IpcInvokeMap["host-switch:plan"]["args"]
     ): Promise<IpcInvokeMap["host-switch:plan"]["result"]>;
@@ -424,6 +433,9 @@ export interface GeneratedElectronAPI {
     status(
       ...args: IpcInvokeMap["host-switch:status"]["args"]
     ): Promise<IpcInvokeMap["host-switch:status"]["result"]>;
+    suggestCloneDestination(
+      ...args: IpcInvokeMap["host-switch:suggest-clone-destination"]["args"]
+    ): Promise<IpcInvokeMap["host-switch:suggest-clone-destination"]["result"]>;
   };
   keepAwake: {
     getState(

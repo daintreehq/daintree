@@ -12,8 +12,12 @@ import type {
   HostBranchTarget,
   HostCloneEnvironment,
   HostProjectOpened,
+  IdentifyProjectPayload,
   OpenOnHostPayload,
   PendingHostSetup,
+  PlaceWorktreePayload,
+  PlacedWorktree,
+  ProjectIdentity,
   ProjectMatchCandidate,
   PushBranchOutcome,
   PushBranchPayload,
@@ -58,6 +62,8 @@ const BRANCH_FETCH_TIMEOUT_MS = 15_000;
 export const PUSH_TIMEOUT_MS = 10 * 60_000;
 const MAX_PENDING_SETUPS = 64;
 const MAX_PREVIEW_COMMITS = 20;
+/** The operation kinds this service starts, and so the only ones it reports or cancels. */
+const OWN_OPERATION_KINDS = new Set(["project-clone-and-open", "project-worktree-place"]);
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
@@ -90,6 +96,40 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 function gitText(error: unknown, fallback: string): string {
   return scrubSecrets(formatErrorMessage(error, fallback));
+}
+
+const MAX_RELATIVE_PATH = 1024;
+
+/** A placed worktree as the host accepts it: exact branch names and a relative, bounded path. */
+function validatePlacedWorktree(value: unknown): PlacedWorktree {
+  const input = (value ?? {}) as Partial<PlacedWorktree>;
+  const newBranch = requireBranchName(input.newBranch, "branch");
+  const baseBranch = requireBranchName(input.baseBranch, "base branch");
+  let relativePath: string | null = null;
+  if (input.relativePath !== null && input.relativePath !== undefined) {
+    if (
+      typeof input.relativePath !== "string" ||
+      input.relativePath.length === 0 ||
+      input.relativePath.length > MAX_RELATIVE_PATH ||
+      input.relativePath.includes("\0") ||
+      path.isAbsolute(input.relativePath)
+    ) {
+      throw invalid("The worktree path must be relative to the project folder");
+    }
+    relativePath = input.relativePath;
+  }
+  const recipeId =
+    typeof input.recipeId === "string" && input.recipeId.length > 0 && input.recipeId.length <= 256
+      ? input.recipeId
+      : null;
+  return {
+    newBranch,
+    baseBranch,
+    fromRemote: input.fromRemote === true,
+    useExistingBranch: input.useExistingBranch === true,
+    relativePath,
+    recipeId,
+  };
 }
 
 /**
@@ -242,6 +282,25 @@ export class ProjectAcrossHostsService {
       recipes,
       defaultRecipeId: defaultId && recipes.some((r) => r.id === defaultId) ? defaultId : null,
     };
+  }
+
+  /**
+   * What another host matches this project by: its remotes (never their
+   * embedded credentials) and a committed project id when one is tracked.
+   * Cheap and offline, unlike {@link describeSource}: no remote is asked.
+   */
+  async identify(payload: IdentifyProjectPayload): Promise<ProjectIdentity> {
+    const project = this.requireProject(payload?.projectId);
+    const remotes = stripRemoteListCredentials(
+      await this.listRemotes(project.path).catch(() => [])
+    );
+    const git = await this.deps.git.local(project.path);
+    const tracked = await tryRaw(git, ["ls-files", "--", ".daintree/project.json"]);
+    const committedProjectId =
+      (tracked ?? "").trim().length > 0
+        ? await this.deps.readCommittedProjectId(project.path).catch(() => null)
+        : null;
+    return { remotes, committedProjectId };
   }
 
   /** What a push of the checked-out branch would publish, for the confirmation to show. */
@@ -708,6 +767,14 @@ export class ProjectAcrossHostsService {
     return remotes.length === 1 ? remotes[0]!.name : null;
   }
 
+  /**
+   * The project `payload` names, or the unregistered clone at its path,
+   * registered here. A folder is adopted only once this host has checked it
+   * for itself: a real directory at the top of its own git repository (not a
+   * subfolder, a linked worktree or a symlink to somewhere else), whose
+   * remotes share one with the repository being opened. Where the Shell
+   * found it — this host's scan or a person with the picker — doesn't matter.
+   */
   private async adoptCandidate(payload: OpenOnHostPayload): Promise<Project> {
     if (payload.projectId) return this.requireProject(payload.projectId);
     if (typeof payload.path !== "string" || !path.isAbsolute(payload.path)) {
@@ -716,14 +783,22 @@ export class ProjectAcrossHostsService {
     const resolved = path.resolve(payload.path);
     const known = this.deps.listProjects().find((p) => path.resolve(p.path) === resolved);
     if (known) return known;
-    // Only a clone this host itself found (by its own scan) is adopted.
-    const found = await this.scan({ remoteUrls: payload.remoteUrls ?? [] });
+    const refuse = (detail: string): AppError =>
+      new AppError({ code: "VALIDATION", message: detail, userMessage: detail });
+    const stat = await fs.lstat(resolved).catch(() => null);
+    if (!stat?.isDirectory()) throw refuse("That folder isn't there on this host.");
+    const gitDir = await fs.lstat(path.join(resolved, ".git")).catch(() => null);
+    if (!gitDir?.isDirectory()) throw refuse("That folder isn't a git repository's main folder.");
     const real = await fs.realpath(resolved).catch(() => null);
-    const offered =
-      real !== null &&
-      (await Promise.all(found.map((c) => fs.realpath(c.path).catch(() => null)))).includes(real);
-    const check = offered ? await checkDestination(resolved, payload.remoteUrls ?? []) : null;
-    if (!check || check.status !== "same-repository") {
+    const git = await this.deps.git.local(resolved);
+    const topLevel = (await tryRaw(git, ["rev-parse", "--show-toplevel"]))?.trim() ?? null;
+    const realTop = topLevel ? await fs.realpath(topLevel).catch(() => null) : null;
+    if (real === null || realTop !== real) {
+      throw refuse("That folder isn't a git repository's main folder.");
+    }
+    const remoteUrls = Array.isArray(payload.remoteUrls) ? payload.remoteUrls : [];
+    const check = await checkDestination(resolved, remoteUrls);
+    if (check.status !== "same-repository") {
       throw new AppError({
         code: "VALIDATION",
         message: "The folder is not a clone of this repository",
@@ -830,22 +905,126 @@ export class ProjectAcrossHostsService {
     });
   }
 
+  /**
+   * Create the worktree another host's new-worktree dialog asked for, as one
+   * operation with its own id and a retained outcome, so a Shell whose link
+   * dropped learns how it ended instead of asking twice. A worktree that
+   * already has the branch checked out is reused, never suffixed.
+   */
+  placeWorktree(payload: PlaceWorktreePayload): Promise<CloneAndOpenOutcome> {
+    const opId = normalizeOperationId(payload?.opId);
+    if (!opId) throw invalid("Invalid operation id");
+    const project = this.requireProject(payload.projectId);
+    const worktree = validatePlacedWorktree(payload.worktree);
+    return this.deps.operations().run(
+      {
+        opId,
+        kind: "project-worktree-place",
+        projectId: project.id,
+        dedupKey: `project-worktree-place:${project.id}\0${worktree.newBranch}`,
+        fingerprint: JSON.stringify({ projectId: project.id, worktree }),
+      },
+      (op) => {
+        op.onCancel(() => {});
+        return this.runPlaceWorktree(project, worktree, op);
+      }
+    );
+  }
+
+  private async runPlaceWorktree(
+    project: Project,
+    worktree: PlacedWorktree,
+    op: {
+      signal: AbortSignal;
+      progress(update: {
+        fraction: number | null;
+        stage: string | null;
+        message: string | null;
+      }): void;
+    }
+  ): Promise<CloneAndOpenOutcome> {
+    const base = { projectId: project.id, projectPath: project.path, projectName: project.name };
+    const existing = findWorktreeForBranch(
+      await this.worktreePorcelain(project.path),
+      worktree.newBranch
+    );
+    let worktreePath: string;
+    if (existing) {
+      worktreePath = existing;
+    } else {
+      const target = worktree.relativePath
+        ? path.resolve(project.path, worktree.relativePath)
+        : await this.deps.worktreePathFor(project.path, worktree.newBranch);
+      const inside = path.relative(project.path, target);
+      if (inside === "" || inside === ".git" || inside.startsWith(`.git${path.sep}`)) {
+        throw invalid("The worktree can't go inside the project's git folder");
+      }
+      const occupied = await fs
+        .readdir(target)
+        .then((entries) => entries.length > 0)
+        .catch((error: NodeJS.ErrnoException) => error.code !== "ENOENT");
+      if (occupied) {
+        const detail = `Something is already at ${target} on this host.`;
+        throw new AppError({ code: "VALIDATION", message: detail, userMessage: detail });
+      }
+      if (op.signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+      op.progress({ fraction: null, stage: "worktree", message: "Creating the worktree" });
+      try {
+        const created = await this.deps.createWorktree(project.path, {
+          baseBranch: worktree.baseBranch,
+          newBranch: worktree.newBranch,
+          path: target,
+          fromRemote: worktree.useExistingBranch ? false : worktree.fromRemote,
+          useExistingBranch: worktree.useExistingBranch,
+          collisionPolicy: "error",
+        });
+        worktreePath = created.worktreeId;
+      } catch (error) {
+        if (error instanceof GitOperationError || error instanceof AppError) throw error;
+        throw new GitOperationError(
+          classifyGitError(error),
+          gitText(error, "The worktree couldn't be created."),
+          { op: "worktree" }
+        );
+      }
+    }
+    await this.deps.focusWorktree(project.id, worktreePath).catch(() => {});
+
+    let setupRecipeId: string | null = null;
+    if (worktree.recipeId) {
+      const recipes = await this.deps.readInRepoRecipes(project.path).catch(() => []);
+      if (recipes.some((r) => r.id === worktree.recipeId)) {
+        setupRecipeId = worktree.recipeId;
+        this.rememberSetup({ projectId: project.id, recipeId: setupRecipeId, worktreePath });
+      }
+    }
+    return {
+      ok: true,
+      ...base,
+      worktreePath,
+      canCheckOutBranch: false,
+      branchNote:
+        worktree.recipeId && !setupRecipeId
+          ? "The setup recipe isn't in this host's copy of the repository, so it won't run."
+          : null,
+      setupRecipeId,
+    };
+  }
+
   // Operations
 
   operationStatus(opId: string): OperationOutcome {
     const id = normalizeOperationId(opId);
     if (!id) throw invalid("Invalid operation id");
     const record = this.deps.operations().get(id);
-    return record && record.kind === "project-clone-and-open"
-      ? record.outcome
-      : { status: "unknown" };
+    return record && OWN_OPERATION_KINDS.has(record.kind) ? record.outcome : { status: "unknown" };
   }
 
   cancelOperation(opId: string): boolean {
     const id = normalizeOperationId(opId);
     if (!id) throw invalid("Invalid operation id");
     const record = this.deps.operations().get(id);
-    if (!record || record.kind !== "project-clone-and-open") return false;
+    if (!record || !OWN_OPERATION_KINDS.has(record.kind)) return false;
     return this.deps.operations().cancel(id);
   }
 

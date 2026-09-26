@@ -152,6 +152,38 @@ export interface OpenOnHostPayload {
   branchRemoteUrl: string | null;
 }
 
+/**
+ * A new worktree asked for in one host's new-worktree dialog and placed on
+ * another: what to create there. The path is relative to the project folder
+ * (a sibling layout carries across hosts; an absolute path on one machine
+ * means nothing on another); null lets the host pick by its own pattern.
+ */
+export interface PlacedWorktree {
+  newBranch: string;
+  baseBranch: string;
+  fromRemote: boolean;
+  useExistingBranch: boolean;
+  relativePath: string | null;
+  /** An in-repo recipe to run in the new worktree's first view, when the host's copy has it. */
+  recipeId: string | null;
+}
+
+export interface PlaceWorktreePayload {
+  opId: string;
+  projectId: string;
+  worktree: PlacedWorktree;
+}
+
+/** The repository identity of a project on its host: what another host matches it by. */
+export interface ProjectIdentity {
+  remotes: Array<{ name: string; url: string }>;
+  committedProjectId: string | null;
+}
+
+export interface IdentifyProjectPayload {
+  projectId: string;
+}
+
 export interface CheckOutBranchPayload {
   projectId: string;
   branch: HostBranchTarget;

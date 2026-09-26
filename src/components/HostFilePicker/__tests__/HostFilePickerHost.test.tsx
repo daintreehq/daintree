@@ -117,6 +117,56 @@ function openPick(request: Parameters<typeof pickHostPaths>[0]): Promise<string[
 }
 
 describe("HostFilePickerHost", () => {
+  it("browses another host through the Shell when a renderer names it", async () => {
+    const otherList = vi.fn(async ({ path }: { toHostId: string; path: string }) => ({
+      path,
+      parent: null,
+      truncated: false,
+      entries: [{ name: "srv-repo", kind: "directory" as const, size: null, mtimeMs: 0 }],
+    }));
+    const pickerRoots = vi.fn(async () => ({
+      home: "/home/studio",
+      projectsDir: null,
+      roots: [{ label: "Home", path: "/home/studio" }],
+    }));
+    Object.assign(window.electron, { hostSwitch: { listDirectory: otherList, pickerRoots } });
+    render(<HostFilePickerHost />);
+    const picked = openPick({
+      mode: "directory",
+      title: "Choose on studio-01",
+      buttonLabel: "Use this folder",
+      hostId: "studio-01",
+    });
+    await screen.findByText("srv-repo");
+    expect(pickerRoots).toHaveBeenCalledWith({ toHostId: "studio-01" });
+    expect(otherList).toHaveBeenCalledWith({
+      toHostId: "studio-01",
+      path: "/home/studio",
+      showHidden: false,
+    });
+    expect(listDirectory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("srv-repo"));
+    fireEvent.click(confirmButton("Use this folder"));
+    await expect(picked).resolves.toEqual(["/home/studio/srv-repo"]);
+  });
+
+  it("never lets a main-process request redirect the picker to another host", async () => {
+    const otherList = vi.fn();
+    Object.assign(window.electron, {
+      hostSwitch: { listDirectory: otherList, pickerRoots: vi.fn() },
+    });
+    render(<HostFilePickerHost />);
+    act(() => {
+      eventListener!({
+        type: "host-pick-request",
+        requestId: "req-x",
+        request: { mode: "directory", title: "Open folder", hostId: "studio-01" },
+      });
+    });
+    await screen.findByText("work");
+    expect(otherList).not.toHaveBeenCalled();
+  });
+
   it("browses the host and answers a main-process pick with the chosen folder", async () => {
     render(<HostFilePickerHost />);
     act(() => {

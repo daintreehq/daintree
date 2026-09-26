@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/remoteHosts";
+import type { HostProjectPresence } from "@shared/types/ipc/hostSwitch";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "./hostList";
@@ -112,16 +113,67 @@ export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTar
 }
 
 /**
- * The project on `target` that goes by the same name, if it lists one. A name
- * match is only what the host reports, so the menu says what it saw: a project
- * of that name is there.
+ * The projects each host lists, for the hosts named (the overview's cards).
+ * A host missing from the map hasn't answered yet; nothing is asked of a
+ * host whose id isn't passed.
  */
-export function findSameNamedProject(
-  target: OtherHostTarget,
-  projectName: string
-): HostProjectRef | null {
-  const wanted = projectName.trim().toLocaleLowerCase();
-  return target.projects?.find((p) => p.name.trim().toLocaleLowerCase() === wanted) ?? null;
+export function useHostProjectLists(
+  hostIds: readonly HostId[]
+): ReadonlyMap<HostId, HostProjectRef[]> {
+  const key = hostIds.join("\n");
+  const [lists, setLists] = useState<ReadonlyMap<HostId, HostProjectRef[]>>(() => new Map());
+  useEffect(() => {
+    const ids = key === "" ? [] : key.split("\n");
+    if (ids.length === 0) {
+      setLists((prev) => (prev.size === 0 ? prev : new Map()));
+      return;
+    }
+    let cancelled = false;
+    const now = Date.now();
+    void Promise.all(ids.map((id) => loadHostProjects(id, now))).then((loaded) => {
+      if (!cancelled) setLists(new Map(ids.map((id, index) => [id, loaded[index] ?? []])));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return lists;
+}
+
+/**
+ * What each other host has of `projectId`, by repository identity (a remote
+ * URL shared with it), asked of the Shell when the menu opens. Absent from
+ * the map while it is being asked; `projects: null` when the host couldn't
+ * be asked. A project that merely shares the name is never counted.
+ */
+export function useProjectPresence(
+  projectId: string,
+  hostIds: readonly HostId[]
+): ReadonlyMap<HostId, HostProjectPresence> {
+  const key = hostIds.join("\n");
+  const [presence, setPresence] = useState<ReadonlyMap<HostId, HostProjectPresence>>(
+    () => new Map()
+  );
+  useEffect(() => {
+    const ids = key === "" ? [] : key.split("\n");
+    const locate = window.electron?.hostSwitch?.locate;
+    if (ids.length === 0 || typeof locate !== "function") return;
+    let cancelled = false;
+    locate({ fromHostId: getViewHostId() ?? LOCAL_HOST_ID, projectId, toHostIds: ids })
+      .then((answers) => {
+        if (!cancelled) setPresence(new Map(answers.map((answer) => [answer.hostId, answer])));
+      })
+      .catch((error: unknown) => {
+        logWarn("[Hosts] Couldn't ask other hosts for this project", { error });
+        if (!cancelled) {
+          setPresence(new Map(ids.map((hostId) => [hostId, { hostId, projects: null }])));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, key]);
+  return presence;
 }
 
 export function _resetHostProjectsForTesting(): void {

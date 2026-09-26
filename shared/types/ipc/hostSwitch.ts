@@ -109,6 +109,23 @@ export type HostSwitchExecutePayload =
       branch: import("./projectMatch.js").HostBranchTarget | null;
       branchRemoteUrl: string | null;
     }
+  /** Clone a repository by its URL onto a host, register and open it (Add project…). */
+  | {
+      kind: "clone-url";
+      opId: string;
+      toHostId: HostId;
+      url: string;
+      destination: string;
+      options: import("./projectMatch.js").HostCloneOptions;
+    }
+  /** Create the worktree asked for in the new-worktree dialog, in a project the target has. */
+  | {
+      kind: "create-worktree";
+      opId: string;
+      toHostId: HostId;
+      projectId: string;
+      worktree: import("./projectMatch.js").PlacedWorktree;
+    }
   /** "Check out <branch> here" on a project the target has. */
   | {
       kind: "checkout";
@@ -122,7 +139,13 @@ export type HostSwitchExecutePayload =
 export type HostSwitchExecuteResult =
   | { kind: "pushed" }
   /** Git refused on the host that ran the step; `message` is git's own text. */
-  | { kind: "git-failed"; step: "push" | "clone"; hostId: HostId; reason: string; message: string }
+  | {
+      kind: "git-failed";
+      step: "push" | "clone" | "worktree";
+      hostId: HostId;
+      reason: string;
+      message: string;
+    }
   | ({ kind: "opened"; hostId: HostId } & import("./projectMatch.js").HostProjectOpened);
 
 /** Where a running step is, for the dialog's progress line. */
@@ -143,4 +166,33 @@ export interface HostSwitchCheckDestinationPayload {
   toHostId: HostId;
   path: string;
   remoteUrls: string[];
+}
+
+/** Which other hosts have a project, by its repository identity. */
+export interface HostSwitchLocatePayload {
+  fromHostId: HostId;
+  projectId: string;
+  toHostIds: HostId[];
+}
+
+/** What one host answered: its registered projects sharing a remote with the source. */
+export interface HostProjectPresence {
+  hostId: HostId;
+  /** Null when the host couldn't be asked. */
+  projects: Array<{ projectId: string; name: string; path: string }> | null;
+}
+
+export interface HostSwitchSuggestClonePayload {
+  toHostId: HostId;
+  url: string;
+}
+
+export interface HostSwitchListDirectoryPayload {
+  toHostId: HostId;
+  path: string;
+  showHidden?: boolean;
+}
+
+export interface HostSwitchPickerRootsPayload {
+  toHostId: HostId;
 }

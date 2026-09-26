@@ -25,6 +25,25 @@ import {
   resolveChoice,
 } from "./hostFilePickerModel";
 
+/**
+ * Where the picker reads folders from: the window's own host, or — when the
+ * request names another — that host through the Shell.
+ */
+function pickerSource(hostId: string | undefined) {
+  if (hostId === undefined) {
+    return {
+      roots: () => window.electron.hostFiles.getPickerRoots(),
+      list: (path: string, showHidden: boolean) =>
+        window.electron.hostFiles.listDirectory({ path, showHidden }),
+    };
+  }
+  return {
+    roots: () => window.electron.hostSwitch.pickerRoots({ toHostId: hostId }),
+    list: (path: string, showHidden: boolean) =>
+      window.electron.hostSwitch.listDirectory({ toHostId: hostId, path, showHidden }),
+  };
+}
+
 interface HostFilePickerDialogProps {
   request: HostPickRequest;
   onResolve(paths: string[] | null): void;
@@ -78,10 +97,12 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     return () => cancelAnimationFrame(frame);
   }, [pathInput]);
 
+  const hostId = request.hostId;
+
   useEffect(() => {
     let cancelled = false;
-    window.electron.hostFiles
-      .getPickerRoots()
+    pickerSource(hostId)
+      .roots()
       .then((result) => {
         if (cancelled) return;
         setRoots(result);
@@ -93,14 +114,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hostId]);
 
   useEffect(() => {
     if (directory === null) return;
     let cancelled = false;
     setLoading(true);
-    window.electron.hostFiles
-      .listDirectory({ path: directory, showHidden })
+    pickerSource(hostId)
+      .list(directory, showHidden)
       .then((result) => {
         if (cancelled) return;
         setListing(result);
@@ -121,7 +142,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     return () => {
       cancelled = true;
     };
-  }, [directory, showHidden, reloadKey]);
+  }, [directory, showHidden, reloadKey, hostId]);
 
   // Anything chosen belongs to the listing on screen, and only while that
   // listing is the answer for the folder asked for: never mid-load, after a

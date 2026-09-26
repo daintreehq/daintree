@@ -17,7 +17,8 @@ export function HostFilePickerHost() {
     if (!fileTransfer?.onEvent) return;
     return fileTransfer.onEvent((event) => {
       if (event.type !== "host-pick-request") return;
-      void pickHostPaths(event.request)
+      // The main process only ever asks about the window's own host.
+      void pickHostPaths({ ...event.request, hostId: undefined })
         .then((paths) => fileTransfer.answerHostPick({ requestId: event.requestId, paths }))
         .catch((error: unknown) =>
           logError("[HostFilePicker] Failed to answer a host pick", error)

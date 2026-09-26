@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { GitBranch, Server } from "lucide-react";
+import { FolderGit2, GitBranch, Server } from "lucide-react";
 import type {
   HostSwitchExecutePayload,
   HostSwitchExecuteResult,
@@ -33,10 +33,13 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { clientPlatform, localHostLabel } from "@/components/Hosts/hostModel";
 import { useHostList } from "@/components/Hosts/hostList";
 import { switchToHost } from "@/components/Hosts/hostSwitching";
+import { pickHostPaths } from "@/components/HostFilePicker/hostFilePickerQueue";
 import { ProjectMatchChooser } from "./ProjectMatchChooser";
 import {
   describeBranchHandoff,
   describeCloneFailure,
+  describePlacedWorktree,
+  destinationInFolder,
   hostDisplayName,
   initialView,
   type BranchPlan,
@@ -125,15 +128,20 @@ function FailureBlock({ failure }: { failure: Failure }) {
 export function HostSwitchDialog({
   request,
   onClose,
+  onComplete,
 }: {
   request: HostSwitchRequest;
   onClose: () => void;
+  /** The project is open on the host (with its worktree, when one was asked for). */
+  onComplete?: () => void;
 }) {
   const { hosts } = useHostList();
   const localLabel = localHostLabel(clientPlatform());
   const fromHostId = currentHostId();
   const sourceName = hostDisplayName(fromHostId, hosts, localLabel);
   const targetName = hostDisplayName(request.toHostId, hosts, localLabel);
+  const placed = request.worktree ?? null;
+  const newWindow = request.newWindow === true;
 
   const [prep, setPrep] = useState<HostSwitchPreparation | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -172,7 +180,8 @@ export function HostSwitchDialog({
         if (cancelled) return;
         setPrep(prepared);
         setView(initialView(prepared));
-        setBranchPlan(describeBranchHandoff(prepared, "").defaultPlan);
+        // A placed worktree replaces the branch handoff: nothing is pushed for it.
+        setBranchPlan(placed ? "no-worktree" : describeBranchHandoff(prepared, "").defaultPlan);
         setCloneUrl(prepared.cloneUrl ?? prepared.remotes[0]?.url ?? "");
         setDestination(prepared.destination?.path ?? "");
         setDestinationCheck(prepared.destination);
@@ -186,7 +195,7 @@ export function HostSwitchDialog({
     return () => {
       cancelled = true;
     };
-  }, [fromHostId, request.toHostId, request.projectId, request.worktreePath]);
+  }, [fromHostId, request.toHostId, request.projectId, request.worktreePath, placed]);
 
   useEffect(() => {
     if (!running) return;
@@ -284,8 +293,32 @@ export function HostSwitchDialog({
   };
 
   const finish = (result: Extract<HostSwitchExecuteResult, { kind: "opened" }>) => {
-    onClose();
-    void switchToHost(result.hostId, false, result.projectId);
+    if (onComplete) onComplete();
+    else onClose();
+    void switchToHost(result.hostId, newWindow, result.projectId);
+  };
+
+  /** The new-worktree dialog's worktree, created in the project now open on the host. */
+  const createPlacedWorktree = async (
+    opened: Extract<HostSwitchExecuteResult, { kind: "opened" }>
+  ) => {
+    if (!placed) return;
+    const result = await execute(`Creating ${placed.newBranch}`, {
+      kind: "create-worktree",
+      toHostId: request.toHostId,
+      projectId: opened.projectId,
+      worktree: placed,
+    });
+    if (!result) return;
+    if (result.kind === "git-failed") {
+      setFailure({
+        title: `Couldn't create ${placed.newBranch} on ${targetName}`,
+        gitText: result.message,
+        fix: null,
+      });
+      return;
+    }
+    if (result.kind === "opened") finish(result);
   };
 
   const handleOpened = (result: HostSwitchExecuteResult | null) => {
@@ -308,6 +341,10 @@ export function HostSwitchDialog({
       return;
     }
     if (result.kind !== "opened") return;
+    if (placed) {
+      void createPlacedWorktree(result);
+      return;
+    }
     if (!result.worktreePath && branchTarget() && (result.canCheckOutBranch || result.branchNote)) {
       setCheckoutOffer({ result });
       return;
@@ -333,20 +370,58 @@ export function HostSwitchDialog({
     handleOpened(result);
   };
 
-  const openExisting = async () => {
-    const candidate = prep?.candidates[candidateIndex];
-    if (!prep || !candidate) return;
+  const openCandidate = async (candidate: { projectId: string | null; path: string }) => {
+    if (!prep) return;
     setFailure(null);
     if (!(await pushIfChosen())) return;
     const result = await execute("Opening", {
       kind: "open",
       toHostId: request.toHostId,
-      candidate: { projectId: candidate.projectId, path: candidate.path },
+      candidate,
       remoteUrls,
       branch: branchTarget(),
       branchRemoteUrl: branchRemoteUrl(),
     });
     handleOpened(result);
+  };
+
+  const openExisting = async () => {
+    const candidate = prep?.candidates[candidateIndex];
+    if (!candidate) return;
+    await openCandidate({ projectId: candidate.projectId, path: candidate.path });
+  };
+
+  /**
+   * A clone the host's scan didn't find: the person picks it on the host, and
+   * the host checks it is this repository before adopting it.
+   */
+  const pickExistingFolder = async () => {
+    const picked = await pickHostPaths({
+      mode: "directory",
+      title: `Choose ${prep?.projectName ?? "the project"}'s folder on ${targetName}`,
+      buttonLabel: "Use this folder",
+      hostId: request.toHostId,
+    });
+    const path = picked?.[0];
+    if (path) await openCandidate({ projectId: null, path });
+  };
+
+  /** "Change…": where the clone goes, chosen on the host. */
+  const pickDestination = async () => {
+    const picked = await pickHostPaths({
+      mode: "directory",
+      title: `Choose where to clone on ${targetName}`,
+      buttonLabel: "Clone here",
+      hostId: request.toHostId,
+      defaultPath: destination.includes("/")
+        ? destination.slice(0, destination.lastIndexOf("/")) || "/"
+        : undefined,
+    });
+    const folder = picked?.[0];
+    if (!folder) return;
+    setDestination(destinationInFolder(folder, destination, prep?.projectName ?? "project"));
+    setDestinationCheck(null);
+    setCheckedInput(null);
   };
 
   const checkOutHere = async () => {
@@ -374,7 +449,7 @@ export function HostSwitchDialog({
 
   const justSwitch = () => {
     onClose();
-    void switchToHost(request.toHostId, false);
+    void switchToHost(request.toHostId, newWindow);
   };
 
   const cancelRunning = () => {
@@ -397,20 +472,31 @@ export function HostSwitchDialog({
 
   const destinationField = (
     <Row label="Into">
-      <Input
-        density="compact"
-        aria-label={`Folder on ${targetName}`}
-        value={destination}
-        spellCheck={false}
-        autoComplete="off"
-        disabled={busy}
-        invalid={destinationCheck !== null && destinationCheck.status !== "free"}
-        onChange={(event) => {
-          setDestination(event.target.value);
-          setDestinationCheck(null);
-          setCheckedInput(null);
-        }}
-      />
+      <div className="flex min-w-0 items-center gap-2">
+        <Input
+          density="compact"
+          aria-label={`Folder on ${targetName}`}
+          value={destination}
+          spellCheck={false}
+          autoComplete="off"
+          disabled={busy}
+          invalid={destinationCheck !== null && destinationCheck.status !== "free"}
+          onChange={(event) => {
+            setDestination(event.target.value);
+            setDestinationCheck(null);
+            setCheckedInput(null);
+          }}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => void pickDestination()}
+          aria-label={`Choose a folder on ${targetName}`}
+        >
+          Change…
+        </Button>
+      </div>
       {checkError && (
         <p role="alert" className="mt-1 text-xs text-status-error">
           Couldn't check this folder on {targetName}: {checkError}{" "}
@@ -443,64 +529,107 @@ export function HostSwitchDialog({
               </button>
             </>
           )}
+          {destinationCheck.status === "same-repository" && view === "clone" && (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="underline underline-offset-2 text-text-primary"
+                disabled={busy}
+                onClick={() => void openCandidate({ projectId: null, path: destinationCheck.path })}
+              >
+                Use existing folder
+              </button>
+            </>
+          )}
         </p>
       )}
     </Row>
   );
 
-  const branchSection = handoff && (
-    <Row label="Branch">
-      <div className="space-y-2">
+  const placedSection = placed && (
+    <Row label="Worktree">
+      <div className="space-y-1">
         <p className="flex items-center gap-1.5">
           <GitBranch className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden />
-          <span className="truncate font-mono text-xs">{prep?.branch ?? "(detached)"}</span>
+          <span className="truncate font-mono text-xs">{placed.newBranch}</span>
         </p>
-        <p className={handoff.tone === "attention" ? "text-status-warning" : "text-text-secondary"}>
-          {handoff.summary}
-        </p>
-        {handoff.detail && <p className="text-xs text-text-secondary">{handoff.detail}</p>}
-        {branchPlan === "push-then-worktree" && prep && (
-          <div className="space-y-1">
-            <p className="text-xs text-text-secondary">
-              {prep.unpushedCommits.length > 0
-                ? `The push publishes ${prep.unpushedCommits.length === 1 ? "this commit" : "these commits"}:`
-                : "The push publishes the branch as it is."}
-            </p>
-            {prep.unpushedCommits.length > 0 && (
-              <ul className="max-h-32 overflow-auto rounded-[var(--radius-md)] border border-border-default px-2 py-1 font-mono text-xs text-text-primary">
-                {prep.unpushedCommits.map((c) => (
-                  <li key={c.sha} className="truncate">
-                    <span className="text-text-secondary">{c.sha}</span> {c.subject}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-        {handoff.choices.length > 0 && (
-          <RadioChoiceGroup legend="What to do with the branch" legendHidden>
-            {handoff.choices.map((choice) => (
-              <RadioChoiceRow
-                key={choice.plan}
-                name="host-switch-branch"
-                value={choice.plan}
-                checked={branchPlan === choice.plan}
-                onChange={() => setBranchPlan(choice.plan)}
-                label={choice.label}
-                description={choice.description ?? undefined}
-                disabled={busy}
-              />
-            ))}
-          </RadioChoiceGroup>
-        )}
-        {prep?.hasUncommittedChanges && (
-          <p className="text-xs text-text-secondary">
-            Uncommitted changes on {sourceName} stay there.
-          </p>
-        )}
+        <p className="text-xs text-text-secondary">{describePlacedWorktree(placed, targetName)}</p>
       </div>
     </Row>
   );
+
+  const existingFolderLink = (label: string) => (
+    <button
+      type="button"
+      className="flex items-center gap-1.5 text-xs text-text-secondary underline-offset-2 hover:underline"
+      disabled={busy}
+      onClick={() => void pickExistingFolder()}
+    >
+      <FolderGit2 className="h-3.5 w-3.5" aria-hidden />
+      {label}
+    </button>
+  );
+
+  const branchSection = placed
+    ? placedSection
+    : handoff && (
+        <Row label="Branch">
+          <div className="space-y-2">
+            <p className="flex items-center gap-1.5">
+              <GitBranch className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden />
+              <span className="truncate font-mono text-xs">{prep?.branch ?? "(detached)"}</span>
+            </p>
+            <p
+              className={
+                handoff.tone === "attention" ? "text-status-warning" : "text-text-secondary"
+              }
+            >
+              {handoff.summary}
+            </p>
+            {handoff.detail && <p className="text-xs text-text-secondary">{handoff.detail}</p>}
+            {branchPlan === "push-then-worktree" && prep && (
+              <div className="space-y-1">
+                <p className="text-xs text-text-secondary">
+                  {prep.unpushedCommits.length > 0
+                    ? `The push publishes ${prep.unpushedCommits.length === 1 ? "this commit" : "these commits"}:`
+                    : "The push publishes the branch as it is."}
+                </p>
+                {prep.unpushedCommits.length > 0 && (
+                  <ul className="max-h-32 overflow-auto rounded-[var(--radius-md)] border border-border-default px-2 py-1 font-mono text-xs text-text-primary">
+                    {prep.unpushedCommits.map((c) => (
+                      <li key={c.sha} className="truncate">
+                        <span className="text-text-secondary">{c.sha}</span> {c.subject}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {handoff.choices.length > 0 && (
+              <RadioChoiceGroup legend="What to do with the branch" legendHidden>
+                {handoff.choices.map((choice) => (
+                  <RadioChoiceRow
+                    key={choice.plan}
+                    name="host-switch-branch"
+                    value={choice.plan}
+                    checked={branchPlan === choice.plan}
+                    onChange={() => setBranchPlan(choice.plan)}
+                    label={choice.label}
+                    description={choice.description ?? undefined}
+                    disabled={busy}
+                  />
+                ))}
+              </RadioChoiceGroup>
+            )}
+            {prep?.hasUncommittedChanges && (
+              <p className="text-xs text-text-secondary">
+                Uncommitted changes on {sourceName} stay there.
+              </p>
+            )}
+          </div>
+        </Row>
+      );
 
   const cloneOptions = prep && (
     <>
@@ -616,16 +745,19 @@ export function HostSwitchDialog({
           disabled={busy}
         />
         {branchSection}
-        {prep.remotes.length > 0 && (
-          <button
-            type="button"
-            className="text-xs text-text-secondary underline-offset-2 hover:underline"
-            disabled={busy}
-            onClick={() => setView("clone")}
-          >
-            Clone a fresh copy instead
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {existingFolderLink(`Use another folder on ${targetName}…`)}
+          {prep.remotes.length > 0 && (
+            <button
+              type="button"
+              className="text-xs text-text-secondary underline-offset-2 hover:underline"
+              disabled={busy}
+              onClick={() => setView("clone")}
+            >
+              Clone a fresh copy instead
+            </button>
+          )}
+        </div>
       </div>
     );
     const candidate = prep.candidates[candidateIndex];
@@ -633,9 +765,11 @@ export function HostSwitchDialog({
       label:
         candidate?.source === "on-disk"
           ? "Use existing folder"
-          : branchPlan === "push-then-worktree"
-            ? "Push, then open"
-            : `Open on ${targetName}`,
+          : placed
+            ? `Create worktree on ${targetName}`
+            : branchPlan === "push-then-worktree"
+              ? "Push, then open"
+              : `Open on ${targetName}`,
       onClick: () => void openExisting(),
     };
   } else if (view === "clone") {
@@ -663,6 +797,7 @@ export function HostSwitchDialog({
         {branchSection}
         {lfsWarning && <p className="text-xs text-status-warning">{lfsWarning}</p>}
         {cloneOptions}
+        {existingFolderLink(`Use an existing folder on ${targetName}…`)}
       </div>
     );
     primary = {

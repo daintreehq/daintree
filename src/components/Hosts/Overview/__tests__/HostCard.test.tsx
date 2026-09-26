@@ -74,4 +74,45 @@ describe("HostCard", () => {
     });
     expect(onSwitch).toHaveBeenLastCalledWith(true);
   });
+
+  it("lists the host's projects, bounded, each opening on that host", () => {
+    const projects = Array.from({ length: 8 }, (_, i) => ({
+      id: `p${i}`,
+      name: `project-${String.fromCharCode(104 - i)}`,
+      path: `/srv/p${i}`,
+    }));
+    const onOpenProject = vi.fn();
+    const row = makeRow({});
+    render(
+      <HostCard
+        row={row}
+        history={[]}
+        onSwitch={() => {}}
+        projects={projects}
+        onOpenProject={onOpenProject}
+      />
+    );
+    const list = screen.getByTestId("host-overview-projects");
+    const buttons = list.querySelectorAll("button");
+    expect(buttons).toHaveLength(6);
+    expect(buttons[0]!.textContent).toBe("project-a");
+    expect(list.textContent).toContain("and 2 more");
+    fireEvent.click(screen.getByRole("button", { name: `Open project-a on ${row.name}` }), {
+      metaKey: true,
+      ctrlKey: true,
+    });
+    expect(onOpenProject).toHaveBeenCalledWith("p7", true);
+  });
+
+  it("says a host has no projects yet, and lists nothing it hasn't read", () => {
+    const row = makeRow({});
+    const { rerender } = render(
+      <HostCard row={row} history={[]} onSwitch={() => {}} projects={[]} />
+    );
+    expect(screen.getByTestId("host-overview-projects").textContent).toBe(
+      `No projects on ${row.name} yet.`
+    );
+    rerender(<HostCard row={row} history={[]} onSwitch={() => {}} />);
+    expect(screen.queryByTestId("host-overview-projects")).toBeNull();
+  });
 });

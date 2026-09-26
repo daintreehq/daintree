@@ -5,6 +5,7 @@ import { PlatformGlyph } from "../PlatformGlyph";
 import { describeHostForges } from "../hostForges";
 import { describeHostAgentClis, describeHostRowStatus, type HostMenuRow } from "../hostModel";
 import { isNewWindowClick } from "../hostSwitching";
+import type { HostProjectRef } from "../hostProjects";
 import { HostSparkline } from "./HostSparkline";
 import {
   cpuSeries,
@@ -25,8 +26,63 @@ interface HostCardProps {
   history: readonly HostMetricsSummary[];
   /** Switch this window (or a new one) to the host. */
   onSwitch: (newWindow: boolean) => void;
+  /** The host's projects, once listed; undefined while it can't be (not connected) or hasn't answered. */
+  projects?: readonly HostProjectRef[];
+  /** Open one of the host's projects on the host (Cmd/Ctrl-click: a new window). */
+  onOpenProject?: (projectId: string, newWindow: boolean) => void;
   /** Extra per-host content: fleet targets, Add project…. */
   children?: ReactNode;
+}
+
+/** A card lists this many projects; the rest are counted. */
+export const HOST_CARD_PROJECT_LIMIT = 6;
+
+function ProjectList({
+  hostName,
+  projects,
+  onOpenProject,
+}: {
+  hostName: string;
+  projects: readonly HostProjectRef[];
+  onOpenProject?: (projectId: string, newWindow: boolean) => void;
+}) {
+  const shown = [...projects]
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+    .slice(0, HOST_CARD_PROJECT_LIMIT);
+  const more = projects.length - shown.length;
+  return (
+    <section aria-label={`Projects on ${hostName}`} data-testid="host-overview-projects">
+      {projects.length === 0 ? (
+        <p className="text-xs text-text-secondary">No projects on {hostName} yet.</p>
+      ) : (
+        <ul className="flex flex-col">
+          {shown.map((project) => (
+            <li key={project.id}>
+              <button
+                type="button"
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 py-1 text-left text-xs",
+                  "text-text-primary transition-colors hover:bg-overlay-subtle",
+                  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline"
+                )}
+                aria-label={`Open ${project.name} on ${hostName}`}
+                title={project.path}
+                onClick={(event) => onOpenProject?.(project.id, isNewWindowClick(event))}
+              >
+                {project.emoji && (
+                  <span className="shrink-0 leading-none" aria-hidden="true">
+                    {project.emoji}
+                  </span>
+                )}
+                <span className="min-w-0 truncate">{project.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {more > 0 && <p className="px-1.5 pt-0.5 text-2xs text-text-secondary">and {more} more</p>}
+    </section>
+  );
 }
 
 function Fact({
@@ -57,7 +113,14 @@ const PLATFORM_LABEL = { darwin: "macOS", linux: "Linux" } as const;
  * machine, or a host whose link is up); otherwise the card says what the link
  * last saw, never a guess at why.
  */
-export function HostCard({ row, history, onSwitch, children }: HostCardProps) {
+export function HostCard({
+  row,
+  history,
+  onSwitch,
+  projects,
+  onOpenProject,
+  children,
+}: HostCardProps) {
   const live = isLive(row);
   const summary = live ? (history[0] ?? row.summary) : null;
   const status = describeHostRowStatus(row);
@@ -135,6 +198,10 @@ export function HostCard({ row, history, onSwitch, children }: HostCardProps) {
         <Fact label="Agent CLIs" value={clis} />
         <Fact label="Forges" value={forges?.short ?? null} detail={forges?.full} />
       </dl>
+
+      {projects && (
+        <ProjectList hostName={row.name} projects={projects} onOpenProject={onOpenProject} />
+      )}
 
       {children}
     </article>

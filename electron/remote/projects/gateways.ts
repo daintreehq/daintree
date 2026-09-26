@@ -8,7 +8,10 @@ import type {
   FindProjectMatchPayload,
   HostCloneEnvironment,
   HostProjectOpened,
+  IdentifyProjectPayload,
   OpenOnHostPayload,
+  PlaceWorktreePayload,
+  ProjectIdentity,
   ProjectMatchCandidate,
   PushBranchOutcome,
   PushBranchPayload,
@@ -16,6 +19,11 @@ import type {
   SuggestDestinationPayload,
 } from "../../../shared/types/ipc/projectMatch.js";
 import type { HostId, OperationOutcome } from "../../../shared/types/remoteHosts.js";
+import type {
+  HostDirectoryListing,
+  HostPickerRoots,
+  ListHostDirectoryPayload,
+} from "../../../shared/types/ipc/hostFiles.js";
 import type { ProjectAcrossHostsService } from "../../services/projectAcrossHosts/index.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
@@ -25,8 +33,11 @@ import {
   CandidatesSchema,
   DestinationSchema,
   EnvironmentSchema,
+  IdentitySchema,
+  ListingSchema,
   OpenedSchema,
   OperationOutcomeSchema,
+  PickerRootsSchema,
   ProjectLinkMethod,
   PushOutcomeSchema,
   SourceDescriptionSchema,
@@ -56,6 +67,13 @@ export interface HostGateway {
   checkOut(payload: CheckOutBranchPayload): Promise<HostProjectOpened>;
   createBundle(projectId: string): Promise<{ token: string; size: number }>;
   discardBundle(token: string): Promise<void>;
+  identify(payload: IdentifyProjectPayload): Promise<ProjectIdentity>;
+  /** Registered projects only, without the disk scan {@link match} falls back to. */
+  find(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]>;
+  /** Starts placing a worktree; follow it with {@link operationStatus}. */
+  startPlaceWorktree(payload: PlaceWorktreePayload): Promise<void>;
+  listDirectory(payload: ListHostDirectoryPayload): Promise<HostDirectoryListing>;
+  pickerRoots(): Promise<HostPickerRoots>;
 }
 
 export class LocalHostGateway implements HostGateway {
@@ -105,6 +123,25 @@ export class LocalHostGateway implements HostGateway {
   }
   discardBundle(token: string) {
     return this.service.bundles.discard(token);
+  }
+  identify(payload: IdentifyProjectPayload) {
+    return this.service.identify(payload);
+  }
+  find(payload: FindProjectMatchPayload) {
+    return this.service.find(payload);
+  }
+  async startPlaceWorktree(payload: PlaceWorktreePayload): Promise<void> {
+    void this.service.placeWorktree(payload).catch(() => {});
+  }
+  // Loaded on first use: the listing module reads the project store, which a
+  // gateway made at boot (or in a test without Electron) must not pull in.
+  async listDirectory(payload: ListHostDirectoryPayload) {
+    const { listHostDirectory } = await import("../../ipc/handlers/hostFiles.js");
+    return listHostDirectory(payload);
+  }
+  async pickerRoots() {
+    const { getHostPickerRoots } = await import("../../ipc/handlers/hostFiles.js");
+    return getHostPickerRoots();
   }
 }
 
@@ -232,6 +269,22 @@ export class RemoteHostGateway implements HostGateway {
   async discardBundle(token: string): Promise<void> {
     const session = await this.session();
     await session.call(ProjectLinkMethod.BUNDLE_DISCARD, { token });
+  }
+  identify(payload: IdentifyProjectPayload) {
+    return this.call(ProjectLinkMethod.IDENTIFY, payload, IdentitySchema);
+  }
+  find(payload: FindProjectMatchPayload) {
+    return this.call(ProjectLinkMethod.FIND, payload, CandidatesSchema);
+  }
+  async startPlaceWorktree(payload: PlaceWorktreePayload): Promise<void> {
+    const session = await this.session();
+    await session.call(ProjectLinkMethod.START_PLACE_WORKTREE, payload);
+  }
+  listDirectory(payload: ListHostDirectoryPayload) {
+    return this.call(ProjectLinkMethod.LIST_DIRECTORY, payload, ListingSchema);
+  }
+  pickerRoots() {
+    return this.call(ProjectLinkMethod.PICKER_ROOTS, null, PickerRootsSchema);
   }
   async expectBundle(): Promise<string> {
     return (await this.call(ProjectLinkMethod.BUNDLE_EXPECT, null, BundleExpectedSchema)).token;

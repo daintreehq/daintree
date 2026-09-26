@@ -940,6 +940,18 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./hostSwitch.js").HostSwitchExecutePayload];
     result: import("./hostSwitch.js").HostSwitchExecuteResult;
   };
+  "host-switch:list-directory": {
+    args: [payload: import("./hostSwitch.js").HostSwitchListDirectoryPayload];
+    result: import("./hostFiles.js").HostDirectoryListing;
+  };
+  "host-switch:locate": {
+    args: [payload: import("./hostSwitch.js").HostSwitchLocatePayload];
+    result: import("./hostSwitch.js").HostProjectPresence[];
+  };
+  "host-switch:picker-roots": {
+    args: [payload: import("./hostSwitch.js").HostSwitchPickerRootsPayload];
+    result: import("./hostFiles.js").HostPickerRoots;
+  };
   "host-switch:plan": {
     args: [payload: import("./hostSwitch.js").HostSwitchPlanPayload];
     result: import("./hostSwitch.js").HostSwitchPlan;
@@ -951,6 +963,10 @@ export interface GeneratedIpcInvokeMap {
   "host-switch:status": {
     args: [payload: import("./hostSwitch.js").HostSwitchOpPayload];
     result: import("./hostSwitch.js").HostSwitchStatus;
+  };
+  "host-switch:suggest-clone-destination": {
+    args: [payload: import("./hostSwitch.js").HostSwitchSuggestClonePayload];
+    result: import("./projectMatch.js").DestinationCheck;
   };
   "idle-background:get-config": {
     args: [];
