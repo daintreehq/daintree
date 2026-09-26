@@ -3,6 +3,8 @@ import type { CopyTreeResult } from "../../../shared/types/ipc/copyTree.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { HostPickRequest } from "../../../shared/types/ipc/hostFiles.js";
 import type { Project } from "../../../shared/types/project.js";
+import type { Scratch } from "../../../shared/types/scratch.js";
+import type { ScratchSaveAsProjectResult } from "../../../shared/types/ipc/scratch.js";
 import type { PluginPickPathRequest } from "../../../shared/types/plugin.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -76,6 +78,45 @@ function projectLocate(deps: PickerSplitDeps): HybridSplit {
     });
     if (newPath === null) return null;
     return remote(CHANNELS.PROJECT_RELOCATION_APPLY, [{ projectId, mode: "reattach", newPath }]);
+  };
+}
+
+/** A folder name for the saved project, from the scratch's name. */
+export function scratchFolderName(name: string): string {
+  const cleaned = name
+    .replace(/[^A-Za-z0-9._ -]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[.-]+/, "")
+    .slice(0, 80)
+    .trim();
+  return cleaned || "scratch";
+}
+
+/**
+ * The scratch is copied into a new folder on the host. The host picker can't
+ * make folders, so the user chooses where it goes and the folder is named
+ * after the scratch; the host refuses one that already has files in it.
+ */
+function scratchSaveAsProject(deps: PickerSplitDeps): HybridSplit {
+  return async ({ webContentsId, args, remote }) => {
+    const scratchId = args[0];
+    if (typeof scratchId !== "string" || !scratchId) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid scratch ID" });
+    }
+    const scratches = (await remote(CHANNELS.SCRATCH_GET_ALL, [])) as Scratch[];
+    const scratch = scratches.find((candidate) => candidate.id === scratchId);
+    if (!scratch) {
+      throw new AppError({ code: "NOT_FOUND", message: `Scratch not found: ${scratchId}` });
+    }
+    const parent = await pickOne(deps, webContentsId, {
+      mode: "directory",
+      title: `Choose where to save "${scratch.name}"`,
+      buttonLabel: "Save here",
+    });
+    if (parent === null) return { status: "cancelled" } satisfies ScratchSaveAsProjectResult;
+    const destinationPath = posix.join(parent, scratchFolderName(scratch.name));
+    return remote(undefined, [scratchId, destinationPath]);
   };
 }
 
@@ -155,6 +196,7 @@ export function createPickerSplits(deps: PickerSplitDeps): Readonly<Record<strin
     [CHANNELS.PROJECT_OPEN_DIALOG]: projectOpenDialog(deps),
     [CHANNELS.PROJECT_LOCATE]: projectLocate(deps),
     [CHANNELS.PLUGIN_PICK_PATH]: pluginPickPath(deps),
+    [CHANNELS.SCRATCH_SAVE_AS_PROJECT]: scratchSaveAsProject(deps),
     // Records come from the renderer; the save dialog and the file are this machine's.
     [CHANNELS.FORGE_AUDIT_EXPORT_LOG]: localOnly,
     [CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE]: copyTreeGenerateAndCopyFile(deps),
@@ -162,8 +204,9 @@ export function createPickerSplits(deps: PickerSplitDeps): Readonly<Record<strin
 }
 
 /**
- * Shell side: register the picker splits. Every remote leg they take is a
- * host-classified channel, so the host needs no hybrid admission for them.
+ * Shell side: register the picker splits. Their remote legs are
+ * host-classified channels, except scratch save-as-project's own host leg,
+ * which the host admits through HYBRID_HOST_LEGS.
  */
 export function installPickerSplits(
   dispatcher: Pick<IpcDispatcher<IpcContext>, "registerHybridSplit"> = getIpcDispatcher()

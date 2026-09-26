@@ -1,6 +1,7 @@
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { scratchStore } from "../../services/ScratchStore.js";
 import { setAttachedFrontendCount } from "../../services/PowerSaveBlockerService.js";
 import { registerRemoteService } from "../runtime.js";
 import { MAX_PROJECT_EMOJI_LENGTH } from "./linkMethods.js";
@@ -25,9 +26,13 @@ export function initRemoteHostsHost(
     dispatcher: getIpcDispatcher(),
     registry: getEndpointRegistry(),
     setAttachedFrontendCount,
+    // A scratch is a workspace a view can show like a project, with no project row.
     describeProject: (projectId) => {
-      const project = projectStore.getProjectById(projectId);
-      return project ? { projectId: project.id, path: project.path, name: project.name } : null;
+      const workspace =
+        projectStore.getProjectById(projectId) ?? scratchStore.getScratchById(projectId);
+      return workspace
+        ? { projectId: workspace.id, path: workspace.path, name: workspace.name }
+        : null;
     },
     // An emoji the Shell's schema would refuse is dropped, not the whole list.
     listProjects: () =>
