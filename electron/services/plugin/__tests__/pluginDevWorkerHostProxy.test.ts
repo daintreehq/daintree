@@ -604,6 +604,48 @@ describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy host.fs revision, mkdir, append and watch options", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function reply(proxy: any, requestId: string, result: unknown): void {
+    proxy.handleMessage({ type: "host-result", requestId, ok: true, result });
+  }
+
+  it("relays readFileWithRevision and resolves the host's result", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.readFileWithRevision("/repo/ledger.json");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.readFileWithRevision");
+    expect(call.params).toEqual({ path: "/repo/ledger.json" });
+    const result = { contents: "rows", revision: "b".repeat(64) };
+    reply(proxy, call.requestId, result);
+    await expect(promise).resolves.toEqual(result);
+  });
+
+  it("relays mkdir and appendFile with exactly the plugin's arguments", async () => {
+    const { proxy, sent } = makeProxy();
+    const made = proxy.host.fs.mkdir("/repo/data");
+    const appended = proxy.host.fs.appendFile("/repo/data/log.jsonl", "{}\n");
+    const mkdirCall = sent.find((m) => m.type === "host-call" && m.method === "fs.mkdir");
+    const appendCall = sent.find((m) => m.type === "host-call" && m.method === "fs.appendFile");
+    expect(mkdirCall.params).toEqual({ path: "/repo/data" });
+    expect(appendCall.params).toEqual({ path: "/repo/data/log.jsonl", contents: "{}\n" });
+    reply(proxy, mkdirCall.requestId, undefined);
+    reply(proxy, appendCall.requestId, undefined);
+    await expect(made).resolves.toBeUndefined();
+    await expect(appended).resolves.toBeUndefined();
+  });
+
+  it("carries recursive and debounceMs on the watch call only when set", async () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: true, debounceMs: 150 });
+    void proxy.host.fs.watch(["/repo"], vi.fn());
+    const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.watch");
+    expect(calls[0].params).toMatchObject({ paths: ["/repo"], recursive: true, debounceMs: 150 });
+    expect(calls[1].params).not.toHaveProperty("recursive");
+    expect(calls[1].params).not.toHaveProperty("debounceMs");
+  });
+});
+
 describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
 

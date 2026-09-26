@@ -58,6 +58,7 @@ import type {
   UnregisterMcpToolsParams,
   FsPathParams,
   FsWriteFileParams,
+  FsAppendFileParams,
   FsWatchParams,
   GitOpParams,
   ClipboardWriteTextParams,
@@ -843,6 +844,16 @@ export class PluginDevWorkerMainBridge {
         return this.host.fs.readFile((params as FsPathParams).path, { signal });
       case "fs.readFileBytes":
         return this.host.fs.readFileBytes((params as FsPathParams).path, { signal });
+      case "fs.readFileWithRevision":
+        return this.host.fs.readFileWithRevision((params as FsPathParams).path, { signal });
+      case "fs.mkdir":
+        await this.host.fs.mkdir((params as FsPathParams).path);
+        return undefined;
+      case "fs.appendFile": {
+        const p = params as FsAppendFileParams;
+        await this.host.fs.appendFile(p.path, p.contents);
+        return undefined;
+      }
       case "fs.writeFile": {
         const p = params as FsWriteFileParams;
         // Forwarded exactly as sent so a malformed options value is refused
@@ -872,7 +883,11 @@ export class PluginDevWorkerMainBridge {
               payload: changedPath,
             });
           },
-          { signal }
+          {
+            signal,
+            ...(p.recursive === true && { recursive: true }),
+            ...(p.debounceMs !== undefined && { debounceMs: p.debounceMs }),
+          }
         );
         // Disposed or reloaded while the watch was settling — tear it down
         // rather than leak it past the cleanup pass that already ran.

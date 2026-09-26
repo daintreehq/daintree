@@ -162,7 +162,11 @@ export interface ShowConfirmRecord {
   options: PluginConfirmOptions;
 }
 
-/** Captured `host.fs.writeFile(path, contents)` calls. */
+/**
+ * Captured `host.fs.writeFile(path, contents)` calls — and, in
+ * {@link MockHostState.fsAppendCalls}, `host.fs.appendFile(path, contents)`
+ * calls, where `contents` is the appended text alone.
+ */
 export interface FsWriteRecord {
   path: string;
   contents: string;
@@ -198,6 +202,10 @@ export interface MockHostState {
   readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
   readonly spawnCalls: ReadonlyArray<SpawnRecord>;
   readonly fsWriteCalls: ReadonlyArray<FsWriteRecord>;
+  /** Captured `host.fs.appendFile(path, contents)` calls, in order. */
+  readonly fsAppendCalls: ReadonlyArray<FsWriteRecord>;
+  /** Captured `host.fs.mkdir(path)` calls, in order. */
+  readonly fsMkdirCalls: ReadonlyArray<string>;
   readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
   /** Captured `host.clipboard.writeText(text)` calls, in order. */
   readonly clipboardWriteCalls: ReadonlyArray<string>;
@@ -568,6 +576,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const spawnCalls: SpawnRecord[] = [];
   const fsFiles = new Map<string, string>();
   const fsWriteCalls: FsWriteRecord[] = [];
+  const fsAppendCalls: FsWriteRecord[] = [];
+  const fsMkdirCalls: string[] = [];
+  // Directories made through `mkdir`; directories implied by a written file's
+  // path are derived from `fsFiles` instead, as before.
+  const fsDirs = new Set<string>();
   const gitCommitCalls: GitCommitRecord[] = [];
   const clipboardWriteCalls: string[] = [];
   const clipboardWriteImageCalls: number[] = [];
@@ -1387,6 +1400,34 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         // to exercise a plugin's byte path without modelling binary storage.
         return new TextEncoder().encode(v);
       },
+      async readFileWithRevision(filePath, options) {
+        options?.signal?.throwIfAborted();
+        const v = fsFiles.get(filePath);
+        if (v === undefined) {
+          throw new Error(`ENOENT: mock fs has no file "${filePath}"`);
+        }
+        return { contents: v, revision: mockRevision(v) };
+      },
+      async mkdir(dirPath) {
+        if (typeof dirPath !== "string" || dirPath.length === 0) {
+          throw new Error(`Plugin "${pluginId}" fs.mkdir: path must be a non-empty string`);
+        }
+        if (fsFiles.has(dirPath)) {
+          throw fsWriteError(
+            "TARGET_EXISTS",
+            `mock fs: "${dirPath}" exists and is not a directory`
+          );
+        }
+        fsDirs.add(dirPath.length > 1 && dirPath.endsWith("/") ? dirPath.slice(0, -1) : dirPath);
+        fsMkdirCalls.push(dirPath);
+      },
+      async appendFile(filePath, contents) {
+        if (typeof contents !== "string") {
+          throw new Error(`Plugin "${pluginId}" fs.appendFile: contents must be a string`);
+        }
+        fsFiles.set(filePath, (fsFiles.get(filePath) ?? "") + contents);
+        fsAppendCalls.push({ path: filePath, contents });
+      },
       async writeFile(filePath, contents, options) {
         // The checked-write contract (#12323), modelled just far enough for a
         // plugin's conflict path to be exercised: `expectedRevision` compares
@@ -1427,6 +1468,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         // (basename only, like a real readdir).
         const prefix = dirPath.endsWith("/") ? dirPath : `${dirPath}/`;
         const isDir = new Map<string, boolean>();
+        for (const made of fsDirs) {
+          if (!made.startsWith(prefix)) continue;
+          const rest = made.slice(prefix.length);
+          const slash = rest.indexOf("/");
+          const name = slash === -1 ? rest : rest.slice(0, slash);
+          if (name.length > 0) isDir.set(name, true);
+        }
         for (const filePath of fsFiles.keys()) {
           if (!filePath.startsWith(prefix)) continue;
           const rest = filePath.slice(prefix.length);
@@ -1463,7 +1511,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       async stat(targetPath, options) {
         options?.signal?.throwIfAborted();
         return {
-          isDirectory: false,
+          isDirectory: fsDirs.has(targetPath),
           isFile: fsFiles.has(targetPath),
           isSymbolicLink: false,
           size: fsFiles.get(targetPath)?.length ?? 0,
@@ -1579,6 +1627,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     showConfirmCalls,
     spawnCalls,
     fsWriteCalls,
+    fsAppendCalls,
+    fsMkdirCalls,
     gitCommitCalls,
     clipboardWriteCalls,
     clipboardWriteImageCalls,

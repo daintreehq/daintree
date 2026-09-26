@@ -156,6 +156,7 @@ interface WatchRegistration {
 interface SharedWatcher {
   readonly watcher: FSWatcher;
   readonly registrations: Set<WatchRegistration>;
+  readonly recursive: boolean;
   /**
    * Whether a failure of this watcher may still be repaired by rebinding its
    * registrations onto a fresh one. Cleared on the replacement so a path that
@@ -164,8 +165,21 @@ interface SharedWatcher {
   readonly rebindable: boolean;
 }
 
-/** Resolved absolute path → the single watcher serving every subscriber of it. */
+/**
+ * {@link watcherKey} → the single watcher serving every subscriber of that path
+ * in that mode.
+ */
 const sharedWatchers = new Map<string, SharedWatcher>();
+
+/**
+ * A recursive and a plain subscriber to one directory need different native
+ * watchers: sharing the recursive one would hand the plain subscriber events
+ * from every depth, and sharing the plain one would starve the recursive one.
+ * NUL cannot appear in a path, so the suffix is unambiguous.
+ */
+function watcherKey(resolvedPath: string, recursive: boolean): string {
+  return recursive ? `${resolvedPath}\0recursive` : resolvedPath;
+}
 
 function dispatch(registrations: Set<WatchRegistration>, changedPath: string): void {
   // Snapshot before dispatch: a listener that disposes itself while being
@@ -186,16 +200,19 @@ function dispatch(registrations: Set<WatchRegistration>, changedPath: string): v
 function createWatcher(
   resolvedPath: string,
   registrations: Set<WatchRegistration>,
-  rebindable: boolean
+  rebindable: boolean,
+  recursive: boolean
 ): SharedWatcher {
-  const watcher = fsWatch(resolvedPath, { persistent: false }, (_event, filename) => {
+  // A recursive watch reports `filename` relative to the watched root at any
+  // depth, so the same join yields the absolute changed path.
+  const watcher = fsWatch(resolvedPath, { persistent: false, recursive }, (_event, filename) => {
     const changed =
       typeof filename === "string" && filename.length > 0
         ? path.join(resolvedPath, filename)
         : resolvedPath;
     dispatch(registrations, changed);
   });
-  const entry: SharedWatcher = { watcher, registrations, rebindable };
+  const entry: SharedWatcher = { watcher, registrations, rebindable, recursive };
   watcher.on("error", (error) => {
     console.error(`[FileObservationService] watch error for ${resolvedPath}:`, error);
     handleWatcherError(resolvedPath, entry, watcher);
@@ -211,10 +228,11 @@ function createWatcher(
  * so they get one final notification before the entry is dropped.
  */
 function handleWatcherError(resolvedPath: string, entry: SharedWatcher, failed: FSWatcher): void {
+  const key = watcherKey(resolvedPath, entry.recursive);
   // Already replaced or torn down by someone else — nothing to repair.
-  if (sharedWatchers.get(resolvedPath) !== entry || entry.watcher !== failed) return;
+  if (sharedWatchers.get(key) !== entry || entry.watcher !== failed) return;
 
-  sharedWatchers.delete(resolvedPath);
+  sharedWatchers.delete(key);
   try {
     failed.close();
   } catch {
@@ -229,7 +247,10 @@ function handleWatcherError(resolvedPath: string, entry: SharedWatcher, failed: 
       // keep receiving events and their existing disposers keep working. It is
       // not itself rebindable: a path whose watcher dies immediately must not
       // spin creating replacements.
-      sharedWatchers.set(resolvedPath, createWatcher(resolvedPath, entry.registrations, false));
+      sharedWatchers.set(
+        key,
+        createWatcher(resolvedPath, entry.registrations, false, entry.recursive)
+      );
       return;
     } catch {
       // Fall through to the final notification below.
@@ -243,9 +264,11 @@ function handleWatcherError(resolvedPath: string, entry: SharedWatcher, failed: 
  * Watch one already-resolved, already-authorised absolute path, sharing a single
  * `fs.watch` with every other subscriber of the same path.
  *
- * Semantics are `fs.watch`'s: non-recursive, `{ persistent: false }`, the joined
- * child path when the platform reports a filename and the watched path
- * otherwise. Callers are responsible for containment and capability checks
+ * Semantics are `fs.watch`'s: `{ persistent: false }`, the joined child path
+ * when the platform reports a filename and the watched path otherwise.
+ * Non-recursive unless `options.recursive` asks otherwise, in which case the
+ * joined path is the changed entry at whatever depth it sits. Recursive and
+ * plain subscribers of one path never share a native watcher. Callers are responsible for containment and capability checks
  * before calling — this module deliberately knows nothing about plugin scopes.
  *
  * Every call is an independent registration, including two calls passing the
@@ -259,15 +282,18 @@ function handleWatcherError(resolvedPath: string, entry: SharedWatcher, failed: 
  */
 export function watchShared(
   resolvedPath: string,
-  listener: (changedPath: string) => void
+  listener: (changedPath: string) => void,
+  options?: { recursive?: boolean }
 ): () => void {
-  let entry = sharedWatchers.get(resolvedPath);
+  const recursive = options?.recursive === true;
+  const key = watcherKey(resolvedPath, recursive);
+  let entry = sharedWatchers.get(key);
 
   if (entry === undefined) {
     // `fsWatch` throws synchronously for a missing path; that propagates to the
     // caller exactly as it did when each caller made its own watcher.
-    entry = createWatcher(resolvedPath, new Set<WatchRegistration>(), true);
-    sharedWatchers.set(resolvedPath, entry);
+    entry = createWatcher(resolvedPath, new Set<WatchRegistration>(), true, recursive);
+    sharedWatchers.set(key, entry);
   }
 
   const owner = entry;
@@ -283,9 +309,9 @@ export function watchShared(
     // The registration set survives a rebind, so the live entry for this path
     // may be a replacement carrying the same set. Close whichever watcher is
     // current, and only drop the map entry if it is still one of ours.
-    const current = sharedWatchers.get(resolvedPath);
+    const current = sharedWatchers.get(key);
     const live = current?.registrations === owner.registrations ? current : owner;
-    if (current === live) sharedWatchers.delete(resolvedPath);
+    if (current === live) sharedWatchers.delete(key);
     try {
       live.watcher.close();
     } catch {

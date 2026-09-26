@@ -2542,8 +2542,8 @@ interface PluginFsStat {
 interface PluginFsWriteOptions {
     /**
      * The revision the caller last read — the sha256 hex of the file's bytes,
-     * as returned by an earlier write or computed by the caller from
-     * {@link PluginFsApi.readFileBytes}. The write is refused with
+     * as returned by an earlier write or by
+     * {@link PluginFsApi.readFileWithRevision}. The write is refused with
      * `REVISION_MISMATCH` when the file's current bytes hash differently; the
      * error carries the current revision so the caller can enter a conflict
      * state without a second read. `null` means the file must not exist yet
@@ -2555,6 +2555,32 @@ interface PluginFsWriteOptions {
 interface PluginFsWriteResult {
     /** sha256 hex of the bytes written — the caller's next `expectedRevision`. */
     revision: string;
+}
+/** Result of {@link PluginFsApi.readFileWithRevision}. */
+interface PluginFsReadWithRevisionResult {
+    /** The file's bytes decoded as UTF-8, exactly as {@link PluginFsApi.readFile} returns them. */
+    contents: string;
+    /**
+     * sha256 hex of the exact bytes read — pass it straight to
+     * {@link PluginFsWriteOptions.expectedRevision}.
+     */
+    revision: string;
+}
+/** Options for {@link PluginFsApi.watch}. */
+interface PluginFsWatchOptions extends PluginHostCallOptions {
+    /**
+     * Watch every directory beneath each path, including subdirectories created
+     * after the subscription. The callback then receives the absolute path of
+     * whatever changed at any depth. Off by default: a plain watch reports only
+     * a directory's immediate children.
+     */
+    recursive?: boolean;
+    /**
+     * Coalesce a burst of changes into one trailing callback fired `debounceMs`
+     * after the last change, carrying the most recent changed path. Values
+     * below ~50ms are clamped up; `0` / omitted delivers every event.
+     */
+    debounceMs?: number;
 }
 /**
  * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
@@ -2606,6 +2632,35 @@ interface PluginFsApi {
      */
     readFileBytes(filePath: string, options?: PluginHostCallOptions): Promise<Uint8Array>;
     /**
+     * Read a file as UTF-8 text together with its revision — the sha256 hex of
+     * the exact bytes read, computed the same way {@link writeFile} computes the
+     * revision it returns. Hand `revision` straight to
+     * {@link PluginFsWriteOptions.expectedRevision} for a read-modify-write that
+     * refuses to clobber a change made in between. Same capability gate,
+     * containment, verified open and cancellation as {@link readFile}.
+     */
+    readFileWithRevision(filePath: string, options?: PluginHostCallOptions): Promise<PluginFsReadWithRevisionResult>;
+    /**
+     * Create a directory and any missing ancestors. Creating a directory that
+     * already exists is a no-op; a non-directory at the path rejects. Gated,
+     * consented and audited like {@link writeFile}: containment is proven before
+     * anything is created, so a symlinked ancestor that resolves outside every
+     * allowed root is refused, and each missing component is created one at a
+     * time and refused if something other than a real directory appears there.
+     */
+    mkdir(dirPath: string): Promise<void>;
+    /**
+     * Append UTF-8 text to a file, creating it if absent (the parent directory
+     * must already exist). Gated, consented, serialised and audited like
+     * {@link writeFile}, and a symlink leaf is refused with `TARGET_IS_SYMLINK`.
+     * The bytes land through one `O_APPEND` descriptor, so concurrent appenders
+     * — an agent adding a line to the same JSONL file — each land whole at the
+     * end instead of racing a read-and-rewrite. No revision is returned: an
+     * append is meaningful without one, and computing it would mean reading the
+     * whole file back.
+     */
+    appendFile(filePath: string, contents: string): Promise<void>;
+    /**
      * Write UTF-8 text to a file, creating it if absent (parent directories must
      * already exist within scope). Rejects on a missing write capability or an
      * out-of-scope path. Recorded in the audit trail. No cancellation signal —
@@ -2649,9 +2704,11 @@ interface PluginFsApi {
      * Resolves to a disposer that tears the watcher down; all watchers are
      * automatically torn down on unload. Rejects on a missing read capability so
      * authoring mistakes surface loudly. Pass `options.signal` to abort the
-     * subscription attempt before it is wired.
+     * subscription attempt before it is wired, `options.recursive` to watch a
+     * whole subtree, and `options.debounceMs` to coalesce bursts — see
+     * {@link PluginFsWatchOptions}.
      */
-    watch(paths: string[], callback: (changedPath: string) => void, options?: PluginHostCallOptions): Promise<() => void>;
+    watch(paths: string[], callback: (changedPath: string) => void, options?: PluginFsWatchOptions): Promise<() => void>;
 }
 /** A single changed file in {@link PluginGitApi.status}. Mirrors {@link PluginWorktreeStatusFile}. */
 type PluginGitStatusFile = PluginWorktreeStatusFile;
@@ -3646,7 +3703,11 @@ interface ShowInputBoxRecord {
 interface ShowConfirmRecord {
     options: PluginConfirmOptions;
 }
-/** Captured `host.fs.writeFile(path, contents)` calls. */
+/**
+ * Captured `host.fs.writeFile(path, contents)` calls — and, in
+ * {@link MockHostState.fsAppendCalls}, `host.fs.appendFile(path, contents)`
+ * calls, where `contents` is the appended text alone.
+ */
 interface FsWriteRecord {
     path: string;
     contents: string;
@@ -3680,6 +3741,10 @@ interface MockHostState {
     readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
     readonly spawnCalls: ReadonlyArray<SpawnRecord>;
     readonly fsWriteCalls: ReadonlyArray<FsWriteRecord>;
+    /** Captured `host.fs.appendFile(path, contents)` calls, in order. */
+    readonly fsAppendCalls: ReadonlyArray<FsWriteRecord>;
+    /** Captured `host.fs.mkdir(path)` calls, in order. */
+    readonly fsMkdirCalls: ReadonlyArray<string>;
     readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
     /** Captured `host.clipboard.writeText(text)` calls, in order. */
     readonly clipboardWriteCalls: ReadonlyArray<string>;

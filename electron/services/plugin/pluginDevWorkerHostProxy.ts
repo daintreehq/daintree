@@ -37,6 +37,7 @@ import type {
   PluginSystemWakeEvent,
   PluginFsDirEntry,
   PluginFsWriteResult,
+  PluginFsReadWithRevisionResult,
   PluginFsStat,
   PluginGitStatus,
   PluginGitCommitResult,
@@ -986,6 +987,15 @@ export class PluginDevWorkerHostProxy {
           this.call<string>("fs.readFile", { path: filePath }, options?.signal),
         readFileBytes: (filePath, options) =>
           this.call<Uint8Array>("fs.readFileBytes", { path: filePath }, options?.signal),
+        readFileWithRevision: (filePath, options) =>
+          this.call<PluginFsReadWithRevisionResult>(
+            "fs.readFileWithRevision",
+            { path: filePath },
+            options?.signal
+          ),
+        mkdir: (dirPath) => this.call<void>("fs.mkdir", { path: dirPath }),
+        appendFile: (filePath, contents) =>
+          this.call<void>("fs.appendFile", { path: filePath, contents }),
         writeFile: (filePath, contents, options) =>
           this.call<PluginFsWriteResult>("fs.writeFile", {
             path: filePath,
@@ -1006,7 +1016,16 @@ export class PluginDevWorkerHostProxy {
           // ahead of the subscription map; tear it down if the watch rejects.
           this.subscriptions.set(subscriptionId, (payload) => callback(payload as string));
           try {
-            await this.call<void>("fs.watch", { subscriptionId, paths }, options?.signal);
+            await this.call<void>(
+              "fs.watch",
+              {
+                subscriptionId,
+                paths,
+                ...(options?.recursive === true && { recursive: true }),
+                ...(options?.debounceMs !== undefined && { debounceMs: options.debounceMs }),
+              },
+              options?.signal
+            );
           } catch (err) {
             this.subscriptions.delete(subscriptionId);
             throw err;
