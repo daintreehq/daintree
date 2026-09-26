@@ -14,8 +14,11 @@ import {
   getAllAtTerminalTokens,
   getAllAtSelectionTokens,
   getAllAtDiffTokens,
+  fenceTokenExpansion,
+  resolveTokenExpansions,
   type DiffContextType,
   type ActiveCompletionContext,
+  type TokenExpansion,
 } from "../hybridInputParsing";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -197,13 +200,11 @@ export function useTokenResolution({
       // could otherwise interleave and double-post.
       isSendingRef.current = true;
       try {
-        let resolvedText = text;
-
         const terminalTokens = getAllAtTerminalTokens(text);
         const selectionTokens = getAllAtSelectionTokens(text);
         const diffTokens = getAllAtDiffTokens(text);
 
-        const replacements: Array<{ start: number; end: number; replacement: string }> = [];
+        const replacements: TokenExpansion[] = [];
 
         for (const token of terminalTokens) {
           const managed = terminalInstanceService.get(terminalId);
@@ -217,7 +218,7 @@ export function useTokenResolution({
               if (line) lines.push(line.translateToString(true));
             }
             const content = lines.join("\n").trimEnd();
-            replacement = content ? "```\n" + content + "\n```" : "[No terminal output]";
+            replacement = content ? fenceTokenExpansion(content) : "[No terminal output]";
           } else {
             replacement = "[Terminal not available]";
           }
@@ -226,7 +227,9 @@ export function useTokenResolution({
 
         for (const token of selectionTokens) {
           const selection = terminalInstanceService.getCachedSelection(terminalId);
-          const replacement = selection ? "```\n" + selection + "\n```" : "[No terminal selection]";
+          const replacement = selection
+            ? fenceTokenExpansion(selection)
+            : "[No terminal selection]";
           replacements.push({ start: token.start, end: token.end, replacement });
         }
 
@@ -235,7 +238,7 @@ export function useTokenResolution({
           try {
             const raw = await window.electron.git.getWorkingDiff(cwd, token.diffType);
             if (raw) {
-              replacement = "```diff\n" + raw + "\n```";
+              replacement = fenceTokenExpansion(raw, "diff");
             } else {
               const labels: Record<DiffContextType, string> = {
                 unstaged: "working tree",
@@ -251,13 +254,7 @@ export function useTokenResolution({
           replacements.push({ start: token.start, end: token.end, replacement });
         }
 
-        if (replacements.length > 0) {
-          replacements.sort((a, b) => b.start - a.start);
-          for (const r of replacements) {
-            resolvedText =
-              resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
-          }
-        }
+        const resolvedText = resolveTokenExpansions(text, replacements);
 
         const outgoing = options?.compose ? options.compose(resolvedText) : resolvedText;
         // Checked on the composed result rather than the raw draft: an empty
