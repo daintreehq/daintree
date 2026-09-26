@@ -5623,9 +5623,9 @@ export class PluginService {
 
     // The instance is leaving the inventory, so its runtime status goes with it
     // — unlike a worker teardown, which retains the status precisely because the
-    // plugin is still there to explain (#12278). Emitted after the delete so the
-    // renderer receives the `null` that drops it from the map.
-    if (this.workerStatuses.delete(pluginId)) this.emitRuntimeStatus(pluginId);
+    // plugin is still there to explain (#12278). Emitted further down, once the
+    // plugin itself is gone.
+    this.workerStatuses.delete(pluginId);
 
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.
@@ -5655,6 +5655,11 @@ export class PluginService {
     this.plugins.delete(pluginId);
     this.pluginWorkerActivity.delete(pluginId);
     this.hostBindings.delete(pluginId);
+    // Every unload emits, worker or not: a plugin with only views has no
+    // worker status, yet a renderer holding one of its settings views needs
+    // the signal to retire it. Emitted after both deletes, so the renderer
+    // receives a `null` (or, under a dev session, a null `viewGeneration`).
+    this.emitRuntimeStatus(pluginId);
     // Drop the project-scope index entry with the instance it described.
     // Leaving it behind would keep filtering broadcasts against a plugin id
     // that no longer exists, and would resurface if the id were reloaded

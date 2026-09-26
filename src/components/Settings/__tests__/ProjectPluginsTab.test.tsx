@@ -711,6 +711,48 @@ describe("ProjectPluginsTab settings deep link and lifecycle", () => {
     expect(pluginApi.getSettingValues).not.toHaveBeenCalled();
   });
 
+  it("drops the editable form the moment the plugin stops, before the loaded list catches up", async () => {
+    // The list keeps answering with the loaded instance — the refresh that
+    // would drop it has not landed — while the project state says it stopped.
+    pluginApi.list.mockResolvedValue([loadedProjectPlugin()]);
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await select("Acme Dashboard");
+    expect(await screen.findByLabelText("API key")).toBeTruthy();
+
+    seed([
+      projectPlugin({
+        muted: true,
+        settings: [{ id: "apiKey", type: "string", label: "API key", scope: "project" }],
+      }),
+    ]);
+
+    const detail = screen.getByTestId("project-plugin-detail");
+    await waitFor(() => expect(within(detail).queryByRole("textbox")).toBeNull());
+    expect(within(detail).getByText("Available when the plugin is turned on")).toBeTruthy();
+  });
+
+  it("lands a link to a stopped plugin's field on its Settings heading, even with a stale list", async () => {
+    pluginApi.list.mockResolvedValue([loadedProjectPlugin()]);
+    seed([
+      projectPlugin({
+        muted: true,
+        settings: [{ id: "apiKey", type: "string", label: "API key", scope: "project" }],
+      }),
+    ]);
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: INSTANCE, key: "apiKey", home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    await waitFor(() =>
+      expect(document.activeElement?.hasAttribute("data-settings-section-title")).toBe(true)
+    );
+    expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
+  });
+
   it("re-reads the running plugins when a project plugin is muted, not only on provenance", async () => {
     pluginApi.list.mockResolvedValue([loadedProjectPlugin()]);
     seed([projectPlugin()]);

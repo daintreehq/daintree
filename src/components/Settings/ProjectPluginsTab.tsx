@@ -280,6 +280,11 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
 const LONG_DESCRIPTION = 160;
 
 /** Whether a loaded plugin contributes settings, so its section is worth a heading. */
+/** Whether a project plugin runs now, by its live state rather than the loaded list. */
+function isProjectPluginRunning(plugin: ProjectPluginInfo, folderTrusted: boolean): boolean {
+  return folderTrusted && !plugin.muted && plugin.state === "active";
+}
+
 function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is LoadedPluginInfo {
   return plugin !== undefined && pluginHasSettings(plugin);
 }
@@ -351,6 +356,12 @@ function ProjectPluginPane({
   const declared = new Set(plugin.capabilities);
   const granted = BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c));
   const canMute = plugin.state !== "invalid";
+  // The live project-plugin state decides, not the loaded list, which only
+  // catches up on the next pull: until then a stopped plugin still has a
+  // loaded entry, and a write against it lands after main dropped the
+  // declaration that says which values are secret.
+  const editable =
+    isProjectPluginRunning(plugin, folderTrusted) && hasPluginSettings(loaded) ? loaded : undefined;
 
   const handleReload = async () => {
     setReloading(true);
@@ -513,22 +524,19 @@ function ProjectPluginPane({
         </SettingsGroup>
       </SettingsSection>
 
-      {hasPluginSettings(loaded) && (
+      {editable && (
         <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
           <PluginSettingsForm
-            plugin={loaded}
+            plugin={editable}
             viewScope="project"
             focusRequest={settingsFocus.request}
             onFocusHandled={settingsFocus.onHandled}
-            // Read off the live project-plugin state rather than the loaded
-            // list, which only catches up on the next pull: a muted or stopped
-            // plugin's custom section unmounts the moment it stops.
-            viewRunning={folderTrusted && !plugin.muted && plugin.state === "active"}
+            viewRunning
           />
         </SettingsSection>
       )}
 
-      {!hasPluginSettings(loaded) &&
+      {!editable &&
         ((plugin.settings?.length ?? 0) > 0 || plugin.declaresSettingsView === true) && (
           <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
             <StoppedPluginSettings
@@ -877,8 +885,17 @@ export function ProjectPluginsTab() {
   const requestNonce = settingsRequest?.nonce;
   const requestKey = settingsRequest?.key;
   // Whether the target pane will render a settings form to land in at all.
+  // A stopped project plugin gets the declaration-only section, so it counts as
+  // formless even while the loaded list still carries it.
+  const requestProjectPlugin =
+    settingsRequest === null
+      ? undefined
+      : projectPlugins.find((p) => p.instanceId === settingsRequest.pluginId);
   const requestTargetHasForm =
-    settingsRequest !== null && hasPluginSettings(loadedByInstanceId.get(settingsRequest.pluginId));
+    settingsRequest !== null &&
+    (requestProjectPlugin === undefined ||
+      isProjectPluginRunning(requestProjectPlugin, folderTrusted)) &&
+    hasPluginSettings(loadedByInstanceId.get(settingsRequest.pluginId));
   const [headingFocusNonce, setHeadingFocusNonce] = useState<number | null>(null);
   useEffect(() => {
     if (requestTargetId === null || requestNonce === undefined) return;

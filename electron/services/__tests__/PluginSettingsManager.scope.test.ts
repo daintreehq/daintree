@@ -685,3 +685,29 @@ describe("PluginSettingsManager required settings", () => {
     expect(onSettingChanged.mock.calls).toEqual([[PLUGIN_ID], [PLUGIN_ID]]);
   });
 });
+
+describe("PluginSettingsManager settings-form writes need a live declaration", () => {
+  it("refuses a form write or reset once the plugin's manifest is gone, and writes nothing", async () => {
+    const projectRoot = path.join(tmpDir, "repo");
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === "p1" ? { path: projectRoot } : null
+    );
+    const mgr = managerFor([{ id: "apiKey", type: "secret", scope: "project" }]);
+    const unloaded = "project__p1__acme.gone";
+
+    await expect(
+      mgr.setSettingValueFromUi(unloaded, "apiKey", "sk-live", "project", "p1")
+    ).rejects.toThrow(/isn't running/);
+    await expect(mgr.deleteSettingValueFromUi(unloaded, "apiKey", "project", "p1")).rejects.toThrow(
+      /isn't running/
+    );
+    await expect(fs.readdir(projectRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a form write for a key the manifest does not declare", async () => {
+    const mgr = managerFor([]);
+    await expect(
+      mgr.setSettingValueFromUi("acme.scope-test", "token", "x", "user", null)
+    ).rejects.toThrow(/not declared/);
+  });
+});

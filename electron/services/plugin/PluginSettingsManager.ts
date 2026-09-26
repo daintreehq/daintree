@@ -259,6 +259,31 @@ export class PluginSettingsManager {
   }
 
   /**
+   * The settings form's write guard. Stricter than {@link assertSettingDeclared}:
+   * the form only ever renders declared fields, and a write that arrives after
+   * the plugin unloaded has no declaration to say whether the value is secret,
+   * so it would land as plaintext — in a git-tracked file for project scope.
+   */
+  private assertSettingWritableFromUi(
+    pluginId: string,
+    key: string,
+    scope: PluginSettingsScope
+  ): void {
+    const manifest = this.deps.getManifest(pluginId);
+    if (!manifest) {
+      throw new Error(
+        `Plugin "${pluginId}" settings: "${key}" can't be changed while the plugin isn't running`
+      );
+    }
+    if (!manifest.contributes.settings?.some((s) => s.id === key)) {
+      throw new Error(
+        `Plugin "${pluginId}" settings: key "${key}" is not declared in contributes.settings`
+      );
+    }
+    this.assertSettingDeclared(pluginId, key, scope);
+  }
+
+  /**
    * Reject a `host.settings.onDidChange` subscription whose `scope` mismatches a
    * declared key's `scope`. Undeclared keys (or manifests with no declarations)
    * are left alone — only the declared scope is enforced, mirroring the set/delete
@@ -629,7 +654,7 @@ export class PluginSettingsManager {
       );
     }
     this.assertSettingSerializable(pluginId, key, value);
-    this.assertSettingDeclared(pluginId, key, scope);
+    this.assertSettingWritableFromUi(pluginId, key, scope);
     const filePath = this.resolveUiSettingsFilePathForKey(pluginId, key, scope, projectId);
     if (!filePath) {
       throw new Error(
@@ -656,7 +681,7 @@ export class PluginSettingsManager {
     projectId: string | null
   ): Promise<boolean> {
     assertSettingsKey(pluginId, "delete", key);
-    this.assertSettingDeclared(pluginId, key, scope);
+    this.assertSettingWritableFromUi(pluginId, key, scope);
     const filePath = this.resolveUiSettingsFilePathForKey(pluginId, key, scope, projectId);
     if (!filePath) return false;
     const store = this.getOrCreateSettingsStore(pluginId, filePath);

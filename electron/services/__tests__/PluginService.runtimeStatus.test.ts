@@ -551,3 +551,25 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
     service.dispose();
   });
 });
+
+describe("runtime-status on unload", () => {
+  it("announces the unload of a plugin that never had a worker", async () => {
+    const dir = path.join(pluginsRoot, "views-only");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: "acme.views-only", version: "1.0.0" })
+    );
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.initialize();
+    expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.views-only");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    service.unloadPlugin("acme.views-only");
+
+    // No worker status ever existed, yet a renderer holding this plugin's
+    // settings view is only told to retire it by this `null`.
+    expect(publishedStatuses()).toEqual([{ pluginId: "acme.views-only", status: null }]);
+    service.dispose();
+  });
+});
