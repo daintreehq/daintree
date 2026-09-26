@@ -58,6 +58,12 @@ class DraftInputPersistence {
     this.rebaseEpochByProject.set(projectId, (this.rebaseEpochByProject.get(projectId) ?? 0) + 1);
   }
 
+  /** A copy of the project's last-acknowledged baseline; undefined before one is primed. */
+  getBaseline(projectId: string): Record<string, string> | undefined {
+    const baseline = this.persistedByProject.get(projectId);
+    return baseline ? { ...baseline } : undefined;
+  }
+
   /**
    * Delta a caller outside this module (the synchronous project-switch outgoing
    * capture) should send so Main merges drafts by key instead of full-replacing
