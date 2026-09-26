@@ -14,6 +14,7 @@ import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useForgeTokenCalloutStore } from "@/store/forgeTokenCalloutStore";
 import { actionService } from "@/services/ActionService";
 import type { ForgeTokenErrorKind } from "@/lib/forgeErrors";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 const PROVIDER_ID = "daintree.github.github";
 // Longer than the callout's anchor re-check tick.
@@ -114,6 +115,19 @@ describe("ForgeTokenCallout", () => {
 
     expect(screen.getByText("GitHub token expired")).toBeTruthy();
     expect(getCredentialStatus).toHaveBeenCalledWith(PROVIDER_ID);
+  });
+
+  it("names the host whose token failed in a window attached to another machine", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    setHostPlatformInfo({ hostName: "studio-01" });
+    try {
+      render(<Harness errorKind="invalid" />);
+      await flush();
+      expect(screen.getByText("GitHub token expired on studio-01")).toBeTruthy();
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    }
   });
 
   it("stays quiet for a token that was never configured", async () => {
