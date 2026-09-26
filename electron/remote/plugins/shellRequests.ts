@@ -35,6 +35,7 @@ import {
 import type { ViewReverseRequest } from "../client/RemoteHostManager.js";
 import { registerReverseRequestMethod } from "../client/reverseRequests.js";
 import { getRemoteService } from "../runtime.js";
+import { isHostPluginDispatchable } from "./pluginDispatchAllowlist.js";
 import {
   persistedClipboardGrants,
   type ClipboardAccess,
@@ -333,27 +334,43 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
 
   /**
    * A host plugin's `host.dispatch()`, run in the view that drives its
-   * project. The view's own ActionService applies the plugin source's rules
-   * (no restricted actions, no confirm bypass), exactly as it does for a
-   * plugin whose main code runs here.
+   * project, and only for an action this Shell lets a host's plugins run
+   * (`HOST_PLUGIN_DISPATCHABLE_ACTION_IDS`). It always runs there as
+   * `source: "plugin"`, so the view's ActionService still applies the plugin
+   * source's rules (no restricted actions, no confirm bypass).
    */
-  const dispatchAction = (request: ViewReverseRequest): Promise<unknown> => {
+  const dispatchAction = async (request: ViewReverseRequest): Promise<unknown> => {
     const parsed = PluginDispatchPayloadSchema.safeParse(request.payload);
     if (!parsed.success) throw malformed("dispatch");
     const wc = scopeView(request, parsed.data.pluginId);
+    if (!isHostPluginDispatchable(parsed.data.actionId)) {
+      // An answer, not a transport failure: the plugin reads it as the refusal it is.
+      return {
+        ok: false,
+        error: {
+          code: "RESTRICTED",
+          message: `Action "${parsed.data.actionId}" can't be run by a plugin on ${hostName(request.hostId)}`,
+        },
+      };
+    }
     return actions.sendDispatchToWebContents(wc, parsed.data.actionId, parsed.data.args);
   };
 
-  const listActions = (request: ViewReverseRequest): Promise<unknown> => {
+  /** The catalog a host's plugin sees is the one it may dispatch from. */
+  const listActions = async (request: ViewReverseRequest): Promise<unknown> => {
     const parsed = PluginActionsListPayloadSchema.safeParse(request.payload);
     if (!parsed.success) throw malformed("actions list");
-    return actions.sendActionsListToWebContents(scopeView(request, parsed.data.pluginId));
+    const { entries } = await actions.sendActionsListToWebContents(
+      scopeView(request, parsed.data.pluginId)
+    );
+    return { entries: entries.filter((entry) => isHostPluginDispatchable(entry.id)) };
   };
 
-  const getAction = (request: ViewReverseRequest): Promise<unknown> => {
+  const getAction = async (request: ViewReverseRequest): Promise<unknown> => {
     const parsed = PluginActionsGetPayloadSchema.safeParse(request.payload);
     if (!parsed.success) throw malformed("actions get");
     const wc = scopeView(request, parsed.data.pluginId);
+    if (!isHostPluginDispatchable(parsed.data.actionId)) return { entry: null };
     return actions.sendActionsGetToWebContents(wc, parsed.data.actionId);
   };
 
