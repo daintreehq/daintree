@@ -107,8 +107,9 @@ async function runResyncPass(projectState: boolean): Promise<void> {
   const isCurrent = () => generation === resyncGeneration && getViewWorkspaceId() === projectId;
   const lease = refreshLease();
   const terminals = projectId ? resyncHostTerminals(projectId, { isCurrent }) : Promise.resolve();
+  const worktrees = window.electron.worktree.refresh();
   const steps: Array<[string, () => Promise<unknown>]> = [
-    ["worktrees", () => window.electron.worktree.refresh()],
+    ["worktrees", () => worktrees],
     [
       "worktree topology",
       () => window.electron.worktreePort.request("reconcile-topology", { force: true }),
@@ -129,7 +130,8 @@ async function runResyncPass(projectState: boolean): Promise<void> {
       async () => {
         // After the terminals, so the host's saved order also places the ones
         // just adopted; after the lease, to know whose layout wins.
-        await Promise.allSettled([terminals, lease]);
+        // And after the worktrees, so the saved active worktree can be found.
+        await Promise.allSettled([terminals, lease, worktrees]);
         if (!isCurrent()) return;
         await rehydrateHostProjectState(projectId, {
           isCurrent,

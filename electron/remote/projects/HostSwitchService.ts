@@ -504,8 +504,12 @@ export class HostSwitchService {
       stopIfCancelled();
       this.stage(track, "checking", "Checking the push with the host");
       try {
+        // A push the host still reports running is followed only so long;
+        // past that, what the remote shows is the answer.
+        const deadline =
+          this.now() + (this.options.reconnectTimeoutMs ?? DEFAULT_RECONNECT_TIMEOUT_MS);
         let status = await from.pushStatus(opId, request.projectId);
-        while (status.state === "running") {
+        while (status.state === "running" && this.now() < deadline) {
           await sleep(interval);
           stopIfCancelled();
           status = await from.pushStatus(opId, request.projectId);
