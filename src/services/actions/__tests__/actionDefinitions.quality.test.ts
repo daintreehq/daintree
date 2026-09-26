@@ -456,7 +456,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // (the host's remembered project, else its project list) and that the host
   // move is confirmed in a dialog; a caller missing either reads the list or
   // the dialog as a failure. The 490 B is exactly their two descriptions.
-  const MAX_COHORT_TOTAL_BYTES = 57_147;
+  // 57_147 → 57_247 for #11158's worktree placement: `project.openOnHost` gained
+  // the optional `worktree` argument (branch, base, path, recipe) that carries a
+  // new worktree onto another host; its 100 B is that argument's description.
+  const MAX_COHORT_TOTAL_BYTES = 57_247;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

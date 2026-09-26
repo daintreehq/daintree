@@ -639,7 +639,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // measured at 228_226 B. In-app only, on the system tier, so the external
   // ceiling above does not move. The spend is their 490 B of description and
   // the `hostId`, `newWindow` and `projectId` arguments.
-  const MAX_COHORT_PAYLOAD_BYTES = 228_250;
+  // 228_250 → 229_075 for #11158's worktree placement, measured at 229_052 B:
+  // `project.openOnHost` gained the optional `worktree` object (branch, base
+  // branch, path, recipe) that creates the new worktree on the chosen host.
+  const MAX_COHORT_PAYLOAD_BYTES = 229_075;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
