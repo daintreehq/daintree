@@ -409,6 +409,63 @@ describe("PluginService", () => {
     );
   });
 
+  it("carries a plugin's databases and a panel's own menu onto its panel kinds", async () => {
+    await writePlugin("data-plugin", {
+      name: "acme.data-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [
+          {
+            id: "board",
+            name: "Board",
+            iconId: "eye",
+            color: "#111",
+            menu: [
+              { actionId: "acme.data-plugin.refresh" },
+              { actionId: "acme.data-plugin.export", label: "CSV" },
+            ],
+          },
+          { id: "side", name: "Side", iconId: "eye", color: "#111" },
+        ],
+        databases: [{ id: "ledger", location: "local" }],
+      },
+    });
+    await writePlugin("plain-plugin", {
+      name: "acme.plain-plugin",
+      version: "1.0.0",
+      contributes: { panels: [{ id: "board", name: "Board", iconId: "eye", color: "#111" }] },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const callFor = (id: string) =>
+      vi.mocked(registerPanelKind).mock.calls.find((call) => call[0]?.id === id)?.[0];
+    expect(callFor("acme.data-plugin.board")).toMatchObject({
+      hasPluginDatabases: true,
+      pluginMenu: [
+        { actionId: "acme.data-plugin.refresh" },
+        { actionId: "acme.data-plugin.export", label: "CSV" },
+      ],
+    });
+    // Every panel of the plugin offers the backup; only the one that declared
+    // a menu carries it.
+    expect(callFor("acme.data-plugin.side")).toMatchObject({ hasPluginDatabases: true });
+    expect(
+      Object.prototype.hasOwnProperty.call(callFor("acme.data-plugin.side"), "pluginMenu")
+    ).toBe(false);
+    const plain = callFor("acme.plain-plugin.board");
+    expect(Object.prototype.hasOwnProperty.call(plain, "hasPluginDatabases")).toBe(false);
+
+    // The backup reads the host's own manifest, never anything the caller sent.
+    expect(service.getDataBackupSource("acme.data-plugin")).toMatchObject({
+      manifestId: "acme.data-plugin",
+      declarations: [{ id: "ledger", location: "local" }],
+      projectRoot: null,
+    });
+    expect(service.getDataBackupSource("acme.not-loaded")).toBeNull();
+  });
+
   it("flags every panel of a plugin with settings, and serves its settings view apart from panels", async () => {
     await writePlugin("settings-plugin", {
       name: "acme.settings-plugin",

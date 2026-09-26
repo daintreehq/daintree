@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow, net } from "electron";
+import { app, ipcMain, dialog, BrowserWindow, net } from "electron";
 import { open, writeFile, readFile, realpath, rm, access, stat } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
@@ -20,6 +20,7 @@ import {
   type PluginAuditConfig,
 } from "../../../shared/types/ipc/pluginAudit.js";
 import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
+import type { PluginDataBackupOutcome } from "../../../shared/types/ipc/pluginDataBackup.js";
 import type {
   PluginManifestIssue,
   PluginManifestValidationResult,
@@ -1848,6 +1849,65 @@ async function handlePathExists(pluginId: string, targetPath: string): Promise<b
   }
 }
 
+/**
+ * "Back up data…" from a plugin panel's menus. The renderer names only the
+ * plugin: which databases exist, where they live and what they are called all
+ * come from main's own copy of the manifest and binding. A project plugin
+ * answers only to its own project's renderers, as `plugin:invoke` does.
+ */
+async function handleBackupDatabases(
+  ctx: IpcContext,
+  pluginId: string
+): Promise<PluginDataBackupOutcome> {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error("backupDatabases: pluginId must be a plugin instance id");
+  }
+  const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (boundProjectId !== null && boundProjectId !== ctx.projectId) {
+    throw new Error("backupDatabases rejected: plugin belongs to a different project");
+  }
+  const source = (await getPluginService()).getDataBackupSource(pluginId);
+  if (!source) throw new Error(`Plugin "${pluginId}" isn't running`);
+
+  const { backupPluginData } = await import("../../services/plugin/pluginDataBackup.js");
+  const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+  const title = `Back up ${source.displayName} data`;
+  return backupPluginData(
+    source,
+    {
+      chooseFile: async (defaultPath) => {
+        const options = {
+          title,
+          defaultPath,
+          filters: [{ name: "SQLite database", extensions: ["db"] }],
+          properties: ["createDirectory", "showOverwriteConfirmation"] as Array<
+            "createDirectory" | "showOverwriteConfirmation"
+          >,
+        };
+        const result = win
+          ? await dialog.showSaveDialog(win, options)
+          : await dialog.showSaveDialog(options);
+        return result.canceled || !result.filePath ? null : result.filePath;
+      },
+      chooseFolder: async (defaultPath) => {
+        const options = {
+          title,
+          defaultPath,
+          buttonLabel: "Back up here",
+          properties: ["openDirectory", "createDirectory"] as Array<
+            "openDirectory" | "createDirectory"
+          >,
+        };
+        const result = win
+          ? await dialog.showOpenDialog(win, options)
+          : await dialog.showOpenDialog(options);
+        return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!;
+      },
+    },
+    { downloadsDir: app.getPath("downloads") }
+  );
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
@@ -2001,6 +2061,9 @@ export const pluginNamespace = defineIpcNamespace({
     ),
     pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),
     pathExists: op(PLUGIN_METHOD_CHANNELS.pathExists, handlePathExists),
+    backupDatabases: op(PLUGIN_METHOD_CHANNELS.backupDatabases, handleBackupDatabases, {
+      withContext: true,
+    }),
     getBackgroundUpdateCheckSettings: op(
       PLUGIN_METHOD_CHANNELS.getBackgroundUpdateCheckSettings,
       handleGetBackgroundUpdateCheckSettings

@@ -13,6 +13,8 @@ import {
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
+  isPluginMenuCommandId,
+  pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
   type GenericPanelMenuInput,
 } from "../genericPanelMenu";
@@ -31,6 +33,8 @@ function registerPluginKind(
     name?: string;
     tourId?: string;
     hasPluginSettings?: boolean;
+    hasPluginDatabases?: boolean;
+    pluginMenu?: Array<{ actionId: string; label?: string }>;
   } = {}
 ) {
   registerPanelKind({
@@ -45,6 +49,8 @@ function registerPluginKind(
     ...(overrides.dockable !== undefined ? { dockable: overrides.dockable } : {}),
     ...(overrides.tourId !== undefined ? { tourId: overrides.tourId } : {}),
     ...(overrides.hasPluginSettings ? { hasPluginSettings: true } : {}),
+    ...(overrides.hasPluginDatabases ? { hasPluginDatabases: true } : {}),
+    ...(overrides.pluginMenu ? { pluginMenu: overrides.pluginMenu } : {}),
   });
 }
 
@@ -101,6 +107,8 @@ describe("readPanelKindMenuCapabilities", () => {
         isDockable: panelKindIsDockable(kind),
         tour: null,
         pluginSettingsId: null,
+        pluginBackupId: null,
+        pluginMenuItems: [],
       });
     }
   });
@@ -146,6 +154,59 @@ describe("readPanelKindMenuCapabilities", () => {
       readPanelKindMenuCapabilities(snapshot, UNDOCKABLE_PLUGIN_KIND).pluginSettingsId
     ).toBeNull();
     expect(readPanelKindMenuCapabilities(snapshot, "file").pluginSettingsId).toBeNull();
+  });
+
+  it("names the plugin whose data Back up data… copies, only when it declares databases", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { hasPluginDatabases: true });
+    registerPluginKind(UNDOCKABLE_PLUGIN_KIND, { hasPluginSettings: true });
+    const snapshot = getPanelKindRegistrySnapshot();
+
+    expect(readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND).pluginBackupId).toBe("acme");
+    expect(readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND).pluginSettingsId).toBeNull();
+    expect(
+      readPanelKindMenuCapabilities(snapshot, UNDOCKABLE_PLUGIN_KIND).pluginBackupId
+    ).toBeNull();
+  });
+
+  it("offers a kind's own menu items in declared order, once each action is registered", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, {
+      pluginMenu: [
+        { actionId: "acme.refresh" },
+        { actionId: "acme.export", label: "Export as CSV" },
+        { actionId: "acme.pending" },
+      ],
+    });
+    const snapshot = getPanelKindRegistrySnapshot();
+    const read = (registered: Array<[string, string]>) =>
+      readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND, undefined, new Map(registered))
+        .pluginMenuItems;
+
+    expect(read([])).toEqual([]);
+    expect(
+      read([
+        ["acme.export", "Export ledger"],
+        ["acme.refresh", "Refresh data"],
+      ])
+    ).toEqual([
+      { actionId: "acme.refresh", label: "Refresh data" },
+      { actionId: "acme.export", label: "Export as CSV" },
+    ]);
+    expect(read([["acme.pending", "Sync now"]])).toEqual([
+      { actionId: "acme.pending", label: "Sync now" },
+    ]);
+  });
+
+  it("leaves out a menu item with nothing to call it", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { pluginMenu: [{ actionId: "acme.untitled" }] });
+
+    expect(
+      readPanelKindMenuCapabilities(
+        getPanelKindRegistrySnapshot(),
+        VIEW_PLUGIN_KIND,
+        undefined,
+        new Map([["acme.untitled", ""]])
+      ).pluginMenuItems
+    ).toEqual([]);
   });
 
   it("reads the snapshot it is handed, not the live registry", () => {
@@ -280,7 +341,9 @@ describe("getGenericPanelMenuGroups", () => {
           command.id === "move-to-worktree" ||
           command.id === "reload" ||
           command.id === "tour" ||
-          command.id === "plugin-settings"
+          command.id === "plugin-settings" ||
+          command.id === "plugin-backup" ||
+          isPluginMenuCommandId(command.id)
         )
           continue;
         expect(GENERIC_PANEL_MENU_ACTION_IDS[command.id]).toBeDefined();
@@ -332,6 +395,65 @@ describe("getGenericPanelMenuGroups", () => {
       .find((command) => command.id === "plugin-settings")!;
     expect(item.destructive).toBeUndefined();
     expect(item.disabled).toBeUndefined();
+  });
+
+  it("offers Back up data… after the tour and before Plugin settings…", () => {
+    expect(ids().flat()).not.toContain("plugin-backup");
+    expect(ids({ hasPluginDatabases: true }).find((g) => g.includes("plugin-backup"))).toEqual([
+      "plugin-backup",
+    ]);
+
+    const all = ids({
+      tourLabel: "Metrics Welcome Tour",
+      hasPluginSettings: true,
+      hasPluginDatabases: true,
+    });
+    expect(all.find((group) => group.includes("tour"))).toEqual([
+      "tour",
+      "plugin-backup",
+      "plugin-settings",
+    ]);
+
+    const item = groups({ hasPluginDatabases: true })
+      .flat()
+      .find((command) => command.id === "plugin-backup")!;
+    // The ellipsis promises the dialog that follows.
+    expect(item.label.endsWith("…")).toBe(true);
+    expect(item.destructive).toBeUndefined();
+    expect(item.disabled).toBeUndefined();
+  });
+
+  it("puts the plugin's own items in a group directly above its entries, in order", () => {
+    const items = [
+      { actionId: "acme.refresh", label: "Refresh data" },
+      { actionId: "acme.export", label: "Export as CSV" },
+    ];
+    const withEverything = groups({
+      tourLabel: "Metrics Welcome Tour",
+      hasPluginSettings: true,
+      pluginMenuItems: items,
+    });
+    const groupIds = withEverything.map((group) => group.map((command) => command.id));
+    const contributedIndex = groupIds.findIndex((group) => group.every(isPluginMenuCommandId));
+    const ownedIndex = groupIds.findIndex((group) => group.includes("tour"));
+
+    expect(contributedIndex).toBeGreaterThan(-1);
+    expect(ownedIndex).toBe(contributedIndex + 1);
+    const contributed = withEverything[contributedIndex]!;
+    expect(contributed.map((command) => command.label)).toEqual(["Refresh data", "Export as CSV"]);
+    expect(
+      contributed.map((command) =>
+        isPluginMenuCommandId(command.id) ? pluginMenuCommandActionId(command.id) : null
+      )
+    ).toEqual(["acme.refresh", "acme.export"]);
+    expect(contributed.every((c) => !c.destructive && !c.disabled)).toBe(true);
+
+    // Without the plugin's entries they still sit just above the removal group.
+    const alone = ids({ pluginMenuItems: items });
+    const aloneIndex = alone.findIndex((group) => group.every(isPluginMenuCommandId));
+    expect(alone[aloneIndex + 1]).toContain("trash");
+    // And nothing at all when the kind offers none.
+    expect(ids().flat().some(isPluginMenuCommandId)).toBe(false);
   });
 
   it("still ends on its one destructive command with a tour offered", () => {

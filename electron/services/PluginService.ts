@@ -41,6 +41,7 @@ import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import type { HostGitFactory } from "./plugin/pluginHostGit.js";
+import type { PluginDataBackupSource } from "./plugin/pluginDataBackup.js";
 import {
   PLUGIN_PROCESS_STREAM_CHANNEL,
   type PluginProcessInfo,
@@ -2162,6 +2163,9 @@ export class PluginService {
         ? { hasPluginSettings: true }
         : {}),
       ...(declaredSettings.some((s) => s.required === true) ? { hasRequiredSettings: true } : {}),
+      // "Back up data…" on every panel of a plugin that declares a database;
+      // main checks what actually exists when it is picked.
+      ...((manifest.contributes.databases?.length ?? 0) > 0 ? { hasPluginDatabases: true } : {}),
     };
 
     for (const panel of manifest.contributes.panels) {
@@ -2206,6 +2210,16 @@ export class PluginService {
         // bags on a promise the author never made (#12280).
         ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
         ...(tourId !== undefined ? { tourId } : {}),
+        // Authored in the manifest namespace, dispatched in the instance's —
+        // the same rewrite the toolbar and menu contributions above get.
+        ...(panel.menu !== undefined && panel.menu.length > 0
+          ? {
+              pluginMenu: panel.menu.map((item) => ({
+                actionId: qualifyActionId(item.actionId),
+                ...(item.label !== undefined ? { label: item.label } : {}),
+              })),
+            }
+          : {}),
         // Keyed by the INSTANCE, because `unregisterPluginPanelKinds` matches
         // on `extensionId` alone: keying by manifest id would make one
         // project's unload sweep every other project's copies of the same kind.
@@ -4202,6 +4216,23 @@ export class PluginService {
 
   hasPlugin(pluginId: string): boolean {
     return this.plugins.has(pluginId);
+  }
+
+  /**
+   * What "Back up data…" needs to find a loaded plugin's databases, read from
+   * the host's own manifest and binding so a caller can name nothing but the
+   * plugin. Null when the plugin is not loaded.
+   */
+  getDataBackupSource(pluginId: string): PluginDataBackupSource | null {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return null;
+    return {
+      manifestId: plugin.manifest.name,
+      displayName: plugin.manifest.displayName ?? plugin.manifest.name,
+      declarations: plugin.manifest.contributes.databases ?? [],
+      projectRoot: plugin.binding?.projectRoot ?? null,
+      dataDir: this.pluginDataDir(pluginId),
+    };
   }
 
   /**

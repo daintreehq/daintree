@@ -11,6 +11,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import { registerTour } from "@/components/Tour/tourRegistry";
+import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
 import type { PanelKind } from "@/types";
 import {
   __resetPanelCloseGuardsForTests,
@@ -958,10 +959,14 @@ describe("PanelHeader", () => {
         name?: string;
         tourId?: string;
         hasPluginSettings?: boolean;
+        hasPluginDatabases?: boolean;
+        pluginMenu?: Array<{ actionId: string; label?: string }>;
       } = {}
     ) {
       registerPanelKind({
         ...(options.hasPluginSettings ? { hasPluginSettings: true } : {}),
+        ...(options.hasPluginDatabases ? { hasPluginDatabases: true } : {}),
+        ...(options.pluginMenu ? { pluginMenu: options.pluginMenu } : {}),
         id,
         name: options.name ?? id,
         iconId: "terminal",
@@ -999,6 +1004,7 @@ describe("PanelHeader", () => {
       for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
       unregisterPanelKind(PLUGIN_KIND);
       unregisterPanelKind(PTY_PLUGIN_KIND);
+      publishRegisteredPluginActions([]);
       __resetPanelCloseGuardsForTests();
     });
 
@@ -1259,6 +1265,50 @@ describe("PanelHeader", () => {
       expect(mockDispatch).toHaveBeenCalledTimes(1);
       expect(mockDispatch).toHaveBeenCalledWith(
         "plugin.openSettings",
+        { pluginId: "acme" },
+        { source: "menu" }
+      );
+    });
+
+    it("offers Back up data… and the plugin's own items, each dispatched once focus is back", async () => {
+      registerPluginKind(PLUGIN_KIND, {
+        hasPluginDatabases: true,
+        pluginMenu: [{ actionId: "acme.refresh" }, { actionId: "acme.export", label: "Export" }],
+      });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      // No action registered yet, so no item would dispatch anything.
+      expect(menuRows()).toEqual(sharedRows({ hasPluginDatabases: true }));
+
+      act(() => publishRegisteredPluginActions([["acme.refresh", "Refresh data"]]));
+      expect(menuRows()).toEqual(
+        sharedRows({
+          hasPluginDatabases: true,
+          pluginMenuItems: [{ actionId: "acme.refresh", label: "Refresh data" }],
+        })
+      );
+
+      const pick = async (label: string) => {
+        fireEvent.click(findMenuButton(label)!);
+        expect(mockDispatch).not.toHaveBeenCalled();
+        act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      };
+
+      await pick("Refresh data");
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "acme.refresh",
+        { panelId: "test-panel" },
+        { source: "menu" }
+      );
+
+      mockDispatch.mockClear();
+      await pick("Back up data…");
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "plugin.backupDatabases",
         { pluginId: "acme" },
         { source: "menu" }
       );

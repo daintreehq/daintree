@@ -178,6 +178,7 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
 | `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
 | `stateVersion` | no | Integer &ge; 1 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
+| `menu` | no | Up to five of your own actions to offer in the panel's ⋯ and right-click menus. See [Panel menu](#panel-menu) below. |
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
 
@@ -192,6 +193,55 @@ Declare it, and the host stamps that number onto the panel record every time you
 You never have to handle a version _above_ the one you declare. That only happens on a downgrade — the user ran a newer build of your plugin, then went back — and the host refuses the bag rather than let it be misread and overwritten, showing the user an error naming both versions. The state stays on disk, so reinstalling the newer build brings it back intact.
 
 Bump `stateVersion` when the shape changes incompatibly, never for an additive key your view can already tolerate missing.
+
+### Panel menu
+
+`menu` puts your own actions on the panel's ⋯ menu and its right-click menu, which always show the same list. Each entry is `{ "actionId": "<your action>", "label"?: "<text>" }`:
+
+```json
+{
+  "contributes": {
+    "commands": [
+      {
+        "id": "refresh",
+        "title": "Refresh data",
+        "description": "",
+        "category": "general",
+        "kind": "command",
+        "danger": "safe"
+      },
+      {
+        "id": "export",
+        "title": "Export ledger",
+        "description": "",
+        "category": "general",
+        "kind": "command",
+        "danger": "safe"
+      }
+    ],
+    "panels": [
+      {
+        "id": "ledger",
+        "name": "Ledger",
+        "iconId": "wallet",
+        "color": "var(--theme-category-green)",
+        "menu": [
+          { "actionId": "acme.ledger.refresh" },
+          { "actionId": "acme.ledger.export", "label": "Export as CSV…" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- **Only your own actions.** `actionId` is written in your manifest namespace, `"{manifestId}.{id}"`, and names a `contributes.commands` entry or an action you register with `host.registerAction`. When you declare commands, the id must match one of them (`action_id_undeclared_command`); a built-in action or another plugin's is refused (`panel_menu_action_not_own`). A project plugin writes its manifest id too; the host moves the id into the instance's namespace for you.
+- **At most five**, each action once (`panel_menu_duplicate_action`). A `hasPty: true` panel renders as a terminal with the terminal's menus, so a `menu` on one is refused (`pty_panel_menu_unsupported`).
+- **Where they appear.** In their own group, directly above the host's entries for your plugin (the panel's Welcome Tour, **Back up data…** and **Plugin settings…**), in the order you declared them.
+- **When they appear.** An entry shows only while its action is registered, so an action you register late in `activate()`, or withdraw, comes and goes with it.
+- **Label.** `label` is the menu text, 1–80 characters. Leave it out to use the action's `title`. End it with `…` when the action asks for more before it acts, as the host's own entries do.
+- **Arguments.** The action is dispatched with `{ panelId }`, the id of the panel whose menu was used, the same `panelId` your view receives in `PanelViewProps`. If the action declares an `inputSchema`, it has to accept that property, or the dispatch fails validation.
+- **Danger.** The action's own danger tier applies: a `"confirm"` action asks first, as it does from the palette.
 
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
@@ -638,6 +688,8 @@ Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--h
 **`journalMode`.** The default, `"delete"`, keeps the database one self-contained file between writes, so git, a backup, or a sync folder never sees committed data stranded in a `-wal` sidecar. The host re-applies the declared mode on every open, so an agent that ran `PRAGMA journal_mode=WAL` cannot silently switch it. Choose `"wal"` only for a local, write-heavy database nothing else copies.
 
 At most 16 databases per plugin; entries are strict, so a `url` or `driver` field is refused rather than read as a backend the host does not have.
+
+**Back up data…** Every panel of a plugin that declares a database offers **Back up data…** in its ⋯ and right-click menus, with no wiring in your view. The host finds the declared databases that exist, never creating one, and snapshots them with SQLite's online backup from a read-only connection, so a write in progress is either wholly in the copy or not in it at all. One database asks where to save the file, suggesting `<manifestId>-<id>-<YYYY-MM-DD_HHmmss>.db` in Downloads; several ask for a folder and write one file each under that pattern. A plugin with no database on disk yet says so instead of opening a dialog. The entry is host UI: the `plugin.backupDatabases` action behind it is closed to plugins and hidden from agents and MCP clients.
 
 ## Skills — _Shipped_
 

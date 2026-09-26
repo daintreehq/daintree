@@ -21,6 +21,7 @@ import {
   ChevronDown,
   CirclePlay,
   CopyPlus,
+  DatabaseBackup,
   Ellipsis,
   Lock,
   PanelBottomClose,
@@ -104,12 +105,19 @@ import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
   GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
+  isPluginMenuCommandId,
+  pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
   type GenericPanelMenuCommandId,
 } from "./genericPanelMenu";
+import {
+  getRegisteredPluginActionsSnapshot,
+  subscribeToRegisteredPluginActions,
+} from "@/services/plugin/registeredPluginActions";
 
 import {
   getPanelKindRegistrySnapshot,
@@ -443,20 +451,44 @@ function PanelHeaderComponent({
     getRegisteredTourIdsSnapshot,
     getRegisteredTourIdsSnapshot
   );
+  // Plugin menu items appear once their action registers, which can be long
+  // after the kind did.
+  const registeredPluginActions = useSyncExternalStore(
+    subscribeToRegisteredPluginActions,
+    getRegisteredPluginActionsSnapshot,
+    getRegisteredPluginActionsSnapshot
+  );
   const storedKindCapabilities = readPanelKindMenuCapabilities(
     panelKindRegistry,
     storedKind ?? kind,
-    registeredTourIds
+    registeredTourIds,
+    registeredPluginActions
   );
   const kindTour = storedKindCapabilities.tour;
   const pluginSettingsId = storedKindCapabilities.pluginSettingsId;
+  const pluginBackupId = storedKindCapabilities.pluginBackupId;
   // Recorded on select and spent by the menu's close hook, after it has handed
-  // focus back to the trigger: opening the settings home from `onSelect` would
-  // race that restore, and the home (or the dialog that returns focus on its
-  // own close) would capture the dying menu item instead of this panel.
-  const pendingPluginSettingsRef = useRef<string | null>(null);
+  // focus back to the trigger: opening the settings home, a save dialog or a
+  // plugin's own confirmation from `onSelect` would race that restore, and
+  // whatever returns focus on its own close would capture the dying menu item
+  // instead of this panel.
+  const pendingMenuDispatchRef = useRef<{
+    actionId: ActionId;
+    args: Record<string, unknown>;
+  } | null>(null);
   const handlePluginSettingsSelect = () => {
-    pendingPluginSettingsRef.current = pluginSettingsId;
+    if (pluginSettingsId === null) return;
+    pendingMenuDispatchRef.current = {
+      actionId: GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+      args: { pluginId: pluginSettingsId },
+    };
+  };
+  const handlePluginBackupSelect = () => {
+    if (pluginBackupId === null) return;
+    pendingMenuDispatchRef.current = {
+      actionId: GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
+      args: { pluginId: pluginBackupId },
+    };
   };
   const handleTourSelect = () => {
     if (!kindTour) return;
@@ -513,21 +545,19 @@ function PanelHeaderComponent({
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
     pendingMovePickerRef.current = null;
-    pendingPluginSettingsRef.current = null;
+    pendingMenuDispatchRef.current = null;
   }, []);
   const handleOverflowMenuCloseAutoFocus = useCallback(
     (event: Event) => {
-      const pendingSettingsPluginId = pendingPluginSettingsRef.current;
-      pendingPluginSettingsRef.current = null;
-      if (pendingSettingsPluginId !== null) {
+      const pendingDispatch = pendingMenuDispatchRef.current;
+      pendingMenuDispatchRef.current = null;
+      if (pendingDispatch !== null) {
         // Left to the menu primitive's own restore (ringless for a pointer,
-        // ringed for the keyboard), then opened once focus is back.
+        // ringed for the keyboard), then dispatched once focus is back.
         setTimeout(() => {
-          void actionService.dispatch(
-            GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
-            { pluginId: pendingSettingsPluginId },
-            { source: "menu" }
-          );
+          void actionService.dispatch(pendingDispatch.actionId, pendingDispatch.args, {
+            source: "menu",
+          });
         }, AFTER_MENU_FOCUS_RESTORE_MS);
         return;
       }
@@ -554,9 +584,20 @@ function PanelHeaderComponent({
         canReload: canReloadPanelKind(kind),
         tourLabel: kindTour?.label,
         hasPluginSettings: pluginSettingsId !== null,
+        hasPluginDatabases: pluginBackupId !== null,
+        pluginMenuItems: storedKindCapabilities.pluginMenuItems,
       })
     : null;
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
+    if (isPluginMenuCommandId(commandId)) {
+      // The panel the menu was opened on, by id: the plugin's action decides
+      // what that means for it.
+      pendingMenuDispatchRef.current = {
+        actionId: pluginMenuCommandActionId(commandId),
+        args: { panelId: id },
+      };
+      return;
+    }
     if (commandId === "move-to-worktree") {
       handleMoveToWorktreeSelect();
       return;
@@ -575,6 +616,10 @@ function PanelHeaderComponent({
     }
     if (commandId === "plugin-settings") {
       handlePluginSettingsSelect();
+      return;
+    }
+    if (commandId === "plugin-backup") {
+      handlePluginBackupSelect();
       return;
     }
     if (commandId === "kill" && hasPanelCloseGuard(id)) {
@@ -1582,6 +1627,12 @@ function PanelHeaderComponent({
                     <DropdownMenuItem onSelect={handleTourSelect}>
                       <CirclePlay className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       {kindTour.label}
+                    </DropdownMenuItem>
+                  )}
+                  {pluginBackupId && (
+                    <DropdownMenuItem onSelect={handlePluginBackupSelect}>
+                      <DatabaseBackup className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Back up data…
                     </DropdownMenuItem>
                   )}
                   {pluginSettingsId && (

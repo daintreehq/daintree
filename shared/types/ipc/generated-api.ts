@@ -542,6 +542,9 @@ export interface GeneratedElectronAPI {
     activateStagedProjectPlugin(
       ...args: IpcInvokeMap["plugin:project-activate-staged"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-activate-staged"]["result"]>;
+    backupDatabases(
+      ...args: IpcInvokeMap["plugin:backup-databases"]["args"]
+    ): Promise<IpcInvokeMap["plugin:backup-databases"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;

@@ -225,6 +225,29 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 1000000
+              },
+              "menu": {
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "actionId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  },
+                  "required": [
+                    "actionId"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [

@@ -155,6 +155,7 @@ import {
   unregisterPanelKind,
 } from "@shared/config/panelKindRegistry";
 import { registerTour } from "@/components/Tour/tourRegistry";
+import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
 import type { PanelLocation } from "@/types";
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import {
@@ -270,10 +271,14 @@ function registerPluginKind(
     name?: string;
     tourId?: string;
     hasPluginSettings?: boolean;
+    hasPluginDatabases?: boolean;
+    pluginMenu?: Array<{ actionId: string; label?: string }>;
   } = {}
 ) {
   registerPanelKind({
     ...(options.hasPluginSettings ? { hasPluginSettings: true } : {}),
+    ...(options.hasPluginDatabases ? { hasPluginDatabases: true } : {}),
+    ...(options.pluginMenu ? { pluginMenu: options.pluginMenu } : {}),
     id,
     name: options.name ?? id,
     iconId: "terminal",
@@ -319,6 +324,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     keybindingDisplays.current = {};
     unregisterPanelKind(PTY_PLUGIN_KIND);
     unregisterPanelKind(VIEW_PLUGIN_KIND);
+    publishRegisteredPluginActions([]);
     __resetPanelCloseGuardsForTests();
   });
 
@@ -673,6 +679,60 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       );
     }
   );
+
+  it("renders Back up data… and the plugin's own items as the shared list does", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, {
+      hasPluginDatabases: true,
+      hasPluginSettings: true,
+      pluginMenu: [{ actionId: "acme.refresh" }, { actionId: "acme.missing" }],
+    });
+    act(() => publishRegisteredPluginActions([["acme.refresh", "Refresh data"]]));
+    renderMenuFor(pluginPanel);
+
+    expect(menuRows()).toEqual(
+      sharedRows({
+        canMoveToWorktree: false,
+        isDockable: panelKindIsDockable(VIEW_PLUGIN_KIND),
+        hasPluginDatabases: true,
+        hasPluginSettings: true,
+        pluginMenuItems: [{ actionId: "acme.refresh", label: "Refresh data" }],
+      })
+    );
+    expect(findRow("Back up data…")).toBeDefined();
+  });
+
+  it("dispatches a plugin's own item with the panel it was opened on, after focus is back", async () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { pluginMenu: [{ actionId: "acme.refresh" }] });
+    act(() => publishRegisteredPluginActions([["acme.refresh", "Refresh data"]]));
+    renderMenuFor(pluginPanel);
+
+    findRow("Refresh data")!.click();
+    expect(dispatch).not.toHaveBeenCalledWith("acme.refresh", expect.anything(), expect.anything());
+    await closeMenu();
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "acme.refresh",
+      { panelId: "panel-1" },
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ["a view panel's generic menu", VIEW_PLUGIN_KIND, false],
+    ["a PTY-backed panel's terminal menu", PTY_PLUGIN_KIND, true],
+  ] as const)("backs up the plugin's data from %s", async (_label, kind, hasPty) => {
+    registerPluginKind(kind, { hasPty, hasPluginDatabases: true });
+    renderMenuFor({ id: "panel-1", title: "Acme", kind, pluginId: "acme", worktreeId: "wt-1" });
+
+    findRow("Back up data…")!.click();
+    await closeMenu();
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "plugin.backupDatabases",
+      { pluginId: "acme" },
+      expect.anything()
+    );
+  });
 
   it("offers no settings entry for a kind whose plugin has none", () => {
     registerPluginKind(VIEW_PLUGIN_KIND);

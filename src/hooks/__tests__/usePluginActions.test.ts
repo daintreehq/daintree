@@ -70,6 +70,43 @@ describe("usePluginActions", () => {
     expect(invokeMock).toHaveBeenCalledWith("acme.my-plugin", action.id, { x: 1 });
   });
 
+  it("publishes what it registered for the panel menus, and withdraws it on unmount", async () => {
+    const { usePluginActions } = await import("../usePluginActions");
+    const { getRegisteredPluginActionsSnapshot } =
+      await import("@/services/plugin/registeredPluginActions");
+    let emit: ((payload: { actions: PluginActionDescriptor[] }) => void) | null = null;
+    onActionsChangedMock.mockImplementation(
+      (cb: (payload: { actions: PluginActionDescriptor[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { unmount } = renderHook(() => usePluginActions());
+    await waitFor(() => expect(onActionsChangedMock).toHaveBeenCalled());
+
+    act(() => {
+      emit!({
+        actions: [
+          descriptor({ id: "acme.my-plugin.a", title: "Refresh" }),
+          descriptor({ id: "acme.my-plugin.b", title: "Export" }),
+        ],
+      });
+    });
+    expect([...getRegisteredPluginActionsSnapshot()]).toEqual([
+      ["acme.my-plugin.a", "Refresh"],
+      ["acme.my-plugin.b", "Export"],
+    ]);
+
+    act(() => {
+      emit!({ actions: [descriptor({ id: "acme.my-plugin.b", title: "Export all" })] });
+    });
+    expect([...getRegisteredPluginActionsSnapshot()]).toEqual([["acme.my-plugin.b", "Export all"]]);
+
+    unmount();
+    expect(getRegisteredPluginActionsSnapshot().size).toBe(0);
+  });
+
   it("registers and unregisters as push updates arrive", async () => {
     const { actionService } = await import("@/services/ActionService");
     const { usePluginActions } = await import("../usePluginActions");
