@@ -26,6 +26,7 @@ import { invalidateProjectSettingsCache } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
+import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
   vscode: "VS Code",
@@ -175,8 +176,9 @@ export function EditorIntegrationTab() {
         path: activeProjectPath,
         projectId: activeProjectId,
       });
-      if (!isMountedRef.current) return;
       // A remote window copies the host path when no editor here can open it: not a pass.
+      announceOpenInEditorFallback(fallback);
+      if (!isMountedRef.current) return;
       setTestResult(fallback ? "error" : "ok");
     } catch {
       if (!isMountedRef.current) return;

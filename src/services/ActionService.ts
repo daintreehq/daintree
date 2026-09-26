@@ -293,6 +293,9 @@ function computeSchemas(definition: AnyActionDefinition): CachedSchemas {
   return { inputSchema, outputSchema };
 }
 
+const ONLY_HERE_CACHE_MS = 30_000;
+const ONLY_HERE_WAIT_MS = 1_500;
+
 /** The most specific of the plugins whose namespace an action id falls in. */
 function longestOwner(pluginIds: readonly string[]): string | null {
   let owner: string | null = null;
@@ -304,6 +307,7 @@ export class ActionService {
   private registry = new Map<ActionId, AnyActionDefinition>();
   /** Every plugin that has registered an action in this view, kept after it unregisters. */
   private pluginIdsSeen = new Set<string>();
+  private onlyHereCache: { hostId: string; pluginIds: string[]; at: number } | null = null;
   private requiresArgsCache = new Map<ActionId, boolean>();
   /**
    * Lazily-filled JSON schema cache. Populated on first `toManifestEntry()` for
@@ -466,17 +470,9 @@ export class ActionService {
     const hostId = currentHostId();
     const owns = (pluginId: string) => actionId.startsWith(`${pluginId}.`);
     let pluginId = longestOwner([...this.pluginIdsSeen].filter(owns));
-    if (pluginId === null) {
-      try {
-        const rows = (await window.electron?.pluginParity?.diff({ hostId })) ?? [];
-        pluginId = longestOwner(
-          rows
-            .filter((row) => row.group === "only-here" && owns(row.pluginId))
-            .map((row) => row.pluginId)
-        );
-      } catch {
-        // No comparison to read: say only what is certain, that the action isn't here.
-      }
+    if (pluginId === null && !this.inBuiltInNamespace(actionId)) {
+      const onlyHere = await this.onlyHerePlugins(hostId);
+      pluginId = longestOwner(onlyHere.filter(owns));
     }
     if (pluginId === null) return null;
     const hostName = getHostPlatformInfo().hostName ?? hostId;
@@ -485,6 +481,48 @@ export class ActionService {
       message: `Plugin "${pluginId}" isn't installed on ${hostName}, so "${actionId}" can't run there`,
       details: pickAppErrorDetails({ code: "PLUGIN_NOT_ON_HOST", pluginId, hostId }),
     };
+  }
+
+  /** A stale or mistyped built-in id: its first segment names a built-in action family. */
+  private inBuiltInNamespace(actionId: string): boolean {
+    const dot = actionId.indexOf(".");
+    if (dot <= 0) return true;
+    const prefix = actionId.slice(0, dot + 1);
+    for (const [id, registered] of this.registry) {
+      if (!registered.pluginId && id.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * This machine's plugins the host lacks, from the parity diff. Cached briefly
+   * and waited on only briefly, so an unknown id never stalls on the host.
+   */
+  private async onlyHerePlugins(hostId: string): Promise<string[]> {
+    const cached = this.onlyHereCache;
+    if (cached && cached.hostId === hostId && Date.now() - cached.at < ONLY_HERE_CACHE_MS) {
+      return cached.pluginIds;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const diff = window.electron?.pluginParity?.diff({ hostId });
+      if (!diff) return [];
+      const rows = await Promise.race([
+        diff,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), ONLY_HERE_WAIT_MS);
+        }),
+      ]);
+      // Unanswered in time: say only what is certain, that the action isn't here.
+      if (rows === null) return [];
+      const pluginIds = rows.filter((row) => row.group === "only-here").map((row) => row.pluginId);
+      this.onlyHereCache = { hostId, pluginIds, at: Date.now() };
+      return pluginIds;
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async dispatch<Result = unknown>(
