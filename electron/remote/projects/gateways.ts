@@ -145,8 +145,18 @@ export class LocalHostGateway implements HostGateway {
   find(payload: FindProjectMatchPayload) {
     return this.service.find(payload);
   }
+  /**
+   * Held to the destination project's lease like a remote Shell's placement:
+   * this machine's windows may not place into a project a remote Shell drives.
+   * A refusal throws before the operation is recorded, so it reaches the caller.
+   */
   async startPlaceWorktree(payload: PlaceWorktreePayload): Promise<void> {
-    void this.service.placeWorktree(payload).catch(() => {});
+    const [{ peekDriveLeaseService }, { localPlacementAuthority }] = await Promise.all([
+      import("../../services/DriveLeaseService.js"),
+      import("../../services/projectAcrossHosts/service.js"),
+    ]);
+    const authority = localPlacementAuthority(peekDriveLeaseService());
+    void this.service.placeWorktree(payload, authority).catch(() => {});
   }
   // Loaded on first use: the listing module reads the project store, which a
   // gateway made at boot (or in a test without Electron) must not pull in.

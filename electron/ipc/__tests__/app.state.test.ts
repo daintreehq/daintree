@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
 
@@ -1895,5 +1895,112 @@ describe("app:hydrate host fields", () => {
       "legacyWorkspaceStateOwnerId",
       expect.anything()
     );
+  });
+});
+
+describe("app:set-state while another screen drives the view's project", () => {
+  let storeModule: typeof import("../../store.js");
+  let leaseModule: typeof import("../../services/DriveLeaseService.js");
+  let registryModule: typeof import("../../window/webContentsRegistry.js");
+
+  async function invokeSetState(payload: unknown) {
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    await ipcHandlers.get("app:set-state")!(
+      {
+        sender: { id: 7, getURL: () => "", isDestroyed: () => false, once: vi.fn(), on: vi.fn() },
+      },
+      payload
+    );
+    cleanup();
+  }
+
+  function written(): Record<string, unknown> {
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    const appState = calls.filter((call) => call[0] === "appState").at(-1);
+    return (appState?.[1] ?? {}) as Record<string, unknown>;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    storeModule = await import("../../store.js");
+    leaseModule = await import("../../services/DriveLeaseService.js");
+    registryModule = await import("../../window/webContentsRegistry.js");
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState" ? { terminals: [], sidebarWidth: 350 } : undefined) as never);
+    vi.mocked(registryModule.getProjectForWebContents).mockReturnValue("proj-1");
+  });
+
+  afterEach(() => {
+    leaseModule._resetDriveLeaseServiceForTesting(null);
+    vi.mocked(registryModule.getProjectForWebContents).mockReturnValue(null);
+  });
+
+  const mixed = {
+    sidebarWidth: 420,
+    diagnosticsHeight: 300,
+    panelGridConfig: { strategy: "fixed-columns", value: 3 },
+    activeWorktreeId: "wt-stale",
+    focusMode: true,
+  };
+
+  it("keeps this screen's own fields and leaves the project's to its driver", async () => {
+    const isDriving = vi.fn(() => false);
+    leaseModule._resetDriveLeaseServiceForTesting({
+      isDriving,
+      dispose: () => undefined,
+    } as unknown as InstanceType<typeof leaseModule.DriveLeaseService>);
+
+    await invokeSetState(mixed);
+
+    expect(isDriving).toHaveBeenCalledWith(
+      "proj-1",
+      expect.objectContaining({ clientId: "local" })
+    );
+    expect(written()).toMatchObject({ sidebarWidth: 420, diagnosticsHeight: 300 });
+    expect(written()).not.toHaveProperty("panelGridConfig");
+    expect(written()).not.toHaveProperty("activeWorktreeId");
+    expect(written()).not.toHaveProperty("focusMode");
+  });
+
+  it("holds a view to the lease before its binding lands, through the workspace it writes", async () => {
+    vi.mocked(registryModule.getProjectForWebContents).mockReturnValue(null);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-1",
+      name: "p",
+      path: "/p",
+    } as never);
+    const isDriving = vi.fn(() => false);
+    leaseModule._resetDriveLeaseServiceForTesting({
+      isDriving,
+      dispose: () => undefined,
+    } as unknown as InstanceType<typeof leaseModule.DriveLeaseService>);
+
+    await invokeSetState(mixed);
+
+    expect(isDriving).toHaveBeenCalledWith("proj-1", expect.anything());
+    expect(written()).toMatchObject({ sidebarWidth: 420 });
+    expect(written()).not.toHaveProperty("activeWorktreeId");
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
+  });
+
+  it("writes every field while it drives, and with no lease service at all", async () => {
+    leaseModule._resetDriveLeaseServiceForTesting({
+      isDriving: () => true,
+      dispose: () => undefined,
+    } as unknown as InstanceType<typeof leaseModule.DriveLeaseService>);
+    await invokeSetState(mixed);
+    expect(written()).toMatchObject({
+      panelGridConfig: mixed.panelGridConfig,
+      activeWorktreeId: "wt-stale",
+    });
+
+    vi.mocked(storeModule.store.set).mockClear();
+    leaseModule._resetDriveLeaseServiceForTesting(null);
+    await invokeSetState(mixed);
+    expect(written()).toMatchObject({
+      panelGridConfig: mixed.panelGridConfig,
+      activeWorktreeId: "wt-stale",
+    });
   });
 });
