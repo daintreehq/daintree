@@ -84,6 +84,7 @@ coverage/
 test-results/
 test-results-mechanism/
 test-results-plugins/
+test-results-remote-hosts/
 playwright-report/
 blob-report/
 daintree-e2e-artifacts/

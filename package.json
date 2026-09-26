@@ -143,6 +143,7 @@
     "test:e2e:demo": "npx playwright test --project=demo --workers=1",
     "test:e2e:mechanism": "npx playwright test --config=playwright.mechanism.config.ts",
     "test:e2e:plugins": "npx playwright test --config=playwright.plugins.config.ts",
+    "test:e2e:remote-hosts": "npx playwright test --config=playwright.remote-hosts.config.ts --workers=1",
     "perf": "tsx scripts/perf/index.ts",
     "pattern-discovery:run": "tsx scripts/pattern-discovery/runner.ts",
     "pattern-discovery:record": "tsx scripts/pattern-discovery/runner.ts",

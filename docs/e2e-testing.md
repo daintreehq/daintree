@@ -71,6 +71,19 @@ Things these specs have to handle that bucket specs don't:
 - **A fixture project's `package.json` type applies to scripts in it.** An extensionless fake CLI inside a `"type": "module"` project loads as ESM, so `require` throws; use `process.getBuiltinModule`.
 - **Print diagnostics on failure.** A blank panel or a silent preview has no assertion message worth reading; the SvelteKit Tools spec dumps the builder's text, the renderer console, the preview's console (collected from `web-contents-created`) and what the agent received.
 
+### Remote hosts E2E (separate config)
+
+`playwright.remote-hosts.config.ts` runs Remote Hosts end to end between two real app instances, on request only — never in a suite, a release gate or `npm run test:e2e`. It needs macOS with `/usr/sbin/sshd` (no Remote Login, nothing in `~/.ssh`) and a current build:
+
+```bash
+npm run build:e2e && npm run test:e2e:remote-hosts
+```
+
+- **`remote-host-ssh.spec.ts`** starts a private user-mode `sshd` on a random 127.0.0.1 port under a short `/tmp/dse-*` root (`e2e/helpers/privateSshd.ts`, a port of the product's real-ssh harness), with its sessions' HOME set to a temp "host home". App A is the Host: its userData is `<host home>/Library/Application Support/Daintree`, where a Shell probing that HOME looks, and Host mode is switched on through its Settings IPC with no start at login. App B is the Shell: `DAINTREE_SSH` points it at a wrapper that runs `/usr/bin/ssh -F <private ssh_config> "$@"`, so every ssh the product runs reaches the private sshd. Through B's own UI it adds the host (the probe must find the same build listening), switches to the host's project through the chip, takes it over from the host's own screen, runs a terminal whose output only the host can produce, kills the ControlMaster and checks the reconnect banner, the recovery and the replay of output emitted while disconnected, and switches back to This Mac. Teardown asserts that quitting B leaves no ssh it started.
+- **`remote-hosts-absent.spec.ts`** is a plain launch with no hosts: no host chip, no link banner, none of the host-gated actions in the palette ("Add host…" is deliberately listed), and the Settings → Hosts tab.
+
+The wrapper can hold new connections (anything but a `-O` control command) while a file exists, which is how the reconnect scenario keeps the host unreachable for as long as it needs. On failure the spec writes both apps' console and main-process logs, the Add Host dialog's text, the sshd log and the wrapper's invocations to `/tmp/dse-*-diagnostics.log` and prints the path. Run it with `--workers=1` and never beside another E2E run: it launches two apps.
+
 | Project         | testDir                 | retries (CI) | workers |
 | --------------- | ----------------------- | ------------ | ------- |
 | core            | `./e2e/core`            | 2            | 1-2     |
