@@ -2,8 +2,8 @@
 // API-surface snapshot guard for `@daintreehq/plugin-sdk`.
 //
 // The package is the public type surface third-party plugins compile against,
-// exposed through its entry points — `.`, `./react`, `./files` and `./testing`
-// (each `dist/<entry>.d.ts`). Nothing else in CI notices when a code change alters
+// exposed through its entry points — `.`, `./react`, `./files`, `./data` and
+// `./testing` (each `dist/<entry>.d.ts`). Nothing else in CI notices when a code change alters
 // that exported shape: only runtime contract tests are gated. This guard
 // snapshots the built declarations into git-tracked report files so any change
 // to the surface forces a reviewed, committed update.
@@ -44,6 +44,11 @@ const ENTRIES = [
     name: "./files",
     dist: path.join(root, "packages/plugin-sdk/dist/files.d.ts"),
     snapshot: path.join(root, "packages/plugin-sdk/api-report/files.d.ts"),
+  },
+  {
+    name: "./data",
+    dist: path.join(root, "packages/plugin-sdk/dist/data.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/data.d.ts"),
   },
   {
     name: "./testing",

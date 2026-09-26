@@ -1236,6 +1236,10 @@ Daintree's own file browser imports the same modules from the same package, so t
 
 **A worked example ships in the repo**: `plugins/sample/file-tree/` is a functioning file browser — lazy expansion, hidden-entry filtering with counts, keyboard navigation, per-type classification, and expansion that survives a remount — built on nothing but this subpath, `host.fs.readdir(dir, { detail: true })` and `PanelViewProps.persistState`. Its `main` half is 30 lines (one channel that forwards to `readdir`); everything else is the model plus the plugin's own row markup. It is deliberately built through the published package boundary rather than by relative import, so a missing or reshaped export breaks _it_ — in typecheck and in its bundle — rather than reaching you.
 
+## Data files — `@daintreehq/plugin-sdk/data`
+
+For plugins whose data is files in the repository: `parseFrontmatter` / `stringifyFrontmatter` / `updateFrontmatter` (YAML frontmatter, with an editor that changes only the keys you name and preserves every other byte), `parseJsonl` / `stringifyJsonlLine` (bad lines reported, not thrown), `contentRevision` (the revision `fs.writeFile` compares), and `editFile(host, path, transform)`, which wraps the read → transform → `writeFile({ expectedRevision })` → retry-on-conflict loop above. A zero-build worker imports it with no install — the plugin worker serves this entry, `/files` and the root from a copy shipped with the app when the plugin has none of its own. See [Data helpers](./data-helpers.md).
+
 ## Disposables
 
 Anything that takes a callback and returns a cleanup function follows the VS Code-style Disposable pattern. You can safely ignore the return value — the plugin's disposal cascade cleans everything up on unload. If you need explicit control (e.g., unsubscribe from a worktree change listener after a one-shot reaction), keep the reference and call it.
