@@ -29,6 +29,7 @@ import type {
   PlanInstallPayload,
   ResetClipboardGrantsPayload,
   SwitchWindowHostPayload,
+  SwitchWindowHostResult,
   UpdateHostPayload,
   WindowHostInfo,
 } from "../../../shared/types/ipc/remoteHosts.js";
@@ -119,7 +120,7 @@ export const remoteHostsNamespace = defineIpcNamespace({
     ),
     switchWindowHost: op(
       REMOTE_HOSTS_METHOD_CHANNELS.switchWindowHost,
-      async (ctx: IpcContext, payload: SwitchWindowHostPayload): Promise<void> =>
+      async (ctx: IpcContext, payload: SwitchWindowHostPayload): Promise<SwitchWindowHostResult> =>
         requireRemoteService("remoteHostsClient").switchWindowHost(ctx, payload),
       { withContext: true }
     ),

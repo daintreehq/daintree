@@ -3,11 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import { app, type WebContents } from "electron";
 import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
-import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.js";
+import {
+  isLocalHostId,
+  parseHostScopedKey,
+  toHostScopedKey,
+  type HostDescriptor,
+  type HostId,
+} from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { store } from "../../store.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { getProjectHistory } from "../../services/ProjectHistoryService.js";
+import { scratchStore } from "../../services/ScratchStore.js";
+import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import { AppError } from "../../utils/errorTypes.js";
 import {
   getAllAppWebContents,
@@ -142,6 +151,38 @@ export interface RemoteHostsClientHooks {
   onRemoteViewActivated?: (windowId: number, webContents: WebContents, isNew: boolean) => void;
 }
 
+/**
+ * Fold a switch this client made into the window's history, the list the
+ * "previous workspace" toggle reads: the workspace being left first, so it
+ * lands directly behind the one arrived at. Remote workspaces are recorded by
+ * their host-scoped key, so toggling back returns to the right host too.
+ */
+function recordWindowSwitch(windowId: number, from: string | null, to: string): void {
+  const history = getProjectHistory(windowId);
+  if (from) history.record(from);
+  history.record(to);
+}
+
+function isOpenLocalProject(projectId: string): boolean {
+  const project = projectStore.getProjectById(projectId);
+  return project !== null && project !== undefined && project.status !== "closed";
+}
+
+function lastLocalProjectId(windowId: number | null): string | null {
+  if (windowId !== null) {
+    for (const key of getProjectHistory(windowId).snapshot().entries) {
+      if (isLocalHostId(parseHostScopedKey(key).hostId) && isOpenLocalProject(key)) return key;
+    }
+  }
+  let latest: { id: string; lastOpened: number } | null = null;
+  for (const project of projectStore.getAllProjects()) {
+    if (project.status === "closed") continue;
+    const lastOpened = typeof project.lastOpened === "number" ? project.lastOpened : 0;
+    if (!latest || lastOpened > latest.lastOpened) latest = { id: project.id, lastOpened };
+  }
+  return latest?.id ?? null;
+}
+
 function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
   return {
     async openWindow() {
@@ -155,21 +196,27 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       return windowOpener();
     },
     async openRemoteProject(windowId, hostId, projectId, projectPath) {
-      const { view, isNew } = await managerFor(windowId).switchToHostProject(
-        hostId,
-        projectId,
-        projectPath
-      );
+      const pvm = managerFor(windowId);
+      const from = pvm.getActiveProjectId();
+      const { view, isNew } = await pvm.switchToHostProject(hostId, projectId, projectPath);
+      recordWindowSwitch(windowId, from, toHostScopedKey(hostId, projectId));
       const wc = view.webContents;
       if (wc && !wc.isDestroyed()) hooks.onRemoteViewActivated?.(windowId, wc, isNew);
     },
     async openLocalProject(windowId, projectId) {
-      const project = projectStore.getProjectById(projectId);
+      // A scratch is a workspace a view shows like a project, with no project row.
+      const project = isScratchWorkspaceId(projectId)
+        ? scratchStore.getScratchById(projectId)
+        : projectStore.getProjectById(projectId);
       if (!project) {
         throw new AppError({ code: "NOT_FOUND", message: `No local project ${projectId}` });
       }
-      await managerFor(windowId).switchTo(project.id, project.path);
+      const pvm = managerFor(windowId);
+      const from = pvm.getActiveProjectId();
+      await pvm.switchTo(project.id, project.path);
+      recordWindowSwitch(windowId, from, project.id);
     },
+    lastLocalProjectId,
     watchWindow(windowId, onClosed) {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!win || win.isDestroyed()) {
