@@ -175,6 +175,32 @@ describe("hybrid split registry", () => {
   });
 });
 
+describe("log level overrides", () => {
+  it("stay on this machine: a remote window's reads and writes never reach the host", async () => {
+    const channels = [
+      CHANNELS.LOGS_GET_LEVEL_OVERRIDES,
+      CHANNELS.LOGS_SET_LEVEL_OVERRIDES,
+      CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES,
+    ];
+    for (const channel of channels) {
+      expect(getChannelLocality(channel), channel).toBe("shell");
+      expect(HYBRID_SPLITS[channel], channel).toBeUndefined();
+      expect(HYBRID_HOST_LEGS, channel).not.toContain(channel);
+    }
+    expect(STORE_KEY_OWNERSHIP.logLevelOverrides).toBe("device");
+
+    const forward = vi.fn();
+    const { invoke, listener } = setup(forward, () => ({ "main:*": "debug" }));
+    await expect(invoke(CHANNELS.LOGS_GET_LEVEL_OVERRIDES, [])).resolves.toEqual({
+      "main:*": "debug",
+    });
+    await invoke(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, [{ "main:*": "warn" }]);
+    await invoke(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES, []);
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(forward).not.toHaveBeenCalled();
+  });
+});
+
 describe("app:hydrate and app:boot", () => {
   const hostHydrate = {
     appState: {
@@ -536,15 +562,48 @@ describe("opening host files", () => {
     );
   });
 
-  it("falls back to Copy host path for an editor with no remote URL", async () => {
-    const { invoke } = setup(
+  it("copies the host path and says so, naming the host, for an editor with no remote URL", async () => {
+    const { invoke, listener } = setup(
       () => ({ preferredEditor: { id: "zed" }, discoveredEditors: [] }),
       () => "local"
     );
     await expect(
       invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/home/greg/a.ts", projectId: "p1" }])
-    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    ).resolves.toEqual({
+      outcome: "copied-host-path",
+      path: "/home/greg/a.ts",
+      hostName: "studio-01",
+    });
     expect(mocks.openExternal).not.toHaveBeenCalled();
+    expect(mocks.writeText).toHaveBeenCalledWith("/home/greg/a.ts");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("copies the host path when no application here handles the editor's remote URL", async () => {
+    mocks.openExternal.mockRejectedValueOnce(new Error("no handler"));
+    const { invoke } = setup(
+      () => ({ preferredEditor: { id: "vscode" }, discoveredEditors: [] }),
+      () => "local"
+    );
+    await expect(
+      invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/home/greg/b.ts", projectId: "p1" }])
+    ).resolves.toMatchObject({ outcome: "copied-host-path", path: "/home/greg/b.ts" });
+    expect(mocks.openExternal).toHaveBeenCalledTimes(1);
+    expect(mocks.writeText).toHaveBeenCalledWith("/home/greg/b.ts");
+  });
+
+  it("copies nothing when the editor opened the file", async () => {
+    const { invoke } = setup(
+      () => ({ preferredEditor: { id: "vscode" }, discoveredEditors: [] }),
+      () => "local"
+    );
+    await expect(
+      invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/home/greg/c.ts", projectId: "p1" }])
+    ).resolves.toBeUndefined();
+    expect(mocks.writeText).not.toHaveBeenCalled();
+    await expect(
+      invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "relative.ts" }])
+    ).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
   it("copies the host path instead of revealing it in this machine's file manager", async () => {

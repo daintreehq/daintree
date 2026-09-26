@@ -8,6 +8,7 @@ import type {
   ProjectSwitchTrace,
 } from "../../../shared/types/ipc/project.js";
 import type { EditorConfig, EditorGetConfigResult } from "../../../shared/types/editor.js";
+import type { SystemOpenInEditorFallback } from "../../../shared/types/ipc/system.js";
 import type { ScratchSwitchPayload } from "../../../shared/types/ipc/scratch.js";
 import type { Scratch } from "../../../shared/types/scratch.js";
 import {
@@ -127,15 +128,6 @@ const editorGetConfig: HybridSplit = async ({ local, remote }) => {
     discoveredEditors: device.discoveredEditors,
   } satisfies EditorGetConfigResult;
 };
-
-/** Levels apply on both machines; the host's view of them is what the log panel shows. */
-function logLevelsOnBoth(): HybridSplit {
-  return async ({ local, remote }) => {
-    const result = await remote();
-    await local();
-    return result;
-  };
-}
 
 const appReloadConfig: HybridSplit = async ({ local, remote }) => {
   await remote();
@@ -297,18 +289,19 @@ export function buildRemoteEditorUrl(options: {
   return `${scheme}://vscode-remote/${remoteSshAuthority(options.sshTarget)}${encodedPath}${position}`;
 }
 
-function copyHostPathInstead(hostId: HostId, reason: string): AppError {
-  return new AppError({
-    code: "UNSUPPORTED",
-    message: `${reason} (host ${hostId})`,
-    userMessage: `This editor can't open files on ${hostLabel(hostId)}. Use Copy host path instead.`,
-    context: { hostId },
-  });
+/**
+ * No editor here can open the host's file, so its path goes to this
+ * machine's clipboard instead, and the window says so, naming the host.
+ */
+function copyHostPathInstead(hostId: HostId, hostPath: string): SystemOpenInEditorFallback {
+  clipboard.writeText(hostPath);
+  return { outcome: "copied-host-path", path: hostPath, hostName: hostLabel(hostId) };
 }
 
 /**
  * The file is on the host, so the editor on this machine opens it through its
- * SSH remote. Never opens a local path for a host file.
+ * SSH remote. Never opens a local path for a host file: where no editor can,
+ * the host path is copied instead.
  */
 const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
   const payload = (args[0] ?? {}) as {
@@ -317,11 +310,12 @@ const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
     col?: number;
     projectId?: unknown;
   };
-  if (typeof payload.path !== "string") {
-    throw new AppError({ code: "VALIDATION", message: "path is required" });
+  if (typeof payload.path !== "string" || !payload.path.startsWith("/")) {
+    throw new AppError({ code: "VALIDATION", message: "An absolute host path is required" });
   }
+  const hostPath = payload.path;
   const descriptor = hostDescriptor(hostId);
-  if (!descriptor) throw copyHostPathInstead(hostId, "Unknown host");
+  if (!descriptor) return copyHostPathInstead(hostId, hostPath);
 
   let editorId: EditorConfig["id"] | null = null;
   if (typeof payload.projectId === "string" && payload.projectId) {
@@ -338,16 +332,18 @@ const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
   const url = buildRemoteEditorUrl({
     editorId,
     sshTarget: descriptor.sshTarget,
-    path: payload.path,
+    path: hostPath,
     line: payload.line,
     col: payload.col,
   });
-  if (!url) throw copyHostPathInstead(hostId, "No remote URL for this editor or path");
+  if (!url) return copyHostPathInstead(hostId, hostPath);
   try {
     await shell.openExternal(url, { activate: true });
   } catch {
-    throw copyHostPathInstead(hostId, "No application handled the remote editor URL");
+    // No application here handles the editor's remote URL.
+    return copyHostPathInstead(hostId, hostPath);
   }
+  return undefined;
 };
 
 /**
@@ -380,9 +376,6 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.TERMINAL_CONFIG_GET]: terminalConfigGet,
   [CHANNELS.EDITOR_GET_CONFIG]: editorGetConfig,
   [CHANNELS.EDITOR_SET_CONFIG]: remoteOnly,
-  [CHANNELS.LOGS_GET_LEVEL_OVERRIDES]: remoteOnly,
-  [CHANNELS.LOGS_SET_LEVEL_OVERRIDES]: logLevelsOnBoth(),
-  [CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES]: logLevelsOnBoth(),
   [CHANNELS.NOTIFICATION_SETTINGS_GET]: notificationSettingsGet,
   [CHANNELS.NOTIFICATION_SETTINGS_SET]: notificationSettingsSet,
   [CHANNELS.PROJECT_SWITCH]: projectSwitch,
@@ -447,9 +440,6 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.TERMINAL_CONFIG_GET,
   CHANNELS.EDITOR_GET_CONFIG,
   CHANNELS.EDITOR_SET_CONFIG,
-  CHANNELS.LOGS_GET_LEVEL_OVERRIDES,
-  CHANNELS.LOGS_SET_LEVEL_OVERRIDES,
-  CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES,
   CHANNELS.PROJECT_SWITCH,
   CHANNELS.PROJECT_REOPEN,
   CHANNELS.PROJECT_GET_CURRENT,

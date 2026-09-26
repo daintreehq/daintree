@@ -114,6 +114,7 @@ import type { CopyTreeRunSource } from "./copyTreeHistory.js";
 import type {
   SystemWakePayload,
   SystemOpenInEditorPayload,
+  SystemOpenInEditorFallback,
   CliAvailability,
   AgentCliDetails,
   AgentVersionInfo,
@@ -529,7 +530,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     openPath(path: string): Promise<void>;
     showItemInFolder(path: string): Promise<void>;
     showItemInFolderUnconfined(path: string): Promise<void>;
-    openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;
+    openInEditor(
+      payload: SystemOpenInEditorPayload & { projectId?: string }
+    ): Promise<SystemOpenInEditorFallback | void>;
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;
     getHomeDir(): Promise<string>;
