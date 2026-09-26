@@ -63,22 +63,18 @@ const WorktreeCreationSourceSchema = z
       .object({
         kind: z
           .literal("newBranch")
-          .describe(
-            "Branch off a base branch. If the name is already taken, `collisionPolicy` decides what happens."
-          ),
+          .describe("Branch off a base branch; a taken name follows `collisionPolicy`."),
         branchName: z
           .string()
           .trim()
           .min(1)
-          .describe(
-            "Name for the new branch. Rejected outright if it is not a valid git ref — nothing rewrites it for you."
-          ),
+          .describe("New branch name; an invalid git ref is rejected, not rewritten."),
         baseBranch: z
           .string()
           .trim()
           .min(1)
           .optional()
-          .describe("Branch to base the new branch on (defaults to the main worktree's branch)."),
+          .describe("Base branch (default: the main worktree's branch)."),
         fromRemote: z
           .boolean()
           .optional()
@@ -87,7 +83,7 @@ const WorktreeCreationSourceSchema = z
           .enum(["suffix", "error"])
           .optional()
           .describe(
-            "If the name is taken: 'suffix' (default) lets the host reuse that branch when nothing has it checked out, else create name-2, and reports which; 'error' fails instead."
+            "If the name is taken: 'suffix' (default) reuses the branch when nothing has it checked out, else creates name-2, and reports which; 'error' fails."
           ),
         issueNumber: z
           .number()
@@ -95,13 +91,13 @@ const WorktreeCreationSourceSchema = z
           .positive()
           .optional()
           .describe(
-            "Issue this worktree is for. Given to the recipe and used by assignToSelf; it does not itself attach the issue."
+            "Issue this worktree is for, passed to the recipe and assignToSelf; it does not attach the issue."
           ),
         assignToSelf: z
           .boolean()
           .optional()
           .describe(
-            "Assign the linked issue to the current user. Omit to use the persisted 'Assign issue to me' preference."
+            "Assign the linked issue to the current user. Omit for the saved 'Assign issue to me' preference."
           ),
       })
       .strict(),
@@ -109,13 +105,13 @@ const WorktreeCreationSourceSchema = z
       .object({
         kind: z
           .literal("existingBranch")
-          .describe("Check out a local branch that already exists, exactly as named."),
+          .describe("Check out an existing local branch exactly as named."),
         branchName: z
           .string()
           .trim()
           .min(1)
           .describe(
-            "The existing local branch to check out. Used verbatim — never suffixed, and never replaced by a new branch if it is missing."
+            "Existing local branch, used verbatim: never suffixed, never replaced by a new branch if missing."
           ),
         issueNumber: z
           .number()
@@ -123,13 +119,13 @@ const WorktreeCreationSourceSchema = z
           .positive()
           .optional()
           .describe(
-            "Issue this worktree is for. Given to the recipe and used by assignToSelf; it does not itself attach the issue."
+            "Issue this worktree is for, passed to the recipe and assignToSelf; it does not attach the issue."
           ),
         assignToSelf: z
           .boolean()
           .optional()
           .describe(
-            "Assign the linked issue to the current user. Omit to use the persisted 'Assign issue to me' preference."
+            "Assign the linked issue to the current user. Omit for the saved 'Assign issue to me' preference."
           ),
       })
       .strict(),
@@ -138,19 +134,19 @@ const WorktreeCreationSourceSchema = z
         kind: z
           .literal("pullRequest")
           .describe(
-            "Check out a pull request's head branch. State is not checked, so a closed or merged PR is accepted as long as its head ref still exists."
+            "Check out a pull request's head branch. State is unchecked: a closed or merged PR works while its head ref exists."
           ),
         pullRequestNumber: z
           .number()
           .int()
           .positive()
           .describe(
-            "Pull request to check out. Its head branch is fetched and resolved for you; do not also pass a branch name."
+            "Pull request to check out; its head branch is fetched for you, so pass no branch name."
           ),
       })
       .strict(),
   ])
-  .describe("Where the worktree's branch comes from. Required — pick exactly one mode.");
+  .describe("Where the branch comes from; exactly one mode.");
 
 export function registerWorkflowCreationActions(
   actions: ActionRegistry,
@@ -161,7 +157,7 @@ export function registerWorkflowCreationActions(
       id: "worktree.createWithRecipe",
       title: "Create managed worktree",
       description:
-        "Create a managed git worktree — Daintree's own creator, which also copies project config, initializes submodules and runs setup. Name the creation mode: a new branch, an existing branch checked out exactly as asked, or a pull request. A recipe is OPTIONAL; pass one only to also launch terminals. Project setup runs in the background and can still fail after this returns.",
+        "Create a managed git worktree; Daintree's creator also copies project config, initializes submodules and runs setup. Pick one mode: new branch, existing branch as named, or pull request. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -177,7 +173,7 @@ export function registerWorkflowCreationActions(
           .string()
           .optional()
           .describe(
-            "Recipe to launch in the new worktree. Omit for a worktree with no terminals — project setup is started either way, and terminals do not wait for it."
+            "Recipe to launch in the new worktree. Omit for no terminals; setup starts either way and terminals do not wait for it."
           ),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
         focusPolicy: AddPanelFocusPolicySchema.optional(),
@@ -493,7 +489,7 @@ export function registerWorkflowCreationActions(
       id: "workflow.startWorkOnIssue",
       title: "Start work on issue",
       description:
-        "Fetch an issue, create a worktree with a derived branch, launch a terminal-backed agent, and inject context. Returns the issue identity plus worktreeId, worktreePath, branch, terminalId, recipe spawn counts, assignment outcome, and contextInjected. An unknown or non-terminal agentId is rejected before the issue lookup, so no worktree is created.",
+        "Start work on an issue in one call: fetch it, create a worktree on a derived branch, launch an agent in a terminal and inject context. An unknown or non-terminal agent id is rejected before the issue lookup, so no worktree is created.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -504,33 +500,31 @@ export function registerWorkflowCreationActions(
           .string()
           .min(1)
           .describe(
-            "Which agent CLI to launch in the new worktree, such as 'claude' or 'codex'; pass 'terminal' for a plain shell. Discover the ids actually installed with the agent-listing capability. An unknown id is rejected before anything is created."
+            "Agent CLI to launch, e.g. 'claude' or 'codex'; 'terminal' for a plain shell. Ids from the agent listing; an unknown one is rejected before anything is created."
           ),
         branchName: z
           .string()
           .trim()
           .min(1)
           .optional()
-          .describe(
-            "Branch name for the new worktree. Defaults to 'feature/issue-<number>-<slug>' derived from the issue title."
-          ),
+          .describe("Defaults to 'feature/issue-<number>-<slug>' from the issue title."),
         baseBranch: z
           .string()
           .trim()
           .min(1)
           .optional()
-          .describe("Branch to base the worktree on (defaults to main worktree's branch)"),
+          .describe("Base branch (default: the main worktree's branch)"),
         recipeId: z.string().optional().describe("Recipe ID to run after creation"),
         assignToSelf: z
           .boolean()
           .optional()
           .describe(
-            "Assign the issue to the current user. Omit to use the user's persisted 'Assign issue to me' preference (mirrors the new-worktree dialog checkbox)."
+            "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference."
           ),
         injectContext: z
           .boolean()
           .optional()
-          .describe("Inject worktree context into the launched terminal (default: true)"),
+          .describe("Inject worktree context into the terminal (default true)"),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
         focusPolicy: AddPanelFocusPolicySchema.optional(),
       }),

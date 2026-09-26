@@ -91,9 +91,7 @@ const ForgeListPagingSchema = z.object({
     // returns page one. Reject it here rather than let it alias.
     .min(1, "cursor must be a non-empty value from a previous response's nextCursor")
     .optional()
-    .describe(
-      "Opaque pagination cursor — pass the previous response's `nextCursor` to fetch the next page."
-    ),
+    .describe("The previous response's `nextCursor`, for the next page."),
   // 100 is the tightest page ceiling across the provider roster, so it is the
   // largest request every provider can serve in one round trip.
   perPage: z
@@ -113,7 +111,7 @@ const ForgeListPagingSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Skip the provider's list cache and fetch fresh (default: false). Use after the list may have changed outside this app; costs a provider round trip, so leave it off for ordinary paging."
+      "Skip the provider's list cache (default false). Costs a round trip; use only when the list changed outside Daintree."
     ),
   view: ForgeListViewSchema,
 });
@@ -124,7 +122,7 @@ const ForgeListOptionsSchema = ForgeListPagingSchema.extend({
     .string()
     .optional()
     .describe(
-      "Provider-native issue search fragment, not plain text; appended after the generated qualifiers and cut to the provider's cap. Uses the search API, which caps result depth."
+      "Provider-native issue search fragment, not plain text; appended to the generated qualifiers and cut to the provider's cap. The search API caps result depth."
     ),
 }).strict();
 
@@ -144,7 +142,7 @@ const ForgePRListOptionsSchema = ForgeListPagingSchema.extend({
     .string()
     .optional()
     .describe(
-      "Provider-native PR search fragment, not plain text; appended after the generated qualifiers and cut to the provider's cap. Uses the search API, which caps result depth."
+      "Provider-native PR search fragment, not plain text; appended to the generated qualifiers and cut to the provider's cap. The search API caps result depth."
     ),
 }).strict();
 
@@ -844,7 +842,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listIssues",
       title: "List issues",
       description:
-        "List repository issues from the active forge provider, a page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
+        "List repository issues a page at a time, to discover or filter them; fetch a known number directly. Search takes a provider-native query fragment, not plain text, and goes through the search API rather than the list cache.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -877,7 +875,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listPRs",
       title: "List pull requests",
       description:
-        "List repository pull requests from the active forge provider, a page at a time. Use this to DISCOVER or filter PRs; for numbers you already have, use the singular or plural PR lookup instead of paging to find them. Search takes a provider-native query fragment, not plain text, and routes through the search API rather than the list cache. Bypassing that cache spends a live round trip.",
+        "List repository pull requests a page at a time, to discover or filter them; fetch known numbers directly instead of paging. Search takes a provider-native query fragment, not plain text, and goes through the search API rather than the list cache.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -908,7 +906,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getIssue",
       title: "Get issue",
       description:
-        "Fetch one issue by number from the active forge provider, including its body. This is the direct lookup: reach for it instead of paging the issue listing to find a number you already have. An issue that does not exist comes back empty rather than failing, so treat empty as absence, not an error. It reports how many comments exist but not their text; read the comment thread for that.",
+        "Fetch one issue by number, with its body; use it instead of paging the listing for a known number. A missing issue comes back empty rather than failing. Reports the comment count, not comment text.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -953,9 +951,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         cursor: z
           .string()
           .optional()
-          .describe(
-            "Opaque pagination cursor — pass the previous response's `nextCursor` to fetch the next page."
-          ),
+          .describe("The previous response's `nextCursor`, for the next page."),
         perPage: z
           .number()
           .int()
@@ -987,14 +983,14 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getPR",
       title: "Get pull request",
       description:
-        "Fetch ONE known pull request number from the active forge provider, with its body, draft state and branches. For two or more known numbers use the plural lookup instead of calling this repeatedly; to discover numbers you do not have, page the PR listing. Read it before editing or merging so the current state is known. A pull request that does not exist comes back as `pr: null` rather than failing.",
+        "Fetch one known pull request number with its body, draft state and branches; page the PR listing to find numbers. Read it before editing or merging. A missing PR comes back as `pr: null` rather than failing.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
         ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z.number().int().positive().describe("Pull request number to fetch"),
+        prNumber: z.number().int().positive().describe("Pull request number"),
       }),
       // Wrapped rather than a bare `.nullable()` for the reason spelled out on
       // `ForgeCIStatusActionResultSchema`: `buildToolOutputSchema` forwards only
@@ -1062,18 +1058,14 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getCIStatus",
       title: "Get CI status",
       description:
-        "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by a minute, so poll for a settled verdict.",
+        "Fetch the roll-up CI verdict for one pull request. Read the overall state: counts cover required checks only, and a zero total also appears when that list could not be read, so it never proves nothing gates the merge. Provider-cached; can lag a minute.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
         ...worktreeLocationShape({ legacy: ["cwd"] }),
-        prNumber: z
-          .number()
-          .int()
-          .positive()
-          .describe("Pull request number whose CI status to fetch"),
+        prNumber: z.number().int().positive().describe("Pull request number"),
       }),
       examples: [
         {

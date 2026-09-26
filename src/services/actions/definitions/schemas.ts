@@ -22,14 +22,12 @@ import {
 export const AgentIdSchema = z
   .union([z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]), z.string().min(1)])
   .describe(
-    "Which agent CLI to run, from the agent-listing capability. Enumerated ids are built-ins; any other non-empty string is accepted, so a bad id fails at launch, not validation."
+    "Agent CLI id from the agent listing. Other strings are accepted, so a bad id fails at launch, not validation."
   );
 
 export const LaunchLocationSchema = z
   .enum(["grid", "dock", "overlay"])
-  .describe(
-    'Where to place the panel: "grid" the main panel grid (default), "dock" the sidebar dock, "overlay" a floating overlay outside both.'
-  );
+  .describe('"grid" main grid (default), "dock" sidebar dock, "overlay" floating overlay.');
 
 /**
  * Mirror of `TerminalSpawnSource` from `shared/types/panel.ts`. Kept in lockstep
@@ -41,9 +39,7 @@ export const LaunchLocationSchema = z
  */
 export const TerminalSpawnSourceSchema = z
   .enum(["quickrun", "recipe", "agent", "palette", "mcp", "assistant"])
-  .describe(
-    "Provenance for run history only; never changes what is launched. Leave unset over MCP, where the bridge stamps its own origin."
-  );
+  .describe("Run-history provenance only. Leave unset over MCP.");
 
 /**
  * Mirror of `AddPanelFocusPolicy` from `shared/types/panel.ts`.
@@ -51,7 +47,7 @@ export const TerminalSpawnSourceSchema = z
 export const AddPanelFocusPolicySchema = z
   .enum(["auto", "preserve", "take"])
   .describe(
-    'Whether the new panel takes focus: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.'
+    'Focus the new panel: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.'
   );
 
 // Derived from the settingsTabIds tuples so the action schema can't drift from
@@ -109,9 +105,7 @@ export const PulseRangeDaysSchema = z
   .union([z.literal(60), z.literal(120), z.literal(180)])
   .optional()
   .default(60)
-  .describe(
-    "How far back to aggregate commit activity, in days. A wider window costs more history to walk, so widen it only when the shorter window leaves the trend ambiguous."
-  );
+  .describe("Days of commit activity to aggregate. Wider windows walk more history.");
 
 export const FileSearchPayloadSchema = z.object({
   cwd: z
@@ -298,7 +292,7 @@ export const CopyTreeOptionsSchema = z
       .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
       .optional()
       .describe(
-        "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Combined with `includePaths` when both are given; omit both to include the whole worktree. An empty list or blank entry is rejected rather than read as no filter."
+        "Worktree-relative file paths or globs to include. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` for a folder. Combined with `includePaths`; omit both for the whole worktree. An empty list or blank entry is rejected."
       ),
     exclude: z.union([z.string(), z.array(z.string())]).optional(),
     // Undocumented on the wire until #11750, which is how a caller ended up
@@ -309,14 +303,14 @@ export const CopyTreeOptionsSchema = z
       .array(z.string())
       .optional()
       .describe(
-        "Force-includes matching files, overriding several exclusion layers at once: ignore files, project and config exclusions, your own `exclude`, the `modified`/`changed` git filters, and `maxFileSize`. It is the blunt option: a broad pattern can pull in `node_modules`, and a `../` pattern reaches outside the worktree entirely. What it does not override: `.git`, CopyTree's internal 10MB memory ceiling, and the `maxFileCount`/`maxTotalSize`/`charLimit` budgets, which still drop force-included files. Prefer `scopePaths` with `scopeIgnoresIgnoreFiles` when you only need past an ignore rule."
+        "Force-include matches past ignore files, project and config exclusions, your `exclude`, the `modified`/`changed` filters and `maxFileSize`. Blunt: a broad pattern can pull in `node_modules`, and `../` reaches outside the worktree. It does not override `.git`, the 10MB memory ceiling, or the `maxFileCount`/`maxTotalSize`/`charLimit` budgets. To pass one ignore rule, use `scopePaths` with `scopeIgnoresIgnoreFiles`."
       ),
     includePaths: z
       .array(z.string().min(1))
       .min(1)
       .optional()
       .describe(
-        "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Use this to assemble a curated bundle of scattered files — sources, their supporting code, and their tests — in one call. Combined with `filter` when both are given. Unlike `scopePaths` this does not restrict traversal, so patterns may match anywhere in the worktree."
+        "Worktree-relative file paths or globs, for a curated bundle of scattered files (sources, supporting code, tests). Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` for a folder. Combined with `filter` when both are given. Unlike `scopePaths` it does not restrict traversal."
       ),
     // An empty list or blank entry would resolve to the worktree root — a folder
     // copy that silently became a whole-worktree copy. Absent means no scoping.
@@ -325,13 +319,13 @@ export const CopyTreeOptionsSchema = z
       .min(1)
       .optional()
       .describe(
-        "Restricts the copy to these subtrees, as worktree-relative literal file or directory paths to walk — not glob patterns, so pass 'src/panels', not 'src/panels/**'. Prefer this over `filter` or `includePaths` when selecting a folder. Omit to include the whole worktree; supplying an empty list is rejected rather than treated as no scoping, since that would silently copy everything. This restricts traversal, so `filter` and `includePaths` can only narrow within these paths and never add a file outside them."
+        "Subtrees to restrict the copy to, as worktree-relative literal file or directory paths, not glob patterns: pass 'src/panels', not 'src/panels/**'. Prefer this over `filter` or `includePaths` for a folder. An empty list is rejected rather than copying everything. Restricts traversal, so `filter` and `includePaths` can only narrow within it."
       ),
     scopeIgnoresIgnoreFiles: z
       .boolean()
       .optional()
       .describe(
-        "Lets `scopePaths` into subtrees an ignore file would have pruned (default false — a scoped copy returns what a whole-worktree copy would have returned). Requires `scopePaths` and is rejected without it. Set true when a path you named is being dropped by a `.copytreeignore` or `.gitignore` rule: only the rules blocking entry into each scoped path are removed, from those two ignore files. Unrelated rules in the same files, negations, and ignore files at or below the selection all still apply — as do project and config exclusions such as node_modules, your own `exclude`, `.git`, the `modified`/`changed` filters, `maxFileSize` and every budget. To get past a rule declared inside a selected folder, scope the exact file instead of that folder: a scoped directory subsumes any of its children you also list, so naming both changes nothing."
+        "Let `scopePaths` into subtrees a `.copytreeignore` or `.gitignore` rule would prune (default false). Requires `scopePaths`. Only the rules blocking entry into each scoped path are lifted; other rules, negations and nested ignore files all still apply, as do node_modules and config exclusions, `exclude`, `.git`, the git filters, `maxFileSize` and budgets. For a rule inside a selected folder, scope the exact file instead: a scoped folder subsumes its listed children."
       ),
     modified: z.boolean().optional(),
     changed: z.string().optional(),
@@ -343,28 +337,26 @@ export const CopyTreeOptionsSchema = z
       .int()
       .positive()
       .optional()
-      .describe("Per-file size cap in bytes; must be positive. Omit for no per-file cap."),
+      .describe("Per-file cap in bytes, positive. Omit for none."),
     maxTotalSize: z
       .number()
       .int()
       .positive()
       .optional()
-      .describe("Total bundle size cap in bytes; must be positive. Omit for no total cap."),
+      .describe("Total bundle cap in bytes, positive. Omit for none."),
     maxFileCount: z
       .number()
       .int()
       .positive()
       .optional()
-      .describe(
-        "Maximum number of files to include; must be positive. Omit for no file-count cap."
-      ),
+      .describe("Max files included, positive. Omit for none."),
     withLineNumbers: z.boolean().optional(),
     charLimit: z
       .number()
       .int()
       .positive()
       .optional()
-      .describe("Character cap on the rendered bundle; must be positive. Omit for no cap."),
+      .describe("Character cap on the rendered bundle, positive. Omit for none."),
     // These actions validate against their own copy of the options schema, so a
     // field only the IPC schema knows about is stripped before the request ever
     // leaves the renderer. `sort` was missing here while `CopyTreeOptions` and the
@@ -425,7 +417,7 @@ export const AgentSettingsEntrySchema = z
 export const WorktreeSetupStateSchema = z
   .enum(["pending", "running", "ready", "failed", "timed-out", "needs-approval", "unknown"])
   .describe(
-    "Post-create setup state: pending (not started), running (config copy, submodules, setup script or provisioning in flight), ready, failed, timed-out, needs-approval (repository setup commands skipped until the user approves them; you can't), or unknown (this host did not create it, or restarted since)."
+    "pending, running (config copy, submodules, setup script or provisioning), ready, failed, timed-out, needs-approval (repo setup commands await the user's approval; you can't give it), or unknown (not created by this host, or it restarted since)."
   );
 
 export const WorktreeSummarySchema = z.object({
@@ -496,7 +488,7 @@ export const TerminalSubmissionRecordSchema = z.object({
   phase: z
     .enum(["queued", "writing", "pty_written", "failed", "cancelled", "unknown"])
     .describe(
-      "How far this submission got. `pty_written`: the text and its Enter reached the pty without error — it does NOT mean the agent read them or acted on them. `queued`/`writing`: still in progress. `failed`/`cancelled`: it did not go out whole, and part may sit in the composer, so neither makes re-sending safe. `unknown`: the terminal was read and holds no record, including tokens aged past the last 32."
+      "`pty_written`: the text and its Enter reached the pty; it does NOT mean the agent read or acted on them. `queued`/`writing`: in progress. `failed`/`cancelled`: not sent whole and part may sit in the composer, so re-sending is not safe. `unknown`: no record, including tokens older than the last 32."
     ),
   at: z.number().optional().describe("Epoch ms the phase was entered. Absent for `unknown`."),
   // Kept inside the 160-byte property target: the tool description is at its
@@ -532,21 +524,16 @@ export const TerminalStatusEntrySchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Present once the process has exited, so its absence means still running — unless listed in `unavailableFields`. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
+      "Set once the process exits, so absence means still running unless listed in `unavailableFields`. Null means killed by a signal with no numeric code."
     ),
-  spawnedAt: z
-    .number()
-    .optional()
-    .describe(
-      "Wall-clock spawn time in epoch milliseconds, for run-duration and staleness checks."
-    ),
+  spawnedAt: z.number().optional().describe("Spawn time, epoch ms."),
   agentIncarnation: z
     .number()
     .int()
     .nonnegative()
     .optional()
     .describe(
-      "Times a new agent was seen taking over this PTY after one exited — the relaunch `spawnedAt` cannot see. 0 is none observed; absent is unobserved, not 0."
+      "Times a new agent took over this PTY after one exited, which `spawnedAt` misses. Absent is unobserved, not 0."
     ),
   lastCheckResult: z
     .object({
@@ -558,7 +545,7 @@ export const TerminalStatusEntrySchema = z.object({
     })
     .optional()
     .describe(
-      "A best-effort reading of the agent's most recent test, lint, or build summary, parsed from its output rather than from a process exit code — the check runs inside the terminal, so its real exit status is unobservable. Absence means no recognized summary was seen, which is not the same as no check running and not the same as passing. Check the run time for freshness before trusting it."
+      "Best-effort parse of the agent's latest test, lint or build summary from its output, not an exit code. Absence means no summary seen, not no check and not a pass. Check its time for freshness."
     ),
   lastHandback: TerminalHandbackSchema.optional().describe(LAST_HANDBACK_DESCRIPTION),
   recentOutput: z.string().nullable().optional(),
@@ -566,45 +553,41 @@ export const TerminalStatusEntrySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Set when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept."
+      "Older output was cut, by `lines` or the shared 50 KiB budget; the newest lines are kept."
     ),
   armed: z
     .boolean()
     .optional()
     .describe(
-      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found, unless listed in `unavailableFields`."
+      "Whether fleet broadcast input reaches this terminal. Set for every found terminal unless in `unavailableFields`."
     ),
   hasPty: z
     .boolean()
     .optional()
     .describe(
-      "PTY-host lifecycle flag: false once the process exited or a kill was requested. Not a health probe — a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface; an unresolvable id reports `error`."
+      "False once the process exited or a kill was requested. Not a health probe: a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface."
     ),
   submission: TerminalSubmissionRecordSchema.optional().describe(
-    "Delivery record for the token this call named. Absent when no token was asked for, or when this terminal could not be read — which is not the same as it holding no record."
+    "Delivery record for the named token. Absent without a token or when the terminal could not be read, which differs from holding no record."
   ),
   error: z
     .string()
     .optional()
     .describe(
-      "Set when the terminal was not found, and also stamped on every resolved entry when a batched fetch fails — the status fields are still populated and only that fetch's own field is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
+      "Set when the terminal was not found, and on every resolved entry when a batched fetch fails; then the status fields are still set and only that fetch's field is missing. Never fails the call."
     ),
 });
 
 export const TerminalSendCommandResultSchema = z.object({
-  sent: z
-    .boolean()
-    .describe(
-      "Accepted onto the terminal's lane. Not evidence of delivery — use `submissionToken` for that."
-    ),
+  sent: z.boolean().describe("Accepted onto the terminal's lane; not evidence of delivery."),
   terminalId: z.string(),
   command: z
     .string()
-    .describe("The submitted text, truncated past 1024 characters — an echo, not a receipt."),
+    .describe("The submitted text, cut past 1024 characters: an echo, not a receipt."),
   submissionToken: z
     .string()
     .describe(
-      "Pass this and `terminalId` to the terminal-status capability to see how far the submission got. Retained for the last 32 per terminal; lost if the terminal restarts."
+      "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart."
     ),
   message: z.string(),
   reply: AwaitedReplySchema.optional(),
@@ -615,7 +598,7 @@ export const TerminalStatusResultSchema = z.object({
   source: z
     .enum(["renderer", "pty"])
     .describe(
-      "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window."
+      "Which surface answered; `pty` is the reduced reading when this workspace has no open window."
     ),
   unavailableFields: z
     .array(
@@ -629,7 +612,7 @@ export const TerminalStatusResultSchema = z.object({
       ])
     )
     .describe(
-      "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
+      "Fields this surface cannot observe: absent from every entry, unknown rather than false."
     ),
 });
 
@@ -679,7 +662,7 @@ export const TerminalLastMessageResultSchema = z
           })
         )
         .describe(
-          "Calls made in or after the message with no result later in the file, oldest first, at most 8. Not proof the agent is waiting on one now."
+          "Calls in or after the message with no later result, oldest first, at most 8. Not proof the agent is waiting on one."
         ),
       newerRecordsFollow: z
         .boolean()
@@ -693,7 +676,7 @@ export const TerminalLastMessageResultSchema = z
       reason: z
         .enum(AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS)
         .describe(
-          "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted. 'message-not-found': no reply at that index, or the cursor's message changed."
+          "'provider-mismatch': an agent this cannot read. 'store-unknown': the pane's store is uncertain; nothing read. 'search-cap-reached': no reply within the bounded read; no older one substituted. 'message-not-found': no reply at that index, or the cursor's message changed."
         ),
     }),
   ])

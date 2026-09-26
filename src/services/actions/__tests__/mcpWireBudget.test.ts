@@ -68,7 +68,8 @@ const MAX_PROPERTY_DESCRIPTION_BYTES = 320;
  * `git.getFileDiff`'s `status`, `terminal.killAll`'s `confirmed` and
  * `terminal.killBatch`'s `terminalIds`.
  */
-const MAX_PROPERTIES_OVER_TARGET = 42;
+// 42 → 3 after description trim, measured at 3.
+const MAX_PROPERTIES_OVER_TARGET = 3;
 
 /**
  * Total bytes spent above {@link PROPERTY_DESCRIPTION_TARGET_BYTES}, summed over
@@ -83,7 +84,8 @@ const MAX_PROPERTIES_OVER_TARGET = 42;
  * the surface with them, which would otherwise have been left as headroom for
  * the next long description to spend without anyone deciding it should.
  */
-const MAX_EXCESS_PROPERTY_BYTES = 2_200;
+// 2_200 → 400 after description trim, measured at 366 B.
+const MAX_EXCESS_PROPERTY_BYTES = 400;
 
 /** Above this a tool is almost always polymorphic and wants splitting. */
 const MAX_TOOL_PARAMS_BYTES = 1_500;
@@ -111,11 +113,6 @@ const OVERSIZED_PARAMS_ALLOWLIST: Readonly<Record<string, string>> = {
   // into it, which is two round trips and a partially-created panel to clean up
   // on failure.
   "agent.launch": "single-round-trip launch; splitting it leaks a half-created panel on failure",
-  // Forge list filters are wide because the underlying forge query is wide;
-  // every property maps to one query parameter rather than to a mode.
-  "forge.listIssues": "flat filter set over one forge query, not a polymorphic mode switch",
-  "forge.listPRs": "flat filter set over one forge query, not a polymorphic mode switch",
-  "workflow.startWorkOnIssue": "composite entry point; the arguments are one workflow's inputs",
   "worktree.createWithRecipe": "composite create-plus-launch; splitting is the plain create tool",
 };
 
@@ -142,7 +139,6 @@ const OVERSIZED_PROPERTY_ALLOWLIST: Readonly<Record<string, string>> = Object.fr
         "properties.options.properties.always",
         "properties.options.properties.scopePaths",
         "properties.options.properties.includePaths",
-        "properties.options.properties.filter",
       ].map((path) => [
         `${tool} :: ${path}`,
         "CopyTreeOptions precedence rules; every clause is regression-pinned (#11722, #11750)",
@@ -530,7 +526,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // until the agent answers and returns the reply is the only way it gets one
   // without polling; the argument pair and the `reply` output field are what
   // the external surface pays for that.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_400;
+  // 63_400 → 53_100 after description trim, measured at 53_083 B.
+  // 53_100 → 53_150: `agent.launch`'s `reply` is nullable and always emitted,
+  // like its other fields, so a strict client never sees a missing key
+  // (measured at 53_119 B).
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 53_150;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -680,7 +680,8 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // round trip — or Codex sleeping and polling, as a live run did — with one
   // call that returns every reply, which is what makes a vote or a fan-out
   // two calls instead of a dozen.
-  const MAX_COHORT_PAYLOAD_BYTES = 135_000;
+  // 135_000 → 113_400 after description trim, measured at 113_320 B.
+  const MAX_COHORT_PAYLOAD_BYTES = 113_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

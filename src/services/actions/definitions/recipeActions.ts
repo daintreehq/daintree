@@ -129,7 +129,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       id: "recipe.list",
       title: "List recipes",
       description:
-        "List the saved recipes for the current project — named multi-terminal setups the user has configured, plus any a plugin contributes. Use this to discover recipe ids before running one; each entry reports its origin. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
+        "List the project's saved recipes, named multi-terminal setups from the user or plugins, each with its origin, to find recipe ids. Never fails; an empty list while still loading means not read yet, not none.",
       category: "recipes",
       kind: "query",
       danger: "safe",
@@ -140,7 +140,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
             .string()
             .optional()
             .describe(
-              "Restricts the listing to recipes available in one worktree, using an id from the worktree-listing capability. Omit it to list every recipe in the project rather than the active worktree's."
+              "Only recipes available in this worktree. Omit for every recipe in the project."
             ),
         })
         .optional(),
@@ -178,7 +178,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       id: "recipe.run",
       title: "Run recipe",
       description:
-        "Launch the terminals a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents. Approving its prompt starts every terminal; a pre-authorized call starts at most three, so check what actually started.",
+        "Launch the terminals a saved recipe defines in one worktree, starting their commands or agents. For a single pane, launch an agent or terminal instead. An approved call starts every terminal, a pre-authorized one at most three, so check what started.",
       category: "recipes",
       kind: "command",
       danger: "confirm",
@@ -190,14 +190,12 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         recipeId: z
           .string()
           .describe(
-            "Identifies which saved recipe to run, using an id from the recipe-listing capability. An unknown id fails before any terminal is created."
+            "Recipe id from the recipe listing; an unknown id fails before any terminal starts."
           ),
         worktreeId: z
           .string()
           .optional()
-          .describe(
-            "Identifies the worktree to launch the recipe terminals in, using an id from the worktree-listing capability. Defaults to the active worktree."
-          ),
+          .describe("Worktree for the recipe's terminals (default: active worktree)."),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
         focusPolicy: AddPanelFocusPolicySchema.optional(),
       }),
@@ -210,9 +208,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         // each one to the session that asked for the run (#11909).
         spawnedTerminalIds: z
           .array(z.string())
-          .describe(
-            "The panels this run actually started, in spawn order. Use these ids to read output from or close the terminals; the count alone identifies nothing."
-          ),
+          .describe("Panels this run started, in spawn order."),
         failedTerminals: z.array(
           z.object({ index: z.number().int().nonnegative(), reason: z.string() })
         ),

@@ -361,7 +361,8 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // poll — a PR seen, not a PR opened — that a PR is not proof its agent has
   // finished, and that running out of time means call again; a supervisor
   // missing any of those advances its queue on the wrong signal.
-  const MAX_EXTERNAL_TOTAL_BYTES = 11_904;
+  // 11_904 → 8_200 after description trim, measured at 8_105 B.
+  const MAX_EXTERNAL_TOTAL_BYTES = 8_200;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -470,7 +471,8 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // replaces one call per participant in every orchestration round — a live
   // four-agent vote went from 12 MCP calls to 4 — so the bytes buy far more
   // than they cost. The external total does not move: none is external.
-  const MAX_COHORT_TOTAL_BYTES = 27_154;
+  // 27_154 → 18_700 after description trim, measured at 18_616 B.
+  const MAX_COHORT_TOTAL_BYTES = 18_700;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

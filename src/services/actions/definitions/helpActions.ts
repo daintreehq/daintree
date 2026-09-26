@@ -67,7 +67,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     id: "help.displayImage",
     title: "Display documentation image",
     description:
-      "Show a documentation image inline in the assistant panel so an answer can point at it. Use this only when an image genuinely illustrates the answer, not for decorative ones. Reference the returned figure label as plain text at the insertion point rather than as markdown image syntax, which command-line renderers strip. Figure numbers are assigned in sequence and must never be chosen yourself.",
+      "Show a documentation image inline in the assistant panel, only when it genuinely illustrates the answer. Cite the returned figure label as plain text where it belongs, not as markdown image syntax, which CLI renderers strip. Never choose figure numbers yourself.",
     category: "help",
     kind: "command",
     danger: "safe",
@@ -78,8 +78,8 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         .string()
         .min(1)
         .describe("An https://daintree.org image URL. data:, blob:, and other hosts are rejected."),
-      caption: z.string().optional().describe("Optional caption shown beneath the figure."),
-      altText: z.string().optional().describe("Optional alternative text for accessibility."),
+      caption: z.string().optional().describe("Caption shown under the figure."),
+      altText: z.string().optional().describe("Alt text for accessibility."),
     }),
     rawOutputSchema: {
       type: "object",

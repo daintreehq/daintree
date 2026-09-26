@@ -63,7 +63,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       id: "plugin.reloadPanel",
       title: "Reload panel",
       description:
-        "Discard a plugin panel's view and mount a fresh one, keeping its backend and the state it persisted. View state it has not persisted is lost. A view that reports unsaved work is left alone, a confirmation is staged for the user, and the call fails rather than reporting success.",
+        "Remount a plugin panel's view, keeping its backend and persisted state; unpersisted view state is lost. A view reporting unsaved work is left alone, a confirmation is staged for the user, and the call fails.",
       category: "plugins",
       kind: "command",
       // No confirmation by default, following browser Reload: what the view
@@ -79,10 +79,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       palette: { mode: "hidden" },
       scope: "renderer",
       argsSchema: z.object({
-        panelId: z
-          .string()
-          .min(1)
-          .describe("The plugin panel to reload. Required: the focused panel is never assumed."),
+        panelId: z.string().min(1).describe("The plugin panel to reload; focus is never assumed."),
       }),
       resultSchema: z.object({
         panelId: z.string(),
@@ -123,7 +120,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       id: "plugin.validate",
       title: "Validate plugin manifest",
       description:
-        "Check a plugin.json on disk against the schema Daintree actually loads with, and get back every rejection paired with the field path that caused it. The rules differ by where a plugin lives, so the reply names which set was applied and whether that came from the location on disk or from what the manifest claims about itself. Warnings are advisory and never stop a plugin loading.",
+        "Check a plugin.json on disk against the schema Daintree loads with, returning each rejection with its field path. Rules differ by plugin location; the reply names the rule set applied and why. Warnings never stop loading.",
       category: "plugins",
       kind: "query",
       danger: "safe",
@@ -133,7 +130,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
           .string()
           .min(1)
           .describe(
-            "The plugin directory, or the manifest file itself. Absolute, or relative to the project root. Must sit inside the open project or the managed plugins directory."
+            "Plugin directory or manifest file, absolute or project-relative, inside the open project or the managed plugins directory."
           ),
       }),
       examples: [
@@ -170,7 +167,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       id: "plugin.diagnostics",
       title: "Read plugin diagnostics",
       description:
-        "Report why one plugin is in the state it is in: the load or activation failure it recorded, whether it is running, and the tail of the lines it wrote through the host logger. A project plugin whose manifest was refused is reported with its rejection, so one that never loaded is distinguishable from one that does not exist. An unknown id fails, listing the ids that do exist.",
+        "Report why a plugin is in its state: its recorded load or activation failure, whether it runs, and its recent host-logger lines. A refused project plugin is reported with its rejection. An unknown id fails, listing the ids that exist.",
       category: "plugins",
       kind: "query",
       danger: "safe",
@@ -180,7 +177,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
           .string()
           .min(1)
           .describe(
-            "The plugin's manifest id, in publisher.name form. For a project plugin this is the id in its manifest, not the directory it sits in."
+            "Manifest id, publisher.name. For a project plugin, the manifest id, not its directory."
           ),
         logLimit: z
           .number()
@@ -189,7 +186,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
           .max(DIAGNOSTICS_LOG_LIMIT_MAX)
           .optional()
           .describe(
-            `How many of the newest log lines to return (default ${DIAGNOSTICS_LOG_LIMIT_DEFAULT}, max ${DIAGNOSTICS_LOG_LIMIT_MAX}).`
+            `Newest log lines to return (default ${DIAGNOSTICS_LOG_LIMIT_DEFAULT}, max ${DIAGNOSTICS_LOG_LIMIT_MAX}).`
           ),
       }),
       examples: [
@@ -335,7 +332,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       id: "plugin.reloadProject",
       title: "Reload project plugins",
       description:
-        "Re-scan the open project's committed plugins and reconcile what is running against what is on disk, then report the state of every plugin directory found. This is how a newly written or rebuilt plugin is picked up without reopening the project. Trust and staging rules still apply, so an id the project has never run is listed but not executed.",
+        "Re-scan the open project's committed plugins, reconcile what runs with what is on disk, and report every plugin directory found. Picks up a new or rebuilt plugin without reopening the project. Trust rules still apply: an id the project never ran is listed, not executed.",
       category: "plugins",
       kind: "command",
       danger: "safe",

@@ -57,7 +57,7 @@ describe("withWorktreeLocation", () => {
     // the source capability in prose rather than by action id is deliberate:
     // clients rewrite every character outside [A-Za-z0-9_-] when namespacing a
     // tool, so a literal `worktree.list` names something the model never sees.
-    expect(props.worktreeId?.description).toMatch(/worktree-listing capability/i);
+    expect(props.worktreeId?.description).toMatch(/worktree[- ]listing/i);
     expect(props.worktreeId?.description).toMatch(/active worktree/i);
   });
 

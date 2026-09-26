@@ -102,13 +102,13 @@ export const McpSurfaceResultSchema = z.object({
     .number()
     .int()
     .positive()
-    .describe("Shape version of this payload, bumped when its fields change meaning"),
+    .describe("Payload shape version, bumped when a field changes meaning"),
   appVersion: z.string().describe("The running Daintree build"),
   tier: z.enum(TIER_VALUES).describe("The authorization tier this call was admitted at"),
   hash: z
     .string()
     .regex(/^[0-9a-f]{64}$/)
-    .describe("Hex SHA-256 of the surface; compare it later to detect drift without diffing"),
+    .describe("Hex SHA-256 of the surface, for drift checks"),
   tools: z
     .array(
       z.object({
@@ -120,7 +120,7 @@ export const McpSurfaceResultSchema = z.object({
         readOnlyHint: z.boolean().describe("The tool does not modify state, so a retry is safe"),
         idempotentHint: z
           .boolean()
-          .describe("Repeating the call with the same arguments has no additional effect"),
+          .describe("Repeating with the same arguments has no further effect"),
         deprecated: z
           .object({
             reason: z.string(),
@@ -133,5 +133,5 @@ export const McpSurfaceResultSchema = z.object({
     // Not "every tool this session can call": a per-tool approval can widen
     // dispatch beyond this list for a few minutes without ever appearing in
     // `tools/list`, and this reports the listing.
-    .describe("Every tool `tools/list` advertises to this session, sorted by id"),
+    .describe("Every tool `tools/list` advertises here, sorted by id"),
 });

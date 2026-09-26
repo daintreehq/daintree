@@ -102,11 +102,11 @@ const WAITING_REASON_VALUES = ["prompt", "question", "approval", "error"] as con
  * drift apart.
  */
 export const NOTIFY_ARG_DESCRIPTION =
-  "When this agent next stops, Daintree types a notice quoting its last screen lines into your prompt; end your turn, don't poll. Agent panes and assistants only.";
+  "When this agent next stops, Daintree types a notice quoting its screen into your prompt; end your turn, don't poll. Agent panes and assistants only.";
 
 /** Model-facing description of `replyLines`, shared like {@link NOTIFY_ARG_DESCRIPTION}. */
 export const NOTIFY_REPLY_LINES_DESCRIPTION =
-  "With notify: screen lines the notice quotes (default 40, 0 for none). With handback it ends at the marker.";
+  "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker.";
 
 export const NotifyReplyLinesSchema = z
   .number()
@@ -126,9 +126,7 @@ export const TerminalNotifyWhenIdleArgsSchema = z.object({
     .string()
     .max(NOTIFY_NOTE_MAX_CHARS)
     .optional()
-    .describe(
-      "Echoed back in the notice, such as what to do next. One line, at most 160 characters."
-    ),
+    .describe("Echoed in the notice, e.g. the next step. One line, at most 160 characters."),
   replyLines: NotifyReplyLinesSchema,
 });
 export type TerminalNotifyWhenIdleArgs = z.infer<typeof TerminalNotifyWhenIdleArgsSchema>;

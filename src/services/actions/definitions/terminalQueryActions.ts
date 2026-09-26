@@ -63,7 +63,7 @@ const HANDBACK_ARG_SCHEMA = z
   .boolean()
   .optional()
   .describe(
-    "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only; a shell refuses it."
+    "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only."
   );
 
 /**
@@ -92,7 +92,7 @@ export function registerTerminalQueryActions(
     id: "terminal.list",
     title: "List terminals",
     description:
-      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
+      "List open terminals and panels with enough metadata to pick one and learn its id. A cheap inventory, not a polling path: the status snapshot carries agent state for many in one call. Ephemeral and internal panels are omitted; empty means nothing matched.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -102,33 +102,27 @@ export function registerTerminalQueryActions(
         worktreeId: z
           .string()
           .optional()
-          .describe(
-            "Restricts the listing to one worktree, using an id from the worktree-listing capability. Omit to list across every worktree in the project."
-          ),
+          .describe("Only this worktree. Omit for every worktree in the project."),
         location: z
           .enum(["grid", "dock", "trash", "background"])
           .optional()
-          .describe(
-            "Only terminals in one place: grid, dock, trash or background. Omitted, trashed and backgrounded terminals are left out."
-          ),
+          .describe("Only this location. Omitted, trash and background are excluded."),
         owned: z
           .boolean()
           .optional()
           .describe(
-            "MCP only: true keeps only the terminals you created or were handed; false or omitted applies no ownership filter. An agent pane keeps them across reconnects."
+            "MCP only: true keeps only terminals you created or were handed; false or omitted, no filter. An agent pane keeps them across reconnects."
           ),
         terminalId: z
           .string()
           .min(1)
           .optional()
-          .describe(
-            "Restricts the listing to one terminal, using a panel id. An id that is not open yields an empty listing rather than an error."
-          ),
+          .describe("Only this panel id; one not open yields an empty listing, not an error."),
         includeClientMetadata: z
           .boolean()
           .optional()
           .describe(
-            "Adds each terminal client-metadata record to its row. Off by default: records run to 2KB each, so narrow with terminalId or worktreeId on a large fleet."
+            "Add each terminal's client-metadata record (up to 2KB each); narrow the listing on a large fleet."
           ),
       })
       .optional(),
@@ -221,7 +215,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getOutput",
     title: "Get terminal output",
     description:
-      "Read the trailing output of one terminal: what an agent or command printed. For several, the status snapshot reads every tail in one call. ANSI is stripped by default; a missing terminal returns an error field, not a failed call.",
+      "Read one terminal's trailing output: what an agent or command printed. For several, the status snapshot reads every tail in one call. ANSI is stripped by default; a missing terminal returns an error field, not a failed call.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -231,7 +225,7 @@ export function registerTerminalQueryActions(
         .string()
         .min(1)
         .describe(
-          "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked comes back as an error field in the result rather than failing the call."
+          "Panel id from the terminal listing. An untracked id returns an error field, not a failed call."
         ),
       maxLines: z
         .number()
@@ -239,11 +233,8 @@ export function registerTerminalQueryActions(
         .min(1)
         .max(1000)
         .default(100)
-        .describe("Maximum lines to return (default: 100, max: 1000)"),
-      stripAnsi: z
-        .boolean()
-        .default(true)
-        .describe("Remove ANSI escape codes from output (default: true)"),
+        .describe("Max lines (default 100, max 1000)"),
+      stripAnsi: z.boolean().default(true).describe("Strip ANSI escape codes (default true)"),
     }),
     examples: [
       {
@@ -360,7 +351,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get terminal status",
     description:
-      "Snapshot agent and process state across many terminals in one call, with optional output tails, and confirm a submission landed. Prefer it to listing terminals or reading each one's output. Never blocks or fails as a whole; an entry's error means that terminal was missing or unreadable.",
+      "Snapshot agent and process state for many terminals in one call, with optional output tails, and confirm a submission landed. Prefer it to listing terminals or reading each. Never fails whole; an entry's error means that terminal was missing or unreadable.",
     // The MCP answer to "what state is this agent in" since `agent.getState`
     // left the tool sets, so search has to find it by those words.
     keywords: ["agent", "state", "waiting", "working"],
@@ -376,25 +367,20 @@ export function registerTerminalQueryActions(
           .max(256)
           .optional()
           .describe(
-            "Terminals to query (1-256); overrides `worktreeId` and `location`. An unknown id gets an `error` entry, not a failed call."
+            "1-256 terminals; overrides the filters. An unknown id gets an `error` entry, not a failed call."
           ),
-        worktreeId: z
-          .string()
-          .optional()
-          .describe("Filter by worktree (ignored when `terminalIds` is provided)."),
+        worktreeId: z.string().optional().describe("Filter by worktree."),
         location: z
           .enum(["grid", "dock", "trash", "background"])
           .optional()
-          .describe(
-            "Filter by panel location (ignored when `terminalIds` is provided). Defaults to all locations except trash and background."
-          ),
+          .describe("Filter by location. Default: all but trash and background."),
         submissionToken: z
           .string()
           .min(1)
           .max(128)
           .optional()
           .describe(
-            "A token from the text-submission capability. Adds that submission's delivery record to each entry. Requires `terminalIds`."
+            "Token from a send; adds its delivery record to each entry. Needs `terminalIds`."
           ),
         // `true` is what a model reaches for first; it reads as the defaults.
         includeOutput: z
@@ -407,18 +393,16 @@ export function registerTerminalQueryActions(
                 .min(1)
                 .max(50)
                 .default(20)
-                .describe(
-                  "Number of trailing scrollback lines to include per terminal (max 50, default 20)."
-                ),
+                .describe("Trailing lines per terminal (max 50, default 20)."),
               stripAnsi: z
                 .boolean()
                 .default(true)
-                .describe("Remove ANSI escape codes from `recentOutput` (default: true)."),
+                .describe("Strip ANSI from `recentOutput` (default true)."),
             }),
           ])
           .optional()
           .describe(
-            "Opt-in, `true` or options. Adds `recentOutput` (last N scrollback lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed."
+            "`true` or options: adds `recentOutput` (last N lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed."
           ),
       })
       .optional(),
@@ -728,7 +712,7 @@ export function registerTerminalQueryActions(
       terminalId: z.string().min(1).describe(
         // Kept under the 160 B property target; `trackingState` is explained
         // in the tool description and its own output-schema entry.
-        "Identifies the terminal to act on, using a panel id from the terminal-listing capability. A closed or unknown id resolves as idle rather than failing."
+        "Panel id from the terminal listing. A closed or unknown id resolves as idle, not a failure."
       ),
       timeoutMs: z
         .number()
@@ -737,7 +721,7 @@ export function registerTerminalQueryActions(
         .max(MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS)
         .optional()
         .describe(
-          "0 for an immediate snapshot (recommended); otherwise the most milliseconds to long-poll, default 60s. Interactive sessions cap at 60s, headless at 2 hours."
+          "0 for an immediate snapshot (recommended); otherwise max ms to long-poll, default 60s. Interactive sessions cap at 60s, headless at 2 hours."
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
@@ -774,13 +758,13 @@ export function registerTerminalQueryActions(
         .min(1)
         .max(MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS)
         .describe(
-          `Terminals to watch (1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}). Closed or unknown ids count as settled rather than failing the batch; each row's \`trackingState\` says which.`
+          `Terminals to watch, 1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}. Closed or unknown ids settle rather than fail; each row's \`trackingState\` says which.`
         ),
       mode: z
         .enum(["first", "all"])
         .optional()
         .describe(
-          "Return when any one terminal stops working (the default, to refill as each frees up) or only once all have (a join barrier)."
+          "'first' returns when any one stops (refill as each frees up), 'all' once every one has (a join)."
         ),
       timeoutMs: z
         .number()
@@ -789,7 +773,7 @@ export function registerTerminalQueryActions(
         .max(MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS)
         .optional()
         .describe(
-          "0 for an immediate snapshot; otherwise the most milliseconds to long-poll, default 60s. Interactive sessions cap at 60s, headless at 2 hours."
+          "0 for an immediate snapshot; otherwise max ms to long-poll, default 60s. Interactive sessions cap at 60s, headless at 2 hours."
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
@@ -818,7 +802,7 @@ export function registerTerminalQueryActions(
     id: "terminal.readLastMessageOwned",
     title: "Read owned agent's last message",
     description:
-      "Read what an agent this connection launched or was handed last wrote to its transcript: that reply's text and any tool calls left unanswered, such as a question and its options. Claude Code only. It says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
+      "Read the last reply an agent this connection launched or was handed wrote to its transcript, plus any unanswered tool calls such as a question and its options. Claude Code only. Says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -831,7 +815,7 @@ export function registerTerminalQueryActions(
         .string()
         .min(1)
         .describe(
-          "The agent panel to read, as an `id` this session created or the user handed it. Required: there is no focus fallback."
+          "Agent panel `id` this session created or was handed. Required; no focus fallback."
         ),
       maxBytes: z
         .number()
@@ -874,7 +858,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
     description:
-      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing a partial message. This returns once the submission is queued, not once it was delivered or run: pass the returned `submissionToken` to the status capability to find out. Runs with the terminal's privileges.",
+      "Queue text as one submission to a terminal: a shell runs it, an agent pane takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -902,14 +886,12 @@ export function registerTerminalQueryActions(
         // and rejecting is clearer than a truncated success reported as a
         // failure.
         .max(512)
-        .describe(
-          "Identifies the terminal to submit to, using a panel id from the terminal-listing capability."
-        ),
+        .describe("Panel id from the terminal listing."),
       command: z
         .string()
         .min(1)
         .describe(
-          "Text to submit: a shell command, or an agent's next prompt. Multi-line text goes in atomically with one Enter."
+          "A shell command or the agent's next prompt. Multi-line text goes in atomically with one Enter."
         ),
       handback: HANDBACK_ARG_SCHEMA,
       notify: NOTIFY_ARG_SCHEMA,
@@ -1008,7 +990,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommandOwned",
     title: "Submit text to owned terminal",
     description:
-      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
+      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -1023,9 +1005,7 @@ export function registerTerminalQueryActions(
         .string()
         .min(1)
         .max(512)
-        .describe(
-          "The terminal to submit to, as an `id` this session created or the user handed it."
-        ),
+        .describe("Terminal `id` this session created or was handed."),
       command: z
         .string()
         .min(1)

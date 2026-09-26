@@ -139,6 +139,7 @@ function launchedResult(overrides: Record<string, unknown> = {}) {
     location: "grid",
     spawnStatus: null,
     ...LAUNCH_IDENTITY,
+    reply: null,
     ...overrides,
   };
 }
@@ -506,6 +507,7 @@ describe("agentActions adversarial", () => {
       worktreePath: "/repo/wt-42",
       branch: "feature/parallel",
       cwd: "/repo/wt-42/packages/app",
+      reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
@@ -543,6 +545,7 @@ describe("agentActions adversarial", () => {
       location: "grid",
       spawnStatus: "missing-cli",
       ...LAUNCH_IDENTITY,
+      reply: null,
     });
     const actions = setupActions(callbacks);
 
@@ -556,6 +559,7 @@ describe("agentActions adversarial", () => {
       location: "grid",
       spawnStatus: "missing-cli",
       ...LAUNCH_IDENTITY,
+      reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
@@ -580,6 +584,7 @@ describe("agentActions adversarial", () => {
       worktreePath: null,
       branch: null,
       cwd: null,
+      reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });

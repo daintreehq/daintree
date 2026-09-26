@@ -86,7 +86,7 @@ const PanelCloseResultSchema = z.object({
   closedIds: z
     .array(z.string())
     .describe(
-      "The panels this call closed. Empty means nothing closed: there was no panel to act on, the one named was already in the trash, or its teardown did not complete. Treat an empty array as a failed close rather than a quiet success."
+      "Panels closed. Empty means nothing closed (none to act on, already in the trash, or teardown failed): treat it as a failed close."
     ),
 });
 
@@ -174,7 +174,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.close",
     title: "Close terminal",
     description:
-      "Close a panel, usually to the trash, where it is briefly recoverable before its process is killed. Recovery is not universal: remove-on-exit and dialog panels are discarded outright. Not limited to terminals. Name the panel you mean; the wrong one discards someone's work. An untracked panel is rejected, not reported closed; the result names what closed, already gone from the listing by then.",
+      "Close a terminal or any other panel, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -186,7 +186,7 @@ export function registerTerminalLifecycleActions(
           .string()
           .optional()
           .describe(
-            "The panel to close, as an `id` from the terminal listing. An automated caller must pass this; omitted, the close falls back to whatever the user has focused."
+            "Panel `id` from the terminal listing. Automated callers must pass it; omitted, the focused panel closes."
           ),
       })
       .optional(),
@@ -250,7 +250,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.closeOwned",
     title: "Close owned terminal",
     description:
-      "Close a panel this session itself created, usually to the trash, where it is briefly recoverable before its process is killed. Only panels created by this connection can be closed: a panel opened by the user, another client, or a plugin is refused outright, as is an id that never existed. The result names what closed, already gone from the listing by then.",
+      "Close a panel this session created, usually to the trash, where it stays briefly recoverable. Panels opened by the user, another client or a plugin are refused, as are unknown ids. The result names what closed.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -266,7 +266,7 @@ export function registerTerminalLifecycleActions(
         .string()
         .min(1)
         .describe(
-          "The panel to close, as an `id` this session received when it created the panel. Required — there is no focused-panel fallback, because the focused panel is rarely one this session owns."
+          "Panel `id` this session got when creating it. Required; there is no focus fallback."
         ),
     }),
     resultSchema: PanelCloseResultSchema,
@@ -296,7 +296,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.revealOwned",
     title: "Reveal owned terminal",
     description:
-      "Bring the user to a panel this session created or was handed, switching workspace and raising the window when it is somewhere they are not looking. No other panel can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
+      "Bring the user to a panel this session created or was handed, switching workspace and raising the window if needed. No other panel can be revealed. Use it when the user asked to be taken there, not to report progress.",
     category: "terminal",
     kind: "command",
     // Reversible navigation: nothing is destroyed and the user can switch back.
@@ -312,10 +312,7 @@ export function registerTerminalLifecycleActions(
     // overview dispatches.
     palette: { mode: "hidden" },
     argsSchema: z.object({
-      terminalId: z
-        .string()
-        .min(1)
-        .describe("The panel to reveal, as an `id` this session created or the user handed it."),
+      terminalId: z.string().min(1).describe("Panel `id` this session created or was handed."),
     }),
     run: async () => {
       throw new Error(
@@ -382,7 +379,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.kill",
     title: "Kill terminal",
     description:
-      "Permanently destroy a panel and its process, with no trash step and no recovery. Not limited to terminals: whatever the id names is removed. A panel running an agent session is untouched unless the call is confirmed, and an untouched call fails rather than reporting it went. Identify it explicitly: an automated caller cannot see what the user focused. Close it instead when recovery matters.",
+      "Permanently destroy a panel of any kind and its process: no trash, no recovery. A panel running an agent session is left alone unless confirmed, and the call then fails. Name the panel explicitly; close it instead when recovery matters.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -395,7 +392,7 @@ export function registerTerminalLifecycleActions(
         .boolean()
         .optional()
         .describe(
-          "Acknowledges losing a running agent session. Redundant once the host has prompted for approval. Without either, the panel is left alone, a confirmation is staged, and the call fails rather than reporting success."
+          "Confirms losing a running agent session; redundant once the host prompted. Otherwise the panel is left alone, a confirmation is staged and the call fails."
         ),
     }),
     run: async (args: unknown, ctx) => {
@@ -531,7 +528,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart terminal",
     description:
-      "Restart a terminal's process in place, keeping the pane. This returns before the restart finishes, so it is not ready when it does; watch its status before sending anything. A terminal running an agent session is left untouched unless the call is confirmed; otherwise whatever was running is terminated and unsaved state is lost. A panel with no process is ignored, not an error.",
+      "Restart a terminal's process in place, keeping the pane. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. A panel with no process is ignored.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -545,7 +542,7 @@ export function registerTerminalLifecycleActions(
         .boolean()
         .optional()
         .describe(
-          "Acknowledges interrupting a running agent session. Redundant once the host has prompted for approval. Without either, the terminal is left alone, a confirmation is staged, and the call fails rather than reporting success."
+          "Confirms interrupting a running agent session; redundant once the host prompted. Otherwise the terminal is untouched, a confirm is staged and the call fails."
         ),
     }),
     run: async (args: unknown, ctx) => {
@@ -609,7 +606,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.rename",
     title: "Rename terminal",
     description:
-      "Change a terminal tab's title, or clear it back to the automatic default. Identify the terminal explicitly — an automated caller cannot see what the user has focused, and cannot answer the dialog that omitting a title would open. A title the user set by hand outranks automation, so renaming one of those is accepted and then quietly ignored.",
+      "Set a terminal tab's title, or clear it to the automatic default. Name the terminal and the title: an automated caller cannot see focus or answer the dialog an omitted title opens. A title the user set by hand wins; renaming it is accepted and ignored.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -617,10 +614,7 @@ export function registerTerminalLifecycleActions(
     keywords: ["title", "label", "name", "edit"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
-      name: z
-        .string()
-        .optional()
-        .describe("New name for the terminal. If omitted, opens the rename dialog."),
+      name: z.string().optional().describe("New title; omitted, opens the rename dialog."),
     }),
     run: async (args: unknown, ctx) => {
       const { terminalId, name } = args as { terminalId?: string; name?: string };
@@ -817,7 +811,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.closeAll",
     title: "Close all terminals",
     description:
-      "Close every panel in the active worktree at once, not only terminals. Most move to the trash and stay briefly recoverable, but panels set to remove on exit are discarded outright. This takes the user's own shells and other agents' terminals with it, so prefer closing panels individually. Tooling-internal and dialog-hosted panels are spared.",
+      "Close every panel in the active worktree, not just terminals, including the user's shells and other agents' terminals; prefer closing individually. Most go to the trash; remove-on-exit panels are discarded. Internal and dialog panels are spared.",
     category: "terminal",
     kind: "command",
     danger: "safe",

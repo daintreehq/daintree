@@ -45,12 +45,12 @@ const TerminalInterruptResultSchema = z.object({
   agentStateAtDispatch: z
     .enum(["working", "waiting"])
     .describe(
-      "What the agent was last observed doing. Read off its own output and often wrong; it gated the request, it is not proof a turn was running."
+      "Last observed agent state, read off its output and often wrong; it gated the request, not proof a turn was running."
     ),
   status: z
     .enum(["requested", "requested-unverified"])
     .describe(
-      "`requested`: keystrokes handed over to an agent whose CLI names Escape as its interrupt. `requested-unverified`: same, but that CLI names no interrupt key, so the effect is unknown. Neither says the keystrokes arrived or the agent stopped — read the terminal's output to find out."
+      "`requested`: keystrokes handed to an agent whose CLI names Escape as its interrupt. `requested-unverified`: that CLI names no interrupt key. Neither says the keystrokes arrived or the agent stopped; read the terminal's output."
     ),
 });
 
@@ -125,7 +125,7 @@ export function registerTerminalInputActions(
     id: "terminal.inject",
     title: "Inject context",
     description:
-      "Write the active worktree's prepared context into a terminal, which is how an agent is handed a large codebase context. Name the target terminal explicitly — focus can drift between the call and its execution, and a mistarget types a multi-kilobyte dump into whatever pane happened to be focused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal, to hand an agent a large codebase context. Name the target: focus can drift, and a mistarget types a large dump into the wrong pane. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -136,9 +136,7 @@ export function registerTerminalInputActions(
           .string()
           .min(1)
           .optional()
-          .describe(
-            "The terminal to inject into. An automated caller must name it: focus can drift before the call runs and land a large context dump in the wrong pane."
-          ),
+          .describe("Terminal to inject into. Automated callers must name it; focus can drift."),
       })
       .optional(),
     run: async (args: { terminalId?: string } | undefined, ctx) => {
@@ -168,7 +166,7 @@ export function registerTerminalInputActions(
     id: "terminal.injectOwned",
     title: "Inject context to owned terminal",
     description:
-      "Write the active worktree's prepared context into a terminal this connection created or was handed, which is how an agent it drives is given a large codebase context. Any other panel is refused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created or was handed, to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -180,9 +178,7 @@ export function registerTerminalInputActions(
       terminalId: z
         .string()
         .min(1)
-        .describe(
-          "The terminal to inject into, as an `id` this session created or the user handed it. Required: there is no focus fallback."
-        ),
+        .describe("Terminal `id` this session created or was handed. Required; no focus fallback."),
     }),
     run: async () => {
       throw new Error(
@@ -331,7 +327,7 @@ export function registerTerminalInputActions(
     id: "terminal.interruptOwned",
     title: "Interrupt owned agent",
     description:
-      "Stop the turn an agent is running in a panel this connection created or was handed, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+      "Interrupt the turn an agent is running in a panel this connection created or was handed, keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -344,7 +340,7 @@ export function registerTerminalInputActions(
         .string()
         .min(1)
         .describe(
-          "The agent panel to interrupt, as an `id` this session created or the user handed it. Required: there is no focus fallback."
+          "Agent panel `id` this session created or was handed. Required; no focus fallback."
         ),
     }),
     resultSchema: TerminalInterruptResultSchema,

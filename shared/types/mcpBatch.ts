@@ -19,7 +19,7 @@ const notifyFields = {
   notify: z
     .boolean()
     .optional()
-    .describe("As on the single call: each agent's notice quotes its reply when it finishes."),
+    .describe("As on a single call: each notice quotes that agent's reply."),
   handback: z.boolean().optional().describe("As on the single call, for each item."),
   replyLines: NotifyReplyLinesSchema,
   waitForReply: z
@@ -34,8 +34,8 @@ export const AgentLaunchManyArgsSchema = z.object({
     .array(z.string().min(1))
     .min(1)
     .max(MAX_BATCH_LAUNCHES)
-    .describe("1-8 distinct agent ids, launched in order, one terminal each."),
-  prompt: z.string().min(1).describe("The first turn every agent receives."),
+    .describe("1-8 distinct agent ids, one terminal each."),
+  prompt: z.string().min(1).describe("First turn every agent receives."),
   name: z
     .string()
     .max(120)
