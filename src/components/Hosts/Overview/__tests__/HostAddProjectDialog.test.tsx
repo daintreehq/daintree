@@ -145,4 +145,14 @@ describe("HostAddProjectDialog", () => {
     expect(alert.textContent).toContain("Permission denied (publickey).");
     expect(onOpened).not.toHaveBeenCalled();
   });
+
+  it("never clones a new URL into the folder checked for the previous one", async () => {
+    renderDialog();
+    const urlField = screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" });
+    fireEvent.change(urlField, { target: { value: URL } });
+    const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
+    await waitFor(() => expect(clone.disabled).toBe(false));
+    fireEvent.change(urlField, { target: { value: "git@github.com:someone/else.git" } });
+    expect(clone.disabled).toBe(true);
+  });
 });
