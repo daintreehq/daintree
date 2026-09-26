@@ -269,11 +269,13 @@ export interface MockHostState {
   seedActionCatalog(entries: PluginActionManifestEntry[]): void;
 
   /**
-   * Fire every active `host.fs.watch` callback with `changedPath`, simulating a
-   * filesystem change the watcher would observe. Like the other `simulate*`
-   * helpers it notifies every registered watcher without path filtering
-   * (containment is a production concern, not modeled here) and lets callback
-   * errors propagate so a test sees them.
+   * Fire the active `host.fs.watch` callbacks that would observe a change at
+   * `changedPath`: a watcher sees its watched path itself and that path's
+   * direct children, and — registered with `recursive: true` — anything
+   * beneath it. A watcher registered with `debounceMs` coalesces a burst into
+   * one trailing callback with the latest path after that delay (drive it with
+   * fake timers). Callback errors propagate so a test sees them; a debounced
+   * callback's error surfaces from the timer instead.
    */
   simulateFsWatch(changedPath: string): void;
 
@@ -527,6 +529,16 @@ function validateQuickPickItems(items: PluginQuickPickItem[]): PluginQuickPickIt
   });
 }
 
+/** One `host.fs.watch` registration in the mock. */
+interface MockFsWatcher {
+  readonly paths: string[];
+  readonly callback: (changedPath: string) => void;
+  readonly recursive: boolean;
+  readonly debounceMs: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  pending: string | null;
+}
+
 /** Reject a postToPanel/broadcastToRenderer channel the way production does. */
 function isInvalidChannel(channel: unknown, allowEmpty: boolean): boolean {
   if (typeof channel !== "string") return true;
@@ -663,7 +675,39 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const actionCatalog = new Map<string, PluginActionManifestEntry>();
   // Active `host.fs.watch` registrations; a watcher's disposer removes its
   // record, and `simulateFsWatch` fires each one's callback.
-  const fsWatchers = new Set<{ paths: string[]; callback: (changedPath: string) => void }>();
+  const fsWatchers = new Set<MockFsWatcher>();
+
+  const parentOf = (target: string): string => {
+    const slash = target.lastIndexOf("/");
+    return slash <= 0 ? "/" : target.slice(0, slash);
+  };
+  const trimDir = (dir: string): string =>
+    dir.length > 1 && dir.endsWith("/") ? dir.slice(0, -1) : dir;
+  // A directory exists when `mkdir` made it, when a stored file or directory
+  // sits beneath it, or when it is (or contains) a worktree the mock was given.
+  // A path holding a file is never a directory.
+  const mockDirExists = (dir: string): boolean => {
+    if (dir === "/") return true;
+    if (fsFiles.has(dir)) return false;
+    if (fsDirs.has(dir)) return true;
+    const prefix = `${dir}/`;
+    for (const key of fsFiles.keys()) if (key.startsWith(prefix)) return true;
+    for (const made of fsDirs) if (made.startsWith(prefix)) return true;
+    const roots = [activeWorktree?.path, ...worktrees.map((w) => w.path)];
+    return roots.some((root) => root !== undefined && (root === dir || root.startsWith(prefix)));
+  };
+  // Every ancestor of `dir`, outermost first, then `dir` itself; "/" excluded.
+  const dirChain = (dir: string): string[] => {
+    const chain: string[] = [];
+    for (let current = trimDir(dir); current !== "/"; current = parentOf(current)) {
+      chain.unshift(current);
+    }
+    return chain;
+  };
+  // The mock's stand-in for the host's implicit per-plugin data dir, which
+  // grows missing parents for a write inside it.
+  const isMockDataDirPath = (target: string): boolean =>
+    target.includes(`/.daintree/plugin-data/${pluginId}/`);
 
   // Resolve the declared scope for a key from the opt-in `manifestSettings`,
   // mirroring PluginSettingsManager.getDeclaredScope. Returns undefined when no
@@ -1412,18 +1456,35 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (typeof dirPath !== "string" || dirPath.length === 0) {
           throw new Error(`Plugin "${pluginId}" fs.mkdir: path must be a non-empty string`);
         }
-        if (fsFiles.has(dirPath)) {
+        const chain = dirChain(dirPath);
+        const target = chain[chain.length - 1];
+        if (target !== undefined && fsFiles.has(target)) {
           throw fsWriteError(
             "TARGET_EXISTS",
             `mock fs: "${dirPath}" exists and is not a directory`
           );
         }
-        fsDirs.add(dirPath.length > 1 && dirPath.endsWith("/") ? dirPath.slice(0, -1) : dirPath);
+        const blocked = chain.find((dir) => fsFiles.has(dir));
+        if (blocked !== undefined) {
+          throw new Error(`ENOTDIR: mock fs: "${blocked}" is a file, not a directory`);
+        }
+        // Recursive, like the host: every missing ancestor is created too.
+        for (const dir of chain) fsDirs.add(dir);
         fsMkdirCalls.push(dirPath);
       },
       async appendFile(filePath, contents) {
         if (typeof contents !== "string") {
           throw new Error(`Plugin "${pluginId}" fs.appendFile: contents must be a string`);
+        }
+        if (!fsFiles.has(filePath) && mockDirExists(filePath)) {
+          throw new Error(`EISDIR: mock fs: "${filePath}" is a directory`);
+        }
+        const parent = parentOf(filePath);
+        if (!mockDirExists(parent)) {
+          if (!isMockDataDirPath(filePath)) {
+            throw new Error(`ENOENT: mock fs: parent directory "${parent}" does not exist`);
+          }
+          for (const dir of dirChain(parent)) fsDirs.add(dir);
         }
         fsFiles.set(filePath, (fsFiles.get(filePath) ?? "") + contents);
         fsAppendCalls.push({ path: filePath, contents });
@@ -1525,18 +1586,44 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (typeof callback !== "function") {
           throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
         }
+        const recursive = options?.recursive;
+        if (recursive !== undefined && typeof recursive !== "boolean") {
+          throw new Error(`Plugin "${pluginId}" fs.watch: recursive must be a boolean`);
+        }
+        const debounceMs = options?.debounceMs;
+        if (
+          debounceMs !== undefined &&
+          (typeof debounceMs !== "number" || !Number.isFinite(debounceMs) || debounceMs < 0)
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" fs.watch: debounceMs must be a finite, non-negative number`
+          );
+        }
         if (!Array.isArray(paths) || paths.length === 0) {
           throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
         }
         // Record the watcher so `simulateFsWatch` can fire it. The disposer
         // removes the record (idempotent) — once disposed the watcher no longer
-        // receives simulated changes.
-        const record = { paths, callback };
+        // receives simulated changes, and a pending debounced one is dropped.
+        const record: MockFsWatcher = {
+          paths: paths.map(trimDir),
+          callback,
+          recursive: recursive === true,
+          // Same floor and ceiling as the host.
+          debounceMs:
+            debounceMs === undefined || debounceMs === 0
+              ? 0
+              : Math.min(Math.max(debounceMs, 50), 60_000),
+          timer: null,
+          pending: null,
+        };
         fsWatchers.add(record);
         let disposed = false;
         return () => {
           if (disposed) return;
           disposed = true;
+          if (record.timer !== null) clearTimeout(record.timer);
+          record.timer = null;
           fsWatchers.delete(record);
         };
       },
@@ -1673,7 +1760,32 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateFsWatch(changedPath) {
       // Snapshot before firing so a callback that registers/disposes a watcher
       // doesn't mutate the set mid-iteration.
-      for (const { callback } of [...fsWatchers]) callback(changedPath);
+      for (const record of [...fsWatchers]) {
+        if (!fsWatchers.has(record)) continue;
+        // The paths the real watcher would report: the watched path itself, a
+        // direct child, or — only for a recursive watch — anything beneath it.
+        const covered = record.paths.some(
+          (watched) =>
+            changedPath === watched ||
+            parentOf(changedPath) === watched ||
+            (record.recursive && changedPath.startsWith(watched === "/" ? "/" : `${watched}/`))
+        );
+        if (!covered) continue;
+        if (record.debounceMs === 0) {
+          record.callback(changedPath);
+          continue;
+        }
+        // One trailing callback per burst, carrying the latest path — drive it
+        // with fake timers or a real wait.
+        record.pending = changedPath;
+        if (record.timer !== null) clearTimeout(record.timer);
+        record.timer = setTimeout(() => {
+          record.timer = null;
+          const latest = record.pending;
+          record.pending = null;
+          if (latest !== null && fsWatchers.has(record)) record.callback(latest);
+        }, record.debounceMs);
+      }
     },
     simulateQuickPickResponse(result) {
       quickPickResponse = result;

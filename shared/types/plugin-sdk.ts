@@ -94,6 +94,8 @@ export type {
   PluginFsApi,
   PluginFsDirEntry,
   PluginFsStat,
+  PluginFsReadWithRevisionResult,
+  PluginFsWatchOptions,
   PluginGitApi,
   PluginGitStatus,
   PluginGitStatusFile,
