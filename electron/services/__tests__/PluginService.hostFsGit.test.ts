@@ -1821,7 +1821,13 @@ describe("host.fs mutation gating before any directory is created", () => {
   it("audits every directory it creates, including the data dir bootstrap", async () => {
     const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
     await host.fs.mkdir(dataDir());
-    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([`fs.mkdir:${dataDir()}`]);
+    // The bootstrap creates the whole host-owned chain under the home dir,
+    // and each directory it makes is audited.
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(homeDir, ".daintree")}`,
+      `fs.mkdir:${join(homeDir, ".daintree", "plugin-data")}`,
+      `fs.mkdir:${dataDir()}`,
+    ]);
 
     appendSpy.mockClear();
     await host.fs.appendFile(join(dataDir(), "2026", "09", "log.jsonl"), "x\n");
@@ -1840,6 +1846,59 @@ describe("host.fs mutation gating before any directory is created", () => {
     expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
       `fs.mkdir:${join(real, "a")}`,
       `fs.mkdir:${join(real, "a", "b")}`,
+    ]);
+  });
+});
+
+describe("host.fs audits a mutation that fails part-way", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("audits the directories a mkdir created before a later component failed", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const real = await fs.realpath(allowed);
+    const realMkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation((async (target: string, options?: unknown) => {
+      if (target === join(real, "a", "b", "c")) {
+        throw Object.assign(new Error("EACCES: denied"), { code: "EACCES" });
+      }
+      return realMkdir(target, options as undefined);
+    }) as typeof fs.mkdir);
+
+    await expect(host.fs.mkdir(join(allowed, "a", "b", "c"))).rejects.toThrow(/EACCES/);
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(real, "a")}`,
+      `fs.mkdir:${join(real, "a", "b")}`,
+    ]);
+  });
+
+  it("audits an append whose close fails after the bytes were written", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const log = join(allowed, "log.jsonl");
+    const realOpen = fs.open.bind(fs);
+    // `close` is an own property of each FileHandle, so the handle the append
+    // opens is wrapped rather than a prototype patched.
+    vi.spyOn(fs, "open").mockImplementationOnce((async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args);
+      const realClose = handle.close.bind(handle);
+      handle.close = async () => {
+        await realClose();
+        throw new Error("EIO: close failed");
+      };
+      return handle;
+    }) as typeof fs.open);
+
+    await expect(host.fs.appendFile(log, "line\n")).rejects.toThrow(/EIO/);
+    expect(await fs.readFile(log, "utf-8")).toBe("line\n");
+    const records = appendSpy.mock.calls
+      .map((c) => c[0] as { channel: string; actionId: string; result: string })
+      .filter((record) => record.channel === "plugin:fs-write");
+    expect(records).toEqual([
+      expect.objectContaining({
+        actionId: `fs.appendFile:${await fs.realpath(log)}`,
+        result: "error",
+      }),
     ]);
   });
 });

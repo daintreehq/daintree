@@ -3845,6 +3845,12 @@ interface CreateMockHostOptions {
      * for an app-global plugin, which has no project.
      */
     projectRoot?: string;
+    /**
+     * The plugin's implicit data dir, inside which `fs.appendFile` grows
+     * missing parents the way the host does. Defaults to the same place the
+     * host uses: `~/.daintree/plugin-data/{pluginId}`.
+     */
+    pluginDataDir?: string;
     activeWorktree?: PluginWorktreeSnapshot | null;
     worktrees?: PluginWorktreeSnapshot[];
     /**

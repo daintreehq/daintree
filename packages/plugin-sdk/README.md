@@ -51,6 +51,12 @@ expect(host.registeredActions).toHaveLength(1);
 
 The mock validates argument shapes the way the real host does and records what the plugin called; it does not model processes, filesystem containment, git, or the manifest gates. The host API reference lists exactly what it leaves out.
 
+### Migrating: `simulateFsWatch` now matches paths
+
+`host.simulateFsWatch(changedPath)` used to call every registered `fs.watch` callback regardless of the paths it watched. It now calls only the watchers that would see that change: a watcher sees its watched path itself and that path's direct children, and one registered with `{ recursive: true }` sees anything beneath it. A watcher registered with `debounceMs` receives one trailing callback after the delay, so drive it with fake timers (`vi.useFakeTimers()` / `vi.advanceTimersByTime`).
+
+A test that simulated a path outside what the plugin watched — `watch(["/a"])` then `simulateFsWatch("/changed")` — no longer fires. Simulate a path under the watched directory instead, or pass `{ recursive: true }` if the plugin really watches a tree.
+
 ## Documentation
 
 The full plugin documentation — manifest reference, host API, contribution points, views, and the development loop — lives at [docs/plugins](https://github.com/daintreehq/daintree/tree/develop/docs/plugins).
