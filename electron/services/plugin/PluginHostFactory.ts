@@ -13,8 +13,10 @@ import { pathToFileURL } from "node:url";
 import {
   MAX_HTML_BYTES,
   renderHtmlToPdf,
+  reserveConsentWait,
   reserveRender,
   validateRenderPdfOptions,
+  type RenderReservation,
 } from "./pluginPdfRenderer.js";
 
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
@@ -3620,9 +3622,18 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
         ? "fs:project-write"
         : "fs:user-data-write";
       const { source, outputPath, print } = validateRenderPdfOptions(pluginId, rawOptions);
-      // Held from here to the end, so queued calls — and the HTML each one
-      // carries — stay bounded while they wait on consent or a render slot.
-      const reservation = reserveRender(pluginId);
+      // Two phases, each bounded so the HTML every parked call carries stays
+      // bounded too. Until consent is given the call holds only a per-plugin
+      // consent-wait place and no clock runs: the prompt goes at the user's
+      // pace, and an unanswered one must not tie up a render slot. From consent
+      // on it holds a render slot, and the 30 s deadline that starts with the
+      // slot covers reading the input, the queue wait and the render.
+      const consentWait = reserveConsentWait(pluginId);
+      let reservation: RenderReservation | null = null;
+      const within = <T>(step: Promise<T>): Promise<T> => {
+        step.catch(() => undefined);
+        return reservation ? Promise.race([step, reservation.expired]) : step;
+      };
       const cancel = new AbortController();
       const untrack = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => cancel.abort());
       try {
@@ -3676,9 +3687,11 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
         if (output) await refuseSymlinkLeaf(outputPath);
         await ensureCapabilityConsent(deps, pluginId, writeCap);
         requireLoaded();
+        consentWait.release();
+        reservation = reserveRender(pluginId);
         if (!output) {
-          await fs.mkdir(dataDir, { recursive: true });
-          output = await containOutput();
+          await within(fs.mkdir(dataDir, { recursive: true }));
+          output = await within(containOutput());
         }
         const contained = output;
 
@@ -3686,25 +3699,28 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
         let baseUrl: string | null = null;
         let resourceRoot: string | null = null;
         if (input) {
-          html = await readHtmlSnapshot(input.htmlPath, input.resolved);
+          html = await within(readHtmlSnapshot(input.htmlPath, input.resolved));
           baseUrl = pathToFileURL(path.dirname(input.resolved) + path.sep).href;
-          resourceRoot = await fs.realpath(input.root);
+          resourceRoot = await within(fs.realpath(input.root));
         } else {
           html = source.kind === "html" ? source.html : "";
           // Inline HTML may still reference absolute file: URLs, but only inside
           // a root the plugin could read for itself.
           const readCap =
             contained.rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
-          if (caps.has(readCap)) resourceRoot = await fs.realpath(contained.root);
+          if (caps.has(readCap)) resourceRoot = await within(fs.realpath(contained.root));
         }
         requireLoaded();
-        const pdf = await renderHtmlToPdf({
-          html,
-          baseUrl,
-          resourceRoot,
-          print,
-          signal: cancel.signal,
-        });
+        const pdf = await within(
+          renderHtmlToPdf({
+            html,
+            baseUrl,
+            resourceRoot,
+            print,
+            signal: cancel.signal,
+            timeoutMs: reservation.remainingMs(),
+          })
+        );
         requireLoaded();
 
         const revision = await runExclusive(contained.resolved, async () => {
@@ -3742,7 +3758,8 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
         });
         return { path: contained.resolved, bytes: pdf.byteLength, revision };
       } finally {
-        reservation.release();
+        consentWait.release();
+        reservation?.release();
         untrack();
       }
     },

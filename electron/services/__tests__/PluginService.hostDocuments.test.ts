@@ -40,6 +40,7 @@ vi.mock("../plugin/pluginPdfRenderer.js", async (importOriginal) => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { MAX_OUTSTANDING_RENDERS, reserveRender } from "../plugin/pluginPdfRenderer.js";
 import {
   getPluginCapabilityConsentService,
   _resetPluginCapabilityServicesForTest,
@@ -122,6 +123,7 @@ describe("host.documents.renderPdf", () => {
       resourceRoot: null,
       print: { pageSize: "A4", printBackground: true, preferCSSPageSize: false },
       signal: expect.any(AbortSignal),
+      timeoutMs: expect.any(Number),
     });
   });
 
@@ -176,6 +178,7 @@ describe("host.documents.renderPdf", () => {
       baseUrl: pathToFileURL(join(allowed, "inv") + "/").href,
       resourceRoot: allowed,
       signal: expect.any(AbortSignal),
+      timeoutMs: expect.any(Number),
       print: {
         pageSize: "Letter",
         printBackground: true,
@@ -394,6 +397,60 @@ describe("host.documents.renderPdf", () => {
     expect(signal?.aborted).toBe(true);
     await expect(pending).rejects.toThrow(/^RENDER_CANCELLED:/);
     await expect(fs.stat(outputPath)).rejects.toThrow();
+  });
+
+  it("parks calls on an unanswered consent prompt without holding render slots", async () => {
+    let answer: (value: "approved-once") => void = () => undefined;
+    const prompt = new Promise<"approved-once">((resolve) => {
+      answer = resolve;
+    });
+    getPluginCapabilityConsentService().setConsentBridge(() => prompt);
+    const host = registerPlugin(["fs:project-write"]);
+    const call = (name: string) =>
+      host.documents.renderPdf({ html: "<p/>", outputPath: join(allowed, name) });
+    const parked = [call("1.pdf"), call("2.pdf")];
+    // A third call waiting on the same prompt is refused rather than queued.
+    await expect(call("3.pdf")).rejects.toThrow(/^RENDER_BUSY: .*consent prompt/);
+    // Every render slot is still free for other plugins while the prompt waits.
+    const slots = Array.from({ length: MAX_OUTSTANDING_RENDERS }, (_v, i) =>
+      reserveRender(`other-${Math.floor(i / 2)}`)
+    );
+    for (const slot of slots) slot.release();
+    expect(renderMock.render).not.toHaveBeenCalled();
+
+    answer("approved-once");
+    await expect(Promise.all(parked)).resolves.toHaveLength(2);
+  });
+
+  it("times out from the moment the render slot is taken, whatever the render does", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const host = registerPlugin(["fs:project-write"]);
+      let started = false;
+      renderMock.render.mockImplementation((request: { timeoutMs: number }) => {
+        started = true;
+        expect(request.timeoutMs).toBeGreaterThan(0);
+        expect(request.timeoutMs).toBeLessThanOrEqual(30_000);
+        // A render that ignores its own timeout still cannot outlive the slot.
+        return new Promise<Buffer>(() => {});
+      });
+      const pending = host.documents.renderPdf({
+        html: "<p/>",
+        outputPath: join(allowed, "slow.pdf"),
+      });
+      pending.catch(() => undefined);
+      while (!started) await new Promise((resolve) => setImmediate(resolve));
+      vi.advanceTimersByTime(30_000);
+      await expect(pending).rejects.toThrow(/^RENDER_TIMEOUT:/);
+      // The slot was released: the plugin can render again.
+      renderMock.render.mockResolvedValue(PDF_BYTES);
+      vi.useRealTimers();
+      await expect(
+        host.documents.renderPdf({ html: "<p/>", outputPath: join(allowed, "next.pdf") })
+      ).resolves.toMatchObject({ path: join(allowed, "next.pdf") });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not create the data dir before consent, or ever when consent is denied", async () => {

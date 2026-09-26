@@ -3303,11 +3303,13 @@ export interface PluginDocumentsApi {
    * `fs:project-write` or `fs:user-data-write` for its root class, then the
    * just-in-time consent prompt; a symlink at the output leaf is refused with
    * `TARGET_IS_SYMLINK`, and a target that moves while the render runs with
-   * `TARGET_UNAVAILABLE`. Renders run two at a time across all plugins; a
-   * plugin with two calls outstanding, or a call arriving when eight are,
-   * rejects with `RENDER_BUSY:`. A call not finished within 30 seconds of
-   * being queued rejects with `RENDER_TIMEOUT:`, a page that fails to load
-   * with `RENDER_FAILED:`, a PDF over 50 MiB with `PAYLOAD_TOO_LARGE:`, and a
+   * `TARGET_UNAVAILABLE`. A call waiting on the consent prompt is untimed and
+   * holds no render slot, but a plugin may have only two waiting. Renders run
+   * two at a time across all plugins; a plugin with two calls holding render
+   * slots, or a call arriving when eight are, rejects with `RENDER_BUSY:`. A
+   * call not finished within 30 seconds of taking its slot rejects with
+   * `RENDER_TIMEOUT:`, a page that fails to load or print with
+   * `RENDER_FAILED:`, a PDF over 50 MiB with `PAYLOAD_TOO_LARGE:`, and a
    * call outstanding when the plugin unloads with `RENDER_CANCELLED:`.
    */
   renderPdf(options: PluginRenderPdfOptions): Promise<PluginRenderPdfResult>;

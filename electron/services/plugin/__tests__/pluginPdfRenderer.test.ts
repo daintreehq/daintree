@@ -98,9 +98,11 @@ vi.mock("electron", () => electronMock.module);
 import {
   _resetPdfRendererForTests,
   createDocumentRequestFilter,
+  MAX_AWAITING_CONSENT_PER_OWNER,
   MAX_OUTSTANDING_RENDERS,
   prepareSnapshotHtml,
   renderHtmlToPdf,
+  reserveConsentWait,
   reserveRender,
   validateRenderPdfOptions,
 } from "../pluginPdfRenderer.js";
@@ -234,10 +236,10 @@ describe("createDocumentRequestFilter", () => {
     // On Windows each of these can reach an SMB server, and resolving one is
     // enough to send the user's credentials; the check must precede any I/O.
     const realpath = vi.fn(async (p: string) => p);
-    const size = vi.fn(async () => 1);
+    const stat = vi.fn(async () => ({ isFile: () => true, size: 1 }));
     const allow = createDocumentRequestFilter(
       { mainFile: "/doc/page.html", resourceRoot: "/" },
-      { realpath, size }
+      { realpath, stat }
     );
     expect(await allow(url)).toBe(false);
     expect(realpath).not.toHaveBeenCalled();
@@ -326,6 +328,76 @@ describe("prepareSnapshotHtml", () => {
     expect(out).toContain(`<link rel="stylesheet" href="a.css">`);
     expect(out).toContain(`<link rel="alternate stylesheet" href="b.css">`);
     expect(out).not.toMatch(/evil|prefetch"|preconnect|prerender|x>y/i);
+  });
+});
+
+describe("createDocumentRequestFilter admission", () => {
+  it.each([
+    ["a FIFO or device", { isFile: () => false, size: 0 }],
+    ["a directory", { isFile: () => false, size: 4096 }],
+    ["a size-0 special such as /proc", { isFile: () => true, size: 0 }],
+  ])("refuses %s inside the root", async (_label, stat) => {
+    const allow = createDocumentRequestFilter(
+      { mainFile: "/doc/page.html", resourceRoot: "/doc" },
+      { realpath: async (p) => p, stat: async () => stat }
+    );
+    expect(await allow("file:///doc/asset")).toBe(false);
+  });
+
+  it("refuses a real FIFO without opening it", async () => {
+    const root = join(baseDir, "root");
+    await fs.mkdir(root);
+    const fifo = join(root, "pipe.css");
+    const { execFileSync } = await import("node:child_process");
+    try {
+      execFileSync("mkfifo", [fifo]);
+    } catch {
+      return; // no mkfifo on this platform
+    }
+    const allow = createDocumentRequestFilter({
+      mainFile: join(root, "p.html"),
+      resourceRoot: root,
+    });
+    expect(await allow(pathToFileURL(fifo).href)).toBe(false);
+  });
+});
+
+describe("reserveConsentWait", () => {
+  it("caps calls waiting on consent per plugin, independently of render slots", () => {
+    const waits = Array.from({ length: MAX_AWAITING_CONSENT_PER_OWNER }, () =>
+      reserveConsentWait("a")
+    );
+    expect(() => reserveConsentWait("a")).toThrow(/^RENDER_BUSY: .*consent prompt/);
+    // Another plugin, and the render slots, are untouched by a's parked calls.
+    expect(() => reserveConsentWait("b").release()).not.toThrow();
+    const slots = Array.from({ length: MAX_OUTSTANDING_RENDERS }, (_v, i) =>
+      reserveRender(`r${Math.floor(i / 2)}`)
+    );
+    for (const r of [...waits, ...slots]) r.release();
+    expect(() => reserveConsentWait("a").release()).not.toThrow();
+  });
+});
+
+describe("reserveRender deadline", () => {
+  it("starts the deadline at reservation and stops it on release", async () => {
+    vi.useFakeTimers();
+    const reservation = reserveRender("a", 1000);
+    expect(reservation.remainingMs()).toBe(1000);
+    vi.advanceTimersByTime(400);
+    expect(reservation.remainingMs()).toBe(600);
+    const expired = vi.fn();
+    reservation.expired.catch(expired);
+    vi.advanceTimersByTime(600);
+    await Promise.resolve();
+    expect(expired).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/^RENDER_TIMEOUT:/) })
+    );
+    expect(reservation.remainingMs()).toBe(0);
+    reservation.release();
+
+    const released = reserveRender("a", 1000);
+    released.release();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -431,6 +503,28 @@ describe("renderHtmlToPdf", () => {
     electronMock.state.printToPDF = () => new Promise<Buffer>(() => {});
     await expect(renderHtmlToPdf({ ...base, timeoutMs: 20 })).rejects.toThrow(/^RENDER_TIMEOUT:/);
     expect(electronMock.windows[0].destroyed).toBe(true);
+  });
+
+  it("maps a raw printToPDF rejection to RENDER_FAILED", async () => {
+    electronMock.state.printToPDF = () => Promise.reject(new Error("Failed to generate PDF"));
+    await expect(renderHtmlToPdf(base)).rejects.toMatchObject({
+      code: "RENDER_FAILED",
+      message: expect.stringMatching(/^RENDER_FAILED: printing failed: Failed to generate PDF/),
+    });
+    expect(electronMock.windows[0].destroyed).toBe(true);
+  });
+
+  it("keeps RENDER_CANCELLED when printing is interrupted by a cancel", async () => {
+    const unload = new AbortController();
+    electronMock.state.printToPDF = () =>
+      new Promise<Buffer>((_resolve, reject) => {
+        unload.abort();
+        // What Electron does once the window under it is destroyed.
+        setTimeout(() => reject(new Error("Render frame was disposed")), 0);
+      });
+    await expect(renderHtmlToPdf({ ...base, signal: unload.signal })).rejects.toMatchObject({
+      code: "RENDER_CANCELLED",
+    });
   });
 
   it("rejects an oversized PDF with PAYLOAD_TOO_LARGE", async () => {
