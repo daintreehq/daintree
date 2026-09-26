@@ -38,8 +38,8 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string) {
           const surface = uploadSurfaceRef.current;
           const { hostPath: filePath, thumbnail } =
             surface !== undefined && isRemoteWindow()
-              ? await trackUpload(surface, "Pasted image", () =>
-                  materialize({ kind: "clipboard-image" })
+              ? await trackUpload(surface, "Pasted image", (options) =>
+                  materialize({ kind: "clipboard-image" }, options)
                 )
               : await materialize({ kind: "clipboard-image" });
           // The caret is read after the save, never before: typing may have

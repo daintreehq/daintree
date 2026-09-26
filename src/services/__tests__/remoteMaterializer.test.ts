@@ -257,6 +257,40 @@ describe("remote materialize", () => {
     });
   });
 
+  it("follows a pasted image's upload by its operation id and cancels it there", async () => {
+    let finish!: () => void;
+    const saveClipboardImage = vi.fn(
+      (options: { opId: string }) =>
+        new Promise<{ filePath: string; thumbnailDataUrl: string }>((resolve) => {
+          void options;
+          finish = () =>
+            resolve({
+              filePath: "/tmp/daintree-inbox/clipboard/clipboard-1.png",
+              thumbnailDataUrl: "data:image/png;base64,AA",
+            });
+        })
+    );
+    const { materialize, deps, fileTransfer, emit } = setup({ saveClipboardImage });
+    const controller = new AbortController();
+    const onProgress = vi.fn();
+    const pending = materialize(
+      { kind: "clipboard-image" },
+      { onProgress, signal: controller.signal }
+    );
+    await vi.waitFor(() => expect(saveClipboardImage).toHaveBeenCalledWith({ opId: "op-1" }));
+    emit({ type: "progress", opId: "op-1", transferredBytes: 42, totalBytes: 100 });
+    emit({ type: "progress", opId: "op-other", transferredBytes: 99, totalBytes: 100 });
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(onProgress).toHaveBeenCalledWith(0.42);
+
+    controller.abort();
+    expect(fileTransfer.cancel).toHaveBeenCalledWith({ opId: "op-1" });
+    // Even when the host finished first, a cancelled paste answers with no path.
+    finish();
+    await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(deps.reportFailure).not.toHaveBeenCalled();
+  });
+
   it("stays quiet when the clipboard has no image", async () => {
     const saveClipboardImage = vi.fn(async () => {
       throw Object.assign(new Error("empty"), { code: "CLIPBOARD_EMPTY" });

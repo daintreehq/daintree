@@ -139,7 +139,7 @@ export interface GeneratedIpcInvokeMap {
     result: { text: string };
   };
   "clipboard:save-image": {
-    args: [];
+    args: [_options?: import("./fileTransfer.js").ClipboardSaveImageOptions | undefined];
     result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:thumbnail-from-path": {
