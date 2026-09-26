@@ -3284,6 +3284,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "plugins",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Snapshot every database a plugin has created to a file or folder the user picks in a native dialog. A plugin with no database on disk yet gets a notice instead.",
+    "examples": undefined,
+    "id": "plugin.backupDatabases",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Back up plugin data",
+  },
+  {
+    "category": "plugins",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Report why one plugin is in the state it is in: the load or activation failure it recorded, whether it is running, and the tail of the lines it wrote through the host logger. A project plugin whose manifest was refused is reported with its rejection, so one that never loaded is distinguishable from one that does not exist. An unknown id fails, listing the ids that do exist.",
     "examples": [
       {

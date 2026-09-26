@@ -19,6 +19,7 @@ import {
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
+  PanelMenuItemSchema,
   PreviewToolContributionSchema,
   GuestAdapterContributionSchema,
   ProcessToolContributionSchema,
@@ -107,6 +108,7 @@ const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
 const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
 const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
 const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
+const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -137,6 +139,7 @@ const SWEPT_SCHEMAS = {
   tours: TourContributionSchema,
   databases: DatabaseContributionSchema,
   surfaces: SurfaceContributionsSchema,
+  "panels.menu": PanelMenuItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
@@ -223,6 +226,7 @@ type FieldConsumerCoverage = {
   agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
   databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
+  "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "recipes.terminals": Record<
@@ -290,6 +294,35 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
       note: "Registered as the panel kind's extensionState schema version; stamped onto the panel record at the write gate (setPanelExtensionState) and enforced on restore by decodePanelExtensionState, which refuses a bag written above it (#12280).",
+    },
+    menu: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop → PanelKindConfig.pluginMenu)" },
+        { file: GENERIC_PANEL_MENU, symbol: "readPanelKindMenuCapabilities (pluginMenuItems)" },
+      ],
+      note: "Registered on the panel kind and drawn by both panel menus, above the plugin's own entries, once each action is registered.",
+    },
+  },
+  "panels.menu": {
+    actionId: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (panel_menu_action_not_own)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId → pluginMenu)" },
+        { file: GENERIC_PANEL_MENU, symbol: "pluginMenuCommandActionId" },
+      ],
+      note: "Checked to be the plugin's own action, qualified to the instance namespace, then dispatched with { panelId } from the panel menus.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: GENERIC_PANEL_MENU,
+          symbol: "readPanelKindMenuCapabilities (label ?? action title)",
+        },
+      ],
+      note: "The menu row's text; the action's registered title when absent.",
     },
   },
   toolbarButtons: {

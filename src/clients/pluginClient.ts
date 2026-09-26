@@ -1,6 +1,7 @@
 import type { LoadedPluginInfo, ProjectPluginInfo } from "@shared/types/plugin";
 import type { PluginDiagnosticsSnapshot } from "@shared/types/ipc/pluginDiagnostics";
 import type { PluginManifestValidationResult } from "@shared/types/ipc/pluginValidation";
+import type { PluginDataBackupOutcome } from "@shared/types/ipc/pluginDataBackup";
 
 /**
  * Renderer surface for the plugin-authoring feedback loop (#12214) — the reads
@@ -23,6 +24,10 @@ export const pluginClient = {
   getProjectPlugins: (): Promise<ProjectPluginInfo[]> => window.electron.plugin.getProjectPlugins(),
 
   reloadProjectPlugins: (): Promise<void> => window.electron.plugin.reloadProjectPlugins(),
+
+  /** Snapshot a plugin's existing databases through a native save or folder dialog. */
+  backupDatabases: (pluginId: string): Promise<PluginDataBackupOutcome> =>
+    window.electron.plugin.backupDatabases(pluginId),
 
   /** Every plugin the host is running, with the instance key each is addressed by. */
   list: (): Promise<LoadedPluginInfo[]> => window.electron.plugin.list(),

@@ -62,6 +62,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   getRequiredSettingsStatus: "plugin:settings-required-status",
   pickPath: "plugin:pick-path",
   pathExists: "plugin:path-exists",
+  backupDatabases: "plugin:backup-databases",
   getBackgroundUpdateCheckSettings: "plugin:bg-update-check-settings-get",
   setBackgroundUpdateCheckSettings: "plugin:bg-update-check-settings-set",
   getLatestBackgroundUpdateCheck: "plugin:bg-update-check-latest",

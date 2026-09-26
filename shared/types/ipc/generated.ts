@@ -1222,6 +1222,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
   };
+  "plugin:backup-databases": {
+    args: [pluginId: string];
+    result: import("./pluginDataBackup.js").PluginDataBackupOutcome;
+  };
   "plugin:bg-update-check-latest": {
     args: [];
     result: import("../plugin.js").PluginBackgroundUpdateCheckResult | null;

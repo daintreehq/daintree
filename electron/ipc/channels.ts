@@ -1115,6 +1115,8 @@ export const CHANNELS = {
   PLUGIN_PICK_PATH: "plugin:pick-path",
   /** Existence probe for a stored plugin `mustExist` path setting. */
   PLUGIN_PATH_EXISTS: "plugin:path-exists",
+  /** Snapshot a plugin's existing databases to a file or folder the user picks. */
+  PLUGIN_BACKUP_DATABASES: "plugin:backup-databases",
   /** Opt-in background plugin update check (#10893): read the enabled setting. */
   PLUGIN_BG_UPDATE_CHECK_SETTINGS_GET: "plugin:bg-update-check-settings-get",
   /** Opt-in background plugin update check (#10893): set the enabled setting. */

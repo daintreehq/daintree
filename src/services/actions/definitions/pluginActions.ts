@@ -16,6 +16,17 @@ import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfi
 import { isBuiltInPanelKind } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmationStaged";
+import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
+import { systemClient } from "@/clients/systemClient";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+/** The folder part of a path main returned, kept in the platform's own separators. */
+function dirnameOf(filePath: string): string {
+  const cut = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return cut > 0 ? filePath.slice(0, cut) : filePath;
+}
 
 /**
  * The plugin-authoring feedback loop (#12214). An agent writing a plugin into a
@@ -400,6 +411,82 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
           home: target.home === "project" ? "project-settings" : "plugin-manager",
           requestedKey: target.key ?? null,
         };
+      },
+    })
+  );
+
+  actions.set("plugin.backupDatabases", () =>
+    defineAction({
+      id: "plugin.backupDatabases",
+      title: "Back up plugin data",
+      description:
+        "Snapshot every database a plugin has created to a file or folder the user picks in a native dialog. A plugin with no database on disk yet gets a notice instead.",
+      category: "plugins",
+      kind: "command",
+      danger: "safe",
+      nonRepeatable: true,
+      // Needs a plugin id, and there is no focused-plugin fallback to act on.
+      palette: { mode: "hidden" },
+      // UI for the plugin panels' menus. It opens a native dialog only a person
+      // can answer, so it is in no assistant or external tier and hidden from
+      // tool listings too.
+      mcpVisibility: "hidden",
+      // A plugin reaching this would raise a save dialog for any plugin's data,
+      // its own included, with nothing the user asked for behind it.
+      denyPluginDispatch: true,
+      scope: "renderer",
+      argsSchema: z.object({
+        pluginId: z.string().min(1).describe("The plugin instance key whose data to back up."),
+      }),
+      // Every outcome, failures included, is reported by the notice below.
+      selfNotifiesOnExecutionError: true,
+      run: async ({ pluginId }) => {
+        const retry = () =>
+          void actionService.dispatch("plugin.backupDatabases", { pluginId }, { source: "user" });
+        let outcome;
+        try {
+          outcome = await pluginClient.backupDatabases(pluginId);
+        } catch (error) {
+          notify({
+            type: "error",
+            priority: "high",
+            title: "Couldn't back up plugin data",
+            message: formatErrorMessage(error, "The backup stopped before any file was written."),
+            action: { label: "Try again", onClick: retry },
+          });
+          throw error;
+        }
+        if (outcome.status === "cancelled") return outcome;
+        if (outcome.status === "no-data") {
+          notify({
+            type: "info",
+            priority: "high",
+            transient: true,
+            duration: 4000,
+            message: `${outcome.pluginName} has no data to back up yet`,
+          });
+          return outcome;
+        }
+        const [first] = outcome.paths;
+        const reveal = revealCopy();
+        notify({
+          type: "success",
+          priority: "high",
+          title: `${outcome.pluginName} data backed up`,
+          message:
+            outcome.paths.length === 1
+              ? `Saved to ${first}`
+              : `${outcome.paths.length} databases saved to ${dirnameOf(first!)}`,
+          ...(first !== undefined
+            ? {
+                action: {
+                  label: reveal.label,
+                  onClick: () => void systemClient.showItemInFolderUnconfined(first),
+                },
+              }
+            : {}),
+        });
+        return outcome;
       },
     })
   );

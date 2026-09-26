@@ -900,7 +900,7 @@ The queries run in your plugin's own process, over the runtime's built-in `node:
 | `exec(sql)` | One or more statements with no parameters. |
 | `columns(sql)` | The result columns (`name`, source `table` / `column`, declared `type`) without running the statement — headers for a result with no rows. |
 | `transaction(fn)` | `BEGIN IMMEDIATE`, `fn(tx)`, `COMMIT` — rolled back if `fn` throws. Use the `tx` you are handed: calling the outer handle inside `fn` waits for the transaction and deadlocks. |
-| `backup(destPath)` | A consistent snapshot written with SQLite's online backup, then moved into place atomically; resolves `{ path, bytes }`. The destination is checked exactly like `host.fs.writeFile` (declared roots or your data directory, `fs:*-write`, first-use consent, no symlink). The way to give a sync folder such as Dropbox a copy — never put the live file there. |
+| `backup(destPath)` | A consistent snapshot written with SQLite's online backup, then moved into place atomically; resolves `{ path, bytes }`. The destination is checked exactly like `host.fs.writeFile` (declared roots or your data directory, `fs:*-write`, first-use consent, no symlink). The way to give a sync folder such as Dropbox a copy — never put the live file there. For a copy the user asks for, you need nothing: your panels' **Back up data…** menu entry does it for every declared database (see [Databases](./contribution-points.md#databases--shipped)). |
 | `onDidChange(cb)` | `cb({ origin: "self" \| "external" })`, coalesced. Returns a disposer. |
 | `close()` | Idempotent. Open handles are also closed when the plugin unloads or reloads. |
 

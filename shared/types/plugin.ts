@@ -99,6 +99,27 @@ export interface PanelContribution {
   dockable?: boolean;
   /** Schema version stamped on every persisted panel-state write; bump only for an incompatible shape change. */
   stateVersion?: number;
+  /**
+   * Up to five of your own actions, offered in this panel's ⋯ and right-click
+   * menus in the order given. Each is dispatched with `{ panelId }` naming the
+   * panel the menu was opened on.
+   */
+  menu?: PanelMenuItemContribution[];
+}
+
+/** Most entries one panel's `menu` may declare. */
+export const PANEL_MENU_MAX_ITEMS = 5;
+
+/** One entry of a panel's `menu`. */
+export interface PanelMenuItemContribution {
+  /**
+   * One of your own actions, in your plugin's namespace (`"{manifestId}.{id}"`),
+   * from `contributes.commands` or `host.registerAction`. The item appears
+   * while that action is registered.
+   */
+  actionId: string;
+  /** Menu label. Defaults to the action's title. */
+  label?: string;
 }
 
 export interface ToolbarButtonContribution {

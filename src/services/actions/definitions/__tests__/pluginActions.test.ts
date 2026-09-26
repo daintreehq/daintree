@@ -6,9 +6,18 @@ const clientMocks = vi.hoisted(() => ({
   getProjectPlugins: vi.fn(),
   reloadProjectPlugins: vi.fn(),
   list: vi.fn(),
+  backupDatabases: vi.fn(),
 }));
 
 vi.mock("@/clients/pluginClient", () => ({ pluginClient: clientMocks }));
+
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
+const revealMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/clients/systemClient", () => ({
+  systemClient: { showItemInFolderUnconfined: revealMock },
+}));
 
 const panelState = vi.hoisted(() => ({
   panelsById: {} as Record<string, { id: string; kind?: string; title: string }>,
@@ -727,6 +736,85 @@ describe("plugin.openSettings", () => {
     const def = definition("plugin.openSettings");
     expect(def.denyPluginDispatch).not.toBe(true);
     expect(DENY_PLUGIN_DISPATCH_ACTION_IDS).not.toContain("plugin.openSettings");
+    expect(def.mcpVisibility).toBe("hidden");
+  });
+});
+
+describe("plugin.backupDatabases", () => {
+  beforeEach(() => {
+    clientMocks.backupDatabases.mockReset();
+    notifyMock.mockReset();
+    revealMock.mockClear();
+  });
+
+  it("names only the plugin, and main does the rest", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({ status: "cancelled" });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    expect(clientMocks.backupDatabases).toHaveBeenCalledWith("acme.ledger");
+  });
+
+  it("says nothing when the dialog was dismissed", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({ status: "cancelled" });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("says so when the plugin has nothing on disk yet", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({ status: "no-data", pluginName: "Ledger" });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.type).toBe("info");
+    expect(payload.message).toBe("Ledger has no data to back up yet");
+    expect(payload.action).toBeUndefined();
+  });
+
+  it("reports where one file went, with a way to reveal it", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({
+      status: "saved",
+      pluginName: "Ledger",
+      paths: ["/Users/me/Downloads/ledger.db"],
+    });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.type).toBe("success");
+    expect(payload.title).toBe("Ledger data backed up");
+    expect(payload.message).toContain("/Users/me/Downloads/ledger.db");
+    payload.action.onClick();
+    expect(revealMock).toHaveBeenCalledWith("/Users/me/Downloads/ledger.db");
+  });
+
+  it("reports a folder of files by their count and folder", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({
+      status: "saved",
+      pluginName: "Ledger",
+      paths: ["C:\\Backups\\a.db", "C:\\Backups\\b.db"],
+    });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    expect(notifyMock.mock.calls[0]![0].message).toBe("2 databases saved to C:\\Backups");
+  });
+
+  it("reports a failure in main's words with one way to try again, and still fails", async () => {
+    clientMocks.backupDatabases.mockRejectedValue(new Error("backup.db already exists in /tmp."));
+
+    await expect(run("plugin.backupDatabases", { pluginId: "acme.ledger" })).rejects.toThrow(
+      "already exists"
+    );
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.type).toBe("error");
+    expect(payload.message).toBe("backup.db already exists in /tmp.");
+    expect(payload.action.label).toBe("Try again");
+  });
+
+  it("is UI only: closed to plugins and hidden from agents", () => {
+    const def = definition("plugin.backupDatabases");
+    expect(def.denyPluginDispatch).toBe(true);
+    expect(DENY_PLUGIN_DISPATCH_ACTION_IDS).toContain("plugin.backupDatabases");
     expect(def.mcpVisibility).toBe("hidden");
   });
 });
