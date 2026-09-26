@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type {
   LoadedPluginInfo,
   PluginRuntimeStatusChangedEvent,
@@ -39,6 +39,7 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
 }));
 
 import { PluginSettingsForm } from "../PluginSettingsForm";
+import { _resetPluginRuntimeStatusStoreForTest } from "@/store/pluginRuntimeStatusStore";
 import {
   _resetPluginSettingsViewRuntimesForTest,
   _settingsViewRemovalSignalForTest,
@@ -109,6 +110,7 @@ beforeEach(() => {
   madeFor.length = 0;
   vi.clearAllMocks();
   _resetPluginSettingsViewRuntimesForTest();
+  _resetPluginRuntimeStatusStoreForTest();
   pluginApi.getSettingValues.mockResolvedValue({
     values: {},
     secretsSet: [],
@@ -243,6 +245,50 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(next.aborted).toBe(true);
   });
 
+  it("swaps a mounted view for the reloaded module while the page stays open", async () => {
+    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
+    const list = vi.fn(async () => [makePlugin([], "plugin://b/__dtv-4/settings.js")]);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        plugin: { ...pluginApi, list },
+        events: {
+          on: (name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
+            if (name === "plugin:runtime-status-changed") listeners.push(cb);
+            return () => {};
+          },
+        },
+      },
+    });
+    const push = (viewGeneration: number) =>
+      act(() =>
+        listeners.forEach((cb) =>
+          cb({
+            pluginId: "acme.test",
+            status: { pluginId: "acme.test", viewGeneration, worker: null, dev: null },
+          })
+        )
+      );
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([], "plugin://a/__dtv-3/settings.js")}
+        viewScope="user"
+      />
+    );
+    push(3);
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+
+    // A dev rebuild: the live generation moves on, the props do not.
+    push(4);
+
+    await waitFor(() =>
+      expect(madeFor.at(-1)?.componentPath).toBe("plugin://b/__dtv-4/settings.js")
+    );
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+    expect(list).toHaveBeenCalled();
+  });
+
   it("renders nothing for a plugin with neither fields nor a view", () => {
     const { container } = render(<PluginSettingsForm plugin={makePlugin([])} viewScope="user" />);
     expect(container.innerHTML).toBe("");
@@ -333,9 +379,44 @@ describe("PluginSettingsForm settings edited by the plugin's own section", () =>
     expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
   });
 
+  it("lands a link to a view-edited key on the plugin's own section", async () => {
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([cadence, channel], "plugin://a/settings.js")}
+        viewScope="user"
+        focusRequest={{ key: "cadence", nonce: 3 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(3));
+    const section = screen.getByTestId("fake-settings-view").closest(".settings-highlight");
+    expect(section).not.toBeNull();
+  });
+
   it("still shows the field when the plugin declares no section to edit it", () => {
     render(<PluginSettingsForm plugin={makePlugin([cadence, channel])} viewScope="user" />);
 
     expect(screen.getByText("Posting cadence")).toBeTruthy();
+  });
+});
+
+describe("PluginSettingsForm after the plugin reloads with new declarations", () => {
+  it("re-reads stored values instead of showing a newly declared field as unset", async () => {
+    const channel: SettingDefinition = { id: "channel", type: "string", label: "Channel" };
+    const extra: SettingDefinition = { id: "extra", type: "string", label: "Extra" };
+    const first = makePlugin([channel]);
+    const { rerender } = render(<PluginSettingsForm plugin={first} viewScope="user" />);
+    await waitFor(() => expect(pluginApi.getSettingValues).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <PluginSettingsForm
+        plugin={{ ...makePlugin([channel, extra]), loadedAt: 2 }}
+        viewScope="user"
+      />
+    );
+
+    await waitFor(() => expect(pluginApi.getSettingValues).toHaveBeenCalledTimes(2));
   });
 });

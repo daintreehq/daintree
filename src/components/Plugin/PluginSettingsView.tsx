@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import {
   pluginSettingsViewKindId,
   type LoadedPluginInfo,
@@ -11,6 +11,8 @@ import {
 } from "@/components/Plugin/PluginViewContent";
 import { pluginDeclaresSettingsView } from "@/services/plugin/pluginSettingsHome";
 import { stripPluginViewGeneration } from "@shared/utils/pluginViewUrl";
+import { usePluginRuntimeStatusStore } from "@/store/pluginRuntimeStatusStore";
+import { logError } from "@/utils/logger";
 
 /**
  * One plugin's settings-view runtime: the content factory, the module URL it was
@@ -153,8 +155,51 @@ export function PluginSettingsView({
   /** False while the home knows the plugin is stopped, even if its list is stale. */
   running?: boolean;
 }) {
+  const liveGeneration = usePluginRuntimeStatusStore(
+    (s) => s.statusById.get(plugin.instanceId)?.viewGeneration ?? null
+  );
+  const initRuntimeStatus = usePluginRuntimeStatusStore((s) => s.init);
+  useEffect(() => initRuntimeStatus(), [initRuntimeStatus]);
+  // A reload serves the view from a new module URL — new generation, new
+  // plugin:// authority — that only a fresh inventory read carries, and the
+  // homes don't re-read on a dev reload. The one this section fetched itself,
+  // if the props are behind the live generation.
+  const [fetchedPath, setFetchedPath] = useState<string | null>(null);
+  const propsPath = plugin.settingsViewPath;
+  const latestPath =
+    fetchedPath !== null && viewGenerationOf(fetchedPath) === liveGeneration
+      ? fetchedPath
+      : propsPath;
+  const stale =
+    latestPath !== undefined &&
+    liveGeneration !== null &&
+    viewGenerationOf(latestPath) !== liveGeneration;
+  const instanceId = plugin.instanceId;
+  useEffect(() => {
+    if (!stale || !running) return;
+    let cancelled = false;
+    window.electron.plugin
+      .list()
+      .then((list) => {
+        const next = list.find((p) => p.instanceId === instanceId)?.settingsViewPath;
+        if (!cancelled && next) setFetchedPath(next);
+      })
+      .catch((err: unknown) => logError(`Failed to refresh ${instanceId}'s settings view`, err));
+    return () => {
+      cancelled = true;
+    };
+  }, [stale, running, instanceId, liveGeneration]);
+
   if (!pluginDeclaresSettingsView(plugin)) return null;
-  const componentPath = running ? plugin.settingsViewPath : undefined;
+  // Never mount the retired module: until the new URL is in, the section waits.
+  const componentPath = running && !stale ? latestPath : undefined;
+  if (running && stale) {
+    return (
+      <SettingsGroup>
+        <SettingsRow label="More settings" description="Reloading…" />
+      </SettingsGroup>
+    );
+  }
   if (!componentPath) {
     return (
       <SettingsGroup>

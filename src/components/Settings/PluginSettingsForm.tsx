@@ -842,6 +842,11 @@ export function pluginSettingFieldId(pluginId: string, settingId: string): strin
   return `plugin-setting-${pluginId}-${settingId}`;
 }
 
+/** The plugin's own settings section, where a deep link to a key it edits lands. */
+export function pluginSettingsViewId(pluginId: string): string {
+  return `plugin-settings-view-${pluginId}`;
+}
+
 /**
  * Generated settings form for one plugin's `contributes.settings` (#9301). Field
  * chrome (labels, controls, scope badges) renders synchronously from the already
@@ -882,6 +887,10 @@ export function PluginSettingsForm({
     local: localScope,
   };
 
+  // A reload can bring new declarations for the same plugin — a branch switch
+  // adding a field whose value is already stored. Stored values are re-read
+  // for the new load, and editing waits until they are in.
+  const declarationsKey = `${plugin.loadedAt}:${settings.map((s) => s.id).join(",")}`;
   const hasUserScope = settings.some((s) => settingScope(s) === "user");
   const hasProjectScope = settings.some((s) => settingScope(s) === "project");
   const hasLocalScope = settings.some((s) => settingScope(s) === "local");
@@ -890,20 +899,20 @@ export function PluginSettingsForm({
   useEffect(() => {
     if (!hasUserScope) return;
     return loadScopeValues(pluginId, "user", null, setUserScope);
-  }, [pluginId, hasUserScope, reloadKey]);
+  }, [pluginId, hasUserScope, reloadKey, declarationsKey]);
 
   // Project-scoped values: reload on project switch (#9301 re-render requirement).
   useEffect(() => {
     if (!hasProjectScope) return;
     return loadScopeValues(pluginId, "project", projectId, setProjectScope);
-  }, [pluginId, hasProjectScope, projectId, reloadKey]);
+  }, [pluginId, hasProjectScope, projectId, reloadKey, declarationsKey]);
 
   // Local scope resolves from the same project id as `project`, so it reloads on
   // exactly the same switches — the file it reaches just isn't in the repo.
   useEffect(() => {
     if (!hasLocalScope) return;
     return loadScopeValues(pluginId, "local", projectId, setLocalScope);
-  }, [pluginId, hasLocalScope, projectId, reloadKey]);
+  }, [pluginId, hasLocalScope, projectId, reloadKey, declarationsKey]);
 
   // A deep link lands once the target's scope has resolved: before that the row
   // is disabled, and focus would skip its control for whatever comes next. It
@@ -912,6 +921,8 @@ export function PluginSettingsForm({
   const focusNonce = focusRequest?.nonce;
   const focusKey = focusRequest?.key;
   const focusDef = settings.find((def) => def.id === focusKey);
+  // A key the plugin's own section edits has no row; the link lands on that section.
+  const focusInView = focusDef?.editor === "view" && pluginDeclaresSettingsView(plugin);
   const focusScope = focusDef ? byScope[settingScope(focusDef)] : null;
   const focusReady = focusScope === null || focusScope.values !== null || !!focusScope.failed;
   useEffect(() => {
@@ -919,7 +930,9 @@ export function PluginSettingsForm({
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const attempt = () => {
-      const row = document.getElementById(pluginSettingFieldId(pluginId, focusKey));
+      const row = document.getElementById(
+        focusInView ? pluginSettingsViewId(pluginId) : pluginSettingFieldId(pluginId, focusKey)
+      );
       if (row && isOnScreen(row)) {
         landOnSettingsElement(row);
       } else if (row && attempts++ < LANDING_ATTEMPTS) {
@@ -932,7 +945,7 @@ export function PluginSettingsForm({
     return () => {
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [focusNonce, focusKey, focusReady, pluginId, onFocusHandled]);
+  }, [focusNonce, focusKey, focusReady, focusInView, pluginId, onFocusHandled]);
 
   const hasView = pluginDeclaresSettingsView(plugin);
   if (settings.length === 0 && elsewhere.length === 0 && !hasView) return null;
@@ -991,11 +1004,15 @@ export function PluginSettingsForm({
           {elsewhereRow}
         </SettingsGroup>
       )}
-      <PluginSettingsView
-        plugin={plugin}
-        context={{ scope: viewScope, projectId: viewScope === "project" ? projectId : null }}
-        running={viewRunning}
-      />
+      {hasView && (
+        <div id={pluginSettingsViewId(pluginId)}>
+          <PluginSettingsView
+            plugin={plugin}
+            context={{ scope: viewScope, projectId: viewScope === "project" ? projectId : null }}
+            running={viewRunning}
+          />
+        </div>
+      )}
     </div>
   );
 }
