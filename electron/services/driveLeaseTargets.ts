@@ -4,13 +4,18 @@ type MaybePromise<T> = T | Promise<T>;
 
 /**
  * This Host's own records, which the lease gate reads to find the project a
- * call changes. Each answers null when it can't tell, which refuses the call;
- * the list-valued ones answer [] for a record that changes no project (an
- * operation that has finished and gone, a panel with no preview running).
+ * call changes. Each answers null, throws or rejects when it can't tell, which
+ * refuses the call; the list-valued ones answer [] for a record that changes
+ * no project (an operation that has finished and gone, a panel with no
+ * preview running).
  */
 export interface LeaseTargetResolvers {
-  /** The registered project a repository, worktree or folder path belongs to. */
-  projectForPath(path: string): MaybePromise<string | null>;
+  /**
+   * Every registered project a repository, worktree or folder path's changes
+   * land in; [] only when it is confirmed to be in none. A lookup that fails
+   * or times out throws or rejects, never answers [].
+   */
+  projectsForPath(path: string): MaybePromise<readonly string[]>;
   /** The project a terminal's pty-host record names. */
   projectForTerminal(terminalId: string): MaybePromise<string | null>;
   projectsForOperation(opId: string): MaybePromise<readonly string[]>;
@@ -78,12 +83,14 @@ function resolveSource(
 
   switch (source.from) {
     case "project":
-      return [value];
+      // Handlers trim the id they act on, so a spelling that trims to another
+      // id would be checked as one project and run as another.
+      return value === value.trim() ? [value] : { unresolved: "a noncanonical project id" };
     case "path":
     case "worktree":
-      return then(resolvers.projectForPath(value), (projectId) =>
-        projectId
-          ? [projectId]
+      return then(resolvers.projectsForPath(value), (projectIds) =>
+        projectIds.length > 0
+          ? projectIds
           : source.from === "path" && source.unowned === "allow"
             ? []
             : { unresolved: `a ${source.from} in no registered project` }

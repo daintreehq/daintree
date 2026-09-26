@@ -575,7 +575,7 @@ describe("drive-lease gate", () => {
         },
       },
       {
-        projectForPath: (p) => (p === P1 ? "proj-1" : p === P2 ? "proj-2" : null),
+        projectsForPath: (p) => (p === P1 ? ["proj-1"] : p === P2 ? ["proj-2"] : []),
         projectForTerminal: (id) => (id === "t1" ? "proj-1" : id === "t2" ? "proj-2" : null),
         projectsForOperation: () => [],
         projectsForDevPreviewPanel: () => [],
@@ -786,10 +786,10 @@ describe("drive-lease gate", () => {
     const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
     const holders = new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]);
     installGate(holders, {
-      projectForPath: async () => {
+      projectsForPath: async () => {
         // Someone takes proj-1 while the lookup runs.
         holders.set("proj-1", { endpointId: "remote:-8", clientId: "client-d" });
-        return "proj-1";
+        return ["proj-1"];
       },
     });
     const refused = await getIpcDispatcher().invokeForEndpoint(
