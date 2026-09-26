@@ -703,7 +703,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
-  it("renders the configure-in-settings fallback and no Start CTA when no single launchable agent (#10699)", () => {
+  it("asks which agent runs the assistant, instead of a Start CTA, when several could", () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
@@ -711,9 +711,44 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
 
     render(<HelpPanel width={380} />);
 
+    expect(screen.getByTestId("help-choose-agent-claude")).toBeTruthy();
+    expect(screen.getByTestId("help-choose-agent-codex")).toBeTruthy();
+    expect(screen.queryByTestId("help-start-assistant")).toBeNull();
+    expect(screen.queryByText(/Configure an assistant agent in settings/i)).toBeNull();
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+  });
+
+  it("stores the chosen agent as the default and starts it", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "chosen-term" } });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("help-choose-agent-codex"));
+    });
+
+    expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("codex");
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "codex" })
+    );
+  });
+
+  it("falls back to settings when no installed agent can run the assistant", () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = {};
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+
     expect(
       screen.getByText(/Configure an assistant agent in settings to get started/i)
     ).toBeTruthy();
+    expect(screen.queryByTestId("help-agent-chooser")).toBeNull();
     expect(screen.queryByTestId("help-start-assistant")).toBeNull();
   });
 
