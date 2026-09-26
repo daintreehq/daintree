@@ -283,7 +283,7 @@ type ServiceWithSettingsManager = {
 
 async function setupSettingsService(
   pluginId: string,
-  settings?: Array<{ id: string; type: string; scope?: SettingsScope }>
+  settings?: Array<{ id: string; type: string; scope?: SettingsScope; default?: unknown }>
 ): Promise<{ service: PluginService; settingsRoot: string }> {
   const pluginsRoot = path.join(tmpDir, "plugins");
   const dir = path.join(pluginsRoot, pluginId);
