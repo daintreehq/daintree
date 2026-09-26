@@ -299,6 +299,27 @@ export class WorktreePortBroker {
     return true;
   }
 
+  /**
+   * Record where a remote endpoint's port goes before any workspace host is up
+   * for it, so a later load (a Retry after a failed one) can connect it with
+   * {@link connectEndpointPort} rather than waiting on the endpoint's own retry.
+   */
+  expectEndpointPort(handle: number, receive: (port: Electron.MessagePortMain) => void): void {
+    if (handle >= 0) throw new Error("Endpoint worktree ports are keyed by a negative handle");
+    this.endpointReceivers.set(handle, receive);
+  }
+
+  /**
+   * Connect a remote endpoint that is waiting for a port, or holds one to
+   * another host, to `host`. True when it holds a port to `host` afterwards;
+   * false when nothing is waiting for one under that handle.
+   */
+  connectEndpointPort(host: WorktreePortHost, handle: number): boolean {
+    if (this.ports.get(handle)?.host === host) return true;
+    const receive = this.endpointReceivers.get(handle);
+    return receive ? this.brokerEndpointPort(host, handle, receive) : false;
+  }
+
   /** Close a remote endpoint's pair for good. */
   releaseEndpointPort(handle: number): void {
     this.endpointReceivers.delete(handle);

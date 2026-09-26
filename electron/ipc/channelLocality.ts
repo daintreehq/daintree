@@ -16,9 +16,11 @@ import type { ChannelName } from "./channels.js";
  * joins a machine's main process to its own views. A host reaches a remote
  * view's renderer through the link's reverse requests, which the view's Shell
  * answers over this bridge.
- * The plugin prompt and capability-consent bridges are `shell` for the same
- * reason: a host's plugin asks the driving Shell by reverse request, and that
- * Shell puts the question to its own view.
+ * The plugin prompt, capability-consent, action-dispatch and action-catalog
+ * bridges are `shell` for the same reason: a host's plugin asks the driving
+ * Shell by reverse request, and that Shell puts the question to its own view.
+ * So is the worktree port receipt: it confirms a port this machine posted to
+ * its own view (a remote view's is a relay this Shell holds).
  *
  * There is no default. The record is total over {@link ChannelName}, so a new
  * channel that isn't classified here fails typecheck, and
@@ -542,10 +544,10 @@ export const CHANNEL_LOCALITY = {
   "plugin-parity:claim-switch-notice": "shell",
   "plugin-process:list": "host",
   "plugin:actions-get": "host",
-  "plugin:actions-get-request": "host",
-  "plugin:actions-get-response": "host",
-  "plugin:actions-list-request": "host",
-  "plugin:actions-list-response": "host",
+  "plugin:actions-get-request": "shell",
+  "plugin:actions-get-response": "shell",
+  "plugin:actions-list-request": "shell",
+  "plugin:actions-list-response": "shell",
   "plugin:actions-register": "host",
   "plugin:actions-unregister": "host",
   "plugin:activate-for-view": "host",
@@ -557,8 +559,8 @@ export const CHANNEL_LOCALITY = {
   "plugin:check-for-update": "host",
   "plugin:clear-audit-log": "host",
   "plugin:context-menu-items": "host",
-  "plugin:dispatch-action-request": "host",
-  "plugin:dispatch-action-response": "host",
+  "plugin:dispatch-action-request": "shell",
+  "plugin:dispatch-action-response": "shell",
   "plugin:export-audit-log": "host",
   "plugin:file-decorations-get": "host",
   "plugin:forge-providers-get": "host",
@@ -987,7 +989,7 @@ export const CHANNEL_LOCALITY = {
   "worktree:get-recent-branches": "host",
   "worktree:host-disconnected": "host",
   "worktree:list-branches": "host",
-  "worktree:port-ack": "host",
+  "worktree:port-ack": "shell",
   "worktree:pr-refresh": "host",
   "worktree:pr-status": "host",
   "worktree:refresh": "host",

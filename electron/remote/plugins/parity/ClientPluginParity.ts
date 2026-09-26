@@ -115,6 +115,28 @@ export class ClientPluginParity {
     return hostId;
   }
 
+  /**
+   * Whether `pluginId` is loaded on the host right now. The host's plugins are
+   * the ones a remote view uses, so this is what a Shell-side feature bound to
+   * such a view (site preview) asks instead of its own plugin service. Any
+   * failure to ask reads as "not loaded": the feature is then refused, never
+   * run on a guess.
+   */
+  async isPluginLoadedOnHost(hostId: HostId, pluginId: string): Promise<boolean> {
+    const session = this.deps.sessionFor(hostId);
+    if (!session?.isOpen) return false;
+    try {
+      const answer = await session.call(
+        PluginParityLinkMethod.LOADED,
+        { pluginId },
+        { timeoutMs: STATUS_TIMEOUT_MS }
+      );
+      return answer === true;
+    } catch {
+      return false;
+    }
+  }
+
   private session(hostId: HostId): ParitySession {
     const session = this.deps.sessionFor(hostId);
     if (!session?.isOpen) throw notConnected(this.deps.hostLabel(hostId));

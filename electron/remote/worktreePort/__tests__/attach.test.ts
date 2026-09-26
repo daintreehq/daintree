@@ -9,7 +9,14 @@ const m = vi.hoisted(() => {
         if (broker.override === fn) broker.override = null;
       };
     }),
-    brokerEndpointPort: vi.fn(() => true),
+    brokerEndpointPort: vi.fn((_host: unknown, _handle: number, _receive: unknown) => true),
+    receivers: new Map<number, unknown>(),
+    expectEndpointPort: vi.fn((handle: number, receive: unknown) => {
+      broker.receivers.set(handle, receive);
+    }),
+    connectEndpointPort: vi.fn((host: unknown, handle: number) =>
+      broker.brokerEndpointPort(host, handle, broker.receivers.get(handle))
+    ),
     releaseEndpointPort: vi.fn(),
     brokerPort: vi.fn(() => true),
     closePortsForView: vi.fn(),

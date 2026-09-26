@@ -2336,8 +2336,10 @@ export function createHost(
         // A bound dispatch reaches only its own project's renderer and rejects
         // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;
         // unbound stays ambient, since an app-global plugin's action belongs
-        // wherever the user is looking.
-        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+        // wherever the user is looking. In Host mode it goes to the view that
+        // drives the project, which may be on another machine, and answers
+        // NO_FRONTEND_ATTACHED when nobody does.
+        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId, pluginId);
       }
       if (boundProjectId !== null) {
         // The confused-deputy guard: a project-bound plugin may restate its own
@@ -2347,7 +2349,7 @@ export function createHost(
             `PERMISSION_REQUIRED: plugin "${pluginId}" is bound to its own project and cannot dispatch to project "${requestedProjectId}"`
           );
         }
-        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId, pluginId);
       }
       // Unbound with an explicit target (#13119): only after the user turned
       // the switch on. No JIT prompt and no built-in bypass — the switch is the
@@ -2377,7 +2379,12 @@ export function createHost(
         });
       };
       try {
-        const result = await dispatcher.sendDispatchToRenderer(actionId, args, requestedProjectId);
+        const result = await dispatcher.sendDispatchToRenderer(
+          actionId,
+          args,
+          requestedProjectId,
+          pluginId
+        );
         if (result.ok) audit("success", "");
         else audit("error", result.error.code);
         return result;
@@ -2397,7 +2404,7 @@ export function createHost(
       list: async () => {
         if (!deps.plugins.has(pluginId)) return [];
         try {
-          return await dispatcher.sendActionsListToRenderer(boundProjectId);
+          return await dispatcher.sendActionsListToRenderer(boundProjectId, pluginId);
         } catch (err) {
           // A bound host whose project has no live view is the catalog's
           // documented "no renderer available" case, not an error — this
@@ -2410,7 +2417,7 @@ export function createHost(
       get: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return null;
         try {
-          return await dispatcher.sendActionsGetToRenderer(actionId, boundProjectId);
+          return await dispatcher.sendActionsGetToRenderer(actionId, boundProjectId, pluginId);
         } catch (err) {
           if (isProjectViewUnavailable(err)) return null;
           throw err;

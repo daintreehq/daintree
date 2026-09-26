@@ -2,10 +2,14 @@ import { clipboard } from "electron";
 import { parseHostScopedKey, type HostId } from "../../../shared/types/remoteHosts.js";
 import type { PluginUiPromptParams } from "../../../shared/types/pluginUiPrompt.js";
 import { requestConsentInWebContents } from "../../ipc/handlers/pluginCapability.js";
+import { PluginRendererDispatcher } from "../../services/plugin/PluginRendererDispatcher.js";
 import { PluginUIPromptDispatcher } from "../../services/plugin/PluginUIPromptDispatcher.js";
 import {
+  PluginActionsGetPayloadSchema,
+  PluginActionsListPayloadSchema,
   PluginClipboardPayloadSchema,
   PluginConsentPayloadSchema,
+  PluginDispatchPayloadSchema,
   PluginFrontendMethod,
   PluginPromptCancelPayloadSchema,
   PluginPromptPayloadSchema,
@@ -139,7 +143,8 @@ function defaultAskClipboardGrant(
 
 /**
  * Shell side of a host plugin's person-facing calls, for the view that drives
- * the plugin's project: its prompts, first-use consent and clipboard. Each is
+ * the plugin's project: its prompts, first-use consent, clipboard, and the
+ * actions it dispatches or looks up. Each is
  * validated, scoped to the view's own project, and shown through the same
  * dialogs a local plugin uses. Returns a teardown.
  */
@@ -152,6 +157,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   const openGrantQuestions = new Map<string, Promise<boolean>>();
   let disposed = false;
   const prompts = new PluginUIPromptDispatcher({ isDisposed: () => disposed });
+  const actions = new PluginRendererDispatcher({ isDisposed: () => disposed });
   const openPrompts = new Map<
     string,
     { controller: AbortController; hostId: HostId; webContentsId: number; pluginId: string }
@@ -325,7 +331,36 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     return null;
   };
 
+  /**
+   * A host plugin's `host.dispatch()`, run in the view that drives its
+   * project. The view's own ActionService applies the plugin source's rules
+   * (no restricted actions, no confirm bypass), exactly as it does for a
+   * plugin whose main code runs here.
+   */
+  const dispatchAction = (request: ViewReverseRequest): Promise<unknown> => {
+    const parsed = PluginDispatchPayloadSchema.safeParse(request.payload);
+    if (!parsed.success) throw malformed("dispatch");
+    const wc = scopeView(request, parsed.data.pluginId);
+    return actions.sendDispatchToWebContents(wc, parsed.data.actionId, parsed.data.args);
+  };
+
+  const listActions = (request: ViewReverseRequest): Promise<unknown> => {
+    const parsed = PluginActionsListPayloadSchema.safeParse(request.payload);
+    if (!parsed.success) throw malformed("actions list");
+    return actions.sendActionsListToWebContents(scopeView(request, parsed.data.pluginId));
+  };
+
+  const getAction = (request: ViewReverseRequest): Promise<unknown> => {
+    const parsed = PluginActionsGetPayloadSchema.safeParse(request.payload);
+    if (!parsed.success) throw malformed("actions get");
+    const wc = scopeView(request, parsed.data.pluginId);
+    return actions.sendActionsGetToWebContents(wc, parsed.data.actionId);
+  };
+
   const disposers = [
+    registerReverseRequestMethod(PluginFrontendMethod.DISPATCH, dispatchAction),
+    registerReverseRequestMethod(PluginFrontendMethod.ACTIONS_LIST, listActions),
+    registerReverseRequestMethod(PluginFrontendMethod.ACTIONS_GET, getAction),
     registerReverseRequestMethod(PluginFrontendMethod.PROMPT, showPrompt),
     registerReverseRequestMethod(PluginFrontendMethod.PROMPT_CANCEL, cancelPrompts),
     registerReverseRequestMethod(PluginFrontendMethod.CONSENT, askConsent),
@@ -358,5 +393,6 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     for (const entry of openPrompts.values()) entry.controller.abort();
     openPrompts.clear();
     prompts.dispose();
+    actions.dispose();
   };
 }

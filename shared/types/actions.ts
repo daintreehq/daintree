@@ -535,7 +535,12 @@ export type ActionErrorCode =
    * see this code — main collapses it into the ordinary miss for them.
    */
   | "TERMINAL_IN_OTHER_PROJECT"
-  | "INVALID_URL";
+  | "INVALID_URL"
+  /**
+   * A plugin on a remote host dispatched an action while no frontend drives
+   * its project: nobody is attached whose view could run it.
+   */
+  | "NO_FRONTEND_ATTACHED";
 
 export interface ActionError {
   code: ActionErrorCode;

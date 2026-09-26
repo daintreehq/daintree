@@ -27,6 +27,12 @@ export const PluginFrontendMethod = {
   CLIPBOARD: "plugin.clipboard",
   /** A plugin toast, shown in the driving view. */
   TOAST: "plugin.toast",
+  /** `host.dispatch()`: run an action in the driving view; answers its dispatch result. */
+  DISPATCH: "plugin.dispatch-action",
+  /** `host.actions.list()`: the driving view's action catalog; answers `{ entries }`. */
+  ACTIONS_LIST: "plugin.actions-list",
+  /** `host.actions.get()`: one catalog entry; answers `{ entry }`. */
+  ACTIONS_GET: "plugin.actions-get",
 } as const;
 
 /** A remote clipboard image must fit one link frame with room to spare. */
@@ -140,6 +146,35 @@ export const PluginToastPayloadSchema = z.object({
   durationMs: z.number().int().positive().max(60_000).optional(),
 });
 export type PluginToastPayload = z.infer<typeof PluginToastPayloadSchema>;
+
+const actionId = z.string().min(1).max(256);
+
+export const PluginDispatchPayloadSchema = z.object({
+  pluginId,
+  actionId,
+  args: z.unknown(),
+});
+
+export const PluginActionsListPayloadSchema = z.object({ pluginId });
+
+export const PluginActionsGetPayloadSchema = z.object({ pluginId, actionId });
+
+/**
+ * A driving view's answer to a plugin dispatch, checked before the plugin
+ * sees it: a result, or an error with a code and message, as a local view's
+ * would be.
+ */
+export const RemoteDispatchAnswerSchema = z.union([
+  z.object({ ok: z.literal(true), result: z.unknown() }),
+  z.object({
+    ok: z.literal(false),
+    error: z.object({
+      code: z.string().min(1).max(64),
+      message: z.string().max(64 * 1024),
+      details: z.unknown().optional(),
+    }),
+  }),
+]);
 
 export const PluginClipboardPayloadSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("writeText"), pluginId, text: z.string() }),
