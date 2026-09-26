@@ -32,6 +32,13 @@ export function databaseError(code: string, message: string): Error & { code: st
 // ── The handle ─────────────────────────────────────────────────────────────
 
 interface SqliteStatement {
+  readonly sourceSQL?: string;
+  columns?(): Array<{
+    name: string;
+    table: string | null;
+    column: string | null;
+    type: string | null;
+  }>;
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
   run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
@@ -44,7 +51,7 @@ interface SqliteDatabase {
 }
 type DatabaseSyncCtor = new (
   path: string,
-  options?: { enableForeignKeyConstraints?: boolean }
+  options?: { enableForeignKeyConstraints?: boolean; readOnly?: boolean }
 ) => SqliteDatabase;
 
 let cachedCtor: DatabaseSyncCtor | null = null;
@@ -98,6 +105,30 @@ function plainRow<T>(row: unknown): T {
   return copy as T;
 }
 
+/**
+ * `prepare` compiles only the first statement and silently drops the rest, so
+ * `query("SELECT 1; DELETE FROM t")` would quietly ignore the DELETE. Anything
+ * but whitespace, semicolons and comments after the first statement is refused.
+ */
+function assertSingleStatement(sql: string, statement: SqliteStatement, id: string): void {
+  const source = statement.sourceSQL;
+  if (typeof source !== "string") return;
+  const start = sql.indexOf(source);
+  if (start < 0) return;
+  const tail = sql
+    .slice(start + source.length)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    // SQLite ends a line comment at \n or \r, so a \r must not hide a statement.
+    .replace(/--[^\r\n]*/g, "")
+    .replace(/[\s;]+/g, "");
+  if (tail.length > 0) {
+    throw databaseError(
+      "DB_MULTIPLE_STATEMENTS",
+      `database "${id}": only one statement is allowed here; use exec() for a batch`
+    );
+  }
+}
+
 interface FileIdentity {
   dev: number;
   ino: number;
@@ -146,6 +177,13 @@ export async function openPluginDatabase(
   }
   if (options.definitions !== undefined && typeof options.definitions !== "string") {
     throw databaseError("VALIDATION", "definitions must be a SQL string");
+  }
+  const readonly = options.readonly === true;
+  if (readonly && (options.migrations !== undefined || options.definitions !== undefined)) {
+    throw databaseError(
+      "VALIDATION",
+      "a readonly open cannot apply migrations or definitions; open it writable once to set the schema up"
+    );
   }
   const DatabaseSync = loadDatabaseSync();
   const filePath = location.path;
@@ -261,8 +299,15 @@ export async function openPluginDatabase(
     const before = readIdentity(filePath);
     let connection: SqliteDatabase | null = null;
     try {
-      connection = new DatabaseSync(filePath, { enableForeignKeyConstraints: true });
+      if (readonly && !leaf) {
+        throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
+      }
+      connection = new DatabaseSync(filePath, {
+        enableForeignKeyConstraints: true,
+        ...(readonly && { readOnly: true }),
+      });
       connection.exec("PRAGMA busy_timeout = 5000");
+      if (readonly) return { connection, identity: readIdentity(filePath), stable: true };
       // Enforced on every open: an agent that ran `PRAGMA journal_mode=WAL`
       // would otherwise leave committed data in a -wal sidecar that a commit
       // of the .db alone silently misses.
@@ -444,8 +489,17 @@ export async function openPluginDatabase(
 
   const prepare = (sql: string): SqliteStatement => {
     const statement = db.prepare(sql);
+    assertSingleStatement(sql, statement, location.id);
     statement.setReadBigInts?.(true);
     return statement;
+  };
+  const assertWritable = (op: string): void => {
+    if (readonly) {
+      throw databaseError(
+        "DB_READONLY",
+        `database "${location.id}" is open readonly; ${op} is refused`
+      );
+    }
   };
 
   // `markWrite` flags a batch that may have written without moving
@@ -459,7 +513,24 @@ export async function openPluginDatabase(
       const row = prepare(sql).get(...bindArgs(params));
       return row === undefined ? undefined : plainRow<T>(row);
     },
+    columns: async (sql: string) => {
+      const statement = prepare(sql);
+      // Reporting [] would read as "no columns"; say the runtime cannot tell.
+      if (typeof statement.columns !== "function") {
+        throw databaseError(
+          "DB_UNSUPPORTED",
+          "columns() needs a runtime whose node:sqlite has StatementSync.columns (Node 22.16+)"
+        );
+      }
+      return statement.columns().map((c) => ({
+        name: c.name,
+        table: c.table ?? null,
+        column: c.column ?? null,
+        type: c.type ?? null,
+      }));
+    },
     run: async (sql: string, params?: PluginDatabaseParams): Promise<PluginDatabaseRunResult> => {
+      assertWritable("run");
       const result = prepare(sql).run(...bindArgs(params));
       return {
         changes: Number(result.changes),
@@ -467,6 +538,7 @@ export async function openPluginDatabase(
       };
     },
     exec: async (sql: string) => {
+      assertWritable("exec");
       try {
         db.exec(sql);
       } finally {
@@ -517,14 +589,17 @@ export async function openPluginDatabase(
   const handle: PluginDatabase = {
     id: location.id,
     location: Object.freeze({ ...location }),
+    readonly,
     query: ((sql: string, params?: PluginDatabaseParams) =>
       run((t) => statements(t.markWrite).query(sql, params))) as PluginDatabase["query"],
     get: ((sql: string, params?: PluginDatabaseParams) =>
       run((t) => statements(t.markWrite).get(sql, params))) as PluginDatabase["get"],
     run: (sql, params) => run((t) => statements(t.markWrite).run(sql, params)),
     exec: (sql) => run((t) => statements(t.markWrite).exec(sql)),
+    columns: (sql) => run((t) => statements(t.markWrite).columns(sql)),
     transaction: <T>(fn: (tx: PluginDatabaseStatements) => Promise<T> | T) =>
       run(async (t) => {
+        assertWritable("transaction");
         db.exec("BEGIN IMMEDIATE");
         try {
           const result = await fn(statements(t.markWrite));

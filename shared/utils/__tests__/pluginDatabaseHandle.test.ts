@@ -307,6 +307,58 @@ describe("openPluginDatabase", () => {
     expect(events).toEqual([]);
   });
 
+  it("opens readonly: refuses writes, still sees an agent's commits", async () => {
+    await (await open({ migrations: ["CREATE TABLE t (x INTEGER)"] })).close();
+    const db = await open({ readonly: true });
+    expect(db.readonly).toBe(true);
+    await expect(db.run("INSERT INTO t VALUES (1)")).rejects.toMatchObject({ code: "DB_READONLY" });
+    await expect(db.exec("DELETE FROM t")).rejects.toMatchObject({ code: "DB_READONLY" });
+    await expect(db.transaction(async () => undefined)).rejects.toMatchObject({
+      code: "DB_READONLY",
+    });
+    await expect(db.query("INSERT INTO t VALUES (2) RETURNING x")).rejects.toThrow(/readonly/i);
+    const events: string[] = [];
+    db.onDidChange((event) => events.push(event.origin));
+    const agent = new DatabaseSync(location.path);
+    agent.exec("INSERT INTO t VALUES (9)");
+    agent.close();
+    await waitFor(() => events.includes("external"));
+    expect(await db.query("SELECT x FROM t")).toEqual([{ x: 9 }]);
+  });
+
+  it("refuses a readonly open of a missing file, or with a schema to apply", async () => {
+    await expect(open({ readonly: true })).rejects.toMatchObject({ code: "DB_NOT_FOUND" });
+    expect(fs.existsSync(location.path)).toBe(false);
+    await expect(
+      open({ readonly: true, migrations: ["CREATE TABLE t (x)"] })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(open({ readonly: true, migrations: [] })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+  });
+
+  it("refuses SQL after the first statement instead of dropping it", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)"] });
+    await expect(db.query("SELECT x FROM t; DELETE FROM t")).rejects.toMatchObject({
+      code: "DB_MULTIPLE_STATEMENTS",
+    });
+    expect(await db.query("SELECT x FROM t;  -- trailing comment\n")).toEqual([{ x: 1 }]);
+    await expect(db.query("SELECT x FROM t; -- comment\rDELETE FROM t")).rejects.toMatchObject({
+      code: "DB_MULTIPLE_STATEMENTS",
+    });
+    expect(await db.get("SELECT count(*) AS n FROM t")).toEqual({ n: 1 });
+  });
+
+  it("describes result columns for a query with no rows", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER, label TEXT)"] });
+    expect(await db.query("SELECT x, label AS name, 1 + 1 AS two FROM t")).toEqual([]);
+    expect(await db.columns("SELECT x, label AS name, 1 + 1 AS two FROM t")).toEqual([
+      { name: "x", table: "t", column: "x", type: "INTEGER" },
+      { name: "name", table: "t", column: "label", type: "TEXT" },
+      { name: "two", table: null, column: null, type: null },
+    ]);
+  });
+
   it("tells its owner when it closes", async () => {
     let closedCount = 0;
     const db = await open({ onClosed: () => closedCount++ });

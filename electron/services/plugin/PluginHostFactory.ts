@@ -681,7 +681,8 @@ export function createHost(
       ? { projectRoot: boundScopeRoot, worktreePath: await resolveBoundWorktreeTarget() }
       : { projectRoot: boundScopeRoot };
 
-  const resolveDatabase = async (id: string) => {
+  const resolveDatabase = async (id: string, options?: { readonly?: boolean }) => {
+    const readonly = options?.readonly === true;
     if (typeof id !== "string" || id.length === 0) {
       throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
     }
@@ -699,7 +700,8 @@ export function createHost(
     // the file, and every migration are project writes, so they wait for the
     // same first-use consent `host.fs.writeFile` does. A local database is
     // plugin-private state, like `host.storage`, and needs none.
-    if (declaration.location === "project") {
+    // A read-only open creates and writes nothing, so it needs no consent.
+    if (declaration.location === "project" && !readonly) {
       await ensureCapabilityConsent(deps, pluginId, "fs:project-write");
       if (!deps.plugins.has(pluginId)) {
         throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" db: plugin is no longer loaded`);
@@ -710,6 +712,7 @@ export function createHost(
       manifestId,
       projectRoot: boundProjectRoot,
       dataDir: deps.pluginDataDir(pluginId),
+      existingOnly: readonly,
     });
   };
 
@@ -1781,13 +1784,14 @@ export function createHost(
     // plugin unloaded mid-resolution silently no-ops rather than writing into
     // a torn-down plugin's file (lessons #9322/#9428/#9533).
     db: {
-      resolve: (id: string) => resolveDatabase(id),
+      resolve: (id: string, options?: { readonly?: boolean }) => resolveDatabase(id, options),
       open: async (id, options) => {
-        const location = await resolveDatabase(id);
+        const mode = { readonly: options?.readonly === true };
+        const location = await resolveDatabase(id, mode);
         let untrack: (() => void) | null = null;
         const database = await openPluginDatabase(location, {
           ...options,
-          revalidate: () => resolveDatabase(id),
+          revalidate: () => resolveDatabase(id, mode),
           onClosed: () => untrack?.(),
         });
         if (!deps.plugins.has(pluginId)) {

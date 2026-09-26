@@ -811,10 +811,11 @@ The queries run in your plugin's own process, over the runtime's built-in `node:
 | Member | Notes |
 | --- | --- |
 | `resolve(id)` | The declared database's `{ id, location, path, projectRelativePath, journalMode }`, without opening it. Hand `path` (or `projectRelativePath`) to agents. |
-| `open(id, { migrations?, definitions? })` | Creates the file and its directory if needed and returns a handle. Rejects `DB_NOT_DECLARED` for an id not in `contributes.databases`. |
+| `open(id, { migrations?, definitions?, readonly? })` | Creates the file and its directory if needed and returns a handle. Rejects `DB_NOT_DECLARED` for an id not in `contributes.databases`. With `readonly: true` it creates nothing (SQLite may still add `-wal`/`-shm` sidecars when reading a file an agent switched to WAL mode), asks for no consent, and refuses `run` / `exec` / `transaction` with `DB_READONLY` — the mode for a dashboard over data agents write; a missing file rejects `DB_NOT_FOUND`. |
 | `query(sql, params?)` / `get(sql, params?)` | All rows / the first row, as plain objects. `params` is an array for `?` placeholders or an object for `:name`, `$name`, `@name`. |
 | `run(sql, params?)` | One statement that returns no rows; resolves `{ changes, lastInsertRowid }`. |
 | `exec(sql)` | One or more statements with no parameters. |
+| `columns(sql)` | The result columns (`name`, source `table` / `column`, declared `type`) without running the statement — headers for a result with no rows. |
 | `transaction(fn)` | `BEGIN IMMEDIATE`, `fn(tx)`, `COMMIT` — rolled back if `fn` throws. Use the `tx` you are handed: calling the outer handle inside `fn` waits for the transaction and deadlocks. |
 | `onDidChange(cb)` | `cb({ origin: "self" \| "external" })`, coalesced. Returns a disposer. |
 | `close()` | Idempotent. Open handles are also closed when the plugin unloads or reloads. |
@@ -826,6 +827,8 @@ The queries run in your plugin's own process, over the runtime's built-in `node:
 **`definitions`** is SQL applied after the migrations, in one transaction, whenever its text differs from what the file last received — the home for views and triggers, which you want to change freely without a numbered migration or a data wipe. Write it to be idempotent: `DROP VIEW IF EXISTS on_hand; CREATE VIEW on_hand AS …`. The host records a hash of the applied text in a small `_daintree_meta` table inside the database, so an open with unchanged definitions never rewrites the file (a committed database does not show as modified just because a panel opened). They are also re-applied whenever a migration ran during the open, since recreating a table drops its triggers. A view or trigger dropped by hand stays dropped until one of those happens. Tell agents in your data contract to leave `_daintree_meta` alone. A failure rolls back and rejects `DB_DEFINITIONS_FAILED`.
 
 **Change detection.** An agent writing the file with the `sqlite3` CLI is a different process, invisible to your connection's own bookkeeping. While any `onDidChange` listener is attached, the handle watches the file's directory and polls once a second. It compares `PRAGMA data_version`, which advances only when _another_ connection commits, and the file's inode, which changes when the file is replaced by `git checkout`, `git stash` or a restore script. A replaced file is reopened transparently before the next statement, so a long-lived handle never keeps reading an unlinked inode. Your own `run`, `exec` and committed transactions announce themselves as `"self"`.
+
+**One statement per call.** `query`, `get`, `run` and `columns` compile exactly one statement; SQL after it rejects with `DB_MULTIPLE_STATEMENTS` instead of being silently dropped. Use `exec` for a batch. Queries run synchronously in your plugin's process: a runaway query stalls your plugin (never Daintree) until it finishes, and cannot be interrupted yet.
 
 **Calls are serialised per handle.** A statement issued while a transaction is running waits for it, so a panel refresh can never read half of a multi-row write.
 

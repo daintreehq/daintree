@@ -139,6 +139,7 @@ export type {
   PluginDatabaseLocationKind,
   PluginDatabaseParams,
   PluginDatabaseRunResult,
+  PluginDatabaseColumn,
   PluginDatabaseChangeEvent,
   PluginDatabaseOpenOptions,
 } from "./plugin.js";

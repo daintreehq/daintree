@@ -993,12 +993,17 @@ export class PluginDevWorkerHostProxy {
       // The host resolves and contains the path; the connection is opened
       // here, in the worker, so queries never cross the port.
       db: {
-        resolve: (id) => this.call<PluginDatabaseLocation>("db.resolve", { id }),
+        resolve: (id, options) =>
+          this.call<PluginDatabaseLocation>("db.resolve", {
+            id,
+            ...(options?.readonly === true && { readonly: true }),
+          }),
         open: async (id, options) => {
-          const location = await this.call<PluginDatabaseLocation>("db.resolve", { id });
+          const params = { id, ...(options?.readonly === true && { readonly: true }) };
+          const location = await this.call<PluginDatabaseLocation>("db.resolve", params);
           const database: PluginDatabase = await openPluginDatabase(location, {
             ...options,
-            revalidate: () => this.call<PluginDatabaseLocation>("db.resolve", { id }),
+            revalidate: () => this.call<PluginDatabaseLocation>("db.resolve", params),
             onClosed: () => this.databases.delete(database),
           });
           if (this.disposed) {

@@ -2975,12 +2975,43 @@ interface PluginDatabaseStatements {
     query<T = Record<string, unknown>>(sql: string, params?: PluginDatabaseParams): Promise<T[]>;
     /** The first row, or `undefined`. */
     get<T = Record<string, unknown>>(sql: string, params?: PluginDatabaseParams): Promise<T | undefined>;
-    /** Execute one statement that returns no rows. */
+    /**
+     * Execute one statement that returns no rows. `query`, `get`, `run` and
+     * `columns` each take exactly one statement; SQL after it rejects with
+     * `DB_MULTIPLE_STATEMENTS` rather than being silently ignored — use `exec`
+     * for a batch.
+     */
     run(sql: string, params?: PluginDatabaseParams): Promise<PluginDatabaseRunResult>;
     /** Execute one or more statements with no parameters (schema, pragmas). */
     exec(sql: string): Promise<void>;
+    /**
+     * The result columns a statement would return, without running it — the
+     * headers for a result that may have no rows.
+     */
+    columns(sql: string): Promise<PluginDatabaseColumn[]>;
+}
+/** One result column of a statement, from `PluginDatabase.columns`. */
+interface PluginDatabaseColumn {
+    /** The name a row object uses for this column (after any `AS` alias). */
+    name: string;
+    /** Source table, or null for an expression. */
+    table: string | null;
+    /** Source column, or null for an expression. */
+    column: string | null;
+    /** Declared type of the source column, or null. */
+    type: string | null;
 }
 interface PluginDatabaseOpenOptions {
+    /**
+     * Open for reading only. The host neither creates the file nor its
+     * directory (SQLite itself may add `-wal`/`-shm` sidecars when reading a
+     * file in WAL mode), raises no write-consent prompt, and refuses `run`, `exec` and
+     * `transaction` with `DB_READONLY`; SQLite itself refuses any write a query
+     * attempts. `migrations` and `definitions` cannot be combined with it. A
+     * missing file rejects with `DB_NOT_FOUND`. The right mode for a dashboard
+     * over data that agents write.
+     */
+    readonly?: boolean;
     /**
      * Ordered schema migrations. Migration `n` (0-based) runs when the file's
      * `PRAGMA user_version` is `n`, inside its own `BEGIN IMMEDIATE`
@@ -3013,6 +3044,8 @@ interface PluginDatabase extends PluginDatabaseStatements {
     readonly id: string;
     /** Where the file is. Hand `path` to agents; they can use `sqlite3` on it. */
     readonly location: PluginDatabaseLocation;
+    /** Whether the handle was opened with `readonly: true`. */
+    readonly readonly: boolean;
     /**
      * Run `fn` inside `BEGIN IMMEDIATE` … `COMMIT`, rolling back if it throws.
      * Use the `tx` it is handed — calling the outer handle from inside `fn`
@@ -3036,8 +3069,15 @@ interface PluginDatabase extends PluginDatabaseStatements {
  * resolved by the host.
  */
 interface PluginDatabaseApi {
-    /** Resolve a declared database's location without opening it. */
-    resolve(id: string): Promise<PluginDatabaseLocation>;
+    /**
+     * Resolve a declared database's location without opening it. By default
+     * this prepares the location for writing (creating the directory, and for a
+     * project database asking for write consent the first time); with
+     * `readonly: true` it only locates an existing file.
+     */
+    resolve(id: string, options?: {
+        readonly?: boolean;
+    }): Promise<PluginDatabaseLocation>;
     /**
      * Open (creating if needed) a declared database, apply `migrations`, and
      * return a handle. Handles are closed automatically when the plugin unloads.
@@ -4856,4 +4896,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseChangeEvent, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

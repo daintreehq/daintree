@@ -14,7 +14,7 @@ import {
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { join as joinPath } from "node:path";
@@ -907,7 +907,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   });
 
   let mockDatabaseDir: string | null = options.databases?.directory ?? null;
-  const resolveMockDatabase = async (id: string): Promise<PluginDatabaseLocation> => {
+  const resolveMockDatabase = async (
+    id: string,
+    readonly = false
+  ): Promise<PluginDatabaseLocation> => {
     if (typeof id !== "string" || id.length === 0) {
       throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
     }
@@ -916,6 +919,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       throw new Error(
         `DB_NOT_DECLARED: plugin "${pluginId}" db: "${id}" is not declared in contributes.databases`
       );
+    }
+    // Readonly locates an existing file and creates nothing, as the host does.
+    if (
+      readonly &&
+      (mockDatabaseDir === null || !existsSync(path.join(mockDatabaseDir, `${id}.db`)))
+    ) {
+      throw Object.assign(new Error(`DB_NOT_FOUND: database "${id}" does not exist yet`), {
+        code: "DB_NOT_FOUND",
+      });
     }
     mockDatabaseDir ??= mkdtempSync(path.join(tmpdir(), "daintree-mock-db-"));
     mkdirSync(mockDatabaseDir, { recursive: true });
@@ -932,9 +944,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     pluginId,
     pluginInfo,
     db: {
-      resolve: resolveMockDatabase,
+      resolve: (id, resolveOptions) => resolveMockDatabase(id, resolveOptions?.readonly === true),
       open: async (id, openOptions) =>
-        openPluginDatabase(await resolveMockDatabase(id), openOptions),
+        openPluginDatabase(
+          await resolveMockDatabase(id, openOptions?.readonly === true),
+          openOptions
+        ),
     },
     panelKindId(bareId: string) {
       if (typeof bareId !== "string" || bareId.length === 0) {

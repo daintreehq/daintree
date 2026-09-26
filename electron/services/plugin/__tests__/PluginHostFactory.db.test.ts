@@ -100,6 +100,21 @@ describe("host.db (in-process host)", () => {
     expect(fs.existsSync(path.join(projectRoot, ".daintree"))).toBe(false);
   });
 
+  it("opens a project database readonly without consent and without creating anything", async () => {
+    ensureAllowed.mockClear();
+    const { deps } = makeDeps([{ id: "ledger", location: "project", journalMode: "delete" }]);
+    const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
+    await expect(host.db.open("ledger", { readonly: true })).rejects.toThrow(/DB_NOT_FOUND/);
+    expect(fs.existsSync(path.join(projectRoot, ".daintree"))).toBe(false);
+    expect(ensureAllowed).not.toHaveBeenCalled();
+    await (await host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] })).close();
+    ensureAllowed.mockClear();
+    const reader = await host.db.open("ledger", { readonly: true });
+    expect(await reader.query("SELECT count(*) AS n FROM t")).toEqual([{ n: 0 }]);
+    expect(ensureAllowed).not.toHaveBeenCalled();
+    await reader.close();
+  });
+
   it("stops tracking a handle the plugin closed itself", async () => {
     const { deps, pluginEventCleanups } = makeDeps([
       { id: "cache", location: "local", journalMode: "delete" },

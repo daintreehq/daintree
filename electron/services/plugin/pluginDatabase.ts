@@ -58,6 +58,25 @@ async function mkdirContained(realRoot: string, dir: string, label: string): Pro
   return realDir;
 }
 
+async function existingContainedDir(
+  realRoot: string,
+  dir: string,
+  label: string,
+  notFound: () => Error
+): Promise<string> {
+  const realDir = await fsp.realpath(dir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") throw notFound();
+    throw error;
+  });
+  if (!isInside(realRoot, realDir)) {
+    throw databaseError(
+      "PATH_NOT_ALLOWED",
+      `database "${label}" directory resolves outside its root`
+    );
+  }
+  return realDir;
+}
+
 /**
  * Whether any segment of a root-relative path is the repository's `.git`,
  * compared case-insensitively because the common desktop filesystems are.
@@ -79,8 +98,13 @@ export async function resolvePluginDatabaseLocation(options: {
   manifestId: string;
   projectRoot: string | null;
   dataDir: string;
+  /**
+   * Locate an existing file only: create nothing, and reject with
+   * `DB_NOT_FOUND` when the file or its directory is missing.
+   */
+  existingOnly?: boolean;
 }): Promise<PluginDatabaseLocation> {
-  const { declaration, manifestId, projectRoot, dataDir } = options;
+  const { declaration, manifestId, projectRoot, dataDir, existingOnly = false } = options;
   let root: string;
   let relative: string;
   if (declaration.location === "project") {
@@ -93,11 +117,16 @@ export async function resolvePluginDatabaseLocation(options: {
     root = projectRoot;
     relative = declaration.path ?? `.daintree/data/${manifestId}/${declaration.id}.db`;
   } else {
-    await fsp.mkdir(dataDir, { recursive: true });
+    if (!existingOnly) await fsp.mkdir(dataDir, { recursive: true });
     root = dataDir;
     relative = `databases/${declaration.id}.db`;
   }
-  const realRoot = await fsp.realpath(root);
+  const notFound = () =>
+    databaseError("DB_NOT_FOUND", `database "${declaration.id}" does not exist yet`);
+  const realRoot = await fsp.realpath(root).catch((error: NodeJS.ErrnoException) => {
+    if (existingOnly && error.code === "ENOENT") throw notFound();
+    throw error;
+  });
   const lexical = path.resolve(realRoot, relative);
   if (!isInside(realRoot, lexical)) {
     throw databaseError("PATH_NOT_ALLOWED", `database "${declaration.id}" path escapes its root`);
@@ -105,7 +134,9 @@ export async function resolvePluginDatabaseLocation(options: {
   if (declaration.location === "project" && isInsideGitDir(path.relative(realRoot, lexical))) {
     throw databaseError("PATH_NOT_ALLOWED", `database "${declaration.id}" path is inside .git`);
   }
-  const realDir = await mkdirContained(realRoot, path.dirname(lexical), declaration.id);
+  const realDir = existingOnly
+    ? await existingContainedDir(realRoot, path.dirname(lexical), declaration.id, notFound)
+    : await mkdirContained(realRoot, path.dirname(lexical), declaration.id);
   const target = path.join(realDir, path.basename(lexical));
   if (declaration.location === "project" && isInsideGitDir(path.relative(realRoot, target))) {
     throw databaseError("PATH_NOT_ALLOWED", `database "${declaration.id}" resolves inside .git`);
@@ -114,6 +145,7 @@ export async function resolvePluginDatabaseLocation(options: {
   if (leaf?.isSymbolicLink()) {
     throw databaseError("TARGET_IS_SYMLINK", `database "${declaration.id}" file is a symlink`);
   }
+  if (!leaf && existingOnly) throw notFound();
   if (leaf && !leaf.isFile()) {
     throw databaseError("TARGET_UNAVAILABLE", `database "${declaration.id}" is not a regular file`);
   }

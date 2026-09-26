@@ -1454,3 +1454,15 @@ describe("createMockHost host.db", () => {
     await expect(host.db.open("other")).rejects.toThrow(/DB_NOT_DECLARED/);
   });
 });
+
+describe("createMockHost host.db readonly", () => {
+  it("creates nothing for a readonly open of a missing database", async () => {
+    const host = createMockHost();
+    await expect(host.db.open("ledger", { readonly: true })).rejects.toThrow(/DB_NOT_FOUND/);
+    await expect(host.db.resolve("ledger", { readonly: true })).rejects.toThrow(/DB_NOT_FOUND/);
+    await (await host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] })).close();
+    const reader = await host.db.open("ledger", { readonly: true });
+    await expect(reader.run("INSERT INTO t VALUES (1)")).rejects.toThrow(/DB_READONLY/);
+    await reader.close();
+  });
+});

@@ -1581,13 +1581,45 @@ export interface PluginDatabaseStatements {
     sql: string,
     params?: PluginDatabaseParams
   ): Promise<T | undefined>;
-  /** Execute one statement that returns no rows. */
+  /**
+   * Execute one statement that returns no rows. `query`, `get`, `run` and
+   * `columns` each take exactly one statement; SQL after it rejects with
+   * `DB_MULTIPLE_STATEMENTS` rather than being silently ignored — use `exec`
+   * for a batch.
+   */
   run(sql: string, params?: PluginDatabaseParams): Promise<PluginDatabaseRunResult>;
   /** Execute one or more statements with no parameters (schema, pragmas). */
   exec(sql: string): Promise<void>;
+  /**
+   * The result columns a statement would return, without running it — the
+   * headers for a result that may have no rows.
+   */
+  columns(sql: string): Promise<PluginDatabaseColumn[]>;
+}
+
+/** One result column of a statement, from `PluginDatabase.columns`. */
+export interface PluginDatabaseColumn {
+  /** The name a row object uses for this column (after any `AS` alias). */
+  name: string;
+  /** Source table, or null for an expression. */
+  table: string | null;
+  /** Source column, or null for an expression. */
+  column: string | null;
+  /** Declared type of the source column, or null. */
+  type: string | null;
 }
 
 export interface PluginDatabaseOpenOptions {
+  /**
+   * Open for reading only. The host neither creates the file nor its
+   * directory (SQLite itself may add `-wal`/`-shm` sidecars when reading a
+   * file in WAL mode), raises no write-consent prompt, and refuses `run`, `exec` and
+   * `transaction` with `DB_READONLY`; SQLite itself refuses any write a query
+   * attempts. `migrations` and `definitions` cannot be combined with it. A
+   * missing file rejects with `DB_NOT_FOUND`. The right mode for a dashboard
+   * over data that agents write.
+   */
+  readonly?: boolean;
   /**
    * Ordered schema migrations. Migration `n` (0-based) runs when the file's
    * `PRAGMA user_version` is `n`, inside its own `BEGIN IMMEDIATE`
@@ -1621,6 +1653,8 @@ export interface PluginDatabase extends PluginDatabaseStatements {
   readonly id: string;
   /** Where the file is. Hand `path` to agents; they can use `sqlite3` on it. */
   readonly location: PluginDatabaseLocation;
+  /** Whether the handle was opened with `readonly: true`. */
+  readonly readonly: boolean;
   /**
    * Run `fn` inside `BEGIN IMMEDIATE` … `COMMIT`, rolling back if it throws.
    * Use the `tx` it is handed — calling the outer handle from inside `fn`
@@ -1645,8 +1679,13 @@ export interface PluginDatabase extends PluginDatabaseStatements {
  * resolved by the host.
  */
 export interface PluginDatabaseApi {
-  /** Resolve a declared database's location without opening it. */
-  resolve(id: string): Promise<PluginDatabaseLocation>;
+  /**
+   * Resolve a declared database's location without opening it. By default
+   * this prepares the location for writing (creating the directory, and for a
+   * project database asking for write consent the first time); with
+   * `readonly: true` it only locates an existing file.
+   */
+  resolve(id: string, options?: { readonly?: boolean }): Promise<PluginDatabaseLocation>;
   /**
    * Open (creating if needed) a declared database, apply `migrations`, and
    * return a handle. Handles are closed automatically when the plugin unloads.
