@@ -1197,6 +1197,80 @@ describe("createMockHost production-parity validation (#10617)", () => {
     expect(host.sentToActiveAgentCalls).toEqual([{ text: "run it", submit: true }]);
   });
 
+  describe("agent handoff", () => {
+    const panes = [
+      {
+        terminalId: "t-1",
+        title: "Claude: auth",
+        agentId: "claude",
+        worktree: { id: "wt-1", name: "main" },
+        isFocused: true,
+        canDraft: true,
+      },
+      {
+        terminalId: "t-2",
+        title: "Codex: docs",
+        agentId: "codex",
+        worktree: null,
+        isFocused: false,
+        canDraft: false,
+        draftRefusal: "input-locked" as const,
+      },
+    ];
+
+    it("agents.list gates on agent:read and reports the configured panes", async () => {
+      await expect(createMockHost({ capabilities: ["agent:input"] }).agents.list()).rejects.toThrow(
+        /PERMISSION_REQUIRED/
+      );
+      const host = createMockHost({ agents: panes });
+      await expect(host.agents.list()).resolves.toEqual(panes);
+      host.simulateAgentsChange([]);
+      await expect(host.agents.list()).resolves.toEqual([]);
+    });
+
+    it("sendToAgent gates on agent:input and validates like production", async () => {
+      await expect(
+        createMockHost({ capabilities: ["agent:read"] }).sendToAgent("x")
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      const host = createMockHost({ agents: panes });
+      await expect(host.sendToAgent("  ")).rejects.toThrow(/non-empty/);
+      await expect(host.sendToAgent("x", { title: "t".repeat(121) })).rejects.toThrow(/limit/);
+      await expect(host.sendToAgent("x", { terminalId: "" })).rejects.toThrow(/terminalId/);
+      expect(host.sentToAgentCalls).toEqual([]);
+    });
+
+    it("sendToAgent drafts into a named pane, and refuses one that cannot take it", async () => {
+      const host = createMockHost({ agents: panes });
+      await expect(host.sendToAgent("x", { terminalId: "t-1" })).resolves.toEqual({
+        status: "drafted",
+        terminalId: "t-1",
+      });
+      await expect(host.sendToAgent("x", { terminalId: "t-2" })).resolves.toEqual({
+        status: "refused",
+        reason: "input-locked",
+      });
+      await expect(host.sendToAgent("x", { terminalId: "nope" })).resolves.toEqual({
+        status: "refused",
+        reason: "unknown-terminal",
+      });
+      expect(host.sentToAgentCalls.map((call) => call.result.status)).toEqual([
+        "drafted",
+        "refused",
+        "refused",
+      ]);
+    });
+
+    it("sendToAgent's picker is dismissed unless a pick is configured", async () => {
+      const host = createMockHost({ agents: panes });
+      await expect(host.sendToAgent("x")).resolves.toEqual({ status: "cancelled" });
+      host.simulateSendToAgentPick("t-1");
+      await expect(host.sendToAgent("x", { worktreeId: "wt-1" })).resolves.toEqual({
+        status: "drafted",
+        terminalId: "t-1",
+      });
+    });
+  });
+
   describe("imperative UI prompts", () => {
     it("showQuickPick validates items, records the call, and returns the configured response", async () => {
       const host = createMockHost();

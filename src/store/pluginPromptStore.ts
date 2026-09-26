@@ -7,12 +7,15 @@ import type {
 
 /**
  * The dismiss/cancel outcome for a prompt kind — `false` for a confirm (the
- * user did not confirm), `undefined` for quick-pick / input-box. Used whenever a
- * prompt is resolved without an explicit answer (Escape, click-away, or a
- * main-process cancel after the plugin unloads).
+ * user did not confirm), `{ status: "cancelled" }` for a send-to-agent picker,
+ * `undefined` for quick-pick / input-box. Used whenever a prompt is resolved
+ * without an explicit answer (Escape, click-away, or a main-process cancel
+ * after the plugin unloads).
  */
 export function dismissValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResultValue {
-  return kind === "confirm" ? false : undefined;
+  if (kind === "confirm") return false;
+  if (kind === "sendToAgent") return { status: "cancelled" };
+  return undefined;
 }
 
 /**
@@ -30,7 +33,7 @@ export interface PendingUiPrompt {
   pluginId: string;
   params: PluginUiPromptParams;
   /** Resolves the promise returned by {@link enqueueUiPrompt}. */
-  resolve: (value: PluginUiPromptResultValue) => void;
+  resolve: (value: PluginUiPromptResultValue | PromiseLike<PluginUiPromptResultValue>) => void;
 }
 
 interface PluginPromptState {
@@ -40,8 +43,15 @@ interface PluginPromptState {
 
 interface PluginPromptActions {
   enqueue: (item: PendingUiPrompt) => void;
-  /** Resolve the visible prompt with the user's answer and advance the queue. */
-  resolveCurrent: (value: PluginUiPromptResultValue) => void;
+  /**
+   * Resolve the visible prompt with the user's answer and advance the queue.
+   * A promise closes the dialog now and answers the plugin once it settles —
+   * the send-to-agent picker's "new agent" rows, whose answer is the draft
+   * that lands after the agent starts. It must never reject.
+   */
+  resolveCurrent: (
+    value: PluginUiPromptResultValue | PromiseLike<PluginUiPromptResultValue>
+  ) => void;
   /**
    * Drop every prompt for `pluginId` (or one specific `promptId`), resolving
    * each with its dismiss value. Invoked when the main process broadcasts a

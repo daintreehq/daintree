@@ -9,7 +9,11 @@ import {
   UI_TYPING_LOCATOR_DWELL_MS,
   UI_TYPING_LOCATOR_REPORT_DWELL_MS,
 } from "@/lib/animationUtils";
-import { useTypingLocatorStore, type TypingLocatorKind } from "@/store/typingLocatorStore";
+import {
+  isRefusalLocatorKind,
+  useTypingLocatorStore,
+  type TypingLocatorKind,
+} from "@/store/typingLocatorStore";
 
 export function getTypingLocatorDwellMs(kind: TypingLocatorKind): number {
   return kind === "typing" ? UI_TYPING_LOCATOR_DWELL_MS : UI_TYPING_LOCATOR_REPORT_DWELL_MS;
@@ -76,7 +80,7 @@ export function TypingLocator() {
           transitionTimingFunction: isLeaving ? UI_EXIT_EASING : UI_ENTER_EASING,
         }}
       >
-        {message.kind === "file-refused" && (
+        {isRefusalLocatorKind(message.kind) && (
           <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
         )}
         <span

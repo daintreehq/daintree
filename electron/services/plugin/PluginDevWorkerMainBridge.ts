@@ -35,6 +35,7 @@ import type {
   BroadcastToRendererParams,
   DispatchParams,
   SendToActiveAgentParams,
+  SendToAgentParams,
   InvalidateFileDecorationsParams,
   LoggerParams,
   PluginWorkerToHostMessage,
@@ -801,6 +802,14 @@ export class PluginDevWorkerMainBridge {
         const p = params as SendToActiveAgentParams;
         await this.host.sendToActiveAgent(p.text, p.options);
         return undefined;
+      }
+      case "agents.list":
+        return this.host.agents.list();
+      case "sendToAgent": {
+        // `signal` ties an open picker to this generation, like showQuickPick:
+        // a retired worker's question comes off the screen with it.
+        const p = params as SendToAgentParams;
+        return this.host.sendToAgent(p.text, p.options, { signal });
       }
       case "showQuickPick": {
         // Reuse the real host so validation/provenance/cancellation all match

@@ -480,6 +480,63 @@ describe("PluginUIPromptDispatcher", () => {
     expect(wcB.send).not.toHaveBeenCalled();
   });
 
+  describe("sendToAgent", () => {
+    const PICKER: PluginUiPromptParams = {
+      kind: "sendToAgent",
+      request: { text: "body", sourceLabel: "Acme" },
+    };
+    const TARGETED: PluginUiPromptParams = {
+      kind: "sendToAgent",
+      request: { text: "body", sourceLabel: "Acme", terminalId: "t-1" },
+    };
+
+    it("dismisses a picker as cancelled rather than undefined", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const promise = d.requestPrompt("p1", PICKER);
+      d.cancelForPlugin("p1");
+      await expect(promise).resolves.toEqual({ status: "cancelled" });
+    });
+
+    it("refuses a second picker as prompt-open instead of claiming the user dismissed it", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const first = d.requestPrompt("p1", QUICK_PICK);
+      await expect(d.requestPrompt("p1", PICKER)).resolves.toEqual({
+        status: "refused",
+        reason: "prompt-open",
+      });
+      d.dispose();
+      await first;
+    });
+
+    it("never caps, and never counts toward the cap, a send that names its pane", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const sends = () =>
+        wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST).length;
+
+      const picker = d.requestPrompt("p1", PICKER);
+      const targeted = d.requestPrompt("p1", TARGETED);
+      const alsoTargeted = d.requestPrompt("p1", TARGETED);
+      expect(sends()).toBe(3);
+
+      d.dispose();
+      await Promise.all([picker, targeted, alsoTargeted]);
+
+      const d2 = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const pending = d2.requestPrompt("p1", TARGETED);
+      // A dialog still opens while a targeted send is in flight.
+      const dialog = d2.requestPrompt("p1", QUICK_PICK);
+      expect(sends()).toBe(5);
+      d2.dispose();
+      await Promise.all([pending, dialog]);
+    });
+  });
+
   it("delivers a bound prompt to a cached (not currently visible) view", async () => {
     const cached = makeWebContents(31);
     setActiveWebContents(null);

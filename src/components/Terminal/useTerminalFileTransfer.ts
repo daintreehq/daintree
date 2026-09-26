@@ -16,6 +16,9 @@ import {
 } from "@/lib/fileDragPayload";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { usePanelStore } from "@/store/panelStore";
+import { hasAgentContextDrag, readAgentContextDrag } from "@/lib/agentContextDragPayload";
+import { draftAgentContext, getDraftRefusal } from "@/services/agentHandoff/agentDraft";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   IMAGE_EXTENSIONS,
@@ -115,6 +118,9 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  *   `imageInput: "bracketed-path"` and xterm reports bracketed-paste mode, each
  *   image is pasted on its own as its raw absolute path — the only form the
  *   CLI turns into an attachment — with the surrounding text pasted between.
+ * - **Agent-context drop:** a handoff dragged out of a plugin view goes to the
+ *   pane's input-bar draft, never the PTY, and only an agent pane with a usable
+ *   bar accepts it; everything else refuses the drag outright.
  *
  * Two independent axes decide what reaches the PTY (#11574):
  *
@@ -366,8 +372,16 @@ export function useTerminalFileTransfer(
       }
     };
 
+    // An agent-context drag is a handoff to this pane's draft, which only a
+    // grid agent with a usable input bar has. Asked live, because the answer
+    // moves with the pane's state mid-drag.
+    const acceptsAgentContext = (): boolean => getDraftRefusal(terminalId) === null;
+
     const handleDragEnter = (e: DragEvent) => {
-      if (!e.dataTransfer || !hasFileDrag(e.dataTransfer.types)) return;
+      if (!e.dataTransfer) return;
+      const types = e.dataTransfer.types;
+      const accepted = hasFileDrag(types) || (hasAgentContextDrag(types) && acceptsAgentContext());
+      if (!accepted) return;
       e.preventDefault();
       e.stopPropagation();
       dragDepthRef.current++;
@@ -375,10 +389,21 @@ export function useTerminalFileTransfer(
     };
 
     const handleDragOver = (e: DragEvent) => {
-      if (!e.dataTransfer || !hasFileDrag(e.dataTransfer.types)) return;
+      if (!e.dataTransfer) return;
+      const types = e.dataTransfer.types;
+      if (hasFileDrag(types)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = isInputLockedRef.current ? "none" : "copy";
+        return;
+      }
+      if (!hasAgentContextDrag(types)) return;
+      // Refused explicitly rather than ignored: the drag also carries
+      // `text/plain`, and xterm's helper textarea would otherwise take a drop
+      // that lands on it as typed input — the one thing a shell must not get.
       e.preventDefault();
       e.stopPropagation();
-      e.dataTransfer.dropEffect = isInputLockedRef.current ? "none" : "copy";
+      e.dataTransfer.dropEffect = acceptsAgentContext() ? "copy" : "none";
     };
 
     const handleDragLeave = (e: DragEvent) => {
@@ -399,6 +424,28 @@ export function useTerminalFileTransfer(
       if (isInputLockedRef.current) return;
       const transfer = e.dataTransfer;
       if (!transfer) return;
+
+      // A handoff never reaches the PTY: it drafts into this pane's input bar,
+      // through the same path the bar's own drop and `host.sendToAgent` use,
+      // and the user submits it. A pane without a usable bar refused the drag
+      // at dragover, so reaching here without one is a race — the draft path
+      // then refuses with the reason instead of typing anything.
+      if (hasAgentContextDrag(transfer.types)) {
+        const payload = readAgentContextDrag(transfer);
+        if (payload === null) return;
+        const result = draftAgentContext(terminalId, {
+          text: payload.text,
+          title: payload.title,
+          sourceLabel: payload.source?.label,
+        });
+        if (result.status !== "drafted") return;
+        // Lands like a drop on the bar itself: pane selected, keyboard in the
+        // bar rather than xterm, since that is where the text went.
+        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+        onDropSelectRef.current?.();
+        focusPanelInput(terminalId);
+        return;
+      }
 
       // A drag out of the file browser (#11576) carries paths where the OS
       // hands over `File` objects. Only the source of the paths differs —

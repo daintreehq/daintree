@@ -1607,6 +1607,16 @@ export interface IpcEventMap {
   };
 
   /**
+   * Plugin agent-pane listing (`host.agents.list()`). Main emits this on the
+   * plugin's project WebContents and awaits a renderer `ipcRenderer.send` reply
+   * on `CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE`, correlated by `requestId`. Same
+   * fire-and-forget response discipline as `plugin:actions-list-request`.
+   */
+  "plugin:agents-list-request": {
+    requestId: string;
+  };
+
+  /**
    * Imperative plugin UI-prompt request (#10522). Main emits this on the active
    * project WebContents when a plugin calls `host.showQuickPick`/`showInputBox`/
    * `showConfirm`, and awaits a renderer `ipcRenderer.send` reply on

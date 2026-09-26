@@ -41,6 +41,8 @@ const HOST_CALL_METHODS = {
   getWorktreeStatus: true,
   getAgentState: true,
   sendToActiveAgent: true,
+  "agents.list": true,
+  sendToAgent: true,
   showToast: true,
   dispatch: true,
   reloadPanel: true,

@@ -223,6 +223,8 @@ Most project plugins are a view over data that agents create — "track this exp
 
 When an answer depends on arithmetic — a streak, a monthly total, "due this week" — give agents a script that shares the panel's own calculation (`scripts/<name>-report.mjs`) and name it in `AGENTS.md`. Agents reading raw data eyeball those numbers and get them wrong.
 
+**Handing a record to an agent** goes the other way: make cards draggable with the `application/x-daintree-agent-context` payload so the user can drop one on an agent terminal, and offer "Send to agent…" through `host.sendToAgent` (needs `agent:input`). Both land the record in the agent's draft, never submitted — see [Patterns → Hand work to an agent](./patterns.md#hand-work-to-an-agent).
+
 ## Styling: use Tailwind
 
 Write Tailwind utility classes. They work in a hand-written `dist/panel.js` exactly as in a bundled view, with no build step and no configuration — Daintree compiles the classes your view uses at runtime, against the host's own Tailwind and theme.
@@ -342,7 +344,7 @@ The plugin loaded, the panel renders, a command or a button does nothing, or the
 2. **`dist/` is stale.** The host runs what is on disk. Check the file's mtime against your edit; if you build, check the watcher is running.
 3. **The `actionId` in the manifest is wrong.** It is `{manifestId}.{commandId}`, and the host rewrites it to the instance namespace. `{commandId}` alone or the instance key by hand both resolve to nothing.
 4. **The action threw.** A thrown error from a command surfaces as a toast; a thrown render error shows the panel's diagnostics pane, whose "Copy diagnostics" carries the stack. `host.logger` lines are in the plugin manager's detail pane for the plugin.
-5. **A capability is missing.** `host.fs`, `host.git`, `host.process` and `sendToActiveAgent` reject with a `PERMISSION_REQUIRED:` prefix when the manifest does not declare the token; `host.process`, `fs.writeFile`, `git` writes and `sendToActiveAgent` also raise a one-time consent dialog on first use, which is easy to miss behind a terminal.
+5. **A capability is missing.** `host.fs`, `host.git`, `host.process`, `sendToActiveAgent`, `sendToAgent` and `agents.list` reject with a `PERMISSION_REQUIRED:` prefix when the manifest does not declare the token; `host.process`, `fs.writeFile`, `git` writes, `sendToActiveAgent` and `sendToAgent` also raise a one-time consent dialog on first use, which is easy to miss behind a terminal.
 
 Edits to `plugin.json` or `dist/` reload the plugin live, per plugin directory, about 200 ms after writes stop. Settings and `host.storage` survive a reload; module-scope state in the worker and React state in the views do not. No restart is ever required — anything that genuinely needed one is not offered to project plugins.
 

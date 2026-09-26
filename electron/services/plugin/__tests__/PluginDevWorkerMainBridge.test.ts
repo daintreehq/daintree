@@ -54,6 +54,10 @@ function makeHost() {
     setPanelBadge: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
+    sendToAgent: vi.fn(async (): Promise<unknown> => ({ status: "drafted", terminalId: "t-1" })),
+    agents: {
+      list: vi.fn(async () => [{ terminalId: "t-1", canDraft: true }]),
+    },
     showInputBox: vi.fn(async (): Promise<unknown> => undefined),
     showConfirm: vi.fn(async () => false),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
@@ -353,6 +357,38 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({
       ok: true,
       result: [{ id: "terminal.new", danger: "safe", requiresArgs: false }],
+    });
+  });
+
+  it("routes agents.list and sendToAgent to the real host", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "g1",
+      method: "agents.list",
+      params: undefined,
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "g2",
+      method: "sendToAgent",
+      params: { text: "Card body", options: { title: "Fix login", terminalId: "t-1" } },
+    });
+    await flush();
+
+    expect(host.agents.list).toHaveBeenCalledTimes(1);
+    expect(host.sendToAgent).toHaveBeenCalledWith(
+      "Card body",
+      { title: "Fix login", terminalId: "t-1" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+    expect(workerHost.sent.find((m) => m.requestId === "g1")).toMatchObject({
+      ok: true,
+      result: [{ terminalId: "t-1", canDraft: true }],
+    });
+    expect(workerHost.sent.find((m) => m.requestId === "g2")).toMatchObject({
+      ok: true,
+      result: { status: "drafted", terminalId: "t-1" },
     });
   });
 
@@ -1241,6 +1277,8 @@ describe("PluginDevWorkerMainBridge", () => {
     { method: "showQuickPick", params: { items: [{ id: "a", label: "A" }] }, signalArg: 2 },
     { method: "showInputBox", params: { options: {} }, signalArg: 1 },
     { method: "showConfirm", params: { options: { title: "Sure?" } }, signalArg: 1 },
+    // The send-to-agent picker is a prompt too.
+    { method: "sendToAgent", params: { text: "body", options: {} }, signalArg: 2 },
   ])("$method cancellation (#12279)", ({ method, params, signalArg }) => {
     const openPrompt = async (host: any, workerHost: FakeWorkerHost) => {
       let seenSignal: AbortSignal | undefined;

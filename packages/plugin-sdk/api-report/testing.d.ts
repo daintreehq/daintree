@@ -2247,6 +2247,104 @@ interface PluginAgentSnapshot {
     readonly timestamp: number;
 }
 /**
+ * Why an agent pane will not take a drafted handoff right now. Codes, not copy:
+ * the wording belongs to whatever surface shows it.
+ *
+ * - `unknown-terminal` — no pane with that id in this project.
+ * - `not-agent` — the pane is not an agent with an input bar (a plain shell, a
+ *   demoted agent, an agent Daintree has no input bar for).
+ * - `exited` — the agent's process has ended.
+ * - `input-bar-off` — the user has the input bar switched off, so there is no
+ *   visible draft to put anything in.
+ * - `backend-unavailable` — the terminal service is disconnected or recovering.
+ * - `input-locked` — the pane's input is locked.
+ * - `restarting` — the pane is restarting.
+ * - `input-busy` — the draft is about to be submitted by dictation, which would
+ *   send the handoff with it.
+ * - `not-in-grid` — the pane is docked or in the background, where its input bar
+ *   is not on screen.
+ * - `fleet-armed` — a fleet broadcast is armed, so Enter in that draft would go
+ *   to every armed agent.
+ * - `project-unavailable` — the plugin's project has no open view.
+ * - `launch-failed` — the user chose to start a new agent and it did not start.
+ * - `prompt-open` — another picker from this plugin is already open.
+ */
+type PluginSendToAgentRefusalReason = "unknown-terminal" | "not-agent" | "exited" | "input-bar-off" | "backend-unavailable" | "input-locked" | "restarting" | "input-busy" | "not-in-grid" | "fleet-armed" | "project-unavailable" | "launch-failed" | "prompt-open";
+/**
+ * One agent pane in the plugin's project, as {@link PluginAgentsApi.list}
+ * reports it.
+ *
+ * `observedState` is what the host last read off the agent's own terminal
+ * output — a heuristic that is often wrong, never a guarantee the agent is
+ * doing (or done doing) anything. Show it as "last seen working", not as fact.
+ */
+interface PluginAgentPane {
+    /** The pane's id — what {@link PluginHostApi.sendToAgent} takes as `terminalId`. */
+    readonly terminalId: string;
+    /** The pane's title as the user sees it, e.g. `Claude: fix auth tests`. */
+    readonly title: string;
+    /** The agent running in it (`claude`, `codex`, …). */
+    readonly agentId: string;
+    /** The worktree the pane belongs to, or `null` when it has none. */
+    readonly worktree: {
+        readonly id: string;
+        readonly name: string;
+        readonly branch?: string;
+    } | null;
+    /** Last observed agent state, when there is one. An observation, not a fact. */
+    readonly observedState?: AgentState;
+    /** Whether this is the pane the user has selected. */
+    readonly isFocused: boolean;
+    /** Whether {@link PluginHostApi.sendToAgent} would draft into it right now. */
+    readonly canDraft: boolean;
+    /** Why it would not, when `canDraft` is `false`. */
+    readonly draftRefusal?: PluginSendToAgentRefusalReason;
+}
+/** `host.agents` — the agent panes in the plugin's project. */
+interface PluginAgentsApi {
+    /**
+     * The live agent panes in this plugin's project, grouped by nothing and in
+     * the order the grid holds them. A project plugin sees only its own
+     * project's agents; an installed plugin sees the project the user is looking
+     * at. Exited and demoted agents are left out. Gated on `agent:read`.
+     *
+     * Resolves `[]` when the project has no open view or once the plugin is
+     * unloaded.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare `agent:read`.
+     */
+    list(): Promise<PluginAgentPane[]>;
+}
+/** Options for {@link PluginHostApi.sendToAgent}. */
+interface PluginSendToAgentOptions {
+    /**
+     * Draft straight into this pane (an id from {@link PluginAgentsApi.list}),
+     * with no picker. Omit to let the user choose.
+     */
+    terminalId?: string;
+    /**
+     * The worktree the call is about — typically `PanelViewProps.worktreeId`.
+     * Only steers the picker: an agent there is preselected, and "New agent here"
+     * starts one there.
+     */
+    worktreeId?: string;
+    /** Heading shown above the text in the draft, e.g. a card title. At most 120 characters. */
+    title?: string;
+}
+/**
+ * How a {@link PluginHostApi.sendToAgent} call ended. `drafted` means the text
+ * is in that agent's draft and nothing was submitted.
+ */
+type PluginSendToAgentResult = {
+    status: "drafted";
+    terminalId: string;
+} | {
+    status: "cancelled";
+} | {
+    status: "refused";
+    reason: PluginSendToAgentRefusalReason;
+};
+/**
  * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
  * app's internal `notify()` surface: plugins cannot set `priority` (a
  * `priority:"low"` + `type:"error"` toast silently drops — see the lint rule at
@@ -3381,6 +3479,38 @@ interface PluginHostApi extends PluginActivationApi {
         submit?: boolean;
     }): Promise<void>;
     /**
+     * The agent panes in this plugin's project, for choosing where to hand work.
+     * Gated on `agent:read`. See {@link PluginAgentsApi}.
+     */
+    readonly agents: PluginAgentsApi;
+    /**
+     * Hand `text` to an agent: it is appended to that agent's visible draft,
+     * below anything the user already typed, as a fenced block headed by
+     * `options.title` and the plugin's name. Nothing is ever submitted — the user
+     * adds their instruction and presses Enter. There is no `submit` option.
+     *
+     * With `options.terminalId` the draft goes straight to that pane. Without it
+     * the user picks from the project's agents, grouped by worktree (an agent in
+     * `options.worktreeId` is preselected, else the focused one), or starts a new
+     * agent in that worktree or in a new worktree; the text lands in the new
+     * agent's draft once it is up.
+     *
+     * Gated on `agent:input` with the same first-use consent prompt as
+     * {@link sendToActiveAgent}. A project plugin only ever reaches its own
+     * project's panes. Never moves focus.
+     *
+     * Resolves `{ status: "drafted", terminalId }`, `{ status: "cancelled" }`
+     * (the user dismissed the picker, or the plugin unloaded), or
+     * `{ status: "refused", reason }` when the target cannot take a draft —
+     * see {@link PluginSendToAgentRefusalReason}.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `agent:input`, or the user denies the consent prompt.
+     * @throws {Error} If `text` is blank or longer than 32,768 characters, or an
+     *   option has the wrong type or length.
+     */
+    sendToAgent(text: string, options?: PluginSendToAgentOptions, callOptions?: PluginHostCallOptions): Promise<PluginSendToAgentResult>;
+    /**
      * Signal that decorations for `scope` (optionally narrowed to `paths`) have
      * changed and any renderer showing them should re-pull. Unlike the
      * `register*` methods this is NOT revoke-guarded: it is called from the
@@ -3720,6 +3850,12 @@ interface SentToActiveAgentRecord {
     text: string;
     submit: boolean;
 }
+/** Captured `host.sendToAgent(text, options)` calls, with what each resolved. */
+interface SentToAgentRecord {
+    text: string;
+    options: PluginSendToAgentOptions | undefined;
+    result: PluginSendToAgentResult;
+}
 interface RegisteredForgeProviderRecord {
     descriptor: ForgeProviderDescriptor;
     impl: ForgeProviderImpl;
@@ -3777,6 +3913,8 @@ interface MockHostState {
     readonly shownToasts: ReadonlyArray<ShownToastRecord>;
     readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
     readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
+    /** Every `host.sendToAgent` call that got past validation, in order. */
+    readonly sentToAgentCalls: ReadonlyArray<SentToAgentRecord>;
     readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
     readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
     /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
@@ -3872,6 +4010,14 @@ interface MockHostState {
     simulateWorktreesResult(result: PluginWorktreesResult | null): void;
     /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
     simulateConfirmResponse(result: boolean): void;
+    /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
+    simulateAgentsChange(agents: PluginAgentPane[]): void;
+    /**
+     * Configure what the user picks when `sendToAgent` is called without a
+     * `terminalId`: a pane id drafts there, `null` (the default) dismisses the
+     * picker and resolves `{ status: "cancelled" }`.
+     */
+    simulateSendToAgentPick(terminalId: string | null): void;
 }
 interface CreateMockHostOptions {
     pluginId?: string;
@@ -3962,7 +4108,13 @@ interface CreateMockHostOptions {
      * resolvable active agent" path. Defaults to `true`.
      */
     hasActiveAgent?: boolean;
+    /**
+     * The agent panes `agents.list()` reports and `sendToAgent` resolves a
+     * `terminalId` against. A pane with `canDraft: false` refuses with its
+     * `draftRefusal`. Defaults to none.
+     */
+    agents?: PluginAgentPane[];
 }
 declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 
-export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type PluginActionManifestEntry, type PluginCanDispatchResult, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };
+export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type PluginActionManifestEntry, type PluginCanDispatchResult, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };

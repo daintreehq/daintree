@@ -3262,6 +3262,16 @@ function buildElectronApi(): ElectronAPI {
         ipcRenderer.send(CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE, payload);
       },
 
+      onAgentsListRequest: (callback: (payload: { requestId: string }) => void) =>
+        _typedOn(CHANNELS.PLUGIN_AGENTS_LIST_REQUEST, callback),
+
+      sendAgentsListResponse: (payload: {
+        requestId: string;
+        agents: import("../shared/types/plugin.js").PluginAgentPane[];
+      }) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE, payload);
+      },
+
       onUiPromptRequest: (
         callback: (
           payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptRequest

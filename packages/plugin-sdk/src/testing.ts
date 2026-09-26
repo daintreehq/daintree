@@ -8,6 +8,7 @@ export type {
   BroadcastRecord,
   ShownToastRecord,
   DispatchedActionRecord,
+  SentToAgentRecord,
   RegisteredForgeProviderRecord,
   RegisteredFileDecorationProviderRecord,
   RegisteredMcpToolsRecord,

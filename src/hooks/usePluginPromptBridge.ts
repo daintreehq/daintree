@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { enqueueUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
+import { draftAgentContext } from "@/services/agentHandoff/agentDraft";
 
 /**
  * Sets up the renderer-side bridge for imperative plugin UI prompts (#10522).
@@ -21,7 +22,13 @@ export function usePluginPromptBridge(): void {
     let disposed = false;
 
     const cleanupRequest = window.electron.pluginBridge.onUiPromptRequest(async (request) => {
-      const value = await enqueueUiPrompt(request);
+      // A send-to-agent that names its pane is not a dialog: it drafts now and
+      // answers, without queueing behind (or blocking) a prompt on screen.
+      const { params } = request;
+      const value =
+        params.kind === "sendToAgent" && params.request.terminalId !== undefined
+          ? draftAgentContext(params.request.terminalId, params.request)
+          : await enqueueUiPrompt(request);
       if (disposed) return;
       window.electron.pluginBridge.sendUiPromptResponse({
         promptId: request.promptId,

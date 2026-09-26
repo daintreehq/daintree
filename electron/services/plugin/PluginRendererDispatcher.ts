@@ -7,6 +7,7 @@ import type {
   ActionDispatchResult,
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
+import type { PluginAgentPane } from "../../../shared/types/plugin.js";
 
 /**
  * Time budget for a `host.dispatch()` main→renderer round-trip. Matches the MCP
@@ -292,6 +293,27 @@ export class PluginRendererDispatcher {
       fallback: null,
       projectId,
       detail: `Plugin actions.get ${actionId}`,
+    });
+  }
+
+  /**
+   * The agent panes a renderer holds (`host.agents.list()`). Resolves `[]` when
+   * no renderer is available, the round-trip times out, or the view is
+   * destroyed; rejects only when `projectId` is bound and that project has no
+   * live view.
+   */
+  sendAgentsListToRenderer(projectId?: PluginTargetProjectId): Promise<PluginAgentPane[]> {
+    return this.requestFromRenderer<PluginAgentPane[]>({
+      requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+      buildRequest: (requestId) => ({ requestId }),
+      extract: (payload) => {
+        const agents = (payload as { agents?: unknown }).agents;
+        return Array.isArray(agents) ? (agents as PluginAgentPane[]) : [];
+      },
+      fallback: [],
+      projectId,
+      detail: "Plugin agents.list",
     });
   }
 

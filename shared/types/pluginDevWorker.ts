@@ -35,6 +35,7 @@ import type {
   PluginFsWriteOptions,
   PluginMcpCaller,
   PluginMcpJsonSchema,
+  PluginSendToAgentOptions,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -45,6 +46,8 @@ export type PluginHostCallMethod =
   | "getWorktreeStatus"
   | "getAgentState"
   | "sendToActiveAgent"
+  | "agents.list"
+  | "sendToAgent"
   | "showToast"
   | "dispatch"
   | "reloadPanel"
@@ -494,6 +497,12 @@ export interface ActionsGetParams {
 export interface SendToActiveAgentParams {
   text: string;
   options?: { submit?: boolean };
+}
+
+/** Params for `sendToAgent` (`host-call`). `agents.list` takes none. */
+export interface SendToAgentParams {
+  text: string;
+  options?: PluginSendToAgentOptions;
 }
 
 /** Params for `showQuickPick` (`host-call`). */

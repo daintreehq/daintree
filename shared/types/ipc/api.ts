@@ -2174,6 +2174,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       entry: import("../actions.js").PluginActionManifestEntry | null;
     }): void;
     /**
+     * Listen for agent-pane listing requests from the main process (a plugin
+     * calling `host.agents.list()`). Reply with {@link sendAgentsListResponse},
+     * correlated by `requestId`.
+     */
+    onAgentsListRequest(callback: (payload: { requestId: string }) => void): () => void;
+    /** Send this view's agent panes back to the main process. */
+    sendAgentsListResponse(payload: {
+      requestId: string;
+      agents: import("../plugin.js").PluginAgentPane[];
+    }): void;
+    /**
      * Listen for imperative plugin UI-prompt requests from the main process (a
      * plugin calling `host.showQuickPick`/`showInputBox`/`showConfirm`, #10522).
      * Reply with {@link sendUiPromptResponse}, correlated by `promptId`.

@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
+import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
   ActionDispatchResult,
@@ -60,6 +61,9 @@ import type {
   PluginWorktreeSnapshot,
   PluginWorktreesResult,
   PluginAgentSnapshot,
+  PluginAgentPane,
+  PluginSendToAgentOptions,
+  PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
   PanelReloadResult,
   PluginSystemWakeEvent,
@@ -118,6 +122,13 @@ export interface DispatchedActionRecord {
 export interface SentToActiveAgentRecord {
   text: string;
   submit: boolean;
+}
+
+/** Captured `host.sendToAgent(text, options)` calls, with what each resolved. */
+export interface SentToAgentRecord {
+  text: string;
+  options: PluginSendToAgentOptions | undefined;
+  result: PluginSendToAgentResult;
 }
 
 export interface RegisteredForgeProviderRecord {
@@ -187,6 +198,8 @@ export interface MockHostState {
   readonly shownToasts: ReadonlyArray<ShownToastRecord>;
   readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
   readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
+  /** Every `host.sendToAgent` call that got past validation, in order. */
+  readonly sentToAgentCalls: ReadonlyArray<SentToAgentRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
@@ -290,6 +303,14 @@ export interface MockHostState {
   simulateWorktreesResult(result: PluginWorktreesResult | null): void;
   /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
   simulateConfirmResponse(result: boolean): void;
+  /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
+  simulateAgentsChange(agents: PluginAgentPane[]): void;
+  /**
+   * Configure what the user picks when `sendToAgent` is called without a
+   * `terminalId`: a pane id drafts there, `null` (the default) dismisses the
+   * picker and resolves `{ status: "cancelled" }`.
+   */
+  simulateSendToAgentPick(terminalId: string | null): void;
 }
 
 export interface CreateMockHostOptions {
@@ -381,6 +402,12 @@ export interface CreateMockHostOptions {
    * resolvable active agent" path. Defaults to `true`.
    */
   hasActiveAgent?: boolean;
+  /**
+   * The agent panes `agents.list()` reports and `sendToAgent` resolves a
+   * `terminalId` against. A pane with `canDraft: false` refuses with its
+   * `draftRefusal`. Defaults to none.
+   */
+  agents?: PluginAgentPane[];
 }
 
 /**
@@ -571,6 +598,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const shownToasts: ShownToastRecord[] = [];
   const dispatchedActions: DispatchedActionRecord[] = [];
   const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
+  const sentToAgentCalls: SentToAgentRecord[] = [];
+  let agentPanes: PluginAgentPane[] = options.agents ?? [];
+  let sendToAgentPick: string | null = null;
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
@@ -1086,6 +1116,61 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         throw new Error("NO_ACTIVE_AGENT: no active agent terminal to receive input");
       }
       sentToActiveAgentCalls.push({ text, submit: options?.submit === true });
+    },
+    agents: {
+      async list() {
+        if (!capabilities.has("agent:read")) {
+          throw new Error(
+            'PERMISSION_REQUIRED: agents.list requires "agent:read", which is not declared in manifest.capabilities'
+          );
+        }
+        return agentPanes.map((pane) => ({ ...pane }));
+      },
+    },
+    async sendToAgent(text, options, callOptions) {
+      // Same order as production: capability, then argument validation. The
+      // mock has no renderer, so a named pane resolves against `agents` and a
+      // picker resolves to `simulateSendToAgentPick`.
+      if (!capabilities.has("agent:input")) {
+        throw new Error(
+          'PERMISSION_REQUIRED: sendToAgent requires "agent:input", which is not declared in manifest.capabilities'
+        );
+      }
+      if (typeof text !== "string" || text.trim().length === 0) {
+        throw new Error("sendToAgent: text must be a non-empty, non-whitespace string");
+      }
+      if (options !== undefined && (typeof options !== "object" || options === null)) {
+        throw new Error("sendToAgent: options must be an object");
+      }
+      if (options?.title !== undefined && typeof options.title !== "string") {
+        throw new Error("sendToAgent: options.title must be a string");
+      }
+      if (validateAgentContextPayload({ v: 1, text, title: options?.title }) === null) {
+        throw new Error("sendToAgent: text or options.title is over its length limit");
+      }
+      for (const key of ["terminalId", "worktreeId"] as const) {
+        const value = options?.[key];
+        if (value !== undefined && (typeof value !== "string" || value.length === 0)) {
+          throw new Error(`sendToAgent: options.${key} must be a non-empty string`);
+        }
+      }
+      if (callOptions?.signal?.aborted) return { status: "cancelled" };
+      const target = options?.terminalId ?? sendToAgentPick;
+      let result: PluginSendToAgentResult;
+      if (target === null) {
+        result = { status: "cancelled" };
+      } else {
+        const pane = agentPanes.find((candidate) => candidate.terminalId === target);
+        if (!pane) {
+          result = { status: "refused", reason: "unknown-terminal" };
+        } else if (!pane.canDraft) {
+          result = { status: "refused", reason: pane.draftRefusal ?? "not-agent" };
+        } else {
+          result = { status: "drafted", terminalId: pane.terminalId };
+        }
+      }
+      sentToAgentCalls.push({ text, options, result });
+      return result;
     },
     onDidChangeAgentState(callback) {
       agentStateSubs.add(callback);
@@ -1612,6 +1697,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     shownToasts,
     dispatchedActions,
     sentToActiveAgentCalls,
+    sentToAgentCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
     registeredMcpTools,
@@ -1677,6 +1763,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     simulateConfirmResponse(result) {
       confirmResponse = result;
+    },
+    simulateAgentsChange(agents) {
+      agentPanes = agents;
+    },
+    simulateSendToAgentPick(terminalId) {
+      sendToAgentPick = terminalId;
     },
   };
 
