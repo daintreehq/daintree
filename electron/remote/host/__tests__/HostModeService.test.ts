@@ -463,3 +463,88 @@ describe("HostModeService status rows", () => {
     });
   });
 });
+
+describe("HostModeService enabling from host setup", () => {
+  it("switches Host mode on for good: saved, start at login installed, keychain checked and recorded", async () => {
+    const fs = memoryFs();
+    const { run, calls } = scriptedRunner({
+      "systemctl --user is-enabled daintree-host.service": { stdout: "enabled\n" },
+      "loginctl show-user greg -p Linger": { stdout: "Linger=yes\n" },
+    });
+    const recorded: unknown[] = [];
+    const { service, settings } = makeService({
+      startAtLogin: createSystemdUserController({
+        homeDir: "/home/greg",
+        packaged: true,
+        userName: "greg",
+        target: { executable: "/opt/Daintree/daintree", appPath: null },
+        run,
+        fs,
+      }),
+      run,
+      writeStatus: async (observation) => void recorded.push(observation),
+    });
+
+    await service.enableFromSetup();
+    expect(settings()).toEqual({ enabled: true, startAtLogin: true });
+    expect(fs.files.get("/home/greg/.config/systemd/user/daintree-host.service")).toBe(
+      buildSystemdUnit({ programArguments: ["/opt/Daintree/daintree", "--host-mode"] })
+    );
+    expect(calls).toContain("systemctl --user enable daintree-host.service");
+    await waitFor(() =>
+      recorded.some((r) => (r as { keychain: { checked: boolean } }).keychain.checked)
+    );
+    expect(recorded.at(-1)).toEqual({
+      enabled: true,
+      startAtLogin: true,
+      startAtLoginInstalled: true,
+      startAtLoginError: null,
+      keychain: {
+        state: "ok",
+        detail: "Keyring answered a test encrypt and decrypt",
+        checked: true,
+      },
+    });
+  });
+
+  it("records a start-at-login failure in the host's words, and records nothing twice", async () => {
+    const recorded: Array<{ startAtLoginError: string | null; startAtLogin: boolean }> = [];
+    const { service } = makeService({
+      startAtLogin: {
+        kind: "systemd-user",
+        path: "/home/greg/.config/systemd/user/daintree-host.service",
+        install: async () => {
+          throw new Error("systemctl --user daemon-reload failed: Failed to connect to bus");
+        },
+        remove: async () => {},
+        isInstalled: async () => false,
+        observe: async () => ({
+          kind: "systemd-user",
+          path: "/x",
+          installed: false,
+          current: false,
+          unitState: null,
+          linger: null,
+          userName: "greg",
+        }),
+      },
+      writeStatus: async (observation) => void recorded.push(observation),
+    });
+    await service.enableFromSetup();
+    await waitFor(() => recorded.length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const last = recorded.at(-1)!;
+    expect(last.startAtLogin).toBe(false);
+    expect(last.startAtLoginError).toContain("Failed to connect to bus");
+    const texts = recorded.map((r) => JSON.stringify(r));
+    expect(new Set(texts).size).toBe(texts.length);
+  });
+
+  it("records nothing for a user who never touches Host mode", async () => {
+    const writeStatus = vi.fn(async () => {});
+    const { service } = makeService({ writeStatus });
+    await service.getStatus();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(writeStatus).not.toHaveBeenCalled();
+  });
+});

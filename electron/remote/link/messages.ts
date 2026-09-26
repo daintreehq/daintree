@@ -90,6 +90,17 @@ export interface RejectMessage {
   reason: RejectReason;
   handshake: HostHandshakeInfo | null;
   detail: string | null;
+  /**
+   * On a build refusal to a client that presented the right token: what the
+   * host saw its agents doing, so a Shell on another build can still tell
+   * whether updating would interrupt work. Absent from hosts before it.
+   */
+  observed?: RejectObservation;
+}
+
+export interface RejectObservation {
+  /** Agents the host observed working; null when it couldn't see them all. */
+  workingAgents: number | null;
 }
 
 export interface PingMessage {

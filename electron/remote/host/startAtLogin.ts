@@ -55,7 +55,15 @@ export interface HostLaunchTarget {
   executable: string;
   /** Dev builds run the Electron binary against an app directory. */
   appPath: string | null;
+  /**
+   * An AppImage on a machine without FUSE: its runtime unpacks and runs it
+   * instead of mounting it (`APPIMAGE_EXTRACT_AND_RUN=1`). The running host
+   * inherits the variable, so a unit it rewrites keeps it.
+   */
+  appImageExtractAndRun?: boolean;
 }
+
+export const APPIMAGE_EXTRACT_AND_RUN_ENV = "APPIMAGE_EXTRACT_AND_RUN";
 
 export function hostModeLaunchArguments(target: HostLaunchTarget): string[] {
   return [target.executable, ...(target.appPath ? [target.appPath] : []), HOST_MODE_FLAG];
@@ -199,7 +207,10 @@ export function systemdQuote(arg: string): string {
   return `"${escaped}"`;
 }
 
-export function buildSystemdUnit(input: { programArguments: readonly string[] }): string {
+export function buildSystemdUnit(input: {
+  programArguments: readonly string[];
+  appImageExtractAndRun?: boolean;
+}): string {
   return [
     `[Unit]`,
     `Description=Daintree host (serves Daintree windows on other machines over SSH)`,
@@ -210,6 +221,7 @@ export function buildSystemdUnit(input: { programArguments: readonly string[] })
     // Linger starts the unit before any login, when neither is in the environment.
     `Environment=XDG_RUNTIME_DIR=/run/user/%U`,
     `Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus`,
+    ...(input.appImageExtractAndRun ? [`Environment=${APPIMAGE_EXTRACT_AND_RUN_ENV}=1`] : []),
     `Restart=on-failure`,
     `RestartSec=10`,
     ``,
@@ -217,6 +229,18 @@ export function buildSystemdUnit(input: { programArguments: readonly string[] })
     `WantedBy=default.target`,
     ``,
   ].join("\n");
+}
+
+/**
+ * The unit for a launch target. The host writes it when start at login goes
+ * on, and a Shell bootstrapping a headless host writes the very same text over
+ * SSH, so the host finds its own unit already current.
+ */
+export function systemdUnitFor(target: HostLaunchTarget): string {
+  return buildSystemdUnit({
+    programArguments: hostModeLaunchArguments(target),
+    appImageExtractAndRun: target.appImageExtractAndRun === true,
+  });
 }
 
 export class StartAtLoginError extends Error {
@@ -256,8 +280,7 @@ export function createSystemdUserController(deps: {
   const files = deps.fs ?? nodeStartAtLoginFs;
   const unit = systemdUnitName(deps.packaged);
   const file = path.posix.join(deps.homeDir, ".config", "systemd", "user", unit);
-  const content = (): string =>
-    buildSystemdUnit({ programArguments: hostModeLaunchArguments(deps.target) });
+  const content = (): string => systemdUnitFor(deps.target);
   const systemctl = (...args: string[]) => deps.run("systemctl", ["--user", ...args]);
 
   return {

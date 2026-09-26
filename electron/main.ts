@@ -138,7 +138,13 @@ import {
 } from "./window/openWindowsTracker.js";
 import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 import { startHostRuntime } from "./boot/hostBootstrap.js";
-import { isHostModeRequested, resolveHostModeLaunch } from "./boot/hostModeLaunch.js";
+import {
+  HOST_MODE_HANDOFF_NOBODY_EXIT_CODE,
+  isHostModeEnableRequested,
+  isHostModeHandoffOnly,
+  isHostModeRequested,
+  resolveHostModeLaunch,
+} from "./boot/hostModeLaunch.js";
 import { isRemoteHostsSupported } from "./remote/buildGate.js";
 import { getRemoteService } from "./remote/runtime.js";
 
@@ -301,6 +307,11 @@ const gotTheLock = isSmokeTest || app.requestSingleInstanceLock();
 if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
   app.quit();
+} else if (isRemoteHostsSupported() && isHostModeHandoffOnly(process.argv)) {
+  // Host setup runs this from an SSH session only to reach a running
+  // Daintree; with none to hand over to, it must not become the backend there.
+  console.log("[MAIN] Host mode handoff found no running instance. Quitting...");
+  app.exit(HOST_MODE_HANDOFF_NOBODY_EXIT_CODE);
 } else {
   initializeLogger(app.getPath("userData"));
 
@@ -403,13 +414,21 @@ if (!gotTheLock) {
   // quit, without changing the setting. Kept apart from `hostModeLaunch`,
   // which also means "this launch opens no window".
   let hostModeHandedOff = false;
+  // Host setup from another machine (`--enable-host-mode`, on this launch or a
+  // later one): switch Host mode on for good, not just for this run.
+  let hostModeEnableRequested = isRemoteHostsSupported() && isHostModeEnableRequested(process.argv);
   let remoteHostsStarted = false;
   const listenForHandedOffHostMode = (): void => {
-    getRemoteService("hostMode")
-      ?.startListening()
-      .catch((error: unknown) => {
-        console.error("[MAIN] Host mode requested by a second launch failed to start:", error);
-      });
+    const hostMode = getRemoteService("hostMode");
+    if (!hostMode) return;
+    const enable = hostModeEnableRequested;
+    hostModeEnableRequested = false;
+    const started: Promise<unknown> = enable
+      ? hostMode.enableFromSetup()
+      : hostMode.startListening();
+    started.catch((error: unknown) => {
+      console.error("[MAIN] Host mode requested by a launch failed to start:", error);
+    });
   };
 
   function ensureFocusThrottle(): void {
@@ -878,8 +897,9 @@ if (!gotTheLock) {
     isHostModeActive: () => hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
     isLaunchSettled: () => launchSettled,
     onHostModeRequested: isRemoteHostsSupported()
-      ? () => {
+      ? (commandLine) => {
           hostModeHandedOff = true;
+          if (isHostModeEnableRequested(commandLine)) hostModeEnableRequested = true;
           // Before the remote runtime is up, its startup reads the flag instead.
           if (remoteHostsStarted) listenForHandedOffHostMode();
         }
@@ -1144,8 +1164,8 @@ if (!gotTheLock) {
               hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
             });
             remoteHostsStarted = true;
-            // A handoff that landed while the start was in flight.
-            if (hostModeHandedOff) listenForHandedOffHostMode();
+            // A handoff that landed while the start was in flight, or setup's enable.
+            if (hostModeHandedOff || hostModeEnableRequested) listenForHandedOffHostMode();
           } catch (error) {
             console.error("[MAIN] Remote Hosts failed to start:", error);
           }

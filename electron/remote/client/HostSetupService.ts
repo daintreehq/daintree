@@ -15,6 +15,7 @@ import type {
   InstallHostResult,
   PlanInstallPayload,
   RemoteHostsEvent,
+  StartHostModeResult,
 } from "../../../shared/types/ipc/remoteHosts.js";
 import {
   OperationRegistry,
@@ -24,16 +25,18 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { CommandRunner } from "./commandRunner.js";
 import { discoverHosts } from "./discovery.js";
 import { runHostInstall } from "./hostInstaller.js";
-import { MAC_APP_PATH, LINUX_UNIT_NAME, probeHost, type ProbeOutcome } from "./hostProbe.js";
+import { bootstrapHostMode } from "./hostModeBootstrap.js";
+import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
-import { createRemoteShell, failureDetail, type RemoteShell } from "./remoteShell.js";
+import { createSshCommandChannel, type HostCommandChannel } from "./remoteShell.js";
 import { controlPathFor, isValidSshTarget } from "./sshTransport.js";
 
 /**
  * The Add host flow and host upkeep behind the `remoteHosts` namespace:
  * discover machines, check one over SSH, install or update its build as a
- * tracked operation, start Host mode there, and clean up after a forgotten
- * host. Everything reaches the host through the system `ssh`.
+ * tracked operation, turn Host mode on there, and clean up after a forgotten
+ * host. Everything reaches the host through a {@link HostCommandChannel}: the
+ * system `ssh` today.
  */
 
 export interface HostSetupDeps {
@@ -51,6 +54,8 @@ export interface HostSetupDeps {
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
   now?: () => number;
   idlePollMs?: number;
+  /** How commands reach a host; the system `ssh` over the shared ControlMaster unless given. */
+  channelFor?(target: string): HostCommandChannel;
 }
 
 function requireTarget(payload: unknown): string {
@@ -205,53 +210,21 @@ export class HostSetupService {
   }
 
   /**
-   * Start Daintree in Host mode on the machine. macOS hands the launch to the
-   * logged-in session (`open`), so the app never runs as a child of this SSH
-   * session; Linux starts only the Daintree-owned user unit, and without one
-   * the user turns Host mode on at the machine.
+   * Turn Host mode on for good on the machine and read back that it is: the
+   * host's own Daintree saves the setting, installs start at login and checks
+   * its keychain, as its Settings switch would. See hostModeBootstrap.ts.
    */
-  async startHostMode(payload: { sshTarget: string }): Promise<HostProbeResult> {
+  async startHostMode(payload: { sshTarget: string }): Promise<StartHostModeResult> {
     const sshTarget = requireTarget(payload);
-    const shell = this.shellFor(sshTarget);
-    const before = await this.probeOutcome(sshTarget, shell);
-    if (!before.parsed) return before.result;
-    if (before.result.hostModeListening) return before.result;
-    if (!before.result.install) {
-      throw new AppError({
-        code: "NOT_FOUND",
-        message: "Daintree is not installed on the host",
-        userMessage: "Install Daintree on this host first.",
-      });
-    }
-    let script: string;
-    if (before.result.platform === "darwin") {
-      script = `open -g -a '${MAC_APP_PATH}' --args --host-mode`;
-    } else if (before.parsed.advice.hostModeUnit) {
-      script = `systemctl --user start ${LINUX_UNIT_NAME}`;
-    } else {
-      throw new AppError({
-        code: "UNSUPPORTED",
-        message: "No Host mode unit on the host",
-        userMessage:
-          "Open Daintree on that machine and turn on “Allow this machine to be a host” in Settings → Hosts.",
-      });
-    }
-    const started = await shell.exec(script, { timeoutMs: 30_000 });
-    if (started.code !== 0) {
-      throw new AppError({
-        code: "INTERNAL",
-        message: `Couldn't start Host mode: ${failureDetail(started, "ssh failed")}`,
-        userMessage: "Couldn't start Daintree on the host. Log in there once and open it.",
-      });
-    }
-    const sleep = this.deps.sleep ?? abortableSleep;
-    const signal = new AbortController().signal;
-    let after = before;
-    for (let i = 0; i < 15 && !after.result.hostModeListening; i++) {
-      await sleep(2_000, signal);
-      after = await this.probeOutcome(sshTarget, shell);
-    }
-    return after.result;
+    const channel = this.shellFor(sshTarget);
+    const before = await this.probeOutcome(sshTarget, channel);
+    if (!before.parsed) return { probe: before.result, lingerRefused: null };
+    return bootstrapHostMode(sshTarget, before, {
+      channel,
+      probe: () => this.probeOutcome(sshTarget, channel),
+      sleep: this.deps.sleep ?? abortableSleep,
+      now: this.deps.now,
+    });
   }
 
   /** Forgetting a host drops its SSH master, control socket and any cached bundles. */
@@ -279,8 +252,9 @@ export class HostSetupService {
     return path.join(this.deps.clientDir, "bundles", targetKey(target));
   }
 
-  private shellFor(target: string): RemoteShell {
-    return createRemoteShell({
+  private shellFor(target: string): HostCommandChannel {
+    if (this.deps.channelFor) return this.deps.channelFor(target);
+    return createSshCommandChannel({
       target,
       controlPath: controlPathFor(this.deps.clientDir, target),
       run: this.deps.run,
@@ -289,7 +263,7 @@ export class HostSetupService {
 
   private async probeOutcome(
     target: string,
-    shell: RemoteShell = this.shellFor(target),
+    shell: HostCommandChannel = this.shellFor(target),
     signal?: AbortSignal
   ): Promise<ProbeOutcome> {
     await fs.mkdir(this.deps.clientDir, { recursive: true, mode: 0o700 }).catch(() => {});

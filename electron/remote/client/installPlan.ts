@@ -12,8 +12,9 @@ import type {
  *
  * - same platform and arch, and this client has a bundle it can copy: push it;
  * - otherwise the host fetches its artifact for the exact version from the
- *   release feed the updater uses, or, when it can't download, this client
- *   fetches it and copies it over.
+ *   release feed the updater uses, or, when it has no curl or wget, this
+ *   client fetches it and copies it over. A host that has them but can't
+ *   reach the feed falls back to the same copy at install time.
  *
  * Linux prefers the deb (declared dependencies, no FUSE; needs sudo, so the
  * user runs one shown command); the AppImage is the no-root fallback.

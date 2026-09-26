@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 
 /**
  * Runs a local program (ssh, scp, tailscale, dns-sd, ditto) with bounded
@@ -25,7 +26,11 @@ export interface CommandOptions {
   collectForMs?: number;
   signal?: AbortSignal;
   maxOutputBytes?: number;
+  /** Fed to the program's stdin, which is otherwise closed. */
+  input?: CommandInput;
 }
+
+export type CommandInput = { text: string } | { file: string };
 
 export type CommandRunner = (
   command: string,
@@ -46,7 +51,10 @@ export const defaultCommandRunner: CommandRunner = (command, args, options = {})
     let settled = false;
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      child = spawn(command, [...args], {
+        stdio: [options.input ? "pipe" : "ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
     } catch (err) {
       resolve({
         code: null,
@@ -75,6 +83,22 @@ export const defaultCommandRunner: CommandRunner = (command, args, options = {})
     const onAbort = () => stop();
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted) stop();
+
+    const input = options.input;
+    if (input && child.stdin) {
+      // The program may exit before reading everything (a refused login): not our error.
+      child.stdin.on("error", () => {});
+      if ("text" in input) {
+        child.stdin.end(input.text);
+      } else {
+        const source = fs.createReadStream(input.file);
+        source.on("error", (err) => {
+          stderr = (stderr + `Couldn't read ${input.file}: ${err.message}`).slice(-MAX_STDERR);
+          stop();
+        });
+        source.pipe(child.stdin);
+      }
+    }
 
     child.stdout?.on("data", (chunk: Buffer) => {
       if (stdout.length < maxOutput) stdout += chunk.toString("utf8").slice(0, maxOutput);

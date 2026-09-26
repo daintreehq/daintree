@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { HostModeStatus, SetHostModePayload } from "../../../shared/types/ipc/hostMode.js";
+import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
 import type { AdvertiseState } from "./advertise.js";
 import type { CommandResult, CommandRunner } from "./hostCommands.js";
 import type { HostListener } from "./hostListener.js";
@@ -46,6 +47,11 @@ export interface HostModeServiceDeps {
   keychainTimeoutMs?: number;
   /** Coalesce bursts of session changes into one push. */
   pushDelayMs?: number;
+  /**
+   * Record the setting where setup on another machine can read it back over
+   * SSH (see hostModeStatusFile.ts). Written only when it changes.
+   */
+  writeStatus?(observation: Omit<HostModeObservation, "pid">): Promise<void>;
 }
 
 function messageOf(error: unknown): string {
@@ -76,6 +82,8 @@ export class HostModeService {
   private queue: Promise<unknown> = Promise.resolve();
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  private recordedStatus: string | null = null;
+  private statusWrite: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: HostModeServiceDeps) {
     this.advertiser = deps.createAdvertiser(() => this.pushSoon());
@@ -138,6 +146,17 @@ export class HostModeService {
     const run = this.queue.then(() => this.applyEnabled(payload));
     this.queue = run.catch(() => {});
     return run;
+  }
+
+  /**
+   * Setup on another machine asked for Host mode (`--enable-host-mode`): it is
+   * switched on exactly as the Settings switch does it, with start at login
+   * (the person confirmed both there), and the keychain is checked here.
+   */
+  async enableFromSetup(): Promise<HostModeStatus> {
+    const status = await this.setEnabled({ enabled: true, startAtLogin: true });
+    void this.runKeychainPreflight();
+    return status;
   }
 
   /** Run the keychain or keyring check now, from this (GUI) session. */
@@ -260,6 +279,35 @@ export class HostModeService {
     this.observed ??= Promise.resolve();
   }
 
+  private recordStatus(): void {
+    const write = this.deps.writeStatus;
+    if (!write) return;
+    const settings = this.deps.readSettings();
+    const keychain =
+      this.keychainCheck ?? classifyKeychainWithoutTrial(this.deps.platform, this.deps.keychain);
+    const observation: Omit<HostModeObservation, "pid"> = {
+      enabled: settings.enabled,
+      startAtLogin: settings.startAtLogin,
+      startAtLoginInstalled: this.observation?.installed ?? null,
+      startAtLoginError: this.installError,
+      keychain: {
+        state: keychain.state,
+        detail: keychain.detail,
+        checked: this.keychainCheck !== null,
+      },
+    };
+    const text = JSON.stringify(observation);
+    if (text === this.recordedStatus) return;
+    this.recordedStatus = text;
+    this.statusWrite = this.statusWrite
+      .then(() => write(observation))
+      .catch((error: unknown) => {
+        // Written again on the next change.
+        this.recordedStatus = null;
+        console.warn("[RemoteHosts] Recording Host mode status failed:", messageOf(error));
+      });
+  }
+
   private snapshot(): HostModeStatus {
     const settings = this.deps.readSettings();
     const listening = this.listener?.isListening() === true;
@@ -309,6 +357,7 @@ export class HostModeService {
       } catch (error) {
         console.warn("[RemoteHosts] Host mode status push failed:", messageOf(error));
       }
+      this.recordStatus();
     });
   }
 

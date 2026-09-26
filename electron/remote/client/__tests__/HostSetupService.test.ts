@@ -132,17 +132,73 @@ describe("HostSetupService", () => {
     ).toThrow(/whileWorking/);
   });
 
-  it("asks the user to turn Host mode on at a Linux machine with no Daintree unit", async () => {
-    const { setup, calls } = service(LINUX_NO_UNIT);
-    await expect(setup.startHostMode({ sshTarget: "bigbox" })).rejects.toMatchObject({
-      code: "UNSUPPORTED",
+  it("bootstraps a fresh Linux host over ssh: the unit on stdin, then a handoff that never starts a backend", async () => {
+    const build = '{"daintreeBuildInfo":1,"version":"1.4.0","commit":"abcdef0123"}';
+    const fresh = [
+      "@@dt:uname Linux x86_64",
+      "@@dt:install deb /opt/Daintree",
+      `@@dt:buildinfo ${build}`,
+      "@@dt:unit no",
+      "@@dt:linger Linger=yes",
+      "@@dt:end",
+    ].join("\n");
+    const state = JSON.stringify({
+      daintreeHostMode: 1,
+      pid: 9,
+      enabled: true,
+      startAtLogin: true,
+      startAtLoginInstalled: true,
+      startAtLoginError: null,
+      keychain: { state: "unavailable", detail: "no keyring (headless)", checked: true },
     });
-    // Never launches the backend from the SSH session.
-    expect(calls.every(([, args]) => (args.at(-1) ?? "").includes("@@dt:uname"))).toBe(true);
+    const on = fresh
+      .replace("@@dt:unit no", "@@dt:unit yes\n@@dt:unitenabled enabled")
+      .replace(
+        "@@dt:end",
+        `@@dt:listening yes\n@@dt:hostpid 9\n@@dt:hostmodestate ${state}\n@@dt:end`
+      );
+    const outputs = [fresh, on];
+    const scripts: Array<{ script: string; input: unknown }> = [];
+    const { setup } = service("", {
+      run: async (_command, args, options) => {
+        const script = args.at(-1) ?? "";
+        if (script.includes("@@dt:uname"))
+          return ok(outputs.length > 1 ? outputs.shift()! : outputs[0]!);
+        scripts.push({ script, input: options?.input });
+        return ok(script.includes("--host-mode-handoff") ? "@@dt:handoff 0\n" : "");
+      },
+    });
+    const result = await setup.startHostMode({ sshTarget: "bigbox" });
+    expect(result.probe.hostModeState).toMatchObject({ enabled: true, startAtLogin: true });
+    expect(scripts[0]!.input).toMatchObject({ text: expect.stringContaining("[Service]") });
+    expect(scripts.map((s) => s.script)).toEqual([
+      expect.stringMatching(/^sh -c '.*systemctl --user enable daintree-host\.service'$/),
+      "sh -c 'systemctl --user start daintree-host.service'",
+      expect.stringContaining("--host-mode --enable-host-mode --host-mode-handoff"),
+    ]);
   });
 
-  it("starts a Mac in Host mode through its logged-in session", async () => {
-    const outputs = [MAC_RUNNING_OLD.replace("@@dt:listening yes\n", ""), MAC_RUNNING_OLD];
+  it("switches a Mac on through its logged-in session and reads the setting back", async () => {
+    const state = JSON.stringify({
+      daintreeHostMode: 1,
+      pid: 4242,
+      enabled: true,
+      startAtLogin: true,
+      startAtLoginInstalled: true,
+      startAtLoginError: null,
+      keychain: { state: "ok", detail: "Keychain answered", checked: true },
+    });
+    const current = MAC_RUNNING_OLD.replace("@@dt:version 1.3.0", "@@dt:version 1.4.0").replace(
+      "@@dt:end",
+      '@@dt:buildinfo {"daintreeBuildInfo":1,"version":"1.4.0","commit":"abcdef0123"}\n@@dt:end'
+    );
+    const outputs = [
+      current.replace("@@dt:listening yes\n", ""),
+      current.replace(
+        "@@dt:end",
+        `@@dt:hostpid 4242\n@@dt:launchagent yes\n@@dt:hostmodestate ${state}\n@@dt:end`
+      ),
+    ];
     const calls: string[] = [];
     const { setup } = service("", {
       run: async (_command, args) => {
@@ -154,8 +210,11 @@ describe("HostSetupService", () => {
       },
     });
     const result = await setup.startHostMode({ sshTarget: "studio" });
-    expect(result.hostModeListening).toBe(true);
-    expect(calls.some((c) => c.includes("open -g -a") && c.includes("--host-mode"))).toBe(true);
+    expect(result.probe.hostModeListening).toBe(true);
+    expect(result.probe.hostModeState?.enabled).toBe(true);
+    expect(
+      calls.some((c) => c.includes("open -n -g -a") && c.includes("--host-mode --enable-host-mode"))
+    ).toBe(true);
   });
 
   it("drops the SSH master and cached bundles when a host is forgotten", async () => {

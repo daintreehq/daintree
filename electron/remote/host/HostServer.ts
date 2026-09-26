@@ -50,6 +50,11 @@ export interface HostServerOptions {
   maxSessions?: number;
   session?: Omit<LinkSessionOptions, "role">;
   now?: () => number;
+  /**
+   * Agents working here, for a build refusal to an authenticated client (see
+   * RejectMessage.observed). Null when they can't all be seen.
+   */
+  observeWorkingAgents?: () => Promise<number | null>;
 }
 
 /**
@@ -67,6 +72,7 @@ const DEFAULT_RESUME_GRACE_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_SESSIONS = 32;
 const CLOSE_GRACE_MS = 1_000;
 const STALE_PROBE_TIMEOUT_MS = 2_000;
+const OBSERVE_TIMEOUT_MS = 2_000;
 
 export class HostServerError extends Error {
   constructor(message: string) {
@@ -276,6 +282,40 @@ export class HostServer {
     });
   }
 
+  /**
+   * Refuse a client on another build, telling it what the host's agents are
+   * doing: it can't open a session to ask, and an update restarts this host.
+   */
+  private async rejectBuild(session: LinkSession, mismatch: HandshakeMismatch): Promise<void> {
+    const workingAgents = await this.observeWorkingAgentsBounded();
+    if (session.isClosed) return;
+    session.reject({
+      reason: mismatch.kind === "protocol" ? "protocol" : "version-mismatch",
+      handshake: this.options.handshake,
+      detail: describeMismatch(mismatch),
+      ...(this.options.observeWorkingAgents ? { observed: { workingAgents } } : {}),
+    });
+  }
+
+  private async observeWorkingAgentsBounded(): Promise<number | null> {
+    const observe = this.options.observeWorkingAgents;
+    if (!observe) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const value = await Promise.race([
+        observe(),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), OBSERVE_TIMEOUT_MS);
+        }),
+      ]);
+      return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private onHello(session: LinkSession, hello: HelloMessage): void {
     const local = this.options.handshake;
     if (this.closing) {
@@ -288,11 +328,7 @@ export class HostServer {
     }
     const mismatch = compareHandshake(local, hello.handshake);
     if (mismatch) {
-      session.reject({
-        reason: mismatch.kind === "protocol" ? "protocol" : "version-mismatch",
-        handshake: local,
-        detail: describeMismatch(mismatch),
-      });
+      void this.rejectBuild(session, mismatch);
       return;
     }
 
