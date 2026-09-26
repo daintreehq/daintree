@@ -745,6 +745,32 @@ describe("PluginDevWorkerHostProxy host.fs revision, mkdir, append and watch opt
     expect(calls[1].params).not.toHaveProperty("recursive");
     expect(calls[1].params).not.toHaveProperty("debounceMs");
   });
+
+  it("forwards a supplied recursive unchanged so the host can reject a malformed one", () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: "true" as unknown as boolean });
+    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: false });
+    const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.watch");
+    expect(calls[0].params.recursive).toBe("true");
+    expect(calls[1].params.recursive).toBe(false);
+  });
+
+  it("releases main's watcher when the watch is cancelled", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.fs.watch(["/repo"], vi.fn(), { signal: controller.signal });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.watch");
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    // The cancel may reach main after the watch already settled there, when it
+    // has no call left to abort; the unsubscribe covers that case.
+    const cancelAt = sent.findIndex((m) => m.type === "host-cancel");
+    const unsubscribeAt = sent.findIndex(
+      (m) => m.type === "unsubscribe" && m.subscriptionId === call.params.subscriptionId
+    );
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(unsubscribeAt).toBeGreaterThan(cancelAt);
+  });
 });
 
 describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {

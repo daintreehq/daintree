@@ -918,14 +918,16 @@ export class PluginDevWorkerMainBridge {
           },
           {
             signal,
-            ...(p.recursive === true && { recursive: true }),
+            // Forwarded as given so the host rejects a malformed value.
+            ...(p.recursive !== undefined && { recursive: p.recursive }),
             ...(p.debounceMs !== undefined && { debounceMs: p.debounceMs }),
             ...(p.allowMissing !== undefined && { allowMissing: p.allowMissing }),
           }
         );
-        // Disposed or reloaded while the watch was settling — tear it down
-        // rather than leak it past the cleanup pass that already ran.
-        if (this.disposed || generation !== this.reloadGeneration) {
+        // Disposed, reloaded or cancelled while the watch was settling — tear
+        // it down rather than leak it: the cleanup pass already ran, or the
+        // worker already rejected the call and dropped its callback.
+        if (this.disposed || generation !== this.reloadGeneration || signal.aborted) {
           try {
             dispose();
           } catch {

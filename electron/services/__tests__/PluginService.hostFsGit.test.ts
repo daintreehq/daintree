@@ -76,6 +76,7 @@ vi.mock("../PluginActionAuditService.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { sharedWatcherListenerCount } from "../FileObservationService.js";
 import {
   getPluginCapabilityConsentService,
   _resetPluginCapabilityServicesForTest,
@@ -1866,6 +1867,127 @@ describe("host.fs.watch allowMissing", () => {
     }
   });
 
+  /**
+   * Swap the directory for a new one with a different inode. Both exist at
+   * once before the rename, so the filesystem cannot hand the old inode back.
+   */
+  async function replaceDirectory(dir: string): Promise<void> {
+    const next = `${dir}-next`;
+    await fs.mkdir(next);
+    await fs.rm(dir, { recursive: true });
+    await fs.rename(next, dir);
+  }
+
+  it("keeps two subscribers on the new directory after it is replaced", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const board = join(allowed, "board");
+    await fs.mkdir(board);
+    const realBoard = await fs.realpath(board);
+    const first: string[] = [];
+    const second: string[] = [];
+    const disposeFirst = await host.fs.watch([board], (p) => first.push(p), {
+      allowMissing: true,
+    });
+    const disposeSecond = await host.fs.watch([board], (p) => second.push(p), {
+      allowMissing: true,
+    });
+    try {
+      await replaceDirectory(board);
+      // Each subscriber announces its own re-attachment.
+      await waitFor(() => first.includes(realBoard) && second.includes(realBoard));
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(board, "card.md"), "x");
+      const card = join(realBoard, "card.md");
+      await waitFor(() => first.includes(card) && second.includes(card));
+    } finally {
+      disposeFirst();
+      disposeSecond();
+    }
+  });
+
+  it("re-attaches after a replacement while an ordinary watch holds the old directory", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const board = join(allowed, "board");
+    await fs.mkdir(board);
+    const realBoard = await fs.realpath(board);
+    const disposeOrdinary = await host.fs.watch([board], () => undefined);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([board], (p) => changes.push(p), { allowMissing: true });
+    try {
+      await replaceDirectory(board);
+      await waitFor(() => changes.includes(realBoard));
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(board, "card.md"), "x");
+      await waitFor(() => changes.includes(join(realBoard, "card.md")));
+    } finally {
+      dispose();
+      disposeOrdinary();
+    }
+  });
+
+  it("leaves no watcher or poll behind when cancelled during the first presence check", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const board = join(allowed, "board");
+    await fs.mkdir(board);
+    const realBoard = await fs.realpath(board);
+    const listenersBefore = sharedWatcherListenerCount();
+
+    let releaseStat!: () => void;
+    const statGate = new Promise<void>((resolve) => {
+      releaseStat = resolve;
+    });
+    const statReached = vi.fn();
+    const realStat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation((async (
+      ...args: Parameters<typeof fs.stat>
+    ) => {
+      if (args[0] === realBoard) {
+        statReached();
+        await statGate;
+      }
+      return realStat(...args);
+    }) as typeof fs.stat);
+    const created: unknown[] = [];
+    const cleared = new Set<unknown>();
+    const realSetInterval = globalThis.setInterval;
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      ...args: Parameters<typeof setInterval>
+    ) => {
+      const id = realSetInterval(...args);
+      created.push(id);
+      return id;
+    }) as typeof setInterval);
+    const realClearInterval = globalThis.clearInterval;
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(((
+      id: Parameters<typeof clearInterval>[0]
+    ) => {
+      cleared.add(id);
+      realClearInterval(id);
+    }) as typeof clearInterval);
+
+    try {
+      const controller = new AbortController();
+      const pending = host.fs.watch([board], () => undefined, {
+        allowMissing: true,
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(statReached).toHaveBeenCalled());
+      controller.abort();
+      releaseStat();
+
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      expect(sharedWatcherListenerCount()).toBe(listenersBefore);
+      expect(created.every((id) => cleared.has(id))).toBe(true);
+      const watchers = (svc as unknown as { pluginFsWatchers: Map<string, Set<unknown>> })
+        .pluginFsWatchers;
+      expect(watchers.get("acme.fsgit")?.size ?? 0).toBe(0);
+    } finally {
+      statSpy.mockRestore();
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
   it("rejects a non-boolean allowMissing", async () => {
     const host = registerPlugin(["fs:project-read"], [allowed]);
     await expect(
@@ -1950,6 +2072,60 @@ describe("host.fs audits a mutation that fails part-way", () => {
       `fs.mkdir:${join(real, "a")}`,
       `fs.mkdir:${join(real, "a", "b")}`,
     ]);
+  });
+
+  it("creates nothing when the plugin unloads during the mkdir containment recheck", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const seam = svc as unknown as {
+      expandAllowedPathEntries(id: string, options: unknown): Promise<unknown>;
+    };
+    const realExpand = seam.expandAllowedPathEntries.bind(svc);
+    let calls = 0;
+    vi.spyOn(seam, "expandAllowedPathEntries").mockImplementation(async (id, options) => {
+      const entries = await realExpand(id, options);
+      // The second containment is the recheck inside the path lock; the roots
+      // it resolved were valid when read, but the plugin is gone by the time
+      // they are used.
+      if (++calls === 2) svc.unloadPlugin("acme.fsgit");
+      return entries;
+    });
+
+    await expect(host.fs.mkdir(join(allowed, "a", "b"))).rejects.toThrow(/PLUGIN_UNLOADED/);
+    expect(calls).toBe(2);
+    expect(existsSync(join(allowed, "a"))).toBe(false);
+    expect(fsWriteAudits()).toEqual([]);
+  });
+
+  it("stops a directory chain part-way when the plugin unloads", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const real = await fs.realpath(allowed);
+    const realMkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation((async (target: string, options?: unknown) => {
+      const made = await realMkdir(target, options as undefined);
+      if (target === join(real, "a")) svc.unloadPlugin("acme.fsgit");
+      return made;
+    }) as typeof fs.mkdir);
+
+    await expect(host.fs.mkdir(join(allowed, "a", "b", "c"))).rejects.toThrow(/PLUGIN_UNLOADED/);
+    expect(existsSync(join(allowed, "a"))).toBe(true);
+    expect(existsSync(join(allowed, "a", "b"))).toBe(false);
+    // What did land is still audited.
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([`fs.mkdir:${join(real, "a")}`]);
+  });
+
+  it("stops the data dir bootstrap part-way when the plugin unloads", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    const realMkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation((async (target: string, options?: unknown) => {
+      const made = await realMkdir(target, options as undefined);
+      if (target === join(homeDir, ".daintree")) svc.unloadPlugin("acme.fsgit");
+      return made;
+    }) as typeof fs.mkdir);
+
+    await expect(host.fs.appendFile(join(dataDir(), "logs", "a.jsonl"), "x\n")).rejects.toThrow(
+      /PLUGIN_UNLOADED/
+    );
+    expect(existsSync(join(homeDir, ".daintree", "plugin-data"))).toBe(false);
   });
 
   it("audits an append whose close fails after the bytes were written", async () => {

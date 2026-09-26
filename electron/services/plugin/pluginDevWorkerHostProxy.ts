@@ -1074,15 +1074,25 @@ export class PluginDevWorkerHostProxy {
               {
                 subscriptionId,
                 paths,
-                ...(options?.recursive === true && { recursive: true }),
-                ...(options?.debounceMs !== undefined && { debounceMs: options.debounceMs }),
                 // Forwarded as given so the host rejects a malformed value.
+                ...(options?.recursive !== undefined && { recursive: options.recursive }),
+                ...(options?.debounceMs !== undefined && { debounceMs: options.debounceMs }),
                 ...(options?.allowMissing !== undefined && { allowMissing: options.allowMissing }),
               },
               options?.signal
             );
           } catch (err) {
             this.subscriptions.delete(subscriptionId);
+            // A cancel that reaches main after the watch settled finds no call
+            // to abort, so main would keep a watcher nobody listens to; this
+            // releases it (and is a no-op when main never registered one).
+            if (options?.signal?.aborted) {
+              try {
+                this.post({ type: "unsubscribe", subscriptionId });
+              } catch {
+                // best-effort
+              }
+            }
             throw err;
           }
           let disposed = false;

@@ -23,7 +23,7 @@ const activeDisposers = new Set<() => void>();
 function watchShared(
   resolvedPath: string,
   listener: (changedPath: string) => void,
-  options?: { recursive?: boolean }
+  options?: { recursive?: boolean; identity?: string }
 ): () => void {
   const release = watchSharedImpl(resolvedPath, listener, options);
   let disposed = false;
@@ -471,6 +471,92 @@ describe("FileObservationService", () => {
       // A late error on an already-released watcher must not resurrect it.
       stub.handlers.get("error")?.(new Error("late death"));
       expect(fsWatch).toHaveBeenCalledTimes(1);
+      expect(sharedWatcherCount()).toBe(0);
+    });
+
+    it("shares a watcher only between subscribers that saw the same directory", () => {
+      const old = makeWatcherStub();
+      const fresh = makeWatcherStub();
+      fsWatch.mockReturnValueOnce(old).mockReturnValueOnce(fresh);
+
+      const a = vi.fn();
+      const b = vi.fn();
+      const disposeA = watchShared("/root/dir", a, { identity: "1:10" });
+      const disposeB = watchShared("/root/dir", b, { identity: "1:10" });
+      expect(fsWatch).toHaveBeenCalledTimes(1);
+
+      // The directory was replaced. A re-attaches while B still holds the old
+      // watcher open; joining it would bind A to the dead inode.
+      disposeA();
+      const disposeA2 = watchShared("/root/dir", a, { identity: "1:20" });
+      expect(fsWatch).toHaveBeenCalledTimes(2);
+      expect(old.close).not.toHaveBeenCalled();
+
+      // B follows and joins A's watcher on the new directory; the old one
+      // closes as its last registration leaves.
+      disposeB();
+      expect(old.close).toHaveBeenCalledTimes(1);
+      const disposeB2 = watchShared("/root/dir", b, { identity: "1:20" });
+      expect(fsWatch).toHaveBeenCalledTimes(2);
+      expect(sharedWatcherCount()).toBe(1);
+      expect(sharedWatcherListenerCount()).toBe(2);
+
+      emitFor(1, "change", "card.md");
+      expect(a).toHaveBeenCalledExactlyOnceWith(path.join("/root/dir", "card.md"));
+      expect(b).toHaveBeenCalledExactlyOnceWith(path.join("/root/dir", "card.md"));
+
+      disposeA2();
+      disposeB2();
+      expect(fresh.close).toHaveBeenCalledTimes(1);
+      expect(sharedWatcherCount()).toBe(0);
+    });
+
+    it("does not let an identity-bearing subscriber join a watcher of unknown identity", () => {
+      const plain = makeWatcherStub();
+      const known = makeWatcherStub();
+      fsWatch.mockReturnValueOnce(plain).mockReturnValueOnce(known);
+
+      const ordinary = vi.fn();
+      const disposeOrdinary = watchShared("/root/dir", ordinary);
+      const tracked = vi.fn();
+      const disposeTracked = watchShared("/root/dir", tracked, { identity: "1:20" });
+      expect(fsWatch).toHaveBeenCalledTimes(2);
+
+      // A later plain subscriber joins whichever watcher now owns the path.
+      const late = vi.fn();
+      const disposeLate = watchShared("/root/dir", late);
+      expect(fsWatch).toHaveBeenCalledTimes(2);
+      emitFor(1, "change", "x");
+      expect(tracked).toHaveBeenCalledTimes(1);
+      expect(late).toHaveBeenCalledTimes(1);
+      expect(ordinary).not.toHaveBeenCalled();
+
+      // The superseded watcher is still closed by its own last disposer, and
+      // never evicts the entry that replaced it.
+      disposeOrdinary();
+      expect(plain.close).toHaveBeenCalledTimes(1);
+      expect(sharedWatcherCount()).toBe(1);
+      disposeTracked();
+      disposeLate();
+      expect(known.close).toHaveBeenCalledTimes(1);
+      expect(sharedWatcherCount()).toBe(0);
+    });
+
+    it("closes a superseded watcher's rebound handle, not just the one it failed with", () => {
+      const failing = makeWatcherStub();
+      const rebound = makeWatcherStub();
+      const fresh = makeWatcherStub();
+      fsWatch.mockReturnValueOnce(failing).mockReturnValueOnce(rebound).mockReturnValueOnce(fresh);
+
+      const disposeOld = watchShared("/root/dir", vi.fn());
+      failing.handlers.get("error")?.(new Error("watch died"));
+      const disposeNew = watchShared("/root/dir", vi.fn(), { identity: "1:20" });
+      expect(fsWatch).toHaveBeenCalledTimes(3);
+
+      disposeOld();
+      expect(rebound.close).toHaveBeenCalledTimes(1);
+      disposeNew();
+      expect(fresh.close).toHaveBeenCalledTimes(1);
       expect(sharedWatcherCount()).toBe(0);
     });
   });

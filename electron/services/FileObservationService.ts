@@ -154,20 +154,29 @@ interface WatchRegistration {
 }
 
 interface SharedWatcher {
-  readonly watcher: FSWatcher;
+  /** Replaced in place by a rebind, so every disposer reaches the live handle. */
+  watcher: FSWatcher;
   readonly registrations: Set<WatchRegistration>;
   readonly recursive: boolean;
   /**
    * Whether a failure of this watcher may still be repaired by rebinding its
-   * registrations onto a fresh one. Cleared on the replacement so a path that
-   * fails repeatedly cannot spin.
+   * registrations onto a fresh one. Cleared by the rebind so a path that fails
+   * repeatedly cannot spin.
    */
-  readonly rebindable: boolean;
+  rebindable: boolean;
+  /**
+   * The `dev:ino` of the directory this watcher was opened on, when the
+   * subscriber that created it knew it. `fs.watch` binds to the inode, not the
+   * path, so this is what tells a watcher on a since-replaced directory apart
+   * from one on the directory standing there now.
+   */
+  identity: string | undefined;
 }
 
 /**
  * {@link watcherKey} → the single watcher serving every subscriber of that path
- * in that mode.
+ * in that mode. An entry superseded by a newer directory at the same path
+ * leaves this map but lives on for the registrations it already holds.
  */
 const sharedWatchers = new Map<string, SharedWatcher>();
 
@@ -197,12 +206,12 @@ function dispatch(registrations: Set<WatchRegistration>, changedPath: string): v
   }
 }
 
-function createWatcher(
+function openWatcher(
   resolvedPath: string,
+  recursive: boolean,
   registrations: Set<WatchRegistration>,
-  rebindable: boolean,
-  recursive: boolean
-): SharedWatcher {
+  onError: (failed: FSWatcher) => void
+): FSWatcher {
   // A recursive watch reports `filename` relative to the watched root at any
   // depth, so the same join yields the absolute changed path.
   const watcher = fsWatch(resolvedPath, { persistent: false, recursive }, (_event, filename) => {
@@ -212,12 +221,35 @@ function createWatcher(
         : resolvedPath;
     dispatch(registrations, changed);
   });
-  const entry: SharedWatcher = { watcher, registrations, rebindable, recursive };
   watcher.on("error", (error) => {
     console.error(`[FileObservationService] watch error for ${resolvedPath}:`, error);
-    handleWatcherError(resolvedPath, entry, watcher);
+    onError(watcher);
   });
+  return watcher;
+}
+
+function createWatcher(
+  resolvedPath: string,
+  recursive: boolean,
+  identity: string | undefined
+): SharedWatcher {
+  const registrations = new Set<WatchRegistration>();
+  const entry: SharedWatcher = {
+    watcher: openWatcher(resolvedPath, recursive, registrations, (failed) =>
+      handleWatcherError(resolvedPath, entry, failed)
+    ),
+    registrations,
+    recursive,
+    rebindable: true,
+    identity,
+  };
   return entry;
+}
+
+/** Drop `entry` from the map, unless a newer entry has already taken its key. */
+function detach(resolvedPath: string, entry: SharedWatcher): void {
+  const key = watcherKey(resolvedPath, entry.recursive);
+  if (sharedWatchers.get(key) === entry) sharedWatchers.delete(key);
 }
 
 /**
@@ -228,35 +260,34 @@ function createWatcher(
  * so they get one final notification before the entry is dropped.
  */
 function handleWatcherError(resolvedPath: string, entry: SharedWatcher, failed: FSWatcher): void {
-  const key = watcherKey(resolvedPath, entry.recursive);
-  // Already replaced or torn down by someone else — nothing to repair.
-  if (sharedWatchers.get(key) !== entry || entry.watcher !== failed) return;
+  // Already rebound, or torn down by its last disposer — nothing to repair.
+  if (entry.watcher !== failed || entry.registrations.size === 0) return;
 
-  sharedWatchers.delete(key);
   try {
     failed.close();
   } catch {
     // best-effort
   }
 
-  if (entry.registrations.size === 0) return;
-
   if (entry.rebindable) {
     try {
-      // The replacement carries the same registration set, so live subscribers
-      // keep receiving events and their existing disposers keep working. It is
-      // not itself rebindable: a path whose watcher dies immediately must not
-      // spin creating replacements.
-      sharedWatchers.set(
-        key,
-        createWatcher(resolvedPath, entry.registrations, false, entry.recursive)
+      // Rebinding in place keeps the registration set and every disposer
+      // pointed at the live handle. The replacement is not itself rebindable:
+      // a path whose watcher dies immediately must not spin creating
+      // replacements. What it opens may not be the inode the failed one had,
+      // so its identity is unknown.
+      entry.watcher = openWatcher(resolvedPath, entry.recursive, entry.registrations, (next) =>
+        handleWatcherError(resolvedPath, entry, next)
       );
+      entry.rebindable = false;
+      entry.identity = undefined;
       return;
     } catch {
       // Fall through to the final notification below.
     }
   }
 
+  detach(resolvedPath, entry);
   dispatch(entry.registrations, resolvedPath);
 }
 
@@ -275,6 +306,13 @@ function handleWatcherError(resolvedPath: string, entry: SharedWatcher, failed: 
  * same listener function, and each returns its own disposer. The underlying
  * watcher is closed when the last registration leaves.
  *
+ * `options.identity` is the `dev:ino` the caller just saw at the path. A caller
+ * passing one only joins a watcher known to be on that same directory;
+ * otherwise it gets a fresh watcher that takes over the path's entry, and the
+ * superseded one lives on only for the registrations it already has. Without
+ * it, a subscriber re-attaching after a directory was replaced would join the
+ * watcher another subscriber keeps alive on the old inode.
+ *
  * One native handle fanned out to N subscribers cannot reproduce N handles'
  * exact event count, ordering or failure independence. `fs.watch` is a
  * best-effort stream regardless, so callbacks must be treated as invalidation
@@ -283,16 +321,17 @@ function handleWatcherError(resolvedPath: string, entry: SharedWatcher, failed: 
 export function watchShared(
   resolvedPath: string,
   listener: (changedPath: string) => void,
-  options?: { recursive?: boolean }
+  options?: { recursive?: boolean; identity?: string }
 ): () => void {
   const recursive = options?.recursive === true;
+  const identity = options?.identity;
   const key = watcherKey(resolvedPath, recursive);
   let entry = sharedWatchers.get(key);
 
-  if (entry === undefined) {
+  if (entry === undefined || (identity !== undefined && entry.identity !== identity)) {
     // `fsWatch` throws synchronously for a missing path; that propagates to the
     // caller exactly as it did when each caller made its own watcher.
-    entry = createWatcher(resolvedPath, new Set<WatchRegistration>(), true, recursive);
+    entry = createWatcher(resolvedPath, recursive, identity);
     sharedWatchers.set(key, entry);
   }
 
@@ -306,14 +345,9 @@ export function watchShared(
     disposed = true;
     owner.registrations.delete(registration);
     if (owner.registrations.size > 0) return;
-    // The registration set survives a rebind, so the live entry for this path
-    // may be a replacement carrying the same set. Close whichever watcher is
-    // current, and only drop the map entry if it is still one of ours.
-    const current = sharedWatchers.get(key);
-    const live = current?.registrations === owner.registrations ? current : owner;
-    if (current === live) sharedWatchers.delete(key);
+    detach(resolvedPath, owner);
     try {
-      live.watcher.close();
+      owner.watcher.close();
     } catch {
       // best-effort
     }
