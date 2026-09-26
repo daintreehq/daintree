@@ -2430,7 +2430,7 @@ export function createHost(
       canDispatch: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return "restricted";
         const entry = await dispatcher
-          .sendActionsGetToRenderer(actionId, boundProjectId)
+          .sendActionsGetToRenderer(actionId, boundProjectId, pluginId)
           .catch((err: unknown) => {
             if (isProjectViewUnavailable(err)) return null;
             throw err;
