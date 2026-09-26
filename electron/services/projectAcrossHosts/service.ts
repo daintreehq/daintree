@@ -21,6 +21,7 @@ import type {
   ProjectMatchCandidate,
   PushBranchOutcome,
   PushBranchPayload,
+  PushObservation,
   ScanProjectMatchPayload,
   SourceProjectDescription,
   SuggestDestinationPayload,
@@ -43,6 +44,7 @@ import { validateBranchName } from "../../../shared/utils/pathPattern.js";
 import { AppError, GitOperationError } from "../../utils/errorTypes.js";
 import { findWorktreeForBranch } from "../../workspace-host/worktreeUtils.js";
 import { normalizeOperationId } from "../operations/OperationRegistry.js";
+import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
 import { checkBranchAgainstRemote } from "./branchCheck.js";
 import { BundleStore, isBundleToken } from "./bundles.js";
 import { checkDestination, suggestDestination } from "./destination.js";
@@ -379,6 +381,34 @@ export class ProjectAcrossHostsService {
         message: gitText(error, "git push failed"),
       };
     }
+  }
+
+  /**
+   * Look at where a push left things, for a push whose outcome was lost with
+   * the link: this branch's tip here, and the remote branch's tip as the
+   * remote itself reports it. Reads only; it pushes nothing.
+   */
+  async observePush(payload: PushBranchPayload): Promise<PushObservation> {
+    const project = this.requireProject(payload?.projectId);
+    const worktreePath = await this.resolveWorktree(project, payload.worktreePath);
+    const branch = requireBranchName(payload.branch, "branch");
+    const remoteBranch = requireBranchName(payload.remoteBranch, "remote branch");
+    const remotes = await this.listRemotes(project.path).catch(() => []);
+    if (!remotes.some((r) => r.name === payload.remote)) throw invalid("Unknown remote");
+    const git = await this.deps.git.local(worktreePath);
+    const local = await tryRaw(git, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `refs/heads/${branch}^{commit}`,
+    ]);
+    const networkGit = await this.deps.git.network(worktreePath);
+    const tip = await readRemoteBranchTip(networkGit, payload.remote, remoteBranch);
+    return {
+      localSha: local?.trim() || null,
+      remoteSha: tip ?? null,
+      remoteReachable: tip !== undefined,
+    };
   }
 
   // Target side

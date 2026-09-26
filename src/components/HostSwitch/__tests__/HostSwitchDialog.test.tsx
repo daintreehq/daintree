@@ -178,6 +178,36 @@ describe("HostSwitchDialog", () => {
     });
   });
 
+  it("says what the source saw when a push's outcome was lost with the link, and clones nothing", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+        unpushedCommits: [{ sha: "abc1234", subject: "Draw the host chip" }],
+      })
+    );
+    execute.mockResolvedValue({
+      kind: "push-unconfirmed",
+      hostId: "local",
+      branch: "feature/host-chip",
+      remote: "origin",
+      remoteBranch: "feature/host-chip",
+      observed: {
+        localSha: "5d6e7f8a9b0c1d2e3f405162738495a6b7c8d9e0",
+        remoteSha: "1a2b3c4d5e6f708192a3b4c5d6e7f80910111213",
+        remoteReachable: true,
+      },
+    });
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("radio", { name: "Push, then continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Push, then clone" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't confirm the push of feature/host-chip");
+    expect(alert.textContent).toContain("origin/feature/host-chip is at 1a2b3c4d");
+    expect(alert.textContent).toContain("feature/host-chip on");
+    expect(alert.textContent).toContain("is at 5d6e7f8a");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("pushes only when chosen, shows what it publishes, and a refused push keeps the dialog and clones nothing", async () => {
     prepare.mockResolvedValue(
       preparation({

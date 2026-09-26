@@ -231,3 +231,25 @@ export interface PushBranchPayload {
 }
 
 export type PushBranchOutcome = { ok: true } | { ok: false; reason: string; message: string };
+
+/**
+ * What the source host saw when asked where a pushed branch stands: its own
+ * branch tip and the remote's, read from the remote itself. `remoteSha` is
+ * null when the remote has no such branch; `remoteReachable` is false when it
+ * didn't answer, and then `remoteSha` says nothing.
+ */
+export interface PushObservation {
+  localSha: string | null;
+  remoteSha: string | null;
+  remoteReachable: boolean;
+}
+
+/**
+ * The source host's record of a push by its opId. `interrupted` is a push
+ * stopped because the link that asked for it closed: git was killed part way,
+ * so whether the remote moved is unknown until it is looked at. `unknown` is
+ * no record at all (never arrived, or retention passed).
+ */
+export type HostPushStatus =
+  | { state: "running" | "cancelled" | "interrupted" | "unknown" }
+  | { state: "settled"; outcome: PushBranchOutcome };

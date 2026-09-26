@@ -20,6 +20,8 @@ import type {
   HostBranchTarget,
   HostCloneOptions,
   HostProjectOpened,
+  PushBranchOutcome,
+  PushBranchPayload,
 } from "../../../shared/types/ipc/projectMatch.js";
 import {
   LOCAL_HOST_ID,
@@ -373,7 +375,12 @@ export class HostSwitchService {
     };
     track.promise = run(track).then(
       (result) => {
-        this.settle(track, result.kind === "git-failed" ? "failed" : "succeeded");
+        this.settle(
+          track,
+          result.kind === "git-failed" || result.kind === "push-unconfirmed"
+            ? "failed"
+            : "succeeded"
+        );
         return result;
       },
       (error: unknown) => {
@@ -446,25 +453,88 @@ export class HostSwitchService {
       controller.abort();
       return true;
     };
-    const outcome = await from.pushBranch(
-      {
-        opId: payload.opId,
-        projectId: payload.projectId,
-        worktreePath: payload.worktreePath,
-        branch: payload.branch,
-        remote: payload.remote,
-        remoteBranch: payload.remoteBranch,
-      },
-      controller.signal
-    );
-    if (outcome.ok) return { kind: "pushed" };
-    return {
-      kind: "git-failed",
-      step: "push",
-      hostId: from.hostId,
-      reason: outcome.reason,
-      message: outcome.message,
+    const request = {
+      projectId: payload.projectId,
+      worktreePath: payload.worktreePath,
+      branch: payload.branch,
+      remote: payload.remote,
+      remoteBranch: payload.remoteBranch,
     };
+    let outcome: PushBranchOutcome;
+    try {
+      outcome = await from.pushBranch({ opId: payload.opId, ...request }, controller.signal);
+    } catch (error) {
+      if (from.kind !== "remote" || !isLinkDrop(error) || controller.signal.aborted) throw error;
+      return this.reconcilePush(from, payload.opId, request, track, controller.signal);
+    }
+    return pushResult(from.hostId, outcome);
+  }
+
+  /**
+   * The link dropped before the push answered, and the remote ref may already
+   * have moved. Once the source is back, take its record of the push; with no
+   * settled record, look at the remote branch and the local tip rather than
+   * guess, and report what was seen.
+   */
+  private async reconcilePush(
+    from: HostGateway,
+    opId: string,
+    request: PushBranchPayload,
+    track: Tracked,
+    signal: AbortSignal
+  ): Promise<HostSwitchExecuteResult> {
+    // Cancelling now only stops the wait: the push itself already ended with the link.
+    const stopIfCancelled = () => {
+      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
+    };
+    const interval = this.options.pollIntervalMs ?? DEFAULT_POLL_MS;
+    for (let drops = 0; ;) {
+      this.stage(track, "reconnecting", "Waiting for the host to come back");
+      const back = await this.options.whenReconnected(
+        from.hostId,
+        this.options.reconnectTimeoutMs ?? DEFAULT_RECONNECT_TIMEOUT_MS
+      );
+      if (!back) {
+        throw new AppError({
+          code: "OUTCOME_UNKNOWN",
+          message: `Lost the link to ${from.hostId} during the push`,
+          userMessage: `Lost the link to ${from.hostId} during the push. Check ${request.branch} on its remote once the host is back.`,
+        });
+      }
+      stopIfCancelled();
+      this.stage(track, "checking", "Checking the push with the host");
+      try {
+        let status = await from.pushStatus(opId, request.projectId);
+        while (status.state === "running") {
+          await sleep(interval);
+          stopIfCancelled();
+          status = await from.pushStatus(opId, request.projectId);
+        }
+        if (status.state === "settled") return pushResult(from.hostId, status.outcome);
+        if (status.state === "cancelled") {
+          throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
+        }
+        const observed = await from.observePush(request);
+        if (
+          observed.remoteReachable &&
+          observed.localSha !== null &&
+          observed.remoteSha !== null &&
+          observed.localSha.toLowerCase() === observed.remoteSha.toLowerCase()
+        ) {
+          return { kind: "pushed" };
+        }
+        return {
+          kind: "push-unconfirmed",
+          hostId: from.hostId,
+          branch: request.branch,
+          remote: request.remote,
+          remoteBranch: request.remoteBranch,
+          observed,
+        };
+      } catch (error) {
+        if (!isLinkDrop(error) || ++drops > 2) throw error;
+      }
+    }
   }
 
   private async clone(
@@ -826,6 +896,17 @@ function stripOptional(url: string | null | undefined): string | null {
 function withoutGrant(check: DestinationCheck & { grant?: unknown }): DestinationCheck {
   const { grant: _grant, ...rest } = check;
   return rest;
+}
+
+function pushResult(hostId: HostId, outcome: PushBranchOutcome): HostSwitchExecuteResult {
+  if (outcome.ok) return { kind: "pushed" };
+  return {
+    kind: "git-failed",
+    step: "push",
+    hostId,
+    reason: outcome.reason,
+    message: outcome.message,
+  };
 }
 
 function opened(hostId: HostId, result: HostProjectOpened): HostSwitchExecuteResult {
