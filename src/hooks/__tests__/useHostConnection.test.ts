@@ -8,7 +8,8 @@ import type {
   OperationOutcome,
 } from "@shared/types/remoteHosts";
 
-const { pluginRefresh, updateAgentState, setAgentState, panels } = vi.hoisted(() => ({
+const { pluginRefresh, updateAgentState, setAgentState, panels, rehydrate } = vi.hoisted(() => ({
+  rehydrate: vi.fn(async (_projectId: string, _options: unknown) => undefined),
   pluginRefresh: vi.fn(),
   updateAgentState: vi.fn(),
   setAgentState: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock("@/store/panelStore", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: { setAgentState },
 }));
+vi.mock("@/store/hostProjectRehydrate", () => ({ rehydrateHostProjectState: rehydrate }));
 
 import {
   _resetHostConnectionSyncForTesting,
@@ -148,6 +150,7 @@ beforeEach(() => {
   pluginRefresh.mockClear();
   updateAgentState.mockClear();
   setAgentState.mockClear();
+  rehydrate.mockClear();
   for (const key of Object.keys(panels)) delete panels[key];
 });
 
@@ -521,5 +524,75 @@ describe("runHostOperation", () => {
       })
     ).resolves.toBe(1);
     expect(waited).toBe(true);
+  });
+});
+
+describe("project state after a fresh session or a takeover", () => {
+  const optionsOf = (call: unknown[]) =>
+    call[1] as { authoritative: boolean; isCurrent: () => boolean };
+
+  it("reads the host's saved project state back only when the link came back on a fresh session", async () => {
+    const { emitHost } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "overflow" });
+    await resyncFromHost();
+    expect(rehydrate).not.toHaveBeenCalled();
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    expect(rehydrate.mock.calls[0]![0]).toBe("proj-1");
+    // This view drives, so what it changed while away isn't overwritten.
+    expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(false);
+    stop();
+  });
+
+  it("takes the host's layout as it is while another screen drives", async () => {
+    const { electron, emitHost } = installElectron();
+    bindView("studio-01");
+    electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
+    const stop = startHostConnectionSync();
+    await flush();
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(true);
+    stop();
+  });
+
+  it("rehydrates after an explicit disconnect and a new connection", async () => {
+    const { emitHost } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    const connected = { status: "connected", rttMs: 5, handshake: HANDSHAKE } as const;
+    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "disconnected" },
+    } as RemoteHostsEvent);
+    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    stop();
+  });
+
+  it("takes the previous driver's saved state after taking over", async () => {
+    const { electron } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    electron.driveLease.takeOver.mockResolvedValue(leaseView(holder(), true));
+
+    await takeOverDrive("proj-1");
+
+    expect(rehydrate).toHaveBeenCalledTimes(1);
+    expect(rehydrate.mock.calls[0]![0]).toBe("proj-1");
+    const options = optionsOf(rehydrate.mock.calls[0]!);
+    expect(options.authoritative).toBe(true);
+    expect(options.isCurrent()).toBe(true);
+    stop();
   });
 });
