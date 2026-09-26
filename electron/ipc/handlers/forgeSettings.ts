@@ -1,4 +1,5 @@
 // eager-import-allow: reads forge settings via store.get synchronously in the IPC handler
+import { createHash } from "node:crypto";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { checkRateLimit, typedHandle } from "../utils.js";
@@ -60,6 +61,13 @@ function awaitPluginInit(): Promise<void> {
 }
 
 /** True when a stored record has at least one non-empty value. */
+// A one-way identity for the stored credential record, so the renderer can
+// tell "the same credential" from "a replaced one" across restarts without
+// ever seeing it. Any write path that changes the record changes this.
+function credentialFingerprint(raw: string): string {
+  return createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
 function recordHasCredential(raw: string | undefined): boolean {
   if (!raw) return false;
   try {
@@ -427,7 +435,9 @@ export function registerForgeSettingsHandlers(): () => void {
         return { hasCredential: false };
       }
       const map = store.get("forgeCredentials") ?? {};
-      return { hasCredential: recordHasCredential(map[providerId]) };
+      const raw = map[providerId];
+      if (!raw || !recordHasCredential(raw)) return { hasCredential: false };
+      return { hasCredential: true, fingerprint: credentialFingerprint(raw) };
     })
   );
 

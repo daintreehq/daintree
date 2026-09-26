@@ -1117,7 +1117,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "forge:get-credential-status": {
     args: [providerId: string];
-    result: { hasCredential: boolean };
+    result: { hasCredential: boolean; fingerprint?: string };
   };
   "forge:clear-credential": {
     args: [providerId: string];

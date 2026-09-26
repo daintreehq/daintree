@@ -1,8 +1,39 @@
 import { describe, it, expect } from "vitest";
-import { isRateLimitError, isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
+import {
+  classifyTokenError,
+  isRateLimitError,
+  isTokenRelatedError,
+  isTransientNetworkError,
+} from "@/lib/forgeErrors";
 
 // Fixtures use the GitHub provider's message vocabulary — the only built-in
 // provider — but the matchers themselves are provider-neutral.
+
+describe("classifyTokenError", () => {
+  it("separates a missing credential from failures of one the user has", () => {
+    expect(classifyTokenError("GitHub token not configured. Set it in Settings.")).toBe(
+      "not-configured"
+    );
+    expect(classifyTokenError("Invalid GitHub token. Please update in Settings.")).toBe("invalid");
+    expect(
+      classifyTokenError("Token lacks required permissions. Required scopes: repo, read:org")
+    ).toBe("permissions");
+    expect(classifyTokenError("SSO authorization required. Re-authorize at github.com.")).toBe(
+      "sso"
+    );
+  });
+
+  it("returns null for non-token errors and partial-results SSO", () => {
+    expect(classifyTokenError(null)).toBeNull();
+    expect(classifyTokenError("Cannot reach GitHub. Check your internet connection.")).toBeNull();
+    expect(classifyTokenError("Repository not found or token lacks access.")).toBeNull();
+    expect(
+      classifyTokenError(
+        "GitHub returned partial results — some organizations require SSO authorization."
+      )
+    ).toBeNull();
+  });
+});
 
 describe("isTokenRelatedError", () => {
   it("matches the documented token error strings", () => {

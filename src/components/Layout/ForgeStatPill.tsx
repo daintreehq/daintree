@@ -23,6 +23,12 @@ export interface ForgeStatPillProps {
   testId?: string;
   tooltipContent: React.ReactNode;
   /**
+   * Hold the hover tooltip shut — while a callout already points at this
+   * pill, a second bubble under it would cover the first.
+   */
+  tooltipSuppressed?: boolean;
+  ariaDescribedBy?: string;
+  /**
    * This pill's own right-click menu. Each segment owns one so it can lead
    * with its own navigation — a single menu around the whole stats control
    * can't tell which segment was clicked (#12354).
@@ -63,6 +69,8 @@ export function ForgeStatPill({
   ariaLabel,
   testId,
   tooltipContent,
+  tooltipSuppressed = false,
+  ariaDescribedBy,
   contextMenuContent,
   onContextMenuOpenChange,
   icon: Icon,
@@ -89,7 +97,7 @@ export function ForgeStatPill({
   const triggerId = useId();
   return (
     <>
-      <Tooltip>
+      <Tooltip open={tooltipSuppressed ? false : undefined}>
         <ContextMenu onOpenChange={onContextMenuOpenChange}>
           <ContextMenuTrigger asChild>
             <TooltipTrigger asChild>
@@ -119,6 +127,7 @@ export function ForgeStatPill({
                 )}
                 id={triggerId}
                 aria-label={ariaLabel}
+                aria-describedby={ariaDescribedBy}
                 aria-expanded={open}
                 aria-controls={open ? dropdownId : undefined}
                 data-testid={testId}

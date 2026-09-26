@@ -7,6 +7,7 @@ import {
   useMemo,
   memo,
   forwardRef,
+  useId,
 } from "react";
 import { CircleDot, GitPullRequest, GitCommit, Clock, TriangleAlert } from "lucide-react";
 import { PRDetectionPausedIndicator } from "./PRDetectionPausedIndicator";
@@ -14,6 +15,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { actionService } from "@/services/ActionService";
 import { ForgeStatsContextMenuItems } from "./ForgeStatsContextMenuItems";
+import { ForgeTokenCallout } from "./ForgeTokenCallout";
+import { classifyTokenError } from "@/lib/forgeErrors";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -142,6 +145,15 @@ export const ForgeStatsToolbarButton = memo(
     } = useResolvedForgeProvider(currentProject?.id ?? null);
     const forgeMode = providerEntry !== null && providerId !== null;
     const providerName = providerEntry?.contribution.name ?? "forge";
+    // A missing credential asks to be configured; one that exists but stopped
+    // working asks to be reconnected, and also raises the pill's callout.
+    const tokenErrorKind = isTokenError ? classifyTokenError(statsError) : null;
+    const tokenVerb =
+      tokenErrorKind !== null && tokenErrorKind !== "not-configured"
+        ? `Reconnect ${providerName}`
+        : `Configure ${providerName} token`;
+    const [tokenCalloutOpen, setTokenCalloutOpen] = useState(false);
+    const tokenCalloutId = useId();
     const menuProviderName = forgeMode ? providerName : null;
     const { canOpenRepo, recheck: recheckRepoLink } = useCanOpenForgeRepo(
       currentProject?.path,
@@ -1015,12 +1027,12 @@ export const ForgeStatsToolbarButton = memo(
             testId="forge-stat-pill-issues"
             ariaLabel={
               isTokenError
-                ? `Configure ${providerName} token to see issues`
+                ? `${tokenVerb} to see issues`
                 : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             tooltipContent={
               isTokenError
-                ? `Configure ${providerName} token to see issues`
+                ? `${tokenVerb} to see issues`
                 : freshnessLevel === "fresh"
                   ? `Browse ${providerName} issues${exactSuffix(issueDisplayCount, "open")}${issuesStatusSuffix}`
                   : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
@@ -1036,6 +1048,8 @@ export const ForgeStatsToolbarButton = memo(
             }
             icon={CircleDot}
             iconClassName="text-pr-open"
+            tooltipSuppressed={tokenCalloutOpen}
+            ariaDescribedBy={tokenCalloutOpen ? tokenCalloutId : undefined}
             tone={isTokenError ? "unavailable" : issueDisplayCount === 0 ? "quiet" : "default"}
             dropdownContent={
               DropdownView && providerId ? (
@@ -1115,12 +1129,12 @@ export const ForgeStatsToolbarButton = memo(
             testId="forge-stat-pill-prs"
             ariaLabel={
               isTokenError
-                ? `Configure ${providerName} token to see pull requests`
+                ? `${tokenVerb} to see pull requests`
                 : `${formatExactCount(prDisplayCount)} open pull requests${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
             }
             tooltipContent={
               isTokenError
-                ? `Configure ${providerName} token to see pull requests`
+                ? `${tokenVerb} to see pull requests`
                 : freshnessLevel === "fresh"
                   ? `Browse ${providerName} pull requests${exactSuffix(prDisplayCount, "open")}${prsStatusSuffix}`
                   : `${formatExactCount(prDisplayCount)} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
@@ -1343,6 +1357,17 @@ export const ForgeStatsToolbarButton = memo(
           contextMenuContent={chromeMenuContent}
           onContextMenuOpenChange={handleStatsMenuOpenChange}
         />
+        {forgeMode && providerId ? (
+          <ForgeTokenCallout
+            id={tokenCalloutId}
+            anchorRef={issuesButtonRef}
+            providerId={providerId}
+            providerName={providerName}
+            errorKind={tokenErrorKind}
+            onReconnect={openSettingsForToken}
+            onOpenChange={setTokenCalloutOpen}
+          />
+        ) : null}
       </div>
     );
   })
