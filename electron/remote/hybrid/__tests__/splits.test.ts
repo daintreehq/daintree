@@ -153,6 +153,7 @@ describe("hybrid split registry", () => {
       [CHANNELS.PROJECT_SWITCH]: { outcome: "switched", project: { id: "p1" } },
       [CHANNELS.PROJECT_REOPEN]: { outcome: "switched", project: { id: "p1" } },
       [CHANNELS.EDITOR_GET_CONFIG]: { preferredEditor: null, discoveredEditors: [] },
+      [CHANNELS.SCRATCH_SWITCH]: { id: "s1", name: "Scratch", path: "/home/greg/s1" },
     };
     for (const [channel, split] of Object.entries(HYBRID_SPLITS)) {
       await Promise.resolve(
@@ -169,6 +170,8 @@ describe("hybrid split registry", () => {
       ).catch(() => undefined);
     }
     for (const channel of called) expect(HYBRID_HOST_LEGS, channel).toContain(channel);
+    // The picker split's host leg (pickers.ts) is admitted here too.
+    expect(HYBRID_HOST_LEGS).toContain(CHANNELS.SCRATCH_SAVE_AS_PROJECT);
   });
 });
 
@@ -434,6 +437,88 @@ describe("project activation", () => {
   });
 });
 
+describe("scratch switch", () => {
+  const scratch = { id: "s1", name: "Try it", path: "/home/greg/.daintree/scratches/s1" };
+
+  it("confirms on the host, rebinds the view to the host scratch and tells only that view", async () => {
+    const order: string[] = [];
+    mocks.pvm.setPendingFocusIntent.mockImplementation(() => order.push("focus"));
+    mocks.client.switchWindowHost.mockImplementationOnce(async () => {
+      order.push("swap");
+      mocks.pvm.getActiveProjectId.mockReturnValue("studio:s1");
+      mocks.pvm.getActiveView.mockReturnValue({
+        webContents: { isDestroyed: () => false, send: mocks.viewSend },
+      });
+    });
+    const forward = vi.fn(() => scratch);
+    const { invoke, listener } = setup(forward, () => "local");
+    const focusIntent = { intent: "focus-panel", panelId: "t1" };
+
+    await expect(invoke(CHANNELS.SCRATCH_SWITCH, ["s1", { focusIntent }])).resolves.toEqual(
+      scratch
+    );
+
+    expect(forward).toHaveBeenCalledWith(CHANNELS.SCRATCH_SWITCH, ["s1", { focusIntent }]);
+    expect(listener).not.toHaveBeenCalled();
+    expect(order).toEqual(["focus", "swap"]);
+    expect(mocks.pvm.setPendingFocusIntent).toHaveBeenCalledWith("studio:s1", focusIntent);
+    expect(mocks.client.switchWindowHost).toHaveBeenCalledWith(
+      expect.objectContaining({ webContentsId: REMOTE_SENDER }),
+      { hostId: "studio", projectId: "s1", newWindow: false }
+    );
+    expect(mocks.viewSend).toHaveBeenCalledWith(CHANNELS.SCRATCH_ON_SWITCH, {
+      scratch,
+      switchId: expect.any(String),
+    });
+  });
+
+  it("sends no switch event when the window ended up somewhere else", async () => {
+    mocks.pvm.getActiveProjectId.mockReturnValue("studio:other");
+    const { invoke } = setup(
+      () => scratch,
+      () => "local"
+    );
+    await invoke(CHANNELS.SCRATCH_SWITCH, ["s1"]);
+    expect(mocks.client.switchWindowHost).toHaveBeenCalled();
+    expect(mocks.viewSend).not.toHaveBeenCalled();
+  });
+
+  it("leaves the view where it is when the host refuses", async () => {
+    const { invoke } = setup(
+      () => {
+        throw new Error("Scratch not found: s1");
+      },
+      () => "local"
+    );
+    await expect(invoke(CHANNELS.SCRATCH_SWITCH, ["s1"])).rejects.toThrow("Scratch not found");
+    expect(mocks.client.switchWindowHost).not.toHaveBeenCalled();
+    expect(mocks.viewSend).not.toHaveBeenCalled();
+  });
+
+  it("fails as disconnected when the remote hosts client is gone", async () => {
+    mocks.hasClient = false;
+    const { invoke } = setup(
+      () => scratch,
+      () => "local"
+    );
+    await expect(invoke(CHANNELS.SCRATCH_SWITCH, ["s1"])).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    expect(mocks.viewSend).not.toHaveBeenCalled();
+  });
+
+  it("leaves a local window's scratch switch on the local handler", async () => {
+    const forward = vi.fn();
+    const { invoke, listener } = setup(forward, () => ({ id: "local-scratch" }));
+    await expect(invoke(CHANNELS.SCRATCH_SWITCH, ["s1"], LOCAL_SENDER)).resolves.toEqual({
+      id: "local-scratch",
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(forward).not.toHaveBeenCalled();
+    expect(mocks.client.switchWindowHost).not.toHaveBeenCalled();
+  });
+});
+
 describe("opening host files", () => {
   it("opens the editor through its SSH remote URL", async () => {
     const forward = vi.fn(() => ({ preferredEditor: { id: "cursor" }, discoveredEditors: [] }));
@@ -508,6 +593,7 @@ describe("opening host files", () => {
       CHANNELS.PROJECT_OPEN_DIALOG,
       CHANNELS.PROJECT_LOCATE,
       CHANNELS.PLUGIN_PICK_PATH,
+      CHANNELS.SCRATCH_SAVE_AS_PROJECT,
     ]) {
       expect(HYBRID_SPLITS[channel], channel).toBeUndefined();
       await expect(invoke(channel, [])).rejects.toMatchObject({ code: "CHANNEL_NOT_REMOTABLE" });

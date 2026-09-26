@@ -66,6 +66,7 @@ import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { useScratchDeletionProgress } from "@/hooks/useScratchDeletionProgress";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { useOverlayClaim } from "@/hooks";
 // Leaf import, not the `@/hooks` barrel: several palette suites mock that barrel
 // and would throw on an export they don't list.
@@ -2804,6 +2805,7 @@ function DeleteScratchConfirmDialog({
   restoreFocusTo: React.RefObject<HTMLElement | null>;
 }) {
   const progress = useScratchDeletionProgress(isDeleting);
+  const remoteHostName = useRemoteHostName();
 
   return (
     <ConfirmDialog
@@ -2829,7 +2831,7 @@ function DeleteScratchConfirmDialog({
     >
       <div className="space-y-3">
         <div className="text-sm text-text-secondary">
-          Its terminals will be closed and its folder deleted from disk.
+          {`Its terminals will be closed and its folder deleted from ${remoteHostName ?? "disk"}.`}
         </div>
         <div className="text-xs text-text-secondary font-mono">
           <PathSegments path={target.path} />
@@ -2930,6 +2932,8 @@ export function ProjectSwitcherPalette({
   fleetLiveness,
 }: ProjectSwitcherPaletteProps) {
   const paletteInputRef = useRef<HTMLInputElement>(null);
+  // Scratch folders live on the window's host; locally the copy says "disk" as it always has.
+  const scratchFolderHome = useRemoteHostName() ?? "disk";
 
   const hasRunningProcesses = removeConfirmProject
     ? removeConfirmProject.processCount > 0 ||
@@ -3178,8 +3182,8 @@ export function ProjectSwitcherPalette({
             <div className="space-y-3">
               <div className="text-sm text-text-secondary">
                 {deleteAllScratchesConfirm.length === 1
-                  ? "Its terminals will be closed and its folder deleted from disk."
-                  : "Their terminals will be closed and their folders deleted from disk."}
+                  ? `Its terminals will be closed and its folder deleted from ${scratchFolderHome}.`
+                  : `Their terminals will be closed and their folders deleted from ${scratchFolderHome}.`}
               </div>
               {/*
                * Named, not just counted: the action is one click from "New
