@@ -1495,6 +1495,18 @@ export const SettingDefinitionSchema = SettingDefinitionObjectSchema.superRefine
   // `extensions` narrows the native file chooser — it is only meaningful for
   // `type: "file"`. Reject it on every other type at the manifest gate so a
   // misplaced filter surfaces loudly instead of silently doing nothing.
+  // A secret's default would ship in plugin.json — committed to the plugin's
+  // repository and readable by anyone who has it — which is the one place a
+  // credential must never live. It would also silently stand in for a key the
+  // user never entered. Rejected at the gate rather than ignored.
+  if (val.default !== undefined && effectiveType === "secret") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'Settings of type "secret" cannot declare a default — it would ship in plugin.json. Leave it unset and mark it required instead.',
+      path: ["default"],
+    });
+  }
   if (val.extensions !== undefined && effectiveType !== "file") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

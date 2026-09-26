@@ -1461,6 +1461,8 @@ export type PluginSecretStorageTier = "keychain" | "unavailable";
 export interface PluginRequiredSettingsStatus {
   missing: string[];
   unreadable: string[];
+  /** Display label (declared `label`, else the id) for every id in either list. */
+  labels: Record<string, string>;
 }
 
 /**
@@ -4719,6 +4721,14 @@ export interface ProjectPluginInfo {
   capabilities: PluginCapability[];
   /** Declared `contributes.databases`, disclosed in the manager. */
   databases?: PluginDatabaseContribution[];
+  /**
+   * Declared `contributes.settings`, so the plugin's Settings section can still
+   * say what it holds while the plugin isn't running and no loaded instance
+   * carries its manifest. Absent when it declares none.
+   */
+  settings?: SettingDefinition[];
+  /** The manifest declares a `location: "settings"` view. */
+  declaresSettingsView?: boolean;
   /** Directory name under `.daintree/plugins/`. Not required to equal `id`. */
   dirName: string;
   state: ProjectPluginState;

@@ -687,6 +687,30 @@ describe("ProjectPluginsTab settings deep link and lifecycle", () => {
     expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
   });
 
+  it("keeps a muted plugin's Settings section, saying what it needs, with nothing to write to", async () => {
+    // Muted: no loaded instance, so no manifest reaches the settings bridge.
+    pluginApi.list.mockResolvedValue([]);
+    seed([
+      projectPlugin({
+        muted: true,
+        state: "blocked",
+        settings: [{ id: "apiKey", type: "secret", label: "API key", scope: "project" }],
+        declaresSettingsView: true,
+      }),
+    ]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Dashboard");
+
+    const detail = screen.getByTestId("project-plugin-detail");
+    expect(within(detail).getByText("API key")).toBeTruthy();
+    expect(within(detail).getByText("More settings")).toBeTruthy();
+    expect(within(detail).getAllByText("Available when the plugin is turned on")).toHaveLength(2);
+    // Declarations only: nothing is read or editable without the plugin loaded.
+    expect(within(detail).queryByRole("textbox")).toBeNull();
+    expect(pluginApi.getSettingValues).not.toHaveBeenCalled();
+  });
+
   it("re-reads the running plugins when a project plugin is muted, not only on provenance", async () => {
     pluginApi.list.mockResolvedValue([loadedProjectPlugin()]);
     seed([projectPlugin()]);

@@ -467,7 +467,7 @@ Declares user-configurable settings for your plugin.
 | `type` | no | One of `string`, `number`, `boolean`, `enum`, `json`, `secret`, `path`, `directory`, `file`. Defaults to `string`. |
 | `label` | no | Field label shown in the generated form. |
 | `description` | no | Help text shown beneath the field. |
-| `default` | no | Default value. |
+| `default` | no | Default value. Rejected on a `secret`: it would ship in `plugin.json` — mark the secret `required` instead. |
 | `scope` | no | `user` (global), `project` (per-project, stored in the repository), or `local` (per-project, stored on this machine only). Defaults to `user`. A `secret` in `project` scope is stored like `local`, never in the repository. |
 | `options` | no | Non-empty string array; required when `type` is `enum`. |
 | `min` / `max` | no | Numeric bounds for `number` settings. `min` cannot exceed `max`. |

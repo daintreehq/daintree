@@ -482,7 +482,8 @@ function SettingField({
   // A required field shows its default but has nothing stored, and a default
   // never satisfies it — so accepting the default has to be an action of its
   // own. Without one, the displayed default can't be saved: committing an
-  // unchanged draft is (rightly) a no-op for every other field.
+  // unchanged draft is (rightly) a no-op for every other field. Never a secret:
+  // the manifest schema refuses a secret default outright.
   const canAcceptDefault =
     def.required === true &&
     def.default !== undefined &&

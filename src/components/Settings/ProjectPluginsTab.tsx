@@ -25,7 +25,6 @@ import {
 } from "@/components/Settings/PluginSettingsForm";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
-import { pruneSettingsViewRuntimes } from "@/components/Plugin/PluginSettingsView";
 import { ProjectAgentToolsSection } from "@/components/Settings/ProjectAgentToolsSection";
 import {
   PROJECT_PLUGINS_OVERVIEW_ID,
@@ -528,6 +527,61 @@ function ProjectPluginPane({
           />
         </SettingsSection>
       )}
+
+      {!hasPluginSettings(loaded) &&
+        ((plugin.settings?.length ?? 0) > 0 || plugin.declaresSettingsView === true) && (
+          <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
+            <StoppedPluginSettings
+              plugin={plugin}
+              reason={stoppedSettingsReason(plugin, folderOff)}
+            />
+          </SettingsSection>
+        )}
+    </div>
+  );
+}
+
+/** Why a declared-but-stopped plugin's settings can't be changed right now. */
+function stoppedSettingsReason(plugin: ProjectPluginInfo, folderOff: boolean): string {
+  if (folderOff) return "Available once this project's plugins are allowed to run";
+  if (plugin.muted) return "Available when the plugin is turned on";
+  if (plugin.state === "staged") return "Available once the plugin is activated";
+  return "Available while the plugin is running";
+}
+
+/**
+ * A project plugin's Settings section while it isn't running — muted, staged,
+ * or its folder turned off.
+ *
+ * Nothing is loaded to answer for its values: the settings bridge reads and
+ * writes against a running plugin's declarations, and without them it can't
+ * tell a secret from a plain string, so it must not be handed a write. The
+ * section keeps its shape anyway — each declared field as a row, and the custom
+ * section as its own row — each saying what it needs, so turning the plugin off
+ * doesn't make its settings look like they never existed.
+ */
+function StoppedPluginSettings({ plugin, reason }: { plugin: ProjectPluginInfo; reason: string }) {
+  const fields = plugin.settings ?? [];
+  return (
+    <div className="grid gap-3">
+      {fields.length > 0 && (
+        <SettingsGroup>
+          {fields.map((def) => (
+            <SettingsRow
+              key={def.id}
+              label={def.label ?? def.id}
+              description={def.description}
+              disabled
+              disabledReason={reason}
+            />
+          ))}
+        </SettingsGroup>
+      )}
+      {plugin.declaresSettingsView === true && (
+        <SettingsGroup>
+          <SettingsRow label="More settings" description={reason} />
+        </SettingsGroup>
+      )}
     </div>
   );
 }
@@ -742,7 +796,6 @@ export function ProjectPluginsTab() {
           if (cancelled) return;
           setInstalled(list);
           setInstalledFailed(false);
-          pruneSettingsViewRuntimes(list);
         })
         .catch((err) => {
           if (cancelled) return;
