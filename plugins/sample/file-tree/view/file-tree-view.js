@@ -6,9 +6,39 @@ function getPluginHostBridge() {
 	if (!bridge) throw new Error("@daintreehq/plugin-sdk/react: window.electron.plugin is unavailable — these hooks run only inside a Daintree plugin renderer view.");
 	return bridge;
 }
+var HostDisconnectedError = class extends Error {
+	code = "HOST_DISCONNECTED";
+	constructor(message = "The host this view runs on is not connected", options) {
+		super(message, options);
+		this.name = "HostDisconnectedError";
+	}
+};
+var OutcomeUnknownError = class extends Error {
+	code = "OUTCOME_UNKNOWN";
+	constructor(message = "The link to the host dropped before the call finished; it may or may not have run", options) {
+		super(message, options);
+		this.name = "OutcomeUnknownError";
+	}
+};
+function errorCode(error) {
+	return error && typeof error === "object" ? error.code : void 0;
+}
+function toHostCallError(error) {
+	if (error instanceof HostDisconnectedError || error instanceof OutcomeUnknownError) return error;
+	const code = errorCode(error);
+	let message;
+	if (error instanceof Error) message = error.message;
+	if (code === "HOST_DISCONNECTED") return new HostDisconnectedError(message, { cause: error });
+	if (code === "OUTCOME_UNKNOWN") return new OutcomeUnknownError(message, { cause: error });
+	return error instanceof Error ? error : new Error(String(error));
+}
+function isHostLinkError(error) {
+	return error instanceof HostDisconnectedError || error instanceof OutcomeUnknownError;
+}
 function useHostChannel(pluginId, channel) {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState(null);
+	const [disconnected, setDisconnected] = useState(false);
 	const callIdRef = useRef(0);
 	useEffect(() => {
 		setLoading(false);
@@ -22,17 +52,21 @@ function useHostChannel(pluginId, channel) {
 			try {
 				const result = await getPluginHostBridge().invoke(pluginId, channel, args);
 				if (callId !== callIdRef.current) return void 0;
+				setDisconnected(false);
 				return result;
 			} catch (err) {
 				if (callId !== callIdRef.current) return void 0;
-				setError(err instanceof Error ? err : new Error(String(err)));
+				const wrapped = toHostCallError(err);
+				setError(wrapped);
+				setDisconnected(isHostLinkError(wrapped));
 				return;
 			} finally {
 				if (callId === callIdRef.current) setLoading(false);
 			}
 		}, [pluginId, channel]),
 		loading,
-		error
+		error,
+		disconnected
 	};
 }
 //#endregion
