@@ -111,7 +111,9 @@ describe("buildVendorGraph", () => {
     );
     expect(copies.length).toBe(1);
 
-    expect(graph.tourFiles.map((file) => path.relative(tmpDir, file)).sort()).toEqual(
+    expect(
+      graph.tourFiles.map((file) => path.relative(tmpDir, file).split(path.sep).join("/")).sort()
+    ).toEqual(
       [
         "node_modules/@daintreehq/tour/dist/index.js",
         "node_modules/@daintreehq/tour/dist/kit.js",

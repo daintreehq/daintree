@@ -106,7 +106,7 @@ function violations(): { reached: Set<string>; offenders: string[] } {
 
 describe("built-in scene isolation", () => {
   it("finds the scenes", () => {
-    const names = ROOTS.map((file) => path.relative(TOUR_DIR, file));
+    const names = ROOTS.map((file) => path.relative(TOUR_DIR, file).split(path.sep).join("/"));
     expect(names).toEqual(
       expect.arrayContaining(["scenes/WelcomeScene.tsx", "scenes/PaletteScene.tsx"])
     );

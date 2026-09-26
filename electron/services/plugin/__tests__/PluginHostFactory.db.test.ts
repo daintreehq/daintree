@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -73,8 +74,8 @@ function makeDeps(databases: PluginDatabaseContribution[]) {
   return { deps, plugins, pluginEventCleanups };
 }
 
-beforeEach(() => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "host-db-")));
+beforeEach(async () => {
+  tmp = await fsp.realpath(fs.mkdtempSync(path.join(os.tmpdir(), "host-db-")));
   projectRoot = path.join(tmp, "project");
   dataDir = path.join(tmp, "plugin-data");
   fs.mkdirSync(projectRoot);

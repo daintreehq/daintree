@@ -239,23 +239,37 @@ test.describe.serial("Core: Plugin settings form", () => {
 
   test("persists a project-scoped field, verified by reload", async () => {
     const { window } = ctx;
-    await openRichSettings(window);
+    const openProjectSetting = () =>
+      window.evaluate(
+        (pluginId) =>
+          (
+            window as unknown as {
+              __daintreeDispatchAction: (
+                actionId: string,
+                args: { pluginId: string; key: string }
+              ) => Promise<unknown>;
+            }
+          ).__daintreeDispatchAction("plugin.openSettings", {
+            pluginId,
+            key: "projectNote",
+          }),
+        PLUGIN_ID
+      );
+    await openProjectSetting();
 
     const input = window.getByLabel("Project note", { exact: true });
     await expect(input).toBeEnabled({ timeout: T_MEDIUM });
     await input.fill("scoped-note");
     await window.keyboard.press("Tab");
 
-    // Project-scoped values are keyed by the active project id (not exposed to
-    // the test), so verify persistence the way the form itself does: remount the
-    // tab and confirm the stored value re-hydrates the control.
-    await window.locator(SEL.plugin.tabOverview).click();
-    await window.locator(SEL.plugin.tabSettings).click();
+    // Reopen the field through its project-scoped home to verify it rehydrates.
+    await window.getByRole("button", { name: "Close settings" }).click();
+    await openProjectSetting();
 
     const reloaded = window.getByLabel("Project note", { exact: true });
     await expect(reloaded).toBeEnabled({ timeout: T_MEDIUM });
     await expect(reloaded).toHaveValue("scoped-note");
 
-    await closePluginManager(window);
+    await window.getByRole("button", { name: "Close settings" }).click();
   });
 });

@@ -214,67 +214,84 @@ describe("openPluginDatabase", () => {
     expect(await db.query("SELECT x FROM t")).toEqual([{ x: 7 }]);
   });
 
-  it("reopens when the file is replaced underneath it", async () => {
-    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
-    await db.run("INSERT INTO t VALUES (1)");
-    // What `git checkout -- data.db` or a reset script does: a new inode.
-    const replacement = path.join(dir, "replacement.db");
-    const other = new DatabaseSync(replacement);
-    other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (99); PRAGMA user_version = 1");
-    other.close();
-    fs.renameSync(replacement, location.path);
-    expect(await db.query("SELECT x FROM t")).toEqual([{ x: 99 }]);
-  });
+  // Windows locks an open SQLite file, so these external replacement scenarios
+  // can only occur on platforms that permit renaming or unlinking open files.
+  it.skipIf(process.platform === "win32")(
+    "reopens when the file is replaced underneath it",
+    async () => {
+      const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+      await db.run("INSERT INTO t VALUES (1)");
+      // What `git checkout -- data.db` or a reset script does: a new inode.
+      const replacement = path.join(dir, "replacement.db");
+      const other = new DatabaseSync(replacement);
+      other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (99); PRAGMA user_version = 1");
+      other.close();
+      fs.renameSync(replacement, location.path);
+      expect(await db.query("SELECT x FROM t")).toEqual([{ x: 99 }]);
+    }
+  );
 
-  it("migrates a file swapped in at an older schema version", async () => {
-    const migrations = ["CREATE TABLE t (x INTEGER)", "ALTER TABLE t ADD COLUMN memo TEXT"];
-    const db = await open({ migrations });
-    // An older checkout of the database: schema version 1, no memo column.
-    const older = path.join(dir, "older.db");
-    const other = new DatabaseSync(older);
-    other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (5); PRAGMA user_version = 1");
-    other.close();
-    fs.renameSync(older, location.path);
-    await db.run("UPDATE t SET memo = 'migrated' WHERE x = 5");
-    expect(await db.get("SELECT x, memo FROM t")).toEqual({ x: 5, memo: "migrated" });
-    expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 2 });
-  });
+  it.skipIf(process.platform === "win32")(
+    "migrates a file swapped in at an older schema version",
+    async () => {
+      const migrations = ["CREATE TABLE t (x INTEGER)", "ALTER TABLE t ADD COLUMN memo TEXT"];
+      const db = await open({ migrations });
+      // An older checkout of the database: schema version 1, no memo column.
+      const older = path.join(dir, "older.db");
+      const other = new DatabaseSync(older);
+      other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (5); PRAGMA user_version = 1");
+      other.close();
+      fs.renameSync(older, location.path);
+      await db.run("UPDATE t SET memo = 'migrated' WHERE x = 5");
+      expect(await db.get("SELECT x, memo FROM t")).toEqual({ x: 5, memo: "migrated" });
+      expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 2 });
+    }
+  );
 
-  it("refuses a file swapped in from a newer schema instead of writing to it", async () => {
-    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
-    const newer = path.join(dir, "newer.db");
-    const other = new DatabaseSync(newer);
-    other.exec("CREATE TABLE t (x INTEGER); PRAGMA user_version = 7");
-    other.close();
-    fs.renameSync(newer, location.path);
-    await expect(db.run("INSERT INTO t VALUES (1)")).rejects.toMatchObject({
-      code: "DB_SCHEMA_TOO_NEW",
-    });
-  });
+  it.skipIf(process.platform === "win32")(
+    "refuses a file swapped in from a newer schema instead of writing to it",
+    async () => {
+      const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+      const newer = path.join(dir, "newer.db");
+      const other = new DatabaseSync(newer);
+      other.exec("CREATE TABLE t (x INTEGER); PRAGMA user_version = 7");
+      other.close();
+      fs.renameSync(newer, location.path);
+      await expect(db.run("INSERT INTO t VALUES (1)")).rejects.toMatchObject({
+        code: "DB_SCHEMA_TOO_NEW",
+      });
+    }
+  );
 
-  it("re-proves the location through revalidate before reopening", async () => {
-    let calls = 0;
-    const db = await open({
-      migrations: ["CREATE TABLE t (x INTEGER)"],
-      revalidate: async () => {
-        calls++;
-        throw Object.assign(new Error("PATH_NOT_ALLOWED: escaped"), { code: "PATH_NOT_ALLOWED" });
-      },
-    });
-    const replacement = path.join(dir, "r.db");
-    new DatabaseSync(replacement).close();
-    fs.renameSync(replacement, location.path);
-    await expect(db.query("SELECT 1")).rejects.toMatchObject({ code: "PATH_NOT_ALLOWED" });
-    expect(calls).toBe(1);
-  });
+  it.skipIf(process.platform === "win32")(
+    "re-proves the location through revalidate before reopening",
+    async () => {
+      let calls = 0;
+      const db = await open({
+        migrations: ["CREATE TABLE t (x INTEGER)"],
+        revalidate: async () => {
+          calls++;
+          throw Object.assign(new Error("PATH_NOT_ALLOWED: escaped"), { code: "PATH_NOT_ALLOWED" });
+        },
+      });
+      const replacement = path.join(dir, "r.db");
+      new DatabaseSync(replacement).close();
+      fs.renameSync(replacement, location.path);
+      await expect(db.query("SELECT 1")).rejects.toMatchObject({ code: "PATH_NOT_ALLOWED" });
+      expect(calls).toBe(1);
+    }
+  );
 
-  it("recreates and migrates a database deleted underneath it", async () => {
-    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
-    await db.run("INSERT INTO t VALUES (1)");
-    fs.rmSync(location.path);
-    expect(await db.query("SELECT x FROM t")).toEqual([]);
-    expect(fs.existsSync(location.path)).toBe(true);
-  });
+  it.skipIf(process.platform === "win32")(
+    "recreates and migrates a database deleted underneath it",
+    async () => {
+      const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+      await db.run("INSERT INTO t VALUES (1)");
+      fs.rmSync(location.path);
+      expect(await db.query("SELECT x FROM t")).toEqual([]);
+      expect(fs.existsSync(location.path)).toBe(true);
+    }
+  );
 
   it("keeps integers past 2^53 exact", async () => {
     const db = await open({ migrations: ["CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER)"] });
@@ -458,78 +475,90 @@ describe("openPluginDatabase", () => {
     await expect(db.run("INSERT INTO t (x) VALUES (-1)")).rejects.toThrow(/x must be >= 0/);
   });
 
-  it("follows a file replaced while a readonly open is under way", async () => {
-    await (
-      await open({ migrations: ["CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)"] })
-    ).close();
-    const replacement = path.join(dir, "replacement.db");
-    const other = new DatabaseSync(replacement);
-    other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (2)");
-    other.close();
-    // Swapped in after the connection opened the original but before the
-    // handle recorded which file it has.
-    const realStat = fs.statSync;
-    let reads = 0;
-    vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
-      if (file === location.path && ++reads === 2) fs.renameSync(replacement, location.path);
-      return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
-    }) as typeof fs.statSync);
-    const db = await open({ readonly: true });
-    vi.restoreAllMocks();
-    expect(await db.query("SELECT x FROM t")).toEqual([{ x: 2 }]);
-  });
+  it.skipIf(process.platform === "win32")(
+    "follows a file replaced while a readonly open is under way",
+    async () => {
+      await (
+        await open({ migrations: ["CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)"] })
+      ).close();
+      const replacement = path.join(dir, "replacement.db");
+      const other = new DatabaseSync(replacement);
+      other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (2)");
+      other.close();
+      // Swapped in after the connection opened the original but before the
+      // handle recorded which file it has.
+      const realStat = fs.statSync;
+      let reads = 0;
+      vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+        if (file === location.path && ++reads === 2) fs.renameSync(replacement, location.path);
+        return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
+      }) as typeof fs.statSync);
+      const db = await open({ readonly: true });
+      vi.restoreAllMocks();
+      expect(await db.query("SELECT x FROM t")).toEqual([{ x: 2 }]);
+    }
+  );
 
-  it("refuses to open a file that keeps being replaced rather than track the wrong one", async () => {
-    await (await open({ migrations: ["CREATE TABLE t (x INTEGER)"] })).close();
-    const realStat = fs.statSync;
-    let swaps = 0;
-    let reads = 0;
-    vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
-      // The second identity read of each attempt, right after the open.
-      if (file === location.path && ++reads % 3 === 2) {
-        const next = path.join(dir, `swap-${++swaps}.db`);
-        fs.copyFileSync(location.path, next);
-        fs.renameSync(next, location.path);
-      }
-      return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
-    }) as typeof fs.statSync);
-    await expect(open({ migrations: ["CREATE TABLE t (x INTEGER)"] })).rejects.toMatchObject({
-      code: "TARGET_UNAVAILABLE",
-    });
-    expect(swaps).toBe(3);
-  });
+  it.skipIf(process.platform === "win32")(
+    "refuses to open a file that keeps being replaced rather than track the wrong one",
+    async () => {
+      await (await open({ migrations: ["CREATE TABLE t (x INTEGER)"] })).close();
+      const realStat = fs.statSync;
+      let swaps = 0;
+      let reads = 0;
+      vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+        // The second identity read of each attempt, right after the open.
+        if (file === location.path && ++reads % 3 === 2) {
+          const next = path.join(dir, `swap-${++swaps}.db`);
+          fs.copyFileSync(location.path, next);
+          fs.renameSync(next, location.path);
+        }
+        return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
+      }) as typeof fs.statSync);
+      await expect(open({ migrations: ["CREATE TABLE t (x INTEGER)"] })).rejects.toMatchObject({
+        code: "TARGET_UNAVAILABLE",
+      });
+      expect(swaps).toBe(3);
+    }
+  );
 
-  it("does not trust the file it created until it has reopened it as an existing file", async () => {
-    const replacement = path.join(dir, "replacement.db");
-    const other = new DatabaseSync(replacement);
-    other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (2); PRAGMA user_version = 1");
-    other.close();
-    // The path is empty; SQLite creates a file, and it is replaced before
-    // the handle reads which file it has.
-    const realStat = fs.statSync;
-    let reads = 0;
-    vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
-      if (file === location.path && ++reads === 2) fs.renameSync(replacement, location.path);
-      return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
-    }) as typeof fs.statSync);
-    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
-    vi.restoreAllMocks();
-    expect(await db.query("SELECT x FROM t")).toEqual([{ x: 2 }]);
-  });
+  it.skipIf(process.platform === "win32")(
+    "does not trust the file it created until it has reopened it as an existing file",
+    async () => {
+      const replacement = path.join(dir, "replacement.db");
+      const other = new DatabaseSync(replacement);
+      other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (2); PRAGMA user_version = 1");
+      other.close();
+      // The path is empty; SQLite creates a file, and it is replaced before
+      // the handle reads which file it has.
+      const realStat = fs.statSync;
+      let reads = 0;
+      vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+        if (file === location.path && ++reads === 2) fs.renameSync(replacement, location.path);
+        return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
+      }) as typeof fs.statSync);
+      const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+      vi.restoreAllMocks();
+      expect(await db.query("SELECT x FROM t")).toEqual([{ x: 2 }]);
+    }
+  );
 
-  it("runs the migrations it checked, not what the caller's array holds later", async () => {
-    const outsideFile = path.join(dir, "mutated-outside.db");
-    const migrations = ["CREATE TABLE t (x INTEGER)"];
-    const db = await open({ migrations });
-    migrations.push(`ATTACH '${outsideFile}' AS o`);
-    // An older copy swapped in makes the handle reopen and migrate again.
-    const older = path.join(dir, "older.db");
-    new DatabaseSync(older).close();
-    fs.renameSync(older, location.path);
-    expect(await db.query("SELECT count(*) AS n FROM t")).toEqual([{ n: 0 }]);
-    expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 1 });
-    expect(fs.existsSync(outsideFile)).toBe(false);
-  });
+  it.skipIf(process.platform === "win32")(
+    "runs the migrations it checked, not what the caller's array holds later",
+    async () => {
+      const outsideFile = path.join(dir, "mutated-outside.db");
+      const migrations = ["CREATE TABLE t (x INTEGER)"];
+      const db = await open({ migrations });
+      migrations.push(`ATTACH '${outsideFile}' AS o`);
+      // An older copy swapped in makes the handle reopen and migrate again.
+      const older = path.join(dir, "older.db");
+      new DatabaseSync(older).close();
+      fs.renameSync(older, location.path);
+      expect(await db.query("SELECT count(*) AS n FROM t")).toEqual([{ n: 0 }]);
+      expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 1 });
+      expect(fs.existsSync(outsideFile)).toBe(false);
+    }
+  );
 });
 
 describe("openPluginDatabase file containment", () => {

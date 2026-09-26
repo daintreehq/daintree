@@ -109,8 +109,8 @@ function listTree(dir: string): string[] {
   return fs.readdirSync(dir, { recursive: true, encoding: "utf8" }).sort();
 }
 
-beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-backup-")));
+beforeEach(async () => {
+  root = await fsp.realpath(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-backup-")));
   projectRoot = path.join(root, "project");
   dataDir = path.join(root, "plugin-data", "acme.ledger");
   downloads = path.join(root, "Downloads");

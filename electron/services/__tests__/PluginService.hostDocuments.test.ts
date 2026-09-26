@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os, { tmpdir } from "node:os";
@@ -85,7 +85,7 @@ beforeEach(async () => {
   appendSpy.mockClear();
   renderMock.render.mockReset();
   renderMock.render.mockResolvedValue(PDF_BYTES);
-  baseDir = realpathSync(mkdtempSync(join(tmpdir(), "plugin-docs-")));
+  baseDir = await fs.realpath(mkdtempSync(join(tmpdir(), "plugin-docs-")));
   const pluginsRoot = join(baseDir, "plugins");
   mkdirSync(pluginsRoot, { recursive: true });
   allowed = join(baseDir, "allowed");
@@ -144,7 +144,9 @@ describe("host.documents.renderPdf", () => {
     const { revision } = await host.documents.renderPdf({ html: "<p/>", outputPath });
     const bytes = await host.fs.readFileBytes(outputPath);
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(revision);
-    expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
+    }
   });
 
   it("writes into the plugin's own data dir, creating the dir on first use", async () => {

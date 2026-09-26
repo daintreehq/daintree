@@ -1,6 +1,6 @@
 import type { KnipConfig } from "knip";
 
-const config: KnipConfig = {
+const baseConfig: KnipConfig = {
   // Every bundle entry point. Knip walks the static import graph from each
   // of these roots; anything unreachable is flagged as dead code. Mirrors
   // the esbuild entryPoints in scripts/build-main.mjs plus the renderer
@@ -31,6 +31,9 @@ const config: KnipConfig = {
     // that aren't wired through package.json.
     "electron-builder.config.cjs",
     "scripts/generate-sounds.mjs",
+    "playwright.mechanism.config.ts",
+    "playwright.plugins.config.ts",
+    "vitest.integration.config.ts",
 
     // The perf dispatcher launches these entry points by string path in
     // isolated subprocesses, so static analysis cannot follow those edges.
@@ -301,6 +304,18 @@ const config: KnipConfig = {
     exports: "warn",
     types: "warn",
     duplicates: "warn",
+  },
+};
+
+const { entry, project, ...options } = baseConfig;
+const config: KnipConfig = {
+  ...options,
+  workspaces: {
+    ".": { entry, project },
+    "packages/daintree-plugin": {
+      // tsup's onSuccess browser build names this entry by string path.
+      entry: ["src/tour/preview/browser/harness.tsx"],
+    },
   },
 };
 

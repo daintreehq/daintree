@@ -39,18 +39,22 @@ describe("createMockHost host.db location parity", () => {
     });
   });
 
-  it("refuses to reopen through a directory swapped for a link", async () => {
-    const host = createMockHost({ databases: { directory } });
-    const db = await host.db.open("ledger", { migrations: ["CREATE TABLE t (x INTEGER)"] });
-    await db.run("INSERT INTO t VALUES (1)");
-    const other = path.join(base, "other");
-    fs.mkdirSync(other);
-    fs.copyFileSync(path.join(directory, "ledger.db"), path.join(other, "ledger.db"));
-    fs.renameSync(directory, `${directory}-moved`);
-    fs.symlinkSync(other, directory);
-    await expect(db.query("SELECT x FROM t")).rejects.toMatchObject({
-      code: "TARGET_UNAVAILABLE",
-    });
-    await db.close();
-  });
+  // Windows does not allow renaming a directory containing an open SQLite file.
+  it.skipIf(process.platform === "win32")(
+    "refuses to reopen through a directory swapped for a link",
+    async () => {
+      const host = createMockHost({ databases: { directory } });
+      const db = await host.db.open("ledger", { migrations: ["CREATE TABLE t (x INTEGER)"] });
+      await db.run("INSERT INTO t VALUES (1)");
+      const other = path.join(base, "other");
+      fs.mkdirSync(other);
+      fs.copyFileSync(path.join(directory, "ledger.db"), path.join(other, "ledger.db"));
+      fs.renameSync(directory, `${directory}-moved`);
+      fs.symlinkSync(other, directory);
+      await expect(db.query("SELECT x FROM t")).rejects.toMatchObject({
+        code: "TARGET_UNAVAILABLE",
+      });
+      await db.close();
+    }
+  );
 });
