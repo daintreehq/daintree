@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { PanelRightClose } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,15 +16,8 @@ import {
   SCRATCHPAD_RESIZE_STEP,
   SCRATCHPAD_RESIZE_STEP_COARSE,
   clampScratchpadWidth,
-  scratchpadHasContent,
+  SCRATCHPAD_BOUNDARY_ATTR,
 } from "@/lib/terminalScratchpad";
-
-/** DOM boundary the pane's focus handoff checks before pulling focus back to the terminal. */
-export const SCRATCHPAD_BOUNDARY_ATTR = "data-terminal-scratchpad";
-
-export function isScratchpadElement(element: Element | null | undefined): boolean {
-  return !!element?.closest(`[${SCRATCHPAD_BOUNDARY_ATTR}]`);
-}
 
 interface TerminalScratchpadProps {
   terminalId: string;
@@ -51,6 +44,10 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
   const hintId = useId();
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
+  const columnRef = useRef<HTMLElement>(null);
+  // Cleared synchronously when a gesture ends, before the unlock, so a rearm
+  // frame already queued cannot take the lock back after release.
+  const gestureActiveRef = useRef(false);
   const isDragging = dragWidth !== null;
 
   // Resize ownership, mirroring the two-pane split: the terminal's grid is held
@@ -60,6 +57,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
     if (!isDragging) return;
     let rafId = 0;
     const rearm = () => {
+      if (!gestureActiveRef.current) return;
       terminalInstanceService.lockResize(terminalId, true);
       rafId = requestAnimationFrame(rearm);
     };
@@ -72,92 +70,104 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
   const committedWidth = scratchpad?.width ?? SCRATCHPAD_DEFAULT_WIDTH;
   const width = dragWidth ?? committedWidth;
 
-  const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.button !== 0 || e.detail > 1) return;
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = committedWidth;
-      let latest = startWidth;
-      let moved = false;
-      const prevCursor = document.body.style.cursor;
-      const prevUserSelect = document.body.style.userSelect;
+  // The column is capped at half the pane, so a resize works from the width
+  // actually on screen and never asks for more than the pane can show —
+  // otherwise part of the drag moves nothing.
+  const measure = (): { rendered: number; max: number } => {
+    const column = columnRef.current;
+    const pane = column?.parentElement?.getBoundingClientRect().width ?? 0;
+    const rendered = column?.getBoundingClientRect().width || committedWidth;
+    const max = pane > 0 ? Math.max(SCRATCHPAD_MIN_WIDTH, Math.floor(pane / 2)) : Infinity;
+    return { rendered, max };
+  };
+  const clampToPane = (next: number, max: number) => clampScratchpadWidth(Math.min(next, max));
 
-      const finish = (commit: boolean) => {
-        document.removeEventListener("mousemove", handleMouseMove);
-        document.removeEventListener("mouseup", handleMouseUp);
-        window.removeEventListener("blur", handleBlur);
-        document.body.style.cursor = prevCursor;
-        document.body.style.userSelect = prevUserSelect;
-        dragCleanupRef.current = null;
-        if (!moved) return;
-        if (commit) setScratchpadWidth(terminalId, latest);
-        setDragWidth(null);
-        terminalInstanceService.lockResize(terminalId, false);
-        terminalInstanceService.runResizePass([terminalId]);
-      };
-      // The column sits on the right, so dragging its left edge leftwards widens it.
-      const handleMouseMove = (ev: MouseEvent) => {
-        if (ev.buttons === 0) {
-          finish(true);
-          return;
-        }
-        if (!moved) {
-          if (Math.abs(ev.clientX - startX) <= 3) return;
-          moved = true;
-          // Before the first width write, so no frame publishes mid-gesture geometry.
-          terminalInstanceService.lockResize(terminalId, true);
-          document.body.style.cursor = "col-resize";
-          document.body.style.userSelect = "none";
-        }
-        latest = clampScratchpadWidth(startWidth - (ev.clientX - startX));
-        setDragWidth(latest);
-      };
-      const handleMouseUp = () => finish(true);
-      const handleBlur = () => finish(true);
+  const handleResizeStart = (e: React.MouseEvent) => {
+    if (e.button !== 0 || e.detail > 1) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const { rendered: startWidth, max } = measure();
+    const owner = terminalId;
+    let latest = startWidth;
+    let moved = false;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
 
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
-      window.addEventListener("blur", handleBlur);
-      dragCleanupRef.current = () => finish(false);
-    },
-    [committedWidth, setScratchpadWidth, terminalId]
-  );
-
-  const handleResizeKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? SCRATCHPAD_RESIZE_STEP_COARSE : SCRATCHPAD_RESIZE_STEP;
-      let next: number;
-      switch (e.key) {
-        case "ArrowLeft":
-          next = committedWidth + step;
-          break;
-        case "ArrowRight":
-          next = committedWidth - step;
-          break;
-        case "Home":
-          next = SCRATCHPAD_MIN_WIDTH;
-          break;
-        case "End":
-          next = SCRATCHPAD_MAX_WIDTH;
-          break;
-        default:
-          return;
+    const finish = (commit: boolean) => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("blur", handleBlur);
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+      dragCleanupRef.current = null;
+      if (!moved) return;
+      gestureActiveRef.current = false;
+      if (commit) setScratchpadWidth(owner, latest);
+      setDragWidth(null);
+      terminalInstanceService.lockResize(owner, false);
+      terminalInstanceService.runResizePass([owner]);
+    };
+    // The column sits on the right, so dragging its left edge leftwards widens it.
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (ev.buttons === 0) {
+        finish(true);
+        return;
       }
-      e.preventDefault();
-      e.stopPropagation();
-      setScratchpadWidth(terminalId, next);
-    },
-    [committedWidth, setScratchpadWidth, terminalId]
-  );
+      if (!moved) {
+        if (Math.abs(ev.clientX - startX) <= 3) return;
+        moved = true;
+        gestureActiveRef.current = true;
+        // Before the first width write, so no frame publishes mid-gesture geometry.
+        terminalInstanceService.lockResize(owner, true);
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+      }
+      latest = clampToPane(startWidth - (ev.clientX - startX), max);
+      setDragWidth(latest);
+    };
+    const handleMouseUp = () => finish(true);
+    const handleBlur = () => finish(true);
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("blur", handleBlur);
+    dragCleanupRef.current = () => finish(false);
+  };
+
+  const handleResizeKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? SCRATCHPAD_RESIZE_STEP_COARSE : SCRATCHPAD_RESIZE_STEP;
+    const { rendered, max } = measure();
+    let next: number;
+    switch (e.key) {
+      case "ArrowLeft":
+        next = rendered + step;
+        break;
+      case "ArrowRight":
+        next = rendered - step;
+        break;
+      case "Home":
+        next = SCRATCHPAD_MIN_WIDTH;
+        break;
+      case "End":
+        next = SCRATCHPAD_MAX_WIDTH;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    setScratchpadWidth(terminalId, clampToPane(next, max));
+  };
 
   if (!scratchpad || scratchpad.collapsed) return null;
 
-  const hasContent = scratchpadHasContent(scratchpad);
-  const collapseLabel = hasContent ? "Collapse scratchpad" : "Close scratchpad";
+  // One label for both outcomes: with notes the header keeps an expand
+  // control, without them there is nothing left to bring back.
+  const hideLabel = "Hide scratchpad";
 
   return (
     <aside
+      ref={columnRef}
       {...{ [SCRATCHPAD_BOUNDARY_ATTR]: "" }}
       aria-label="Scratchpad"
       data-testid="terminal-scratchpad"
@@ -210,7 +220,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
               variant="ghost"
               size="icon-xs"
               className="-mr-1 [&_svg]:size-3.5"
-              aria-label={collapseLabel}
+              aria-label={hideLabel}
               data-testid="terminal-scratchpad-collapse"
               onClick={(e) => {
                 e.stopPropagation();
@@ -220,7 +230,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
               <PanelRightClose aria-hidden="true" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{collapseLabel}</TooltipContent>
+          <TooltipContent side="bottom">{hideLabel}</TooltipContent>
         </Tooltip>
       </div>
 

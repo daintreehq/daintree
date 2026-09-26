@@ -43,6 +43,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
+import { isScratchpadElement } from "@/lib/terminalScratchpad";
 
 interface DockedTerminalItemProps {
   terminal: PtyPanelData;
@@ -279,6 +280,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   useEffect(() => {
     if (!isOpen || !portalContainer) return;
     if (terminal.focusPolicy === "preserve") return;
+    // Re-runs on agent chrome changes while open; never while the user is
+    // writing in the pane's Scratchpad (#12835).
+    if (isScratchpadElement(document.activeElement)) return;
 
     const focusTarget = getTerminalFocusTarget({
       preferredTarget: preferredTerminalFocusTarget,

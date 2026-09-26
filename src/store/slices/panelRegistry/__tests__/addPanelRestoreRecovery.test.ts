@@ -301,3 +301,71 @@ describe("addPanel — recovery holds (#12434)", () => {
     }
   });
 });
+
+describe("addPanel — scratchpad carry onto an existing record (#12835)", () => {
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
+  });
+
+  // A restored pane: only a record restore created may be merged into again. A
+  // reconnect landing on a pane launched this session is refused outright, so
+  // these cases would never reach the merge they exist to test.
+  async function openPane(id: string): Promise<void> {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: id,
+      cwd: "/repo",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+  }
+
+  function landAgain(id: string, content: string) {
+    return usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: id,
+      existingId: id,
+      cwd: "/repo",
+      scratchpad: { content, collapsed: false },
+      bypassLimits: true,
+    });
+  }
+
+  it("keeps notes typed since the snapshot over the snapshot's own", async () => {
+    await openPane("p1");
+    usePanelStore.getState().showScratchpad("p1");
+    usePanelStore.getState().setScratchpadContent("p1", "typed after restore");
+
+    await landAgain("p1", "stale snapshot");
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.scratchpad?.content).toBe("typed after restore");
+  });
+
+  it("keeps live notes inside a hydration batch too", async () => {
+    await openPane("p1");
+    usePanelStore.getState().showScratchpad("p1");
+    usePanelStore.getState().setScratchpadContent("p1", "typed after restore");
+
+    const token = beginBatch();
+    try {
+      await landAgain("p1", "stale snapshot");
+      await drainMicrotasks();
+      expect(ptyPanel("p1")?.scratchpad?.content).toBe("typed after restore");
+    } finally {
+      consumeBatch(token);
+    }
+  });
+
+  it("takes the incoming notes when the live record has none", async () => {
+    await openPane("p1");
+
+    await landAgain("p1", "from the snapshot");
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.scratchpad?.content).toBe("from the snapshot");
+  });
+});

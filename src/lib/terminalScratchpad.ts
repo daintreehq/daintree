@@ -44,3 +44,15 @@ export function sanitizeScratchpad(value: unknown): TerminalScratchpad | undefin
   if (scratchpad.collapsed && !scratchpadHasContent(scratchpad)) return undefined;
   return scratchpad;
 }
+
+/** DOM boundary every automatic focus handoff checks before pulling focus into the terminal. */
+export const SCRATCHPAD_BOUNDARY_ATTR = "data-terminal-scratchpad";
+
+/**
+ * Whether the user is writing in a Scratchpad. A focus handoff that fires on
+ * its own — a pane becoming selected, a dock popover's agent chrome changing, a
+ * lazily mounted input bar — must leave the keyboard there (#12835).
+ */
+export function isScratchpadElement(element: Element | null | undefined): boolean {
+  return !!element?.closest(`[${SCRATCHPAD_BOUNDARY_ATTR}]`);
+}

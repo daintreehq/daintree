@@ -123,7 +123,7 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     const editor = panel.getByTestId("terminal-scratchpad-editor");
     const notes = await editor.inputValue();
 
-    await panel.getByRole("button", { name: "Collapse scratchpad" }).click();
+    await panel.getByRole("button", { name: "Hide scratchpad" }).click();
     await expect(scratchpad).toHaveCount(0);
     const expand = panel.getByTestId("panel-expand-scratchpad");
     await expect(expand).toBeVisible();
@@ -144,7 +144,7 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     const editor = panel.getByTestId("terminal-scratchpad-editor");
 
     await editor.fill("");
-    await panel.getByRole("button", { name: "Close scratchpad" }).click();
+    await panel.getByRole("button", { name: "Hide scratchpad" }).click();
 
     await expect(panel.getByTestId("terminal-scratchpad")).toHaveCount(0);
     await expect(panel.getByTestId("panel-expand-scratchpad")).toHaveCount(0);
@@ -154,5 +154,22 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     await openScratchpadFromMenu(window, panel);
     await expect(panel.getByTestId("terminal-scratchpad")).toBeVisible();
     await expect(editor).toHaveValue("");
+  });
+
+  test("keeps the caret when a click in the notes is what selects the pane", async () => {
+    const { window } = ctx;
+    const other = await spawnTerminalAndVerify(window);
+    await other.locator(".xterm-screen").click();
+    await expectTerminalFocused(other);
+
+    const editor = panel.getByTestId("terminal-scratchpad-editor");
+    await editor.click();
+    // The pane's own focus handoff runs a frame after selection; the notes must
+    // still own the keyboard once it has.
+    await window.waitForTimeout(300);
+    await expect(editor).toBeFocused();
+    await window.keyboard.type("still here");
+    await expect(editor).toHaveValue("still here");
+    expect(await getTerminalText(panel)).not.toContain("still here");
   });
 });

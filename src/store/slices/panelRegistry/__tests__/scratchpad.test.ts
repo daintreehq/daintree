@@ -198,4 +198,22 @@ describe("terminal scratchpad (#12835)", () => {
     usePanelStore.getState().removePanel("term-1");
     expect(usePanelStore.getState().panelsById["term-1"]).toBeUndefined();
   });
+
+  it("seeds notes onto a terminal that has none, and never over existing ones", () => {
+    seedTerminal();
+
+    usePanelStore.getState().seedScratchpad("term-1", { content: "carried", collapsed: true });
+    expect(scratchpadOf("term-1")).toEqual({ content: "carried", collapsed: true });
+
+    usePanelStore.getState().seedScratchpad("term-1", { content: "other", collapsed: false });
+    expect(scratchpadOf("term-1")?.content).toBe("carried");
+  });
+
+  it("does not seed a collapsed scratchpad with nothing in it", () => {
+    seedTerminal();
+
+    usePanelStore.getState().seedScratchpad("term-1", { content: " ", collapsed: true });
+
+    expect(scratchpadOf("term-1")).toBeUndefined();
+  });
 });

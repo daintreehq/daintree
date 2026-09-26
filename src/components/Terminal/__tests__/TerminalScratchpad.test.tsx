@@ -33,7 +33,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { TerminalScratchpad, isScratchpadElement } from "../TerminalScratchpad";
+import { TerminalScratchpad } from "../TerminalScratchpad";
+import { isScratchpadElement } from "@/lib/terminalScratchpad";
 
 function seed(scratchpad: ScratchpadState | undefined): void {
   panelState.panelsById = {
@@ -90,18 +91,16 @@ describe("TerminalScratchpad", () => {
     expect(flushMock).toHaveBeenCalledTimes(1);
   });
 
-  it("names the control by what it will do: close when empty, collapse when not", () => {
+  it("keeps one label on the hide control whether or not there are notes", () => {
     seed({ content: "  ", collapsed: false });
     const empty = renderPad();
-    expect(empty.getByTestId("terminal-scratchpad-collapse").getAttribute("aria-label")).toBe(
-      "Close scratchpad"
-    );
+    const emptyLabel = empty.getByTestId("terminal-scratchpad-collapse").getAttribute("aria-label");
     empty.unmount();
 
     seed({ content: "note", collapsed: false });
     const { getByTestId } = renderPad();
     const button = getByTestId("terminal-scratchpad-collapse");
-    expect(button.getAttribute("aria-label")).toBe("Collapse scratchpad");
+    expect(button.getAttribute("aria-label")).toBe(emptyLabel);
     fireEvent.click(button);
     expect(actions.collapseScratchpad).toHaveBeenCalledWith("term-1");
   });

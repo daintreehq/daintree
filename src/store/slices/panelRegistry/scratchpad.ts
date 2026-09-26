@@ -5,6 +5,7 @@ import { saveNormalized } from "./persistence";
 import {
   SCRATCHPAD_MAX_CHARS,
   clampScratchpadWidth,
+  sanitizeScratchpad,
   scratchpadHasContent,
 } from "@/lib/terminalScratchpad";
 
@@ -40,7 +41,11 @@ export const createScratchpadActions = (
   set: Set
 ): Pick<
   PanelRegistrySlice,
-  "showScratchpad" | "collapseScratchpad" | "setScratchpadContent" | "setScratchpadWidth"
+  | "showScratchpad"
+  | "collapseScratchpad"
+  | "setScratchpadContent"
+  | "setScratchpadWidth"
+  | "seedScratchpad"
 > => ({
   showScratchpad: (id) => {
     updateScratchpad(set, id, (current) => {
@@ -73,5 +78,14 @@ export const createScratchpadActions = (
       if (!current || current.width === clamped) return current;
       return { ...current, width: clamped };
     });
+  },
+
+  // Hands notes to a terminal that replaces another one (a missing-CLI gate's
+  // launch, a worktree deletion rolled back). Never overwrites notes the
+  // terminal already has.
+  seedScratchpad: (id, scratchpad) => {
+    const sanitized = sanitizeScratchpad(scratchpad);
+    if (!sanitized) return;
+    updateScratchpad(set, id, (current) => current ?? sanitized);
   },
 });

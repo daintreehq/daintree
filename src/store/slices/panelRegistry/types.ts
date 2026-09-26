@@ -249,6 +249,11 @@ export interface PanelRegistrySlice {
   collapseScratchpad: (id: string) => void;
   setScratchpadContent: (id: string, content: string) => void;
   setScratchpadWidth: (id: string, width: number) => void;
+  /** Give notes to a terminal that has none — for a pane that replaces another. */
+  seedScratchpad: (
+    id: string,
+    scratchpad: import("@shared/types/panel.js").TerminalScratchpad
+  ) => void;
   setBrowserUrl: (id: string, url: string) => void;
   setBrowserHistory: (id: string, history: BrowserHistory) => void;
   setBrowserZoom: (id: string, zoom: number) => void;
