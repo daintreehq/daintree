@@ -418,6 +418,8 @@ export interface StoreSchema {
     tours?: Record<string, { completed: boolean; dismissed: boolean; lastChapter: number }>;
     tourMuted?: boolean;
   };
+  // Once-per-agent duplicate-CLI-install warning flags. The name outlives the
+  // retired milestone toasts; renaming it would re-fire warnings already shown.
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
   /**

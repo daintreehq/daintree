@@ -1043,26 +1043,6 @@ body,
   will-change: opacity;
 }
 
-/* Onboarding checklist completion — short opacity flash that replaces the
- * confetti for users who opt out of motion. A one-off milestone, not an
- * ambient signal. */
-@keyframes checklist-complete-flash {
-  0% {
-    opacity: 0;
-  }
-  20% {
-    opacity: 0.18;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
-.animate-checklist-complete-flash {
-  animation: checklist-complete-flash 180ms ease-out forwards;
-  will-change: opacity;
-}
-
 /* Label crossfade — used by AnimatedLabel for text/number swaps. Outgoing
  * label fades out & lifts up; incoming rises in from below. Opacity +
  * transform only (no filter): filter was the culprit — `will-change: filter`
@@ -1455,16 +1435,6 @@ body,
    * meaning, so `opacity: 0` (not `opacity: 1`) is the correct rest state.
    */
   .animate-input-receipt-flash {
-    animation: none;
-    opacity: 0;
-    will-change: auto;
-  }
-
-  /* Checklist completion overlay — pure transient flash with no static-state
-   * meaning. Match the input-receipt-flash treatment: drop the keyframe and
-   * keep the overlay invisible so it can't ghost over content.
-   */
-  .animate-checklist-complete-flash {
     animation: none;
     opacity: 0;
     will-change: auto;

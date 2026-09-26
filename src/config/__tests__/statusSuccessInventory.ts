@@ -251,14 +251,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result carried by a success notification already in the inbox",
     },
   ],
-  "src/components/Onboarding/CelebrationConfetti.tsx": [
-    {
-      category: "transient",
-      signature: "bg-status-success/15",
-      expectedOccurrences: 1,
-      rationale: "Reduced-motion checklist-complete flash; the animation ends and unmounts",
-    },
-  ],
   "src/components/Project/CloneRepoDialog.tsx": [
     {
       category: "outcome",
@@ -760,5 +752,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 89;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 93;
+export const EXPECTED_STATUS_SUCCESS_SITES = 88;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 92;

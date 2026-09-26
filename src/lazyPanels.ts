@@ -174,13 +174,6 @@ export const LazyGettingStartedChecklist = lazy(() =>
   preloadGettingStartedChecklist().then((m) => ({ default: m.GettingStartedChecklist }))
 );
 
-export function preloadCelebrationConfetti() {
-  return import("./components/Onboarding/CelebrationConfetti");
-}
-export const LazyCelebrationConfetti = lazy(() =>
-  preloadCelebrationConfetti().then((m) => ({ default: m.CelebrationConfetti }))
-);
-
 export function preloadPanelDialogHost() {
   return import("./components/Panel/PanelDialogHost");
 }

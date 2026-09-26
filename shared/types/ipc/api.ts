@@ -1593,7 +1593,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   onboarding: GeneratedElectronAPI["onboarding"] & {
     onChecklistPush(callback: (state: ChecklistState) => void): () => void;
   };
-  // milestones is generated — see GeneratedElectronAPI.
   // shortcutHints is generated — see GeneratedElectronAPI.
   // previewCredentialImport / commitCredentialImport are generated.
   forge: GeneratedElectronAPI["forge"] & {

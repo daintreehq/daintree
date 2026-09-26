@@ -455,14 +455,6 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["menu:show-context"]["args"]
     ): Promise<IpcInvokeMap["menu:show-context"]["result"]>;
   };
-  milestones: {
-    get(
-      ...args: IpcInvokeMap["milestones:get"]["args"]
-    ): Promise<IpcInvokeMap["milestones:get"]["result"]>;
-    markShown(
-      ...args: IpcInvokeMap["milestones:mark-shown"]["args"]
-    ): Promise<IpcInvokeMap["milestones:mark-shown"]["result"]>;
-  };
   onboarding: {
     complete(
       ...args: IpcInvokeMap["onboarding:complete"]["args"]
@@ -488,9 +480,6 @@ export interface GeneratedElectronAPI {
     markAgentsSeen(
       ...args: IpcInvokeMap["onboarding:mark-agents-seen"]["args"]
     ): Promise<IpcInvokeMap["onboarding:mark-agents-seen"]["result"]>;
-    markChecklistCelebrationShown(
-      ...args: IpcInvokeMap["onboarding:checklist-mark-celebration-shown"]["args"]
-    ): Promise<IpcInvokeMap["onboarding:checklist-mark-celebration-shown"]["result"]>;
     markChecklistItem(
       ...args: IpcInvokeMap["onboarding:checklist-mark-item"]["args"]
     ): Promise<IpcInvokeMap["onboarding:checklist-mark-item"]["result"]>;
