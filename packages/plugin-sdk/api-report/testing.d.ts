@@ -3053,10 +3053,12 @@ interface PluginRenderPdfOptions {
      */
     html?: string;
     /**
-     * Absolute path to an HTML file, read-contained exactly like
-     * {@link PluginFsApi.readFile} and gated on the read capability for its root
-     * class. Relative images and stylesheets beside it resolve as long as they
-     * stay inside the same allowed root.
+     * Absolute path to an HTML file (at most 5 MiB, read as UTF-8),
+     * read-contained exactly like {@link PluginFsApi.readFile} and gated on the
+     * read capability for its root class. It is snapshotted once consent is
+     * given and the snapshot is what renders. Relative images and stylesheets
+     * resolve against its directory as long as they stay inside the same
+     * allowed root.
      */
     htmlPath?: string;
     /**
@@ -3109,9 +3111,12 @@ interface PluginDocumentsApi {
      * `fs:project-write` or `fs:user-data-write` for its root class, then the
      * just-in-time consent prompt; a symlink at the output leaf is refused with
      * `TARGET_IS_SYMLINK`, and a target that moves while the render runs with
-     * `TARGET_UNAVAILABLE`. Renders are capped at two at a time across all
-     * plugins; one that takes longer than 30 seconds rejects with
-     * `RENDER_TIMEOUT:`, and a page that fails to load with `RENDER_FAILED:`.
+     * `TARGET_UNAVAILABLE`. Renders run two at a time across all plugins; a
+     * plugin with two calls outstanding, or a call arriving when eight are,
+     * rejects with `RENDER_BUSY:`. A call not finished within 30 seconds of
+     * being queued rejects with `RENDER_TIMEOUT:`, a page that fails to load
+     * with `RENDER_FAILED:`, a PDF over 50 MiB with `PAYLOAD_TOO_LARGE:`, and a
+     * call outstanding when the plugin unloads with `RENDER_CANCELLED:`.
      */
     renderPdf(options: PluginRenderPdfOptions): Promise<PluginRenderPdfResult>;
 }
