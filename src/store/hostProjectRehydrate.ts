@@ -45,12 +45,17 @@ export async function rehydrateHostProjectState(
   const workspaceId = hydrate.workspaceId ?? hydrate.project?.id ?? null;
   if (workspaceId !== projectId) return;
 
-  const [{ usePanelStore }, { buildArgsForNonPtyRecreation, inferKind }, drafts] =
-    await Promise.all([
-      import("@/store/panelStore"),
-      import("@/utils/stateHydration/statePatcher"),
-      import("@/store/terminalInputStore"),
-    ]);
+  const [
+    { usePanelStore },
+    { buildArgsForNonPtyRecreation, inferKind },
+    drafts,
+    { draftInputPersistence },
+  ] = await Promise.all([
+    import("@/store/panelStore"),
+    import("@/utils/stateHydration/statePatcher"),
+    import("@/store/terminalInputStore"),
+    import("@/store/persistence/draftInputPersistence"),
+  ]);
   if (!options.isCurrent()) return;
 
   type Saved = Parameters<typeof inferKind>[0];
@@ -101,6 +106,14 @@ export async function rehydrateHostProjectState(
     incoming[terminalId] = text;
   }
   if (Object.keys(incoming).length > 0) input.restoreProjectDraftInputs(projectId, incoming);
+  // The host holds exactly its snapshot now, so the next flush diffs against
+  // it: a restored draft that is then sent gets its tombstone, and an edit
+  // made here during hydration (kept above) goes up as a change.
+  const hostRecord: Record<string, string> = {};
+  for (const [terminalId, text] of Object.entries(hostDrafts)) {
+    if (typeof text === "string") hostRecord[terminalId] = text;
+  }
+  draftInputPersistence.rebaseProject(projectId, hostRecord);
 }
 
 async function applyActiveWorktree(

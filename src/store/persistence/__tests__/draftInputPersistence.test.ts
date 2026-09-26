@@ -244,3 +244,65 @@ describe("draftInputPersistence.computeDelta / primeProject", () => {
     expect(delta.removedIds).toEqual([]);
   });
 });
+
+describe("draftInputPersistence.rebaseProject", () => {
+  it("replaces an established baseline, so a draft restored from a newer record and then sent is tombstoned", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, {});
+    // A host snapshot this view adopted, carrying a draft the old baseline never had.
+    draftInputPersistence.rebaseProject(projectId, { t1: "host draft" });
+    setDraft(projectId, "t1", "host draft");
+    setDraft(projectId, "t1", "");
+
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
+    const [, , changedIds, removedIds] = setDraftInputsMock.mock.calls[0]!;
+    expect(changedIds).toEqual([]);
+    expect(removedIds).toEqual(["t1"]);
+  });
+
+  it("keeps a rebase made while a write was in flight, applying only that write's delta on top", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, {});
+    let acknowledge!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (acknowledge = resolve))
+    );
+    setDraft(projectId, "t1", "mine");
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+
+    draftInputPersistence.rebaseProject(projectId, { t2: "restored from the host" });
+    acknowledge();
+    await draftInputPersistence.whenIdle();
+
+    const delta = draftInputPersistence.computeDelta(projectId, { t1: "mine" });
+    expect(delta.changedIds).toEqual([]);
+    expect(delta.removedIds).toEqual(["t2"]);
+  });
+
+  it("re-reads the live drafts for a flush that was queued before a rebase, so restored drafts aren't deleted", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, {});
+    let acknowledge!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (acknowledge = resolve))
+    );
+    setDraft(projectId, "t1", "mine");
+    draftInputPersistence.flushAll(); // in flight
+    await flushMicrotasks();
+    draftInputPersistence.flushAll(); // queued behind it, snapshot {t1}
+
+    // The host snapshot is applied while the second flush waits.
+    draftInputPersistence.rebaseProject(projectId, { t1: "mine", t2: "restored" });
+    setDraft(projectId, "t2", "restored");
+    acknowledge();
+    await draftInputPersistence.whenIdle();
+
+    for (const [, , , removedIds] of setDraftInputsMock.mock.calls) {
+      expect(removedIds).not.toContain("t2");
+    }
+  });
+});
