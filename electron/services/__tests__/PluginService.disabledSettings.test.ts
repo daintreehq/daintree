@@ -12,6 +12,17 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
 }));
 
+// A settings write announces itself to renderers (the panel setup strip).
+const ipcUtilsMock = vi.hoisted(() => ({
+  broadcastToRenderer: vi.fn(),
+  broadcastToProjectRenderers: vi.fn(),
+}));
+vi.mock("../../ipc/utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../ipc/utils.js")>()),
+  broadcastToRenderer: ipcUtilsMock.broadcastToRenderer,
+  broadcastToProjectRenderers: ipcUtilsMock.broadcastToProjectRenderers,
+}));
+
 vi.mock("../ProjectStore.js", () => ({
   projectStore: {
     getAllProjects: vi.fn(() => []),
@@ -68,5 +79,25 @@ describe("PluginService settings for launch-disabled plugins", () => {
     const result = await svc.getSettingValuesForUi("acme.demo", "user", null);
 
     expect(result.values.apiKey).toBe("xyz");
+    // The write is announced app-wide for an installed plugin, id only.
+    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledWith(expect.any(String), {
+      name: "plugin:settings-changed",
+      payload: { pluginId: "acme.demo" },
+    });
+  });
+
+  it("answers which required settings are still unset", async () => {
+    seedDisabled(
+      manifestWith([
+        { id: "apiKey", type: "string", scope: "user", required: true },
+        { id: "team", type: "string", scope: "user" },
+      ])
+    );
+
+    await expect(svc.getMissingRequiredSettingsForUi("acme.demo", null)).resolves.toEqual([
+      "apiKey",
+    ]);
+    await svc.setSettingValueFromUi("acme.demo", "apiKey", "xyz", "user", null);
+    await expect(svc.getMissingRequiredSettingsForUi("acme.demo", null)).resolves.toEqual([]);
   });
 });

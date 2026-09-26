@@ -89,6 +89,7 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
+  Settings,
   Trash2,
   Unlock,
 } from "lucide-react";
@@ -115,6 +116,7 @@ import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
@@ -722,6 +724,20 @@ export function TerminalContextMenu({
           );
           break;
         }
+        case "plugin-settings": {
+          const pluginId = readPanelKindMenuCapabilities(
+            panelKindRegistry,
+            terminal.kind ?? "terminal",
+            registeredTourIds
+          ).pluginSettingsId;
+          if (!pluginId) break;
+          void actionService.dispatch(
+            GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+            { pluginId },
+            { source: sourceRef.current }
+          );
+          break;
+        }
         case "reload-browser":
           void actionService.dispatch(
             "browser.reload",
@@ -842,6 +858,14 @@ export function TerminalContextMenu({
     <ContextMenuItem onSelect={() => handleAction("tour")}>
       <CirclePlay className={ICON_CLASS} aria-hidden="true" />
       {kindCapabilities.tour.label}
+    </ContextMenuItem>
+  ) : null;
+  // A PTY-backed plugin kind's plugin settings, beside its tour on the same
+  // terminal menus: the last of the plugin's own entries.
+  const pluginSettingsMenuItem = kindCapabilities.pluginSettingsId ? (
+    <ContextMenuItem onSelect={() => handleAction("plugin-settings")}>
+      <Settings className={ICON_CLASS} aria-hidden="true" />
+      Plugin settings…
     </ContextMenuItem>
   ) : null;
 
@@ -1000,6 +1024,7 @@ export function TerminalContextMenu({
             Rename browser
           </ContextMenuItem>
           {tourMenuItem}
+          {pluginSettingsMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1064,6 +1089,7 @@ export function TerminalContextMenu({
             Rename dev preview
           </ContextMenuItem>
           {tourMenuItem}
+          {pluginSettingsMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1114,6 +1140,7 @@ export function TerminalContextMenu({
             Rename review
           </ContextMenuItem>
           {tourMenuItem}
+          {pluginSettingsMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1164,6 +1191,7 @@ export function TerminalContextMenu({
             canMoveToWorktree,
             canReload: canReloadPanelKind(kind),
             tourLabel: kindCapabilities.tour?.label,
+            hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
           }).map((group, groupIndex) => (
             <Fragment key={group[0]?.id ?? groupIndex}>
               {groupIndex > 0 && <ContextMenuSeparator />}
@@ -1463,6 +1491,7 @@ export function TerminalContextMenu({
             View terminal info
           </ContextMenuItem>
           {tourMenuItem}
+          {pluginSettingsMenuItem}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />

@@ -587,6 +587,9 @@ export interface GeneratedElectronAPI {
     getLatestBackgroundUpdateCheck(
       ...args: IpcInvokeMap["plugin:bg-update-check-latest"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-latest"]["result"]>;
+    getMissingRequiredSettings(
+      ...args: IpcInvokeMap["plugin:settings-missing-required"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-missing-required"]["result"]>;
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;

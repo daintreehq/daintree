@@ -246,13 +246,14 @@ function isSafePluginAssetPath(componentPath: string): boolean {
 }
 
 /**
- * View contribution. A view renders into a `contributes.panels` entry with a
- * matching `id`; at plugin load (`PluginService.loadPlugin`) the panels loop
- * attaches the view's `componentPath` to that panel kind. A view whose `id`
- * matches no panel is rejected by the manifest-level `superRefine` (#10620) —
- * it would otherwise silently never render. Only `location: "panel"` is supported — it
- * sets `showInPalette: true` so the view is spawnable from the panel palette.
- * `"sidebar"` is rejected at the schema boundary: the sidebar host does not
+ * View contribution. A `location: "panel"` view renders into a
+ * `contributes.panels` entry with a matching `id`; at plugin load
+ * (`PluginService.loadPlugin`) the panels loop attaches the view's
+ * `componentPath` to that panel kind. A panel view whose `id` matches no panel
+ * is rejected by the manifest-level `superRefine` (#10620) — it would otherwise
+ * silently never render. A `location: "settings"` view is the plugin's custom
+ * settings section instead: it names no panel, and a manifest may declare at
+ * most one. `"sidebar"` is rejected at the schema boundary: the sidebar host does not
  * exist yet, so accepting it would validate a manifest the runtime cannot
  * honor. Contributed via the stable `contributes.views` key (the pre-1.0
  * `experimental_views` name is still accepted as a deprecated alias). See
@@ -265,7 +266,10 @@ export const ViewContributionSchema = z
       message:
         "componentPath must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
-    location: z.literal("panel"),
+    // `"settings"` is the plugin's custom settings section: tied to no panel,
+    // at most one per manifest (both checked in the manifest `superRefine`),
+    // and mounted in the plugin's settings home below its declared fields.
+    location: z.enum(["panel", "settings"]),
     // `iconId` is advisory only — the SDK `validate` command flags an
     // unrenderable id, but at runtime the matching `contributes.panels` entry
     // owns the rendered icon (the panels loop reads `panel.iconId`, never the
@@ -1460,6 +1464,8 @@ export const SettingDefinitionObjectSchema = z
     // File-extension filter for type: "file" (no leading dot). Non-empty when present.
     extensions: z.array(z.string().min(1)).min(1).optional(),
     secret: z.boolean().optional(),
+    // Drives the panel "needs setup" strip and `host.settings.missingRequired`.
+    required: z.boolean().optional(),
   })
   .strict();
 
@@ -2464,6 +2470,9 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // and the wiring silently no-ops at runtime.
       const settingIds = new Set(manifest.contributes.settings.map((setting) => setting.id));
       const viewIds = new Set(manifest.contributes.views.map((view) => view.id));
+      const settingsViewIds = new Set(
+        manifest.contributes.views.filter((view) => view.location === "settings").map((v) => v.id)
+      );
       const panelIds = new Set(manifest.contributes.panels.map((panel) => panel.id));
 
       // `forgeProvider.settingsScopeRef` → a declared setting; `viewRefs[]` →
@@ -2508,6 +2517,17 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
           continue;
         }
+        // A surface mounts through the claimed view's panel kind, and a
+        // settings view has none.
+        if (settingsViewIds.has(claim.viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces", slot, "viewId"],
+            message: `surfaces.${slot}.viewId "${claim.viewId}" names a location: "settings" view — a surface draws a panel view, and a settings view renders only in the plugin's settings.`,
+            params: { errorCode: "surface_view_ref_settings" },
+          });
+          continue;
+        }
         // A PTY panel is rendered by TerminalPane, so its matching view is
         // ignored at load and no component path is ever attached. The claim
         // would then hold the project's slot against every other plugin while
@@ -2538,7 +2558,32 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         }
       });
 
+      // A settings view is the plugin's one custom settings section. It renders
+      // into the plugin's settings home, not a panel, so it may not share an id
+      // with a panel (the panels loop would otherwise attach it as that panel's
+      // view), and a second one has nowhere to go.
+      let settingsViewSeen = false;
       manifest.contributes.views.forEach((view, index) => {
+        if (view.location === "settings") {
+          if (settingsViewSeen) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "location"],
+              message: `View "${view.id}" is a second location: "settings" view — a plugin has one settings section, so declare at most one.`,
+              params: { errorCode: "settings_view_duplicate" },
+            });
+          }
+          settingsViewSeen = true;
+          if (panelIds.has(view.id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "id"],
+              message: `Settings view "${view.id}" shares its id with a contributes.panels entry — a settings view renders in the plugin's settings, not a panel, so give it an id of its own.`,
+              params: { errorCode: "settings_view_panel_id_collision" },
+            });
+          }
+          return;
+        }
         if (!panelIds.has(view.id)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

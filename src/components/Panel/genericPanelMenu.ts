@@ -9,6 +9,7 @@ import {
   PanelTopClose,
   Pencil,
   RotateCw,
+  Settings,
   Trash2,
 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
@@ -24,6 +25,7 @@ export type GenericPanelMenuCommandId =
   | "rename"
   | "reload"
   | "tour"
+  | "plugin-settings"
   | "background"
   | "trash"
   | "kill";
@@ -47,6 +49,11 @@ export interface GenericPanelMenuInput {
   canReload: boolean;
   /** Label of the kind's Welcome Tour item; absent when it declares no tour. */
   tourLabel?: string;
+  /**
+   * The kind's plugin has settings, so the menu offers "Plugin settings…" as
+   * the last of the plugin's own entries.
+   */
+  hasPluginSettings?: boolean;
 }
 
 export interface PanelKindMenuCapabilities {
@@ -54,6 +61,8 @@ export interface PanelKindMenuCapabilities {
   isDockable: boolean;
   /** The tour the kind declares, which its menus offer by `label` once it is registered. */
   tour: { id: string; label: string } | null;
+  /** The plugin instance whose settings "Plugin settings…" opens; null when it has none. */
+  pluginSettingsId: string | null;
 }
 
 const EMPTY_TOUR_IDS: ReadonlySet<string> = new Set();
@@ -81,6 +90,8 @@ export function readPanelKindMenuCapabilities(
       tourId && registeredTourIds.has(tourId)
         ? { id: tourId, label: `${config.name} Welcome Tour` }
         : null,
+    pluginSettingsId:
+      config?.hasPluginSettings === true && config.extensionId ? config.extensionId : null,
   };
 }
 
@@ -123,7 +134,16 @@ export function getGenericPanelMenuGroups({
   canMoveToWorktree,
   canReload,
   tourLabel,
+  hasPluginSettings = false,
 }: GenericPanelMenuInput): GenericPanelMenuCommand[][] {
+  // The plugin's own entries share one group, its settings last: they are
+  // about the plugin behind the panel rather than the panel itself.
+  const pluginOwned: GenericPanelMenuCommand[] = [
+    ...(tourLabel ? [{ id: "tour" as const, label: tourLabel, icon: CirclePlay }] : []),
+    ...(hasPluginSettings
+      ? [{ id: "plugin-settings" as const, label: "Plugin settings…", icon: Settings }]
+      : []),
+  ];
   const layout: GenericPanelMenuCommand[] = [];
   if (canMoveToWorktree) {
     // The ellipsis on both surfaces: a destination is still to be chosen,
@@ -153,7 +173,7 @@ export function getGenericPanelMenuGroups({
       { id: "rename", label: "Rename panel", icon: Pencil },
       ...(canReload ? [{ id: "reload" as const, label: "Reload panel", icon: RotateCw }] : []),
     ],
-    ...(tourLabel ? [[{ id: "tour" as const, label: tourLabel, icon: CirclePlay }]] : []),
+    ...(pluginOwned.length > 0 ? [pluginOwned] : []),
     [
       { id: "background", label: "Send to background", icon: ArrowDownFromLine },
       { id: "trash", label: "Trash panel", icon: Trash2 },
@@ -166,11 +186,15 @@ export function getGenericPanelMenuGroups({
  * The action each command dispatches for the panel it was opened on, as
  * `{ terminalId }`. "move-to-worktree" has none of its own: it picks a
  * destination first. "reload" names its panel as `{ panelId }` — see
- * {@link GENERIC_PANEL_RELOAD_ACTION_ID} — and "tour" names a tour, not a
- * panel — see {@link GENERIC_PANEL_TOUR_ACTION_ID}.
+ * {@link GENERIC_PANEL_RELOAD_ACTION_ID} — "tour" names a tour, not a panel —
+ * see {@link GENERIC_PANEL_TOUR_ACTION_ID} — and "plugin-settings" names a
+ * plugin, see {@link GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID}.
  */
 export const GENERIC_PANEL_MENU_ACTION_IDS: Readonly<
-  Record<Exclude<GenericPanelMenuCommandId, "move-to-worktree" | "reload" | "tour">, ActionId>
+  Record<
+    Exclude<GenericPanelMenuCommandId, "move-to-worktree" | "reload" | "tour" | "plugin-settings">,
+    ActionId
+  >
 > = {
   "move-to-dock": "terminal.moveToDock",
   "move-to-grid": "terminal.moveToGrid",
@@ -193,3 +217,10 @@ export const GENERIC_PANEL_RELOAD_ACTION_ID = "plugin.reloadPanel" satisfies Act
  * own tour.
  */
 export const GENERIC_PANEL_TOUR_ACTION_ID = "help.tour.show" satisfies ActionId;
+
+/**
+ * The action "plugin-settings" dispatches, as `{ pluginId }` from the kind's
+ * {@link PanelKindMenuCapabilities.pluginSettingsId}: it lands in whichever home
+ * the plugin's settings already live in.
+ */
+export const GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID = "plugin.openSettings" satisfies ActionId;

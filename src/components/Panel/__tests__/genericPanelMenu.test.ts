@@ -9,6 +9,7 @@ import {
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import {
   GENERIC_PANEL_MENU_ACTION_IDS,
+  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
   GENERIC_PANEL_RELOAD_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
@@ -25,7 +26,13 @@ const TOURED_PLUGIN_KIND = "acme.metrics";
 
 function registerPluginKind(
   id: string,
-  overrides: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
+  overrides: {
+    hasPty?: boolean;
+    dockable?: boolean;
+    name?: string;
+    tourId?: string;
+    hasPluginSettings?: boolean;
+  } = {}
 ) {
   registerPanelKind({
     id,
@@ -38,6 +45,7 @@ function registerPluginKind(
     extensionId: "acme",
     ...(overrides.dockable !== undefined ? { dockable: overrides.dockable } : {}),
     ...(overrides.tourId !== undefined ? { tourId: overrides.tourId } : {}),
+    ...(overrides.hasPluginSettings ? { hasPluginSettings: true } : {}),
   });
 }
 
@@ -93,6 +101,7 @@ describe("readPanelKindMenuCapabilities", () => {
         hasPty: panelKindHasPty(kind),
         isDockable: panelKindIsDockable(kind),
         tour: null,
+        pluginSettingsId: null,
       });
     }
   });
@@ -124,6 +133,20 @@ describe("readPanelKindMenuCapabilities", () => {
     expect(read()).toEqual({ id: "acme.metrics-intro", label: "Metrics Welcome Tour" });
     for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
     expect(read()).toBeNull();
+  });
+
+  it("names the plugin whose settings the menus open, only when it has some", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { hasPluginSettings: true });
+    registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true, hasPluginSettings: true });
+    registerPluginKind(UNDOCKABLE_PLUGIN_KIND);
+    const snapshot = getPanelKindRegistrySnapshot();
+
+    expect(readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND).pluginSettingsId).toBe("acme");
+    expect(readPanelKindMenuCapabilities(snapshot, PTY_PLUGIN_KIND).pluginSettingsId).toBe("acme");
+    expect(
+      readPanelKindMenuCapabilities(snapshot, UNDOCKABLE_PLUGIN_KIND).pluginSettingsId
+    ).toBeNull();
+    expect(readPanelKindMenuCapabilities(snapshot, "file").pluginSettingsId).toBeNull();
   });
 
   it("reads the snapshot it is handed, not the live registry", () => {
@@ -254,7 +277,12 @@ describe("getGenericPanelMenuGroups", () => {
   it("gives every command but the worktree move and reload an action to dispatch", () => {
     for (const input of LAYOUT_INPUTS) {
       for (const command of groups(input).flat()) {
-        if (command.id === "move-to-worktree" || command.id === "reload" || command.id === "tour")
+        if (
+          command.id === "move-to-worktree" ||
+          command.id === "reload" ||
+          command.id === "tour" ||
+          command.id === "plugin-settings"
+        )
           continue;
         expect(GENERIC_PANEL_MENU_ACTION_IDS[command.id]).toBeDefined();
       }
@@ -287,6 +315,25 @@ describe("getGenericPanelMenuGroups", () => {
     expect(tour.label).toBe("Metrics Welcome Tour");
     expect(tour.destructive).toBeUndefined();
     expect(tour.disabled).toBeUndefined();
+  });
+
+  it("offers Plugin settings… as the last of the plugin's own entries", () => {
+    const withSettings = ids({ hasPluginSettings: true });
+    expect(withSettings.find((group) => group.includes("plugin-settings"))).toEqual([
+      "plugin-settings",
+    ]);
+    expect(ids().flat()).not.toContain("plugin-settings");
+
+    const both = ids({ tourLabel: "Metrics Welcome Tour", hasPluginSettings: true });
+    expect(both.find((group) => group.includes("tour"))).toEqual(["tour", "plugin-settings"]);
+    expect(both.flat().indexOf("plugin-settings")).toBeLessThan(both.flat().indexOf("trash"));
+
+    const item = groups({ hasPluginSettings: true })
+      .flat()
+      .find((command) => command.id === "plugin-settings")!;
+    expect(item.label).toBe("Plugin settings…");
+    expect(item.destructive).toBeUndefined();
+    expect(GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID).toBe("plugin.openSettings");
   });
 
   it("still ends on its one destructive command with a tour offered", () => {

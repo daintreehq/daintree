@@ -504,8 +504,11 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     location: {
       mode: "cross-reference",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (literal 'panel')" }],
-      note: "Literal gate tying the view to the panel host; a sidebar host is rejected at parse.",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (enum 'panel' | 'settings')" },
+        { file: PLUGIN_SERVICE, symbol: "settingsViewPath (location 'settings')" },
+      ],
+      note: "'panel' ties the view to the panel host; 'settings' is the plugin's one custom settings section, mounted in its settings home and never matched to a panel. A sidebar host is rejected at parse.",
     },
     iconId: {
       mode: "verbatim",
@@ -828,6 +831,17 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_SCHEMA, symbol: "SettingDefinitionSchema transform (→ type 'secret')" },
       ],
       note: "Normalized into type: 'secret' by the schema; also read directly by the form.",
+    },
+    required: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/plugin/PluginSettingsManager.ts",
+          symbol: "missingRequired (host.settings.missingRequired, setup strip)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (hasRequiredSettings kind flag)" },
+      ],
+      note: "An unset required setting shows the panel's needs-setup strip and is listed by host.settings.missingRequired.",
     },
   },
   agentMcp: {

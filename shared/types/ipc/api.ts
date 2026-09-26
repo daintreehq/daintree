@@ -2248,6 +2248,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
     /**
+     * Subscribe to "a plugin's stored settings changed", from the settings form
+     * or the plugin's own `host.settings.set`. Carries only the plugin instance
+     * key; re-read what depends on it. Returns a cleanup.
+     */
+    onSettingsChanged(callback: (payload: { pluginId: string }) => void): () => void;
+    /**
      * Subscribe to phase/entry progress for installs started with a `jobId`
      * (#11302). Only the window that started the install receives its events;
      * filter by `jobId` anyway, since one window can start several in sequence.

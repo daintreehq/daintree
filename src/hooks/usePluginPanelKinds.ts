@@ -64,6 +64,10 @@ const PANEL_KIND_META_KEYS = [
   // A reload that only adds, drops or retargets a tour changes only this, and
   // the panel menus read it off the registered config.
   "tourId",
+  // Read off the registered config by the panel menus ("Plugin settings…") and
+  // by the view host (the "needs setup" strip).
+  "hasPluginSettings",
+  "hasRequiredSettings",
 ] as const satisfies readonly (keyof PanelKindConfig)[];
 
 function panelKindMetaEqual(a: PanelKindConfig, b: PanelKindConfig): boolean {

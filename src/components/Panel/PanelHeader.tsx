@@ -27,6 +27,7 @@ import {
   PanelTopClose,
   Pencil,
   RefreshCw,
+  Settings,
   ShieldAlert,
   Trash2,
   Unlock,
@@ -102,6 +103,7 @@ import {
   GENERIC_PANEL_MENU_ACTION_IDS,
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
@@ -435,11 +437,21 @@ function PanelHeaderComponent({
     getRegisteredTourIdsSnapshot,
     getRegisteredTourIdsSnapshot
   );
-  const kindTour = readPanelKindMenuCapabilities(
+  const storedKindCapabilities = readPanelKindMenuCapabilities(
     panelKindRegistry,
     storedKind ?? kind,
     registeredTourIds
-  ).tour;
+  );
+  const kindTour = storedKindCapabilities.tour;
+  const pluginSettingsId = storedKindCapabilities.pluginSettingsId;
+  const handlePluginSettingsSelect = () => {
+    if (!pluginSettingsId) return;
+    void actionService.dispatch(
+      GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+      { pluginId: pluginSettingsId },
+      { source: "menu" }
+    );
+  };
   const handleTourSelect = () => {
     if (!kindTour) return;
     void actionService.dispatch(
@@ -520,6 +532,7 @@ function PanelHeaderComponent({
         canMoveToWorktree,
         canReload: canReloadPanelKind(kind),
         tourLabel: kindTour?.label,
+        hasPluginSettings: pluginSettingsId !== null,
       })
     : null;
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
@@ -537,6 +550,10 @@ function PanelHeaderComponent({
     }
     if (commandId === "tour") {
       handleTourSelect();
+      return;
+    }
+    if (commandId === "plugin-settings") {
+      handlePluginSettingsSelect();
       return;
     }
     if (commandId === "kill" && hasPanelCloseGuard(id)) {
@@ -1544,6 +1561,12 @@ function PanelHeaderComponent({
                     <DropdownMenuItem onSelect={handleTourSelect}>
                       <CirclePlay className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       {kindTour.label}
+                    </DropdownMenuItem>
+                  )}
+                  {pluginSettingsId && (
+                    <DropdownMenuItem onSelect={handlePluginSettingsSelect}>
+                      <Settings className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Plugin settings…
                     </DropdownMenuItem>
                   )}
                   {hasPty && (

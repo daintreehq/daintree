@@ -7,6 +7,8 @@ import {
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
+import { PluginSettingsView } from "@/components/Plugin/PluginSettingsView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -29,6 +31,7 @@ import type {
   PluginPickPathRequest,
   PluginSecretStorageTier,
   PluginSettingsScope,
+  PluginSettingsViewContext,
   SettingDefinition,
   SettingFieldType,
 } from "@shared/types/plugin";
@@ -348,7 +351,7 @@ function SettingField({
   useEffect(() => {
     if (enumOpen && !enumListOpen) setEnumOpen(false);
   }, [enumOpen, enumListOpen]);
-  const fieldId = `plugin-setting-${pluginId}-${def.id}`;
+  const fieldId = pluginSettingFieldId(pluginId, def.id);
 
   // Optimistic, but a failed write puts the switch back: a control that still shows
   // the value it couldn't save reads as applied.
@@ -471,7 +474,15 @@ function SettingField({
   };
 
   const label = fieldLabel(def);
-  const scopeBadge = <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>;
+  // "Required" rides beside the scope badge rather than in the label: the plugin
+  // can't work without it, which is what the panel's setup strip sent the user
+  // here to fix.
+  const scopeBadge = (
+    <>
+      <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>
+      {def.required === true && <Badge size="xs">Required</Badge>}
+    </>
+  );
   const isModified = (isSecret ? hasStored : overridden) && loaded && scopeReady;
   const shownError =
     error ??
@@ -675,7 +686,10 @@ function SettingField({
         ? "Secure storage unavailable — secrets can't be saved on this device"
         : hasStored && secretIsPlaintext && !migratedToKeychain
           ? "Stored as plaintext — re-save to move it into the OS keychain"
-          : "Stored in OS keychain";
+          : // Nothing stored yet is not "stored": say where a value will go.
+            hasStored
+            ? "Stored in OS keychain"
+            : "Saved to the OS keychain when you enter it";
     return (
       <>
         <SettingsRow
@@ -761,8 +775,28 @@ function SettingField({
   );
 }
 
+/** A deep link's "land on this setting" request; `nonce` makes a repeat land again. */
+export interface PluginSettingsFocusRequest {
+  key: string;
+  nonce: number;
+}
+
 interface PluginSettingsFormProps {
   plugin: LoadedPluginInfo;
+  /**
+   * Which home this form is in, handed to the plugin's custom settings view.
+   * `"user"` in the plugin manager, `"project"` in Project settings → Plugins.
+   */
+  viewScope?: PluginSettingsViewContext["scope"];
+  /** Scroll to, focus and briefly highlight this setting once its value has loaded. */
+  focusRequest?: PluginSettingsFocusRequest | null;
+  /** Told once `focusRequest` has been handled, landed or not. */
+  onFocusHandled?: (nonce: number) => void;
+}
+
+/** The DOM id of a generated field's row — what a settings deep link lands on. */
+export function pluginSettingFieldId(pluginId: string, settingId: string): string {
+  return `plugin-setting-${pluginId}-${settingId}`;
 }
 
 /**
@@ -771,8 +805,16 @@ interface PluginSettingsFormProps {
  * loaded manifest; stored values hydrate asynchronously per scope. User-scoped
  * values load once; project-scoped values reload whenever the active project
  * changes (the fields are remounted so their drafts re-initialize).
+ *
+ * Below the fields, the plugin's own `location: "settings"` view when it
+ * declares one — the host owns the surface, the view renders its rows.
  */
-export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
+export function PluginSettingsForm({
+  plugin,
+  viewScope = "user",
+  focusRequest = null,
+  onFocusHandled,
+}: PluginSettingsFormProps) {
   // The registry key, not the manifest name: they are the same for an installed
   // plugin, but a project plugin is addressed by its instance key everywhere on
   // the settings bridge — which is also what pins its files to its own project.
@@ -814,11 +856,27 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
     return loadScopeValues(pluginId, "local", projectId, setLocalScope);
   }, [pluginId, hasLocalScope, projectId, reloadKey]);
 
-  if (settings.length === 0) return null;
+  // A deep link lands once the target's scope has resolved: before that the row
+  // is disabled, and focus would skip its control for whatever comes next.
+  const focusNonce = focusRequest?.nonce;
+  const focusKey = focusRequest?.key;
+  const focusDef = settings.find((def) => def.id === focusKey);
+  const focusScope = focusDef ? byScope[settingScope(focusDef)] : null;
+  const focusReady = focusScope === null || focusScope.values !== null || !!focusScope.failed;
+  useEffect(() => {
+    if (focusNonce === undefined || focusKey === undefined || !focusReady) return;
+    const row = document.getElementById(pluginSettingFieldId(pluginId, focusKey));
+    if (row) landOnSettingsElement(row);
+    onFocusHandled?.(focusNonce);
+  }, [focusNonce, focusKey, focusReady, pluginId, onFocusHandled]);
+
+  if (settings.length === 0 && !plugin.settingsViewPath) return null;
 
   const anyFailed = userScope.failed || projectScope.failed || localScope.failed;
 
-  // One group; the caller owns the heading (a section, or the tab that already names it).
+  // The caller owns the heading (a section, or the tab that already names it):
+  // the declared fields are one group, and a custom settings view is a second
+  // group directly below them under the same heading.
   return (
     <div className="grid gap-3">
       {anyFailed && (
@@ -827,33 +885,39 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
           onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
-      <SettingsGroup>
-        {settings.map((def) => {
-          const scope = settingScope(def);
-          const state = byScope[scope];
-          const loaded = state.values !== null;
-          const values = state.values;
-          const secrets = state.secrets;
-          const secretInfo = state.secretInfo;
-          return (
-            <SettingField
-              // Remount project-bound fields on project switch so drafts reset.
-              key={
-                PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id
-              }
-              def={def}
-              pluginId={pluginId}
-              projectId={projectId}
-              storedValue={values?.[def.id]}
-              secretIsSet={secrets.has(def.id)}
-              secretTier={secretInfo.tier}
-              secretIsPlaintext={secretInfo.plaintext.has(def.id)}
-              loaded={loaded}
-              failed={state.failed === true}
-            />
-          );
-        })}
-      </SettingsGroup>
+      {settings.length > 0 && (
+        <SettingsGroup>
+          {settings.map((def) => {
+            const scope = settingScope(def);
+            const state = byScope[scope];
+            const loaded = state.values !== null;
+            const values = state.values;
+            const secrets = state.secrets;
+            const secretInfo = state.secretInfo;
+            return (
+              <SettingField
+                // Remount project-bound fields on project switch so drafts reset.
+                key={
+                  PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id
+                }
+                def={def}
+                pluginId={pluginId}
+                projectId={projectId}
+                storedValue={values?.[def.id]}
+                secretIsSet={secrets.has(def.id)}
+                secretTier={secretInfo.tier}
+                secretIsPlaintext={secretInfo.plaintext.has(def.id)}
+                loaded={loaded}
+                failed={state.failed === true}
+              />
+            );
+          })}
+        </SettingsGroup>
+      )}
+      <PluginSettingsView
+        plugin={plugin}
+        context={{ scope: viewScope, projectId: viewScope === "project" ? projectId : null }}
+      />
     </div>
   );
 }

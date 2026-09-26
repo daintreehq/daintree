@@ -98,7 +98,11 @@ import type {
   ProjectSurfaceSlot,
   ProjectSurfaceSnapshot,
 } from "../../../shared/types/plugin.js";
-import { isProjectSurfaceChoice, isProjectSurfaceSlot } from "../../../shared/types/plugin.js";
+import {
+  isProjectSurfaceChoice,
+  isProjectSurfaceSlot,
+  pluginIdFromSettingsViewKindId,
+} from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import {
   isSafePluginInstanceId,
@@ -861,6 +865,22 @@ async function handleActivateForView(
   panelKindId: string,
   requestRecoveryPath?: boolean
 ): Promise<string | undefined> {
+  // A settings view names its plugin instance directly rather than a panel
+  // kind, so the owning project comes from the instance key — the same rule,
+  // applied to the other id shape.
+  const settingsPluginId = pluginIdFromSettingsViewKindId(panelKindId);
+  if (settingsPluginId !== null) {
+    const settingsOwner = projectIdFromPluginInstanceKey(settingsPluginId);
+    const malformed =
+      settingsOwner === null && settingsPluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX);
+    if (malformed || (settingsOwner !== null && settingsOwner !== ctx.projectId)) {
+      throw new AppError({
+        code: "PLUGIN_ACTIVATION_FAILED",
+        message: `Plugin activation rejected for settings view "${panelKindId}": sender belongs to a different project`,
+        userMessage: "That plugin belongs to a different project.",
+      });
+    }
+  }
   // A project-qualified kind may only be activated by a renderer belonging to
   // the project that owns it. `activatePluginForView` searches every loaded
   // instance for a matching kind, so without this a renderer could activate —
@@ -1622,6 +1642,23 @@ async function handleSettingsRevealSecret(
 }
 
 /**
+ * The declared `required` settings `pluginId` still has unset, read against the
+ * sender's own project. Ids only — never a value — so this is safe to poll from
+ * every open panel of the plugin.
+ */
+async function handleSettingsMissingRequired(
+  ctx: IpcContext,
+  pluginId: string,
+  projectId: string | null
+): Promise<string[]> {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error("plugin settings rejected: invalid plugin id");
+  }
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
+  return (await getPluginService()).getMissingRequiredSettingsForUi(pluginId, projectId);
+}
+
+/**
  * Project-local plugin rows for the SENDER's project.
  *
  * The project is resolved from the sender's own view registration, never from a
@@ -1954,6 +1991,11 @@ export const pluginNamespace = defineIpcNamespace({
     revealSecretSetting: op(
       PLUGIN_METHOD_CHANNELS.revealSecretSetting,
       handleSettingsRevealSecret,
+      { withContext: true }
+    ),
+    getMissingRequiredSettings: op(
+      PLUGIN_METHOD_CHANNELS.getMissingRequiredSettings,
+      handleSettingsMissingRequired,
       { withContext: true }
     ),
     pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),

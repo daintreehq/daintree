@@ -3339,6 +3339,8 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:actions-changed", callback),
       onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
         _eventBusOn("plugin:provenance-changed", callback),
+      onSettingsChanged: (callback: (payload: { pluginId: string }) => void) =>
+        _eventBusOn("plugin:settings-changed", callback),
       // Direct channel, not the event bus: install progress is targeted at the
       // window that started the install, never broadcast to every view (#11302).
       onInstallProgress: (

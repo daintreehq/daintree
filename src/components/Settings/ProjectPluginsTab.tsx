@@ -19,7 +19,12 @@ import {
 } from "@/components/ui/select";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
-import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
+import {
+  PluginSettingsForm,
+  type PluginSettingsFocusRequest,
+} from "@/components/Settings/PluginSettingsForm";
+import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { ProjectAgentToolsSection } from "@/components/Settings/ProjectAgentToolsSection";
 import {
   PROJECT_PLUGINS_OVERVIEW_ID,
@@ -276,7 +281,13 @@ const LONG_DESCRIPTION = 160;
 
 /** Whether a loaded plugin contributes settings, so its section is worth a heading. */
 function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is LoadedPluginInfo {
-  return (plugin?.manifest.contributes.settings?.length ?? 0) > 0;
+  return plugin !== undefined && pluginHasSettings(plugin);
+}
+
+/** A settings deep link aimed at the pane showing it, and how to report it handled. */
+interface PaneSettingsFocus {
+  request: PluginSettingsFocusRequest | null;
+  onHandled: (nonce: number) => void;
 }
 
 /**
@@ -317,11 +328,13 @@ function ProjectPluginPane({
   loaded,
   projectPath,
   onShowOverview,
+  settingsFocus,
 }: {
   plugin: ProjectPluginInfo;
   loaded: LoadedPluginInfo | undefined;
   projectPath: string | undefined;
   onShowOverview: () => void;
+  settingsFocus: PaneSettingsFocus;
 }) {
   const trust = useProjectPluginStore((s) => s.trust);
   const muting = useProjectPluginStore((s) => s.muting);
@@ -499,7 +512,12 @@ function ProjectPluginPane({
 
       {hasPluginSettings(loaded) && (
         <SettingsSection title="Settings">
-          <PluginSettingsForm plugin={loaded} />
+          <PluginSettingsForm
+            plugin={loaded}
+            viewScope="project"
+            focusRequest={settingsFocus.request}
+            onFocusHandled={settingsFocus.onHandled}
+          />
         </SettingsSection>
       )}
     </div>
@@ -512,7 +530,13 @@ const VISIBILITY_DEFAULT_OPTIONS = [
 ] as const;
 
 /** Detail for one INSTALLED plugin, seen from inside a project. */
-function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
+function InstalledPluginPane({
+  plugin,
+  settingsFocus,
+}: {
+  plugin: LoadedPluginInfo;
+  settingsFocus: PaneSettingsFocus;
+}) {
   const pluginId = plugin.instanceId;
   const visibility = useProjectPluginStore((s) => s.visibility);
   const setVisibility = useProjectPluginStore((s) => s.setVisibility);
@@ -525,6 +549,14 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
   const forgeSettingsProvider = plugin.manifest.contributes.forgeProviders?.find(
     (provider) => provider.slots?.settingsTab
   );
+  // A forge-owned settings pane has no field here to land on; the pointer to
+  // Code forge is where the request ends.
+  const pendingNonce = settingsFocus.request?.nonce;
+  const onFocusHandled = settingsFocus.onHandled;
+  const forgeOwned = forgeSettingsProvider !== undefined;
+  useEffect(() => {
+    if (pendingNonce !== undefined && forgeOwned) onFocusHandled(pendingNonce);
+  }, [pendingNonce, forgeOwned, onFocusHandled]);
   const override = visibility.overrides[pluginId];
   const visible = override ?? !hiddenByDefault;
   const name = plugin.manifest.displayName ?? pluginId;
@@ -651,7 +683,12 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
           </SettingsSection>
         ) : (
           <SettingsSection title="Settings">
-            <PluginSettingsForm plugin={plugin} />
+            <PluginSettingsForm
+              plugin={plugin}
+              viewScope="project"
+              focusRequest={settingsFocus.request}
+              onFocusHandled={settingsFocus.onHandled}
+            />
           </SettingsSection>
         ))}
     </div>
@@ -756,6 +793,40 @@ export function ProjectPluginsTab() {
     : undefined;
   const showOverview = !selectedProjectPlugin && !selectedInstalled;
 
+  // A `plugin.openSettings` whose home is this page: pick the plugin it names,
+  // then let that pane's form land on the key. A request with no key, or for a
+  // plugin that has no settings here, is done once the pane is showing.
+  const settingsRequest = usePluginManagerStore((s) =>
+    s.settingsRequest?.home === "project" ? s.settingsRequest : null
+  );
+  const consumeSettingsRequest = usePluginManagerStore((s) => s.consumeSettingsRequest);
+  const requestTargetId = useMemo(() => {
+    if (settingsRequest === null) return null;
+    const project = projectPlugins.find((p) => p.instanceId === settingsRequest.pluginId);
+    if (project) return `${PROJECT_OPTION_PREFIX}${project.id}`;
+    const installedMatch = installedOnly.find((p) => p.instanceId === settingsRequest.pluginId);
+    return installedMatch ? `${INSTALLED_OPTION_PREFIX}${installedMatch.instanceId}` : null;
+  }, [settingsRequest, projectPlugins, installedOnly]);
+  const requestNonce = settingsRequest?.nonce;
+  const requestKey = settingsRequest?.key;
+  // Whether the target pane will render a settings form to land in at all.
+  const requestTargetHasForm =
+    settingsRequest !== null && hasPluginSettings(loadedByInstanceId.get(settingsRequest.pluginId));
+  useEffect(() => {
+    if (requestTargetId === null || requestNonce === undefined) return;
+    setSelectedId(requestTargetId);
+    if (requestKey === undefined || !requestTargetHasForm) consumeSettingsRequest(requestNonce);
+  }, [requestTargetId, requestNonce, requestKey, requestTargetHasForm, consumeSettingsRequest]);
+  // Handed only to the pane the request names, and only once it is the one
+  // showing — a pane being replaced must not answer for the one replacing it.
+  const paneSettingsFocus: PaneSettingsFocus = {
+    request:
+      requestNonce !== undefined && requestKey !== undefined && selectedId === requestTargetId
+        ? { key: requestKey, nonce: requestNonce }
+        : null,
+    onHandled: consumeSettingsRequest,
+  };
+
   return (
     <div className="space-y-8">
       {/* The picker leads the page bare, the way the agent and forge pages open: it
@@ -792,11 +863,16 @@ export function ProjectPluginsTab() {
           }
           projectPath={projectPath}
           onShowOverview={() => setSelectedId(PROJECT_PLUGINS_OVERVIEW_ID)}
+          settingsFocus={paneSettingsFocus}
         />
       )}
 
       {selectedInstalled && (
-        <InstalledPluginPane key={selectedInstalled.instanceId} plugin={selectedInstalled} />
+        <InstalledPluginPane
+          key={selectedInstalled.instanceId}
+          plugin={selectedInstalled}
+          settingsFocus={paneSettingsFocus}
+        />
       )}
 
       {showOverview &&

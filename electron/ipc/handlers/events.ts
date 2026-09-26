@@ -96,6 +96,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",
   "plugin:provenance-changed": "external",
+  // PluginService sends this itself, scoped like runtime status below.
+  "plugin:settings-changed": "external",
   // PluginService sends this itself, scoped to the owning project for a
   // project-local instance and globally for an app-global one.
   "plugin:runtime-status-changed": "external",

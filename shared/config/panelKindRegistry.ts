@@ -166,6 +166,17 @@ export interface PanelKindConfig {
    */
   tourId?: string;
   /**
+   * The owning plugin declares settings (fields or a `location: "settings"`
+   * view), so the kind's menus offer "Plugin settings…". Absent for built-ins
+   * and for plugins with nothing to configure.
+   */
+  hasPluginSettings?: boolean;
+  /**
+   * The owning plugin declares at least one `required` setting, so the kind's
+   * host checks what is still unset and shows its "needs setup" strip.
+   */
+  hasRequiredSettings?: boolean;
+  /**
    * Owning project, or `null`/absent for global plugin and built-in kinds. Set
    * only for kinds contributed by a project-local plugin, whose `id` is the
    * project-qualified runtime form (`project:{projectId}/{manifestId}/{kindId}`).

@@ -24,6 +24,27 @@ It is a request. The host may refuse it, nothing tells you whether or when the n
 
 The user can reload the panel too, from Reload panel in its menus and dialog header, and an agent can through the host's tools. That reload is the same new attempt, it is never rationed, and it is what lifts a stopped view. It does not ask first, because what you persisted comes back. If your view holds work it has not persisted — an unsaved draft, a half-filled form — call `setHasUnsavedChanges(true)` while it does and `setHasUnsavedChanges(false)` once it is saved or dropped; while it is set, the user is asked to confirm before the view is discarded, whichever way the reload was asked for. Your own `requestReload` is never held up by it. Like `requestReload`, the setter belongs to its attempt, a new attempt starts with nothing unsaved, and it is absent where there is no reload to guard.
 
+## A settings section
+
+A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list editor, a connection test. The host mounts it in your settings home, below the generated fields, inside a settings surface it draws; the section's heading and spacing are the host's. Render **rows**, not a page: no heading, no card, no Save button — apply each change as it is made, like every other settings row. It receives the usual props (no `requestReload`, `initialArgs` or `persistState`: there is no panel record behind it) plus `settingsContext: { scope, projectId }`, and an installed plugin's section mounts twice — `scope: "user"` in the plugin manager, `scope: "project"` in Project settings — so render the rows for the scope you're given.
+
+```jsx
+// One root whose children are rows; the hairlines match the host's own.
+<div className="divide-y divide-border-subtle">
+  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
+    <div className="min-w-0 flex-1">
+      <div className="text-sm font-medium text-text-primary">Connected account</div>
+      <div className="mt-0.5 text-xs text-text-secondary">Signed in as ada@example.com</div>
+    </div>
+    <button className="rounded-md border border-border-default px-3 py-1.5 text-xs hover:bg-surface-hover">
+      Sign out
+    </button>
+  </div>
+</div>
+```
+
+Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database.
+
 ## Styling
 
 **Tailwind utility classes are how you style a plugin view.** Write `className="flex gap-2 p-4 bg-surface-panel"` and it works — in a hand-written `dist/panel.js` exactly as in a bundled view, with no build step and no configuration on your side.

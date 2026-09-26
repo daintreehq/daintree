@@ -216,7 +216,9 @@ Views are the React components that render inside a panel. A view binds to a pan
 }
 ```
 
-**Pairing with `contributes.panels`** — a view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view whose `id` matches no panel is rejected at manifest validation (`view_panel_ref_unknown`) — it would otherwise never render, so it's a hard load error rather than a silent runtime skip. A view targeting a panel with `hasPty: true` is skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
+**A settings view** — `location: "settings"` is the one exception to the pairing below. It names no panel (its `id` may not match one), a plugin declares at most one (`settings_view_duplicate`), and a surface can't claim it. The host mounts it in the plugin's settings home, below the generated [settings](#settings-schema--shipped) fields, and it receives the usual `PanelViewProps` plus `settingsContext`. See [Views: a settings section](./views.md#a-settings-section).
+
+**Pairing with `contributes.panels`** — a panel view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view whose `id` matches no panel is rejected at manifest validation (`view_panel_ref_unknown`) — it would otherwise never render, so it's a hard load error rather than a silent runtime skip. A view targeting a panel with `hasPty: true` is skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
 
 **Fields:**
 
@@ -224,7 +226,7 @@ Views are the React components that render inside a panel. A view binds to a pan
 | --- | --- | --- |
 | `id` | yes | Matches the panel `id` it provides a component for. Namespaced at runtime as `{pluginId}.{id}`. |
 | `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin. The module's default export is a React component. Absolute paths, URL schemes, and `..` segments are rejected at manifest validation. |
-| `location` | yes | `"panel"` (docked in the grid). `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
+| `location` | yes | `"panel"` (docked in the grid), or `"settings"` for the plugin's custom settings section. `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
 | `iconId` | no | Accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. Set it there instead. |
 
 The view schema is strict and carries no `name` or `description`: the matching panel is the single source of truth for a view's display metadata, so those fields were removed (#10888) rather than validate values the runtime ignores.
@@ -472,12 +474,17 @@ Declares user-configurable settings for your plugin.
 | `mustExist` | no | For `path` / `directory` / `file`: when `true`, the form flags a stored path that no longer resolves on disk. Advisory — it never blocks saving. |
 | `extensions` | no | For `file` only: restrict the native chooser to these extensions (no leading dot, e.g. `["json", "md"]`). Rejected on any other type. |
 | `secret` | no | Legacy boolean; `secret: true` normalizes to `type: "secret"`. Prefer `type: "secret"`. |
+| `required` | no | `true` when the plugin can't do its job without a value. While one is unset, each of the plugin's open panels shows a neutral "<Plugin> needs setup" strip above the view whose **Configure…** opens that setting, and [`host.settings.missingRequired()`](./host-api.md#settings) lists it. A `default` never satisfies it, and a secret counts as set only once a value is stored. |
 
 The `path` and `directory` types render a read-only text input plus a **Browse** button that opens a native folder chooser; `file` opens a single-file chooser narrowed by `extensions`. The stored value is an absolute filesystem path. Plugins read it back through the host settings API like any other setting.
 
 **Scopes:** `user` (global, persisted in Daintree config), `project` (per-project, persisted in `<projectRoot>/.daintree/plugin-settings/`), `local` (per-project, persisted on this machine only). Secret values are never persisted in the repository: a `project`-scoped secret is stored on this machine, in the `local` file.
 
-Settings appear in Preferences → Plugins → `{pluginId}` as a generated form. Values are read via the host API:
+**Where they appear.** Each scope has one home, and nothing else shows your settings: an installed plugin's settings are in the plugin manager, on its Settings tab; a project plugin's — and an installed plugin's `project` / `local` keys — are in Project settings → Plugins, with the plugin selected. Every way in lands there: the **Plugin settings…** entry in your panels' ⋯ and right-click menus, the setup strip, [`host.settings.open(key?)`](./host-api.md#settings), and the `plugin.openSettings` action (also an MCP tool), which scrolls to and briefly highlights `key` when it names a declared setting. The form applies each change as it is made; there is no Save.
+
+**A custom section.** When fields aren't enough — a sign-in flow, a list editor, a connection test — declare one view with `location: "settings"` (see [Views](#views--shipped-panel-surface)). The host mounts it in the plugin's settings home below the generated fields, inside its own settings surface, and hands it `settingsContext: { scope, projectId }`: an installed plugin's section mounts with `scope: "user"` in the plugin manager and `scope: "project"` in Project settings, so render the rows for that scope.
+
+Values are read via the host API:
 
 ```ts
 const token = await host.settings.get<string>("linear.apiToken");

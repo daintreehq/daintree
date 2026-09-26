@@ -757,6 +757,18 @@ const dispose = await host.settings.onDidChange("linear.apiToken", (newValue) =>
 
 Scope defaults to `"user"`. `project` scope resolves the active project at call time, so it tracks project switches: `get` returns `undefined` and `set` throws when no project is active. `set` rejects `undefined` and non-JSON-serializable values; when the manifest declares `contributes.settings`, an undeclared key is rejected. `onDidChange` fires only on in-process writes — edits made to the JSON file by other processes don't fire until the plugin reloads.
 
+**Sending the user to your settings.** Don't build a settings screen into a panel; send the user to the one home your settings already have:
+
+```ts
+// Gate on setup, then take the user straight to what's missing
+const missing = await host.settings.missingRequired(); // e.g. ["apiKey"]
+if (missing.length > 0) await host.settings.open(missing[0]);
+```
+
+`open(key?)` shows your plugin's settings where they live — the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a `project` / `local` key — and scrolls to and briefly highlights `key` when it names a declared setting. It always opens your own plugin's settings, and a project plugin's open in its own project's window. It resolves once the request reaches the renderer and rejects when no window can show it. It is the same `plugin.openSettings` action your panels' **Plugin settings…** menu entry dispatches.
+
+`missingRequired()` lists your declared `required: true` settings that are still unset, in manifest order. A `default` never counts as set, a secret counts only once a value is stored, and a `project`-scoped key with no project to read is missing. While the list is non-empty, your open panels show a "needs setup" strip above the view, so a panel doesn't need to draw its own.
+
 **Storage:** values are stored as JSON at `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope), with `chmod 0o600` applied on POSIX. `secret`-typed settings (#9167) are encrypted at rest through the OS keychain (macOS Keychain / Windows DPAPI / Linux libsecret-kwallet via Electron `safeStorage`) — the value is persisted as a tagged ciphertext envelope, and the `host.settings.get`/`set` API shape is unchanged (encryption is transparent to your plugin). A secret is never stored under the project root: a `scope: "project"` secret is still read, written, and subscribed to as `"project"`, but its value lives in this machine's per-project local file (`~/.daintree/plugin-settings/local/{projectId}/{pluginId}.json`), so it is never committed and each collaborator enters their own. When no keychain is available (e.g. a headless Linux box without a secret service), `set` on a secret rejects rather than storing it in plaintext, and the settings UI says secrets can't be saved. Non-secret settings are stored as plaintext JSON — never put a credential in one.
 
 ## `storage` — private key/value storage

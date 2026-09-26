@@ -518,7 +518,10 @@
               },
               "location": {
                 "type": "string",
-                "const": "panel"
+                "enum": [
+                  "panel",
+                  "settings"
+                ]
               },
               "iconId": {
                 "type": "string",
@@ -1153,6 +1156,9 @@
                 }
               },
               "secret": {
+                "type": "boolean"
+              },
+              "required": {
                 "type": "boolean"
               }
             },

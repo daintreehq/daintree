@@ -12,7 +12,11 @@ import {
   type ComponentType,
   type LazyExoticComponent,
 } from "react";
-import type { PanelReloadResult, PanelViewProps } from "@shared/types/plugin";
+import type {
+  PanelReloadResult,
+  PanelViewProps,
+  PluginSettingsViewContext,
+} from "@shared/types/plugin";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import {
   admitViewReload,
@@ -62,6 +66,13 @@ export interface PluginViewContentConfig {
   name: string;
   componentPath: string;
   extensionId: string;
+  /**
+   * The id names no registered panel kind — a plugin's settings view. Such a
+   * view is not torn down by `plugin:panel-kinds-changed` (its id is never in
+   * that snapshot, so every broadcast would read as removal); its host unmounts
+   * it when the plugin goes away instead.
+   */
+  standalone?: boolean;
 }
 
 /**
@@ -142,6 +153,8 @@ export interface PluginViewContentProps {
    * a real panel — grid, dock, or dialog — can offer it. Project surfaces don't.
    */
   offerRequestReload?: boolean;
+  /** Forwarded as `PanelViewProps.settingsContext`, for a settings view's host only. */
+  settingsContext?: PluginSettingsViewContext;
 }
 
 /**
@@ -257,7 +270,13 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
 export function makePluginViewContent(
   config: PluginViewContentConfig
 ): ComponentType<PluginViewContentProps> {
-  const { componentPath, extensionId: pluginId, id: kindId, name: displayName } = config;
+  const {
+    componentPath,
+    extensionId: pluginId,
+    id: kindId,
+    name: displayName,
+    standalone = false,
+  } = config;
 
   // Defined once per content factory, not inline in render: the boundary swaps
   // its fallback subtree whenever this component *type* changes identity, which
@@ -495,6 +514,7 @@ export function makePluginViewContent(
     panelRemovedSignal: panelRemovedSignalOverride,
     readRecoveryState,
     offerRequestReload = false,
+    settingsContext,
   }: PluginViewContentProps) {
     // Resolved before any attempt is built so the first attempt already takes
     // the right path. Reactive, because a slot registered after this panel
@@ -611,7 +631,7 @@ export function makePluginViewContent(
       }
       let disposed = false;
       const electron = typeof window !== "undefined" ? window.electron : undefined;
-      const onChanged = electron?.plugin?.onPanelKindsChanged;
+      const onChanged = standalone ? undefined : electron?.plugin?.onPanelKindsChanged;
       let cleanup: (() => void) | undefined;
       if (onChanged) {
         cleanup = onChanged((payload) => {
@@ -1240,6 +1260,7 @@ export function makePluginViewContent(
                   setHasUnsavedChanges={setHasUnsavedChanges}
                   worktreeId={worktreeId}
                   styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
+                  {...(settingsContext ? { settingsContext } : {})}
                 />
                 <PluginViewMountReporter
                   panelId={panelId}

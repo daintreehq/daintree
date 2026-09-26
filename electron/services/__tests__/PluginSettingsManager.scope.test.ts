@@ -583,3 +583,60 @@ describe("PluginSettingsManager project-scoped secrets (#12613)", () => {
     ).toBeUndefined();
   });
 });
+
+describe("PluginSettingsManager required settings", () => {
+  const PLUGIN_ID = "acme.scope-test";
+  const PROJECT_ID = "c".repeat(64);
+
+  it("lists unset required keys in manifest order, and a stored value clears one", async () => {
+    const mgr = managerFor([
+      { id: "token", type: "secret", required: true },
+      { id: "optional", type: "string" },
+      { id: "region", type: "string", required: true, default: "us" },
+    ]);
+
+    // A declared default never satisfies a required key.
+    await expect(mgr.missingRequiredForUi(PLUGIN_ID, null)).resolves.toEqual(["token", "region"]);
+
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-live", "user", null);
+    await expect(mgr.missingRequiredForUi(PLUGIN_ID, null)).resolves.toEqual(["region"]);
+
+    // An emptied field is unset again.
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "region", "", "user", null);
+    await expect(mgr.missingRequiredForHost(PLUGIN_ID)).resolves.toEqual(["region"]);
+  });
+
+  it("reports a project-scoped key missing with no project, and reads the bound project's", async () => {
+    const projectRoot = path.join(tmpDir, "checkout");
+    projectStoreMock.getProjectById.mockReturnValue({ path: projectRoot });
+    const mgr = managerFor([{ id: "team", type: "string", scope: "project", required: true }]);
+
+    await expect(mgr.missingRequiredForUi(PLUGIN_ID, null)).resolves.toEqual(["team"]);
+    await expect(mgr.missingRequiredForUi(PLUGIN_ID, PROJECT_ID)).resolves.toEqual(["team"]);
+
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "team", "core", "project", PROJECT_ID);
+    await expect(mgr.missingRequiredForUi(PLUGIN_ID, PROJECT_ID)).resolves.toEqual([]);
+    await expect(mgr.missingRequiredForHost(PLUGIN_ID, projectRoot)).resolves.toEqual([]);
+  });
+
+  it("is empty when nothing is required", async () => {
+    const mgr = managerFor([{ id: "token", type: "secret" }]);
+    await expect(mgr.missingRequiredForUi(PLUGIN_ID, null)).resolves.toEqual([]);
+  });
+
+  it("announces every stored change, from a write or a reset", async () => {
+    const onSettingChanged = vi.fn();
+    const manifest = manifestWith([{ id: "token", type: "secret", required: true }]);
+    const mgr = new PluginSettingsManager({
+      getPluginsRoot: () => path.join(tmpDir, "plugins"),
+      getManifest: () => manifest,
+      cipher: fakeCipher(),
+      onSettingChanged,
+    });
+
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk", "user", null);
+    await mgr.deleteSettingValueFromUi(PLUGIN_ID, "token", "user", null);
+
+    expect(onSettingChanged.mock.calls).toEqual([[PLUGIN_ID], [PLUGIN_ID]]);
+  });
+});

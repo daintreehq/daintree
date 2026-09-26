@@ -1767,6 +1767,26 @@ export function createHost(
         );
         return Promise.resolve(dispose);
       },
+      // Always this plugin's own settings: the id is the closure's, never the
+      // caller's, and a bound host reaches only its own project's renderer —
+      // the same routing `dispatch` uses, so a project plugin cannot open
+      // another project's settings.
+      open: async (key?: string): Promise<void> => {
+        if (key !== undefined) assertSettingsKey(pluginId, "open", key);
+        if (!deps.plugins.has(pluginId)) {
+          throw new Error(`Plugin "${pluginId}" settings.open: plugin is no longer loaded`);
+        }
+        const result = await deps.dispatcher.sendDispatchToRenderer(
+          "plugin.openSettings",
+          key === undefined ? { pluginId } : { pluginId, key },
+          boundProjectId
+        );
+        if (!result.ok) {
+          throw new Error(`Plugin "${pluginId}" settings.open: ${result.error.message}`);
+        }
+      },
+      missingRequired: (): Promise<string[]> =>
+        deps.settings.missingRequiredForHost(pluginId, boundScopeRoot),
     },
     // Private machine-owned key/value storage (#10556). NOT revoke-guarded
     // (except onDidChange): plugins read/write storage throughout their
