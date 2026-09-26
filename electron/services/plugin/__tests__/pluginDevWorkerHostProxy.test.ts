@@ -759,6 +759,23 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     await expect(promise).resolves.toBeUndefined();
   });
 
+  it("relays host.documents.renderPdf with the options intact and resolves the host's result", async () => {
+    const { proxy, sent } = makeProxy();
+    const options = {
+      htmlPath: "/tmp/data/invoice.html",
+      outputPath: "/tmp/data/invoice.pdf",
+      pageSize: "Letter" as const,
+      margins: { top: 0.5 },
+    };
+    const promise = proxy.host.documents.renderPdf(options);
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === "documents.renderPdf");
+    expect(call.params).toEqual({ options });
+    const result = { path: "/tmp/data/invoice.pdf", bytes: 2048, revision: "b".repeat(64) };
+    resolveCall(proxy, sent, "documents.renderPdf", result);
+    await expect(promise).resolves.toEqual(result);
+  });
+
   it("relays clipboard.writeImage with the typed array's own bytes", async () => {
     // A subarray is the case that breaks if anything copies `.buffer`
     // wholesale — the wire payload must carry this view, not its backing

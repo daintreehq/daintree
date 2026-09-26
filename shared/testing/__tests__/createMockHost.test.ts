@@ -1267,6 +1267,45 @@ describe("createMockHost production-parity validation (#10617)", () => {
     });
   });
 
+  describe("documents.renderPdf", () => {
+    it("records the call and leaves a placeholder PDF the plugin can read back", async () => {
+      const host = createMockHost();
+      await host.fs.writeFile("/data/invoice.html", "<h1>Invoice</h1>");
+      const result = await host.documents.renderPdf({
+        htmlPath: "/data/invoice.html",
+        outputPath: "/data/invoice.pdf",
+        pageSize: "Letter",
+      });
+      expect(host.documentsRenderPdfCalls).toEqual([
+        { htmlPath: "/data/invoice.html", outputPath: "/data/invoice.pdf", pageSize: "Letter" },
+      ]);
+      const stored = await host.fs.readFile("/data/invoice.pdf");
+      expect(stored.startsWith("%PDF-")).toBe(true);
+      expect(result.path).toBe("/data/invoice.pdf");
+      expect(result.bytes).toBe(new TextEncoder().encode(stored).byteLength);
+      expect(result.revision).toMatch(/^[0-9a-f]{64}$/);
+      // Not a text write: the fs.writeFile recording stays about writeFile.
+      expect(host.fsWriteCalls.map((c) => c.path)).toEqual(["/data/invoice.html"]);
+    });
+
+    it("refuses the argument shapes the real host refuses, recording nothing", async () => {
+      const host = createMockHost();
+      await expect(host.documents.renderPdf({ outputPath: "/data/a.pdf" })).rejects.toThrow(
+        /VALIDATION: .*exactly one of html or htmlPath/
+      );
+      await expect(
+        host.documents.renderPdf({ html: "<p/>", htmlPath: "/x.html", outputPath: "/data/a.pdf" })
+      ).rejects.toThrow(/exactly one of html or htmlPath/);
+      await expect(
+        host.documents.renderPdf({ html: "<p/>", outputPath: "/data/a.html" })
+      ).rejects.toThrow(/outputPath must end in \.pdf/);
+      await expect(
+        host.documents.renderPdf({ htmlPath: "/missing.html", outputPath: "/data/a.pdf" })
+      ).rejects.toThrow(/INVALID_PATH/);
+      expect(host.documentsRenderPdfCalls).toEqual([]);
+    });
+  });
+
   describe("fs.readdir", () => {
     it("lists files and subdirectories previously written under the directory", async () => {
       const host = createMockHost();

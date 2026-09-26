@@ -37,6 +37,7 @@ import type {
   PluginSystemWakeEvent,
   PluginFsDirEntry,
   PluginFsWriteResult,
+  PluginRenderPdfResult,
   PluginFsStat,
   PluginGitStatus,
   PluginGitCommitResult,
@@ -1049,6 +1050,11 @@ export class PluginDevWorkerHostProxy {
         openPath: (targetPath) => this.call<void>("system.openPath", { targetPath }),
         showItemInFolder: (targetPath) =>
           this.call<void>("system.showItemInFolder", { targetPath }),
+      },
+      // Rendering needs Electron's printToPDF, which only exists in main.
+      documents: {
+        renderPdf: (options) =>
+          this.call<PluginRenderPdfResult>("documents.renderPdf", { options }),
       },
       settings: {
         // Forward an omitted scope as `undefined` (not a defaulted "user") so the

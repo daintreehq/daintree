@@ -70,6 +70,7 @@ export type PluginHostCallMethod =
   | "clipboard.readText"
   | "system.openPath"
   | "system.showItemInFolder"
+  | "documents.renderPdf"
   | "showQuickPick"
   | "showInputBox"
   | "showConfirm"
@@ -544,6 +545,15 @@ export interface ClipboardWriteImageParams {
 /** Params for `system.openPath` / `system.showItemInFolder` (`host-call`). */
 export interface SystemPathParams {
   targetPath: string;
+}
+
+/**
+ * Params for `documents.renderPdf` (`host-call`). The options are forwarded
+ * untouched: the host is the one that validates them, since the worker is the
+ * untrusted side.
+ */
+export interface DocumentsRenderPdfParams {
+  options: unknown;
 }
 
 /** Params for `process.spawn` (`host-call`). */

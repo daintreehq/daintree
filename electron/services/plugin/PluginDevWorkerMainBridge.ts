@@ -28,6 +28,7 @@ import type {
   PluginProcessMode,
   PluginSettingsScope,
   PluginStorageScope,
+  PluginRenderPdfOptions,
 } from "../../../shared/types/plugin.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
@@ -63,6 +64,7 @@ import type {
   ClipboardWriteTextParams,
   ClipboardWriteImageParams,
   SystemPathParams,
+  DocumentsRenderPdfParams,
   ProcessSpawnParams,
   ProcessHandleRefParams,
   ProcessWriteParams,
@@ -956,6 +958,11 @@ export class PluginDevWorkerMainBridge {
         await this.host.system.showItemInFolder((params as SystemPathParams).targetPath);
         return undefined;
       }
+      case "documents.renderPdf":
+        // Forwarded as sent; the host validates every option.
+        return this.host.documents.renderPdf(
+          (params as DocumentsRenderPdfParams).options as PluginRenderPdfOptions
+        );
       case "clipboard.readText":
         return this.host.clipboard.readText();
       default:

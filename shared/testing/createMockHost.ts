@@ -31,6 +31,7 @@ import type { NotificationType } from "../types/notification.js";
 import type {
   ActionHandler,
   PluginActionContribution,
+  PluginRenderPdfOptions,
   PluginChannelSchema,
   PluginConfirmOptions,
   PluginHostApi,
@@ -212,6 +213,12 @@ export interface MockHostState {
   readonly systemOpenPathCalls: ReadonlyArray<string>;
   /** Captured `host.system.showItemInFolder(path)` calls, in order. */
   readonly systemShowItemCalls: ReadonlyArray<string>;
+  /**
+   * Captured `host.documents.renderPdf(options)` calls, in order, as a shallow
+   * copy of the options. Only calls that passed the mock's validation are
+   * recorded; each one also leaves a placeholder PDF in the mock filesystem.
+   */
+  readonly documentsRenderPdfCalls: ReadonlyArray<PluginRenderPdfOptions>;
 
   /**
    * Replace the active worktree and notify every `onDidChangeActiveWorktree`
@@ -573,6 +580,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const clipboardWriteImageCalls: number[] = [];
   const systemOpenPathCalls: string[] = [];
   const systemShowItemCalls: string[] = [];
+  const documentsRenderPdfCalls: PluginRenderPdfOptions[] = [];
   let clipboardText = "";
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
@@ -1553,6 +1561,36 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         systemShowItemCalls.push(targetPath);
       },
     },
+    // No Chromium here, so nothing is rendered: the call is recorded and a
+    // placeholder PDF lands in the in-memory fs, so a plugin that reads,
+    // lists or opens its export afterwards sees a file. Only the argument
+    // shape and an in-memory `htmlPath` are checked; the full validation,
+    // containment and gating live in the real host and are tested there.
+    documents: {
+      async renderPdf(options) {
+        const fail = (message: string): never => {
+          throw new Error(`VALIDATION: mock documents.renderPdf: ${message}`);
+        };
+        if (typeof options !== "object" || options === null) fail("options must be an object");
+        if ((options.html === undefined) === (options.htmlPath === undefined)) {
+          fail("exactly one of html or htmlPath is required");
+        }
+        if (typeof options.outputPath !== "string" || !/\.pdf$/i.test(options.outputPath)) {
+          fail("outputPath must end in .pdf");
+        }
+        if (options.htmlPath !== undefined && !fsFiles.has(options.htmlPath)) {
+          throw new Error(`INVALID_PATH: mock fs has no file "${options.htmlPath}"`);
+        }
+        documentsRenderPdfCalls.push({ ...options });
+        const placeholder = `%PDF-1.4\n% createMockHost placeholder\n%%EOF\n`;
+        fsFiles.set(options.outputPath, placeholder);
+        return {
+          path: options.outputPath,
+          bytes: new TextEncoder().encode(placeholder).byteLength,
+          revision: mockRevision(placeholder),
+        };
+      },
+    },
     settings,
     storage,
     logger: {
@@ -1584,6 +1622,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     clipboardWriteImageCalls,
     systemOpenPathCalls,
     systemShowItemCalls,
+    documentsRenderPdfCalls,
 
     simulateActiveWorktreeChange(snapshot) {
       activeWorktree = snapshot;

@@ -99,6 +99,13 @@ function makeHost() {
       writeText: vi.fn(async () => {}),
       readText: vi.fn(async () => "clip-contents"),
     },
+    documents: {
+      renderPdf: vi.fn(async (): Promise<unknown> => ({
+        path: "/data/out.pdf",
+        bytes: 1234,
+        revision: "a".repeat(64),
+      })),
+    },
   };
 }
 
@@ -279,6 +286,42 @@ describe("PluginDevWorkerMainBridge", () => {
     await flush();
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "ce");
     expect(result).toMatchObject({ ok: true, result: "" });
+  });
+
+  it("routes documents.renderPdf to the host with the options exactly as sent", async () => {
+    const { host, workerHost } = makeBridge();
+    // Unknown keys ride through untouched so the host's strict validation,
+    // not the bridge, is what refuses them.
+    const options = { html: "<p>hi</p>", outputPath: "/data/out.pdf", bogus: 1 };
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "pdf1",
+      method: "documents.renderPdf",
+      params: { options },
+    });
+    await flush();
+    expect(host.documents.renderPdf).toHaveBeenCalledWith(options);
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "pdf1");
+    expect(result).toMatchObject({
+      ok: true,
+      result: { path: "/data/out.pdf", bytes: 1234, revision: "a".repeat(64) },
+    });
+  });
+
+  it("relays a documents.renderPdf rejection with its code prefix intact", async () => {
+    const { host, workerHost } = makeBridge();
+    host.documents.renderPdf.mockRejectedValueOnce(
+      new Error("RENDER_TIMEOUT: render exceeded 30000 ms")
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "pdf2",
+      method: "documents.renderPdf",
+      params: { options: { html: "x", outputPath: "/data/out.pdf" } },
+    });
+    await flush();
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "pdf2");
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/^RENDER_TIMEOUT:/) });
   });
 
   it("replies host-result ok:false when the host method throws", async () => {

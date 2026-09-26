@@ -3833,6 +3833,90 @@ interface PluginSystemApi {
      */
     showItemInFolder(targetPath: string): Promise<void>;
 }
+/** Paper sizes {@link PluginDocumentsApi.renderPdf} accepts. */
+type PluginPdfPageSize = "A4" | "Letter" | "Legal" | "A3" | "A5" | "Tabloid";
+/** Page margins for {@link PluginDocumentsApi.renderPdf}, in inches (0–3 each). */
+interface PluginPdfMargins {
+    top?: number;
+    bottom?: number;
+    left?: number;
+    right?: number;
+}
+/**
+ * Options for {@link PluginDocumentsApi.renderPdf}. Exactly one of `html` or
+ * `htmlPath` is required; any other key, or a value of the wrong shape, is
+ * refused with a `VALIDATION:` error rather than ignored.
+ */
+interface PluginRenderPdfOptions {
+    /**
+     * Inline HTML, at most 5 MiB (UTF-8). The document has no base URL, so a
+     * relative reference resolves to nothing: embed images and fonts as `data:`
+     * URIs, or write the HTML to disk and pass {@link htmlPath} instead.
+     */
+    html?: string;
+    /**
+     * Absolute path to an HTML file, read-contained exactly like
+     * {@link PluginFsApi.readFile} and gated on the read capability for its root
+     * class. Relative images and stylesheets beside it resolve as long as they
+     * stay inside the same allowed root.
+     */
+    htmlPath?: string;
+    /**
+     * Absolute path of the PDF to write; must end in `.pdf` and its parent
+     * directory must exist. Contained, capability-gated, consent-gated and
+     * replaced atomically exactly like {@link PluginFsApi.writeFile}.
+     */
+    outputPath: string;
+    /** Paper size. Defaults to `"A4"`. A CSS `@page size` is not honoured. */
+    pageSize?: PluginPdfPageSize;
+    /** Landscape orientation. Defaults to `false`. */
+    landscape?: boolean;
+    /** Print CSS backgrounds and colours. Defaults to `true`. */
+    printBackground?: boolean;
+    /** Page margins in inches. Each side defaults to Chromium's 1 cm (~0.4 in). */
+    margins?: PluginPdfMargins;
+    /** Pages to keep, e.g. `"1-3, 5"`. Omitted keeps every page. */
+    pageRanges?: string;
+}
+/** Result of {@link PluginDocumentsApi.renderPdf}. */
+interface PluginRenderPdfResult {
+    /** The contained absolute path the PDF was written to. */
+    path: string;
+    /** Size of the written PDF in bytes. */
+    bytes: number;
+    /**
+     * SHA-256 hex of the written bytes — the same revision
+     * {@link PluginFsApi.writeFile} returns, so it can be passed straight back as
+     * an `expectedRevision`.
+     */
+    revision: string;
+}
+/**
+ * Host-mediated document export on {@link PluginHostApi.documents}. Rendering
+ * runs in the main process — Electron's `printToPDF` is unreachable from the
+ * plugin worker — in a hidden, sandboxed window with JavaScript disabled, a
+ * throwaway in-memory session, permissions denied, navigation and popups
+ * blocked, and the network cut off: only `data:` URIs and `file:` URLs inside
+ * a root the plugin can read load, so remote images, fonts and stylesheets are
+ * never fetched.
+ *
+ * NOT revoke-guarded, like {@link PluginFsApi}; every method rejects once the
+ * plugin unloads.
+ */
+interface PluginDocumentsApi {
+    /**
+     * Render HTML to a PDF file and resolve its path, size and revision.
+     *
+     * Gated exactly like {@link PluginFsApi.writeFile} on the output path:
+     * `fs:project-write` or `fs:user-data-write` for its root class, then the
+     * just-in-time consent prompt; a symlink at the output leaf is refused with
+     * `TARGET_IS_SYMLINK`, and a target that moves while the render runs with
+     * `TARGET_UNAVAILABLE`. Renders are capped at two at a time across all
+     * plugins; one that takes longer than 30 seconds rejects with
+     * `RENDER_TIMEOUT:`, and a page that fails to load with `RENDER_FAILED:`.
+     */
+    renderPdf(options: PluginRenderPdfOptions): Promise<PluginRenderPdfResult>;
+}
 /**
  * The revoke-guarded slice of {@link PluginHostApi}: the registration methods
  * that are only valid during `activate()`. The host revokes this surface once
@@ -4512,6 +4596,14 @@ interface PluginHostApi extends PluginActivationApi {
      * NOT revoke-guarded — same membership lifetime as {@link fs}.
      */
     readonly system: PluginSystemApi;
+    /**
+     * Host-mediated document export — HTML to PDF, rendered in the main process
+     * and written under the same gates as {@link PluginFsApi.writeFile}. See
+     * {@link PluginDocumentsApi}.
+     *
+     * NOT revoke-guarded — same membership lifetime as {@link fs}.
+     */
+    readonly documents: PluginDocumentsApi;
 }
 /**
  * Synchronous, fire-and-forget diagnostic logger handed to a plugin via
@@ -4654,4 +4746,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
