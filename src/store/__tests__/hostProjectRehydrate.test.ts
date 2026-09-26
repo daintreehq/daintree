@@ -20,6 +20,10 @@ const { store, drafts, selection } = vi.hoisted(() => {
     restoreProjectDraftInputs: vi.fn((_projectId: string, restored: Record<string, string>) => {
       Object.assign(drafts.local, restored);
     }),
+    clearDraftInput: vi.fn((terminalId: string) => {
+      delete drafts.local[terminalId];
+    }),
+    bumpExternalDraftRevision: vi.fn(),
   };
   const selection = { setActiveWorktree: vi.fn() };
   return { store, drafts, selection };
@@ -204,5 +208,35 @@ describe("rehydrateHostProjectState", () => {
       ["t1"],
       []
     );
+  });
+
+  it("drops a draft another driver sent or cleared on the host, so the next flush doesn't write it back", async () => {
+    // This view last saw t1 and t3 on the host; t3 has been edited here since.
+    draftInputPersistence.primeProject("proj-1", { t1: "stale draft", t3: "old" });
+    drafts.local = { t1: "stale draft", t3: "edited here" };
+    // Meanwhile the other driver sent t1 and cleared t3.
+    hydrate.mockResolvedValue(hostSaved({ draftInputs: {} }));
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+    expect(drafts.local).toEqual({ t3: "edited here" });
+    // A mounted editor re-reads the store rather than keep showing t1.
+    expect(drafts.bumpExternalDraftRevision).toHaveBeenCalled();
+
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+    expect(setDraftInputs).toHaveBeenCalledTimes(1);
+    expect(setDraftInputs).toHaveBeenCalledWith("proj-1", { t3: "edited here" }, ["t3"], []);
+  });
+
+  it("keeps a draft whose own write was acknowledged while the host's answer travelled", async () => {
+    draftInputPersistence.primeProject("proj-1", {});
+    drafts.local = { t1: "mine" };
+    hydrate.mockImplementation(async () => {
+      // The snapshot was taken before this view's write of t1 landed.
+      draftInputPersistence.flushAll();
+      await draftInputPersistence.whenIdle();
+      return hostSaved({ draftInputs: {} });
+    });
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+    expect(drafts.local).toEqual({ t1: "mine" });
   });
 });
