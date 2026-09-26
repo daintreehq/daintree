@@ -96,6 +96,7 @@ const CLIPBOARD_DESTINATION: TransferDestination = { kind: "inbox", bucket: "cli
 /** Cancels that arrived before their upload started, kept this long for it to catch up. */
 const EARLY_CANCEL_TTL_MS = 60_000;
 const MAX_EARLY_CANCELS = 256;
+const MAX_EARLY_CANCEL_VIEWS = 64;
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
@@ -167,21 +168,35 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       controller: AbortController;
     }
   >();
-  /** Per operation id, the view whose cancel arrived first, and until when it counts. */
-  const earlyCancels = new Map<string, { webContentsId: number; until: number }>();
+  /** Per view, the operation ids whose cancel arrived before their upload, and until when. */
+  const earlyCancels = new Map<number, Map<string, number>>();
   const noteEarlyCancel = (opId: string, webContentsId: number): void => {
     if (typeof opId !== "string" || opId.length === 0 || opId.length > 128) return;
     const now = Date.now();
-    for (const [id, entry] of earlyCancels) {
-      if (entry.until <= now || earlyCancels.size >= MAX_EARLY_CANCELS) earlyCancels.delete(id);
+    let forView = earlyCancels.get(webContentsId);
+    if (!forView) {
+      while (earlyCancels.size >= MAX_EARLY_CANCEL_VIEWS) {
+        const oldest = earlyCancels.keys().next().value;
+        if (oldest === undefined) break;
+        earlyCancels.delete(oldest);
+      }
+      forView = new Map();
+      earlyCancels.set(webContentsId, forView);
     }
-    earlyCancels.set(opId, { webContentsId, until: now + EARLY_CANCEL_TTL_MS });
+    for (const [id, until] of forView) {
+      if (until <= now || forView.size >= MAX_EARLY_CANCELS) forView.delete(id);
+    }
+    forView.delete(opId);
+    forView.set(opId, now + EARLY_CANCEL_TTL_MS);
   };
+  // Only the view's own cancel counts, and only that view's upload consumes it.
   const takeEarlyCancel = (opId: string, webContentsId: number): boolean => {
-    const entry = earlyCancels.get(opId);
-    if (!entry) return false;
-    earlyCancels.delete(opId);
-    return entry.webContentsId === webContentsId && entry.until > Date.now();
+    const forView = earlyCancels.get(webContentsId);
+    const until = forView?.get(opId);
+    if (forView === undefined || until === undefined) return false;
+    forView.delete(opId);
+    if (forView.size === 0) earlyCancels.delete(webContentsId);
+    return until > Date.now();
   };
   const maxBytes = deps.maxUploadBytes ?? UPLOAD_REFUSE_BYTES;
   const grantTtlMs = deps.grantTtlMs ?? DEFAULT_GRANT_TTL_MS;

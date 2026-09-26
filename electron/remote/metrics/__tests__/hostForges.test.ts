@@ -92,4 +92,14 @@ describe("the host's forge observations", () => {
     ]);
     expect(state.getCurrentUser).not.toHaveBeenCalled();
   });
+
+  it("stays within the summary's wire limits", async () => {
+    state.providers = Array.from({ length: 70 }, (_, i) => ({
+      pluginId: `acme.p${i}`,
+      contribution: { id: "forge", name: "N".repeat(300) },
+    }));
+    const observed = await createForgeObserver(() => 0)();
+    expect(observed).toHaveLength(64);
+    expect(observed[0]!.name).toHaveLength(256);
+  });
 });

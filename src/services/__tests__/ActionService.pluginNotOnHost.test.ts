@@ -16,8 +16,6 @@ import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import type { AnyActionDefinition } from "../actions/actionTypes";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
-type HostWindow = { __DAINTREE_HOST_ID__?: { id: string } };
-
 function action(id: string, pluginId?: string): ActionDefinition {
   const definition = {
     id: id as ActionId,
@@ -34,9 +32,8 @@ function action(id: string, pluginId?: string): ActionDefinition {
 }
 
 function attachToHost(id: string | null): void {
-  const target = window as unknown as HostWindow;
-  if (id === null) delete target.__DAINTREE_HOST_ID__;
-  else target.__DAINTREE_HOST_ID__ = { id };
+  if (id === null) delete window.__DAINTREE_HOST_ID__;
+  else window.__DAINTREE_HOST_ID__ = { id };
 }
 
 const diff = vi.fn();
@@ -106,6 +103,25 @@ describe("dispatching an action whose plugin isn't on the window's host", () => 
       expect(result.error.code, id).toBe("NOT_FOUND");
       expect(result.error.details).toBeUndefined();
     }
+  });
+
+  it("never asks the host about a stale id in a built-in action family", async () => {
+    attachToHost("studio");
+    await service.dispatch("file.noSuchThing" as ActionId);
+    expect(diff).not.toHaveBeenCalled();
+  });
+
+  it("answers NOT_FOUND rather than wait long on a slow comparison, and reuses a fresh one", async () => {
+    attachToHost("studio");
+    diff.mockReturnValueOnce(new Promise(() => {}));
+    const started = Date.now();
+    const slow = await service.dispatch("acme.linear.createIssue" as ActionId);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(slow.ok || slow.error.code).toBe("NOT_FOUND");
+
+    await service.dispatch("acme.linear.createIssue" as ActionId);
+    await service.dispatch("acme.linear.other" as ActionId);
+    expect(diff).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to NOT_FOUND when the plugin comparison can't be read", async () => {
