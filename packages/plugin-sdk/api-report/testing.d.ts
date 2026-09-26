@@ -49,7 +49,12 @@ type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
  * because the action's side effects DID happen — only the payload is
  * unusable. Signals a bug in the action itself, not in the caller's request.
  */
- | "RESULT_VALIDATION_ERROR" | "DISABLED" | "RESTRICTED" | "CONFIRMATION_REQUIRED" | "EXECUTION_ERROR" | "USER_REJECTED" | "CONFIRMATION_TIMEOUT" | "ELICITATION_FAILED" | "BINDING_STALE" | "PLUGIN_UNLOADED" | "TIER_NOT_PERMITTED"
+ | "RESULT_VALIDATION_ERROR" | "DISABLED" | "RESTRICTED" | "CONFIRMATION_REQUIRED" | "EXECUTION_ERROR" | "USER_REJECTED" | "CONFIRMATION_TIMEOUT" | "ELICITATION_FAILED" | "BINDING_STALE" | "PLUGIN_UNLOADED"
+/**
+ * A window attached to a remote host dispatched an action of a plugin that
+ * host doesn't have. `details` carries `{ code, pluginId, hostId }`.
+ */
+ | "PLUGIN_NOT_ON_HOST" | "TIER_NOT_PERMITTED"
 /**
  * An `*Owned` MCP cleanup tool was called with a resource the calling session
  * did not create (#11909). Distinct from `NOT_FOUND`, which would answer a
