@@ -2421,6 +2421,7 @@ export interface GeneratedIpcInvokeMap {
           submoduleInit?: "inherit" | "all" | "none" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
         };
+        opId?: string | undefined;
       },
     ];
     result: import("../worktree.js").WorktreeCreateResult;
