@@ -10,8 +10,10 @@ import { HostAdvertiser } from "./advertise.js";
 import { runCommand, spawnOwnedProcess } from "./hostCommands.js";
 import { hostLocation, startHostListener } from "./hostListener.js";
 import { HostModeService, type HostModeSettings } from "./HostModeService.js";
+import { writeHostModeStatusFile } from "./hostModeStatusFile.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import {
+  APPIMAGE_EXTRACT_AND_RUN_ENV,
   createLaunchAgentController,
   createSystemdUserController,
   type HostLaunchTarget,
@@ -31,6 +33,8 @@ function launchTarget(): HostLaunchTarget {
     executable: process.env.APPIMAGE || process.execPath,
     // `electron .` in dev: the binary needs the app directory to know what to run.
     appPath: process.defaultApp ? app.getAppPath() : null,
+    appImageExtractAndRun:
+      Boolean(process.env.APPIMAGE) && process.env[APPIMAGE_EXTRACT_AND_RUN_ENV] === "1",
   };
 }
 
@@ -74,11 +78,15 @@ export function createHostModeService(
 ): HostModeService {
   const { location } = options;
   let socketPath: string | null = null;
+  let socketDir: string | null = null;
   try {
-    socketPath = (location ?? hostLocation()).socketPath;
+    const resolved = location ?? hostLocation();
+    socketPath = resolved.socketPath;
+    socketDir = resolved.dir;
   } catch {
     // Reported through the listener's own error when it tries to start.
   }
+  const statusDir = socketDir;
   return new HostModeService({
     platform: process.platform,
     readSettings,
@@ -103,5 +111,8 @@ export function createHostModeService(
     },
     run: runCommand,
     broadcast: broadcastLocal,
+    writeStatus: statusDir
+      ? (observation) => writeHostModeStatusFile(statusDir, { pid: process.pid, ...observation })
+      : undefined,
   });
 }

@@ -114,11 +114,50 @@ export interface HostProbeResult {
   appRunning: boolean;
   /** AppImages found in ~/Applications on a Linux host. */
   appImages: string[];
-  /** curl or wget is there, so the host can fetch its own build. */
+  /**
+   * curl or wget is there, so the host tries fetching its own build first. It
+   * says nothing about internet access: when that fetch fails, this machine
+   * downloads the build and copies it over.
+   */
   canDownload: boolean;
   /** The installed build is this client's version and commit; null when that can't be read. */
   matchesClient: boolean | null;
   advice: HostAdvice;
+  /** What Daintree on the host last wrote about its Host mode setting; null when it wrote nothing. */
+  hostModeState: HostModeObservation | null;
+}
+
+/**
+ * Host mode as the host's own Daintree last recorded it (`host-mode.json`
+ * beside its socket): the saved setting, start at login, and its keychain
+ * check. Written by the host process; read over SSH, so it needs no link.
+ */
+export interface HostModeObservation {
+  /** The Daintree process that wrote it. */
+  pid: number;
+  enabled: boolean;
+  startAtLogin: boolean;
+  /** The Daintree-owned login item or unit was on disk when the host last looked; null when unread. */
+  startAtLoginInstalled: boolean | null;
+  /** Why start at login couldn't be installed, in the host's words. */
+  startAtLoginError: string | null;
+  keychain: {
+    state: "ok" | "warning" | "unavailable" | "unknown";
+    detail: string;
+    /** The host ran its keychain check; false while it hasn't yet. */
+    checked: boolean;
+  };
+}
+
+/** What starting Host mode on a host from setup ended with. */
+export interface StartHostModeResult {
+  probe: HostProbeResult;
+  /**
+   * Linux: `loginctl enable-linger` was asked for and refused, in its own
+   * words. Without lingering the Host mode service stops when the last login
+   * session there ends.
+   */
+  lingerRefused: string | null;
 }
 
 /** What the probe saw that bears on running a host unattended. Observations only. */
@@ -133,6 +172,16 @@ export interface HostAdvice {
   linger: boolean | null;
   /** Linux: whether the Daintree-owned systemd user unit is there. */
   hostModeUnit: boolean | null;
+  /**
+   * The Daintree-owned start-at-login item is in place: the LaunchAgent on
+   * macOS, the systemd user unit (file present and enabled) on Linux.
+   */
+  startAtLoginInstalled: boolean | null;
+  /**
+   * Linux: FUSE is usable for an AppImage (`/dev/fuse`, fusermount and
+   * libfuse2). Without it an AppImage host runs extracted. Null on macOS.
+   */
+  fuse: boolean | null;
 }
 
 export type LinuxPackagePreference = "deb" | "appimage";

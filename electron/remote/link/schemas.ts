@@ -60,6 +60,9 @@ const RejectSchema = z.object({
   reason: z.enum(["unauthorized", "version-mismatch", "protocol", "busy", "shutting-down"]),
   handshake: HandshakeSchema.nullable(),
   detail: shortText.nullable(),
+  observed: z
+    .object({ workingAgents: z.number().int().min(0).max(1_000_000).nullable() })
+    .optional(),
 });
 
 const PingSchema = z.object({ sentAt: epochMs });

@@ -24,7 +24,13 @@ import type {
   LinuxPackagePreference,
 } from "@shared/types/ipc/remoteHosts";
 import { HostCommand } from "./HostCommand";
-import { defaultHostName, deliveryLabel, installLabel, platformLabel } from "./hostLabels";
+import {
+  defaultHostName,
+  deliveryLabel,
+  hostModeSwitchedOn,
+  installLabel,
+  platformLabel,
+} from "./hostLabels";
 
 type Step = "discover" | "check" | "install" | "enable" | "advise";
 
@@ -101,6 +107,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [opId, setOpId] = useState<OperationId | null>(null);
   const [installResult, setInstallResult] = useState<InstallHostResult | null>(null);
   const [confirmProceed, setConfirmProceed] = useState(false);
+  /** Linux: the host refused `loginctl enable-linger`, in its words. */
+  const [lingerRefused, setLingerRefused] = useState<string | null>(null);
   /** Saved to the host list, but the connection that followed failed. */
   const [added, setAdded] = useState<{ hostId: HostId; name: string } | null>(null);
   const install = useRemoteHostsStore((s) => (opId ? (s.installs[opId] ?? null) : null));
@@ -192,7 +200,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const startHostMode = () =>
     run(
       () => remoteHostsClient.startHostMode(target.trim()),
-      (result) => setProbe(result)
+      (result) => {
+        setProbe(result.probe);
+        setLingerRefused(result.lingerRefused);
+      }
     );
 
   const connectAdded = (hostId: HostId, hostName: string) =>
@@ -431,8 +442,16 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             <p className="text-sm text-text-secondary">{deliveryLabel(plan)}.</p>
             {plan.packaging === "deb" && (
               <p className="text-xs text-text-secondary">
-                The package needs sudo, so the last step is one command you run on the host. The
-                AppImage installs without root but needs libfuse2.
+                The package needs sudo, so the last step is one command you run on the host.{" "}
+                {probe?.advice.fuse === false
+                  ? "The AppImage installs without root; with no FUSE on the host, it runs unpacked."
+                  : "The AppImage installs without root but needs FUSE (libfuse2)."}
+              </p>
+            )}
+            {plan.packaging === "appimage" && probe?.advice.fuse === false && (
+              <p className="text-xs text-text-secondary">
+                No FUSE was found on {hostLabel}, so the AppImage runs unpacked each time it starts,
+                which makes starting slower.
               </p>
             )}
             {plan.restartsHost && (
@@ -493,26 +512,29 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       };
     }
   } else if (step === "enable") {
-    body = probe?.hostModeListening ? (
-      <p className="text-sm text-text-primary">Host mode is on. This machine can connect.</p>
+    const switchedOn = hostModeSwitchedOn(probe);
+    body = switchedOn ? (
+      <p className="text-sm text-text-primary">
+        Host mode is on at {hostLabel} and starts at login there. This machine can connect.
+      </p>
     ) : (
       <div className="space-y-2 text-sm">
-        <p className="text-text-primary">Host mode is off on {name || target}.</p>
+        <p className="text-text-primary">
+          {probe?.hostModeListening
+            ? `Host mode is listening on ${hostLabel} for now, but isn't switched on there, so it stops when Daintree quits.`
+            : `Host mode is off on ${hostLabel}.`}
+        </p>
         <p className="text-text-secondary">
           {probe?.platform === "darwin"
-            ? "Daintree can start it there in the logged-in session. If it has never run on that Mac, open it once at the machine: macOS asks to approve a first launch."
-            : probe?.advice.hostModeUnit
-              ? "Daintree can start its Host mode service there."
-              : "Open Daintree on that machine and turn on “Allow this machine to be a host”. That also sets it to start at login."}
+            ? "Daintree turns on Host mode there in the logged-in session and sets it to start at login. If it has never run on that Mac, open it once at the machine: macOS asks to approve a first launch."
+            : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
         </p>
       </div>
     );
-    primary = probe?.hostModeListening
+    primary = switchedOn
       ? { label: "Continue", onClick: () => setStep("advise") }
-      : probe?.platform === "darwin" || probe?.advice.hostModeUnit
-        ? { label: "Start Host mode", onClick: startHostMode, disabled: busy, loading: busy }
-        : { label: "Check again", onClick: check, disabled: busy, loading: busy };
-    secondary = probe?.hostModeListening
+      : { label: "Turn on Host mode", onClick: startHostMode, disabled: busy, loading: busy };
+    secondary = switchedOn
       ? { label: "Cancel", onClick: onClose }
       : { label: "Skip", onClick: () => setStep("advise") };
   } else {
@@ -531,26 +553,49 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         <div>
           <p className="font-medium text-text-primary">Keychain</p>
           <p className="text-text-secondary">
-            {probe?.platform === "linux"
-              ? probe.advice.keyring === "running"
-                ? "A keyring process was running for the SSH user when checked. Whether plugin secrets can be stored there is known once Host mode runs its own keyring check on that machine."
-                : probe.advice.keyring === "not-running"
-                  ? "No keyring process was seen running for the SSH user when checked. Host mode runs its own keyring check on that machine."
-                  : "The host's keyring wasn't checked. Host mode runs its own keyring check on that machine."
-              : "Plugin secrets live in the host's own keychain. Credentials aren't copied between machines: each host signs in for itself."}
+            {probe?.hostModeState?.keychain.checked
+              ? `Checked by Daintree on ${hostLabel}: ${probe.hostModeState.keychain.detail}.`
+              : probe?.platform === "linux"
+                ? probe.advice.keyring === "running"
+                  ? "A keyring process was running for the SSH user when checked. Whether plugin secrets can be stored there is known once Host mode runs its own keyring check on that machine."
+                  : probe.advice.keyring === "not-running"
+                    ? "No keyring process was seen running for the SSH user when checked. Host mode runs its own keyring check on that machine."
+                    : "The host's keyring wasn't checked. Host mode runs its own keyring check on that machine."
+                : "Plugin secrets live in the host's own keychain. Credentials aren't copied between machines: each host signs in for itself."}
           </p>
         </div>
-        {probe?.platform === "linux" && probe.advice.linger === false && (
-          <p className="text-text-secondary">
-            Lingering is off, so the Host mode service stops when you log out there.
-          </p>
+        {lingerRefused !== null ? (
+          <div>
+            <p className="font-medium text-text-primary">Running after logout</p>
+            <p className="text-text-secondary">
+              Daintree asked {hostLabel} to let its Host mode service run with nobody logged in
+              (loginctl enable-linger), and the host refused:
+            </p>
+            <pre className="mt-1 whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text">
+              {lingerRefused}
+            </pre>
+            <p className="text-text-secondary">
+              Until someone allowed to runs the command below there, the service stops when the last
+              login session on {hostLabel} ends.
+            </p>
+          </div>
+        ) : (
+          probe?.platform === "linux" &&
+          probe.advice.linger === false && (
+            <p className="text-text-secondary">
+              Lingering is off, so the Host mode service stops when you log out there.
+            </p>
+          )
         )}
         {isMac() && (
           <div>
             <p className="font-medium text-text-primary">Local network</p>
             <p className="text-text-secondary">
-              macOS may ask whether Daintree can find devices on your local network. Allow it to
-              reach hosts on your LAN; tailnet hosts work either way.
+              macOS may ask whether Daintree can find devices on your local network. Whether a
+              connection needs it depends on how macOS routes to that host, not on its address, so
+              allow it if you use hosts on your network. If it&apos;s denied, connections macOS
+              treats as local fail until Daintree is turned on in System Settings → Privacy &amp;
+              Security → Local Network.
             </p>
           </div>
         )}

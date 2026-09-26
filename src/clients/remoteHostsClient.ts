@@ -14,6 +14,7 @@ import type {
   HostPluginClipboardGrant,
   PlanInstallPayload,
   RemoteHostsEvent,
+  StartHostModeResult,
   UpdateHostPayload,
 } from "@shared/types/ipc/remoteHosts";
 
@@ -37,7 +38,7 @@ export const remoteHostsClient = {
     window.electron.remoteHosts.getInstallStatus({ opId }),
   cancelInstall: (opId: OperationId): Promise<boolean> =>
     window.electron.remoteHosts.cancelInstall({ opId }),
-  startHostMode: (sshTarget: string): Promise<HostProbeResult> =>
+  startHostMode: (sshTarget: string): Promise<StartHostModeResult> =>
     window.electron.remoteHosts.startHostMode({ sshTarget }),
   listClipboardGrants: (hostId: string): Promise<HostPluginClipboardGrant[]> =>
     window.electron.remoteHosts.listClipboardGrants({ hostId }),

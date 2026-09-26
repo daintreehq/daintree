@@ -31,6 +31,16 @@ function probeResult(overrides: Partial<HostProbeResult> = {}): HostProbeResult 
       keyring: null,
       linger: null,
       hostModeUnit: null,
+      startAtLoginInstalled: true,
+      fuse: null,
+    },
+    hostModeState: {
+      pid: 4242,
+      enabled: true,
+      startAtLogin: true,
+      startAtLoginInstalled: true,
+      startAtLoginError: null,
+      keychain: { state: "unknown", detail: "Not checked yet", checked: false },
     },
     ...overrides,
   };
@@ -62,7 +72,7 @@ beforeEach(() => {
     add: vi.fn(async () => ({ id: "studio", name: "studio", sshTarget: "greg@studio" })),
     connect: vi.fn(async () => ({ status: "connecting", attempt: 1 })),
     cancelInstall: vi.fn(async () => true),
-    startHostMode: vi.fn(async () => probeResult()),
+    startHostMode: vi.fn(async () => ({ probe: probeResult(), lingerRefused: null })),
   };
   Object.defineProperty(window, "electron", {
     value: { remoteHosts },
@@ -207,6 +217,8 @@ describe("AddHostDialog", () => {
           keyring: "running",
           linger: null,
           hostModeUnit: true,
+          startAtLoginInstalled: true,
+          fuse: null,
         },
       })
     );
@@ -219,5 +231,106 @@ describe("AddHostDialog", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     expect(await screen.findByText(/A keyring process was running for the SSH user/)).toBeTruthy();
     expect(screen.queryByText(/can be stored there\./)).toBeNull();
+  });
+
+  it("turns Host mode on for good where it only listens, then reports why lingering was refused", async () => {
+    const linuxAdvice = {
+      sleepObserved: null,
+      sleepDisabled: null,
+      keyring: "not-running" as const,
+      linger: false,
+      hostModeUnit: false,
+      startAtLoginInstalled: false,
+      fuse: true,
+    };
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({
+        platform: "linux",
+        hostModeState: {
+          pid: 4242,
+          enabled: false,
+          startAtLogin: false,
+          startAtLoginInstalled: false,
+          startAtLoginError: null,
+          keychain: { state: "unknown", detail: "Not checked yet", checked: false },
+        },
+        advice: linuxAdvice,
+        suggestedCommands: [
+          {
+            label: "Let Host mode run without a login session",
+            command: "loginctl enable-linger $USER",
+          },
+        ],
+      })
+    );
+    remoteHosts.startHostMode!.mockResolvedValue({
+      probe: probeResult({
+        platform: "linux",
+        advice: { ...linuxAdvice, hostModeUnit: true, startAtLoginInstalled: true },
+        hostModeState: {
+          pid: 4242,
+          enabled: true,
+          startAtLogin: true,
+          startAtLoginInstalled: true,
+          startAtLoginError: null,
+          keychain: {
+            state: "unavailable",
+            detail: "Plugin secrets unavailable on this host: no keyring (headless)",
+            checked: true,
+          },
+        },
+        suggestedCommands: [
+          {
+            label: "Let Host mode run without a login session",
+            command: "loginctl enable-linger $USER",
+          },
+        ],
+      }),
+      lingerRefused: "Could not enable linger: Interactive authentication required.",
+    });
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@studio-03"), {
+      target: { value: "greg@bigbox" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+
+    expect(
+      await screen.findByText(/listening on bigbox for now, but isn't switched on there/)
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Turn on Host mode" }));
+    expect(
+      await screen.findByText(/Host mode is on at bigbox and starts at login there/)
+    ).toBeTruthy();
+    expect(remoteHosts.startHostMode).toHaveBeenCalledWith({ sshTarget: "greg@bigbox" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(
+      await screen.findByText("Could not enable linger: Interactive authentication required.")
+    ).toBeTruthy();
+    expect(screen.getByText(/Daintree asked bigbox to let its Host mode service run/)).toBeTruthy();
+    expect(screen.getByText("loginctl enable-linger $USER")).toBeTruthy();
+    expect(
+      screen.getByText(/Checked by Daintree on bigbox: Plugin secrets unavailable on this host/)
+    ).toBeTruthy();
+  });
+
+  it("explains Local Network permission by routing, never promising tailnet hosts work", async () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      fireEvent.change(screen.getByPlaceholderText("user@studio-03"), {
+        target: { value: "greg@studio" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+      const copy = (await screen.findByText(/find devices on your local network/)).textContent!;
+      expect(copy).toContain("depends on how macOS routes to that host, not on its address");
+      expect(copy).toContain("Privacy & Security → Local Network");
+      expect(copy).not.toMatch(/either way/);
+    } finally {
+      platform.mockRestore();
+    }
   });
 });

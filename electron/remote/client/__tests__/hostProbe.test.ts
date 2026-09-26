@@ -8,7 +8,7 @@ import {
   parseHostProbe,
   probeHost,
 } from "../hostProbe.js";
-import type { RemoteShell } from "../remoteShell.js";
+import type { HostCommandChannel } from "../remoteShell.js";
 
 const CLIENT = { version: "1.4.0", commit: "abcdef0123456789" };
 
@@ -38,7 +38,9 @@ const LINUX_OUTPUT = [
   "@@dt:end",
 ].join("\n");
 
-function shellReturning(result: Partial<CommandResult>): RemoteShell & { scripts: string[] } {
+function shellReturning(
+  result: Partial<CommandResult>
+): HostCommandChannel & { scripts: string[] } {
   const scripts: string[] = [];
   return {
     scripts,
@@ -46,7 +48,14 @@ function shellReturning(result: Partial<CommandResult>): RemoteShell & { scripts
       scripts.push(script);
       return { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false, ...result };
     },
-    upload: async () => ({ code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false }),
+    execWithInput: async () => ({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      spawnError: null,
+      timedOut: false,
+    }),
+    sendFile: async () => ({ code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false }),
   };
 }
 
@@ -110,6 +119,8 @@ describe("parseHostProbe", () => {
       keyring: "not-running",
       linger: false,
       hostModeUnit: false,
+      startAtLoginInstalled: false,
+      fuse: null,
     });
   });
 
@@ -220,6 +231,68 @@ describe("parseHostProbe", () => {
     const probe = parseHostProbe("@@dt:uname Linux x86_64\n@@dt:end");
     expect(probe.install).toBeNull();
     expect(probe.appRunning).toBe(false);
+  });
+});
+
+describe("Host mode setup read-back", () => {
+  const STATE = {
+    daintreeHostMode: 1,
+    pid: 4242,
+    enabled: true,
+    startAtLogin: true,
+    startAtLoginInstalled: true,
+    startAtLoginError: null,
+    keychain: { state: "ok", detail: 'Keychain answered a "test"', checked: true },
+  };
+
+  it("reads what the host's Daintree recorded, and the LaunchAgent on disk", () => {
+    const probe = parseHostProbe(
+      [
+        MAC_OUTPUT.replace("@@dt:end", ""),
+        "@@dt:launchagent yes",
+        `@@dt:hostmodestate ${JSON.stringify(STATE)}`,
+        "@@dt:end",
+      ].join("\n")
+    );
+    expect(probe.advice.startAtLoginInstalled).toBe(true);
+    expect(probe.advice.fuse).toBeNull();
+    const { daintreeHostMode: _marker, ...observation } = STATE;
+    expect(probe.hostModeState).toEqual(observation);
+  });
+
+  it("ignores a status file that isn't one", () => {
+    for (const text of ["{", '{"daintreeHostMode":2}', '{"enabled":true}', "yes"]) {
+      const probe = parseHostProbe(`@@dt:uname Darwin arm64\n@@dt:hostmodestate ${text}\n@@dt:end`);
+      expect(probe.hostModeState).toBeNull();
+    }
+  });
+
+  it("counts a Linux unit as start at login only when systemd says it is enabled", () => {
+    const linux = (lines: string[]) =>
+      parseHostProbe(["@@dt:uname Linux x86_64", ...lines, "@@dt:end"].join("\n")).advice;
+    expect(linux(["@@dt:unit yes", "@@dt:unitenabled enabled"]).startAtLoginInstalled).toBe(true);
+    expect(linux(["@@dt:unit yes", "@@dt:unitenabled disabled"]).startAtLoginInstalled).toBe(false);
+    // systemctl couldn't be asked: unknown, not off.
+    expect(linux(["@@dt:unit yes", "@@dt:unitenabled "]).startAtLoginInstalled).toBeNull();
+    expect(linux(["@@dt:unit no"]).startAtLoginInstalled).toBe(false);
+  });
+
+  it("reports whether an AppImage could mount itself on a Linux host", () => {
+    const fuse = (value: string) =>
+      parseHostProbe(`@@dt:uname Linux x86_64\n@@dt:fuse ${value}\n@@dt:end`).advice.fuse;
+    expect(fuse("yes")).toBe(true);
+    expect(fuse("no")).toBe(false);
+  });
+
+  it("asks for all of it in the one probe line, printing the status file verbatim", () => {
+    const script = buildHostProbeScript();
+    expect(script).not.toContain("\n");
+    expect(script).toContain("Library/LaunchAgents/org.daintree.app.host.plist");
+    expect(script).toContain("systemctl --user is-enabled daintree-host.service");
+    expect(script).toContain("/dev/fuse");
+    expect(script).toContain("libfuse[.]so[.]2");
+    // echo would rewrite backslashes in the JSON on some shells.
+    expect(script).toMatch(/printf '%s %s\\n' "@@dt:hostmodestate"/);
   });
 });
 

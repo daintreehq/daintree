@@ -243,10 +243,11 @@ export interface AppLifecycleOptions {
   isLaunchSettled?: () => boolean;
   /**
    * A second launch asked for Host mode (`--host-mode`, from a login item or
-   * the systemd unit). Only where Remote Hosts exists; without it such a
+   * the systemd unit, or `--enable-host-mode` from host setup). Given the
+   * launch's command line. Only where Remote Hosts exists; without it such a
    * launch is handled like any other.
    */
-  onHostModeRequested?: () => void;
+  onHostModeRequested?: (commandLine: readonly string[]) => void;
 }
 
 export interface AppLifecycleHandle {
@@ -348,7 +349,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // never for a window: nothing is focused or opened for it.
     if (opts.onHostModeRequested && isHostModeRequested(commandLine)) {
       console.log("[MAIN] Second instance asked for Host mode");
-      opts.onHostModeRequested();
+      opts.onHostModeRequested(commandLine);
       return;
     }
     const liveWindow = getLiveWindow();

@@ -114,7 +114,7 @@ import {
 import { isWebviewSrcAllowed } from "../../window/webviewSrcGate.js";
 import { stopRemoteHosts } from "../boot.js";
 import { probeHost } from "../client/hostProbe.js";
-import { createRemoteShell } from "../client/remoteShell.js";
+import { createSshCommandChannel } from "../client/remoteShell.js";
 import {
   buildCatArgs,
   buildProbeArgs,
@@ -343,7 +343,7 @@ describe.skipIf(!ENABLED)(
 
         // The setup probe over the same master (macOS: it looks under $HOME).
         if (process.platform === "darwin") {
-          const shell = createRemoteShell({
+          const shell = createSshCommandChannel({
             target: SSH_ALIAS,
             controlPath,
             run: sshd!.runCommand,

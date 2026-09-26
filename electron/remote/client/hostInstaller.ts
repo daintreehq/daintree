@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
@@ -18,7 +20,7 @@ import {
   type ProbeOutcome,
 } from "./hostProbe.js";
 import { type ClientBuild, debInstallCommand, planInstall } from "./installPlan.js";
-import { failureDetail, type RemoteShell } from "./remoteShell.js";
+import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
 /**
  * Carry out an install or update on a host: stage the new build next to the
@@ -35,7 +37,7 @@ export interface InstallProgress {
 }
 
 export interface InstallerDeps {
-  shell: RemoteShell;
+  shell: HostCommandChannel;
   /** Local programs (ditto). */
   run: CommandRunner;
   client: ClientBuild;
@@ -123,28 +125,54 @@ async function stage(
   if (!dir || !SAFE_REMOTE_PATH.test(dir))
     throw failed("Couldn't make a staging folder on the host");
   const file = path.posix.join(dir, stagedName(plan));
+  try {
+    await deliver(deps, plan, file, signal, report);
+  } catch (err) {
+    // Nothing is in place yet: the host keeps no half-delivered build.
+    await deps.shell.exec(`rm -rf ${remotePath(dir)}`, { timeoutMs: 30_000 }).catch(() => {});
+    throw err;
+  }
+  return { dir, file };
+}
 
+/** Get the build to `file` on the host: pushed from here, or fetched there with this machine as the fallback. */
+async function deliver(
+  deps: InstallerDeps,
+  plan: HostInstallPlan,
+  file: string,
+  signal: AbortSignal,
+  report: (p: InstallProgress) => void
+): Promise<void> {
   if (plan.delivery === "host-fetch") {
     const url = plan.artifactUrl!;
     if (!SAFE_URL.test(url)) throw failed("The release URL isn't usable", url);
     report({ stage: "downloading", fraction: 0.2, message: "The host is downloading the build" });
-    await exec(
-      deps,
-      `cd ${remotePath(dir)} && if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 2 -o ${remotePath(file)} ${sq(url)}; else wget -q -O ${remotePath(file)} ${sq(url)}; fi`,
-      signal,
-      "The host couldn't download the build",
-      30 * 60_000
+    const fetched = await deps.shell.exec(
+      `if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 2 -o ${remotePath(file)} ${sq(url)}; else wget -q -O ${remotePath(file)} ${sq(url)}; fi`,
+      { signal, timeoutMs: 30 * 60_000 }
     );
-    return { dir, file };
+    if (signal.aborted) throw cancelled();
+    if (fetched.code === 0) return;
+    // Having curl or wget doesn't mean the host can reach the release feed:
+    // this machine fetches the same artifact and copies it over.
+    const hostReason = failureDetail(fetched, "download failed");
+    await deps.shell.exec(`rm -f ${remotePath(file)}`, { timeoutMs: 30_000 }).catch(() => {});
+    report({
+      stage: "downloading",
+      fraction: 0.25,
+      message: "The host couldn't download the build, so this machine is fetching it",
+    });
+    const local = await downloadHere(deps, plan, signal, hostReason);
+    await pushFile(deps, local, file, signal, report, true);
+    return;
   }
 
-  await fs.mkdir(deps.cacheDir, { recursive: true, mode: 0o700 });
-  let local: string;
   if (plan.delivery === "push-bundle") {
     const bundle = deps.client.bundle;
     if (bundle.kind === "app-bundle") {
+      await fs.mkdir(deps.cacheDir, { recursive: true, mode: 0o700 });
       report({ stage: "packing", fraction: 0.15, message: "Packing this machine's build" });
-      local = path.join(deps.cacheDir, `Daintree-${plan.version}-${deps.client.arch}.zip`);
+      const local = path.join(deps.cacheDir, `Daintree-${plan.version}-${deps.client.arch}.zip`);
       await fs.rm(local, { force: true });
       const packed = await deps.run("ditto", ["-c", "-k", "--keepParent", bundle.path, local], {
         signal,
@@ -153,27 +181,92 @@ async function stage(
       if (signal.aborted) throw cancelled();
       if (packed.code !== 0)
         throw failed("Couldn't pack this machine's build", failureDetail(packed, "ditto failed"));
-    } else if (bundle.kind === "appimage") {
-      local = bundle.path;
-    } else {
-      throw failed("This machine has no build to copy");
+      await pushFile(deps, local, file, signal, report, true);
+      return;
     }
-  } else {
-    report({ stage: "downloading", fraction: 0.2, message: "Downloading the build" });
-    local = path.join(deps.cacheDir, plan.artifactName!);
-    await deps.download(plan.artifactUrl!, local, signal);
+    if (bundle.kind === "appimage") {
+      // The app's own AppImage is never removed.
+      await pushFile(deps, bundle.path, file, signal, report, false);
+      return;
+    }
+    throw failed("This machine has no build to copy");
   }
 
-  report({ stage: "copying", fraction: 0.45, message: "Copying the build to the host" });
-  const copied = await deps.shell.upload(local, file, { signal, timeoutMs: 30 * 60_000 });
-  // The app's own AppImage is never removed; packed and downloaded copies are.
-  if (local !== (deps.client.bundle.kind === "appimage" ? deps.client.bundle.path : null)) {
-    await fs.rm(local, { force: true }).catch(() => {});
+  report({ stage: "downloading", fraction: 0.2, message: "Downloading the build" });
+  const local = await downloadHere(deps, plan, signal, null);
+  await pushFile(deps, local, file, signal, report, true);
+}
+
+async function downloadHere(
+  deps: InstallerDeps,
+  plan: HostInstallPlan,
+  signal: AbortSignal,
+  hostReason: string | null
+): Promise<string> {
+  await fs.mkdir(deps.cacheDir, { recursive: true, mode: 0o700 });
+  const local = path.join(deps.cacheDir, plan.artifactName!);
+  try {
+    await deps.download(plan.artifactUrl!, local, signal);
+  } catch (err) {
+    if (signal.aborted) throw cancelled();
+    if (hostReason === null) throw err;
+    throw failed(
+      "Neither the host nor this machine could download the build",
+      `on the host: ${hostReason}; here: ${formatErrorMessage(err, "download failed")}`
+    );
   }
   if (signal.aborted) throw cancelled();
-  if (copied.code !== 0)
-    throw failed("Couldn't copy the build to the host", failureDetail(copied, "scp failed"));
-  return { dir, file };
+  return local;
+}
+
+async function sha256Of(file: string): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
+/** Prints the file's sha256 with whichever tool the host has (Linux sha256sum, macOS shasum). */
+export function remoteSha256Script(file: string): string {
+  const f = remotePath(file);
+  return `if command -v sha256sum >/dev/null 2>&1; then h=$(sha256sum ${f}); else h=$(shasum -a 256 ${f}); fi && echo "${MARK}sha256 \${h%% *}"`;
+}
+
+/**
+ * Copy a local file to the host and check the copy's sha256 there against
+ * this one's, so a truncated or altered transfer never reaches the swap.
+ */
+async function pushFile(
+  deps: InstallerDeps,
+  local: string,
+  remote: string,
+  signal: AbortSignal,
+  report: (p: InstallProgress) => void,
+  removeLocal: boolean
+): Promise<void> {
+  try {
+    const expected = await sha256Of(local);
+    report({ stage: "copying", fraction: 0.45, message: "Copying the build to the host" });
+    const copied = await deps.shell.sendFile(local, remote, { signal, timeoutMs: 30 * 60_000 });
+    if (signal.aborted) throw cancelled();
+    if (copied.code !== 0)
+      throw failed("Couldn't copy the build to the host", failureDetail(copied, "copy failed"));
+    const out = await exec(
+      deps,
+      remoteSha256Script(remote),
+      signal,
+      "Couldn't check the copy on the host",
+      10 * 60_000
+    );
+    const actual = markerValue(out, "sha256");
+    if (actual !== expected) {
+      throw failed(
+        "The copy on the host doesn't match this machine's (sha256), so it wasn't used",
+        actual ?? "unreadable"
+      );
+    }
+  } finally {
+    if (removeLocal) await fs.rm(local, { force: true }).catch(() => {});
+  }
 }
 
 /**

@@ -21,6 +21,7 @@ import type {
   DiscoveredHost,
   HostInstallPlan,
   HostProbeResult,
+  StartHostModeResult,
   HostProjectSummary,
   InstallHostPayload,
   ListHostProjectsPayload,
@@ -154,7 +155,7 @@ export const remoteHostsNamespace = defineIpcNamespace({
     ),
     startHostMode: op(
       REMOTE_HOSTS_METHOD_CHANNELS.startHostMode,
-      async (payload: { sshTarget: string }): Promise<HostProbeResult> =>
+      async (payload: { sshTarget: string }): Promise<StartHostModeResult> =>
         requireRemoteService("hostSetup").startHostMode(payload)
     ),
     listHostProjects: op(

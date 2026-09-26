@@ -1871,7 +1871,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "remote-hosts:start-host-mode": {
     args: [payload: { sshTarget: string }];
-    result: import("./remoteHosts.js").HostProbeResult;
+    result: import("./remoteHosts.js").StartHostModeResult;
   };
   "remote-hosts:switch-window-host": {
     args: [payload: import("./remoteHosts.js").SwitchWindowHostPayload];
