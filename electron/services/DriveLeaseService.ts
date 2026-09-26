@@ -5,6 +5,12 @@ import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import type { LeaseGate } from "../ipc/dispatcher.js";
 import { getLocalClientRef, getLocalEndpoint } from "../ipc/localEndpoint.js";
 import { AppError } from "../utils/errorTypes.js";
+import { getChannelLeaseTarget } from "../ipc/channelLeasePolicy.js";
+import {
+  resolveLeaseTarget,
+  type LeaseTargetResolution,
+  type LeaseTargetResolvers,
+} from "./driveLeaseTargets.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 import type { DriveLeaseHolder, DriveLeaseState } from "../../shared/types/remoteHosts.js";
 import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
@@ -187,6 +193,22 @@ export class DriveLeaseService {
     const holder = this.getHolder(projectId);
     if (!drives(holder, endpoint)) return false;
     return holder?.leaseId ?? null;
+  }
+
+  /**
+   * Every project someone other than `endpoint` drives, with its holder: the
+   * projects a call from it may not change.
+   */
+  projectsDrivenElsewhere(
+    endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">
+  ): Map<string, DriveLeaseHolder> {
+    const out = new Map<string, DriveLeaseHolder>();
+    const projects = new Set([...this.leases.keys(), ...this.attachedProjects()]);
+    for (const projectId of projects) {
+      const holder = this.getHolder(projectId);
+      if (holder && !drives(holder, endpoint)) out.set(projectId, holder);
+    }
+    return out;
   }
 
   /**
@@ -437,27 +459,86 @@ function drives(
   return holder.clientId === LOCAL_CLIENT_ID && endpoint.clientId === LOCAL_CLIENT_ID;
 }
 
+function drivenElsewhereError(
+  channel: string,
+  projectId: string | null,
+  holder: DriveLeaseHolder | null
+): AppError {
+  return new AppError({
+    code: "DRIVEN_ELSEWHERE",
+    message: `${channel} changes ${projectId ?? "a project"}, which another window drives`,
+    userMessage: holder
+      ? `This project is being driven from ${holder.clientName}. Take it over first.`
+      : "This project is being driven from another screen. Take it over first.",
+    context: { channel, projectId },
+  });
+}
+
 /**
- * The dispatcher's lease gate: a caller that doesn't drive its project is
- * refused on the channels that change it, exactly as its terminal input is.
- * A caller bound to no project has no lease to consult.
+ * The dispatcher's lease gate: a call on a channel that changes a project is
+ * refused unless its caller drives that project, exactly as its terminal input
+ * is. The project is the one the call targets, traced through this Host's own
+ * records (`CHANNEL_LEASE_TARGETS`), not the one the caller is showing:
+ * a view on A can't change B by naming B's repository. While every project
+ * with a holder is one the caller drives, nothing needs tracing; otherwise a
+ * call whose target can't be traced is refused rather than let through.
  */
-export function createDriveLeaseGate(lease: Pick<DriveLeaseService, "getHolder">): LeaseGate {
-  return (channel, caller) => {
+export function createDriveLeaseGate(
+  lease: Pick<DriveLeaseService, "projectsDrivenElsewhere">,
+  resolvers: LeaseTargetResolvers
+): LeaseGate {
+  return (channel, caller, args) => {
     const endpoint = caller.kind === "link" ? caller.endpoint : getLocalEndpoint(caller.sender);
-    const projectId = endpoint.projectId;
-    if (projectId === null) return null;
-    const holder = lease.getHolder(projectId);
-    if (drives(holder, endpoint)) return null;
-    return new AppError({
-      code: "DRIVEN_ELSEWHERE",
-      message: `${channel} changes a project driven by another window`,
-      userMessage: holder
-        ? `This project is being driven from ${holder.clientName}. Take it over first.`
-        : "This project is being driven from another screen. Take it over first.",
-      context: { channel, projectId },
-    });
+    const elsewhere = lease.projectsDrivenElsewhere(endpoint);
+    if (elsewhere.size === 0) return null;
+    const target = getChannelLeaseTarget(channel);
+    if (target === null) {
+      const [projectId, holder] = elsewhere.entries().next().value!;
+      return drivenElsewhereError(channel, projectId, holder);
+    }
+    const verdict = (
+      resolution: LeaseTargetResolution,
+      holders: Map<string, DriveLeaseHolder>
+    ): AppError | null => {
+      if (resolution.kind === "unresolved") {
+        return new AppError({
+          code: "DRIVEN_ELSEWHERE",
+          message: `${channel} targets ${resolution.reason}, and another window drives a project here`,
+          userMessage:
+            "Another screen is driving a project on this host, and this change couldn't be matched to a project. Take it over first.",
+          context: { channel },
+        });
+      }
+      const projectIds = resolution.kind === "every" ? [...holders.keys()] : resolution.projectIds;
+      for (const projectId of projectIds) {
+        const holder = holders.get(projectId);
+        if (holder) return drivenElsewhereError(channel, projectId, holder);
+      }
+      return null;
+    };
+    const resolution = resolveLeaseTarget(target, args, endpoint.projectId, resolvers);
+    // A lookup that answers later is judged against the leases as they stand
+    // then: a takeover while it ran counts.
+    return resolution instanceof Promise
+      ? resolution.then((resolved) => verdict(resolved, lease.projectsDrivenElsewhere(endpoint)))
+      : verdict(resolution, elsewhere);
   };
+}
+
+/**
+ * Whether the endpoint may write the project's host-owned state (its saved
+ * layout, drafts, active worktree): always when no lease service runs, which
+ * is everyone who never turned on Host mode, else only while the lease is
+ * vacant or the endpoint drives it. The endpoint is only looked up once a
+ * lease service runs: a local view's is created on first read.
+ */
+export function mayWriteProjectState(
+  projectId: string,
+  getEndpoint: () => Pick<ClientEndpoint, "endpointId" | "clientId"> | null | undefined
+): boolean {
+  if (service === null) return true;
+  const endpoint = getEndpoint();
+  return endpoint != null && service.isDriving(projectId, endpoint);
 }
 
 let service: DriveLeaseService | null = null;

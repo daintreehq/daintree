@@ -61,6 +61,12 @@ export function resolveLocalDevPreviewUpstream(subdomain: string): DevPreviewUps
   return liveSessionService?.resolveUpstream(subdomain) ?? { kind: "unknown-subdomain" };
 }
 
+/** The projects whose preview sessions run in a panel, for the drive-lease gate. */
+export function getDevPreviewProjectsForPanel(panelId: string): string[] {
+  const sessions = liveSessionService?.getAllSessions() ?? [];
+  return [...new Set(sessions.filter((s) => s.panelId === panelId).map((s) => s.projectId))];
+}
+
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   let sessionService: DevPreviewSessionServiceType | null = null;
   let sessionServicePromise: Promise<DevPreviewSessionServiceType> | null = null;

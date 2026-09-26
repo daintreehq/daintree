@@ -31,15 +31,34 @@ export type InvokeEnveloper = (
 ) => Promise<IpcEnvelope>;
 
 /**
- * Decides whether the caller may drive its project, for a channel whose lease
- * policy requires it (`channelLeasePolicy.ts`): null to let the call through,
- * or the error to refuse it with. A link call names its endpoint; a local call
- * names the view that sent it, resolved to an endpoint only when asked.
+ * Decides whether the caller may drive the project a call changes, for a
+ * channel whose lease policy requires it (`channelLeasePolicy.ts`): null to
+ * let the call through, or the error to refuse it with. A link call names its
+ * endpoint; a local call names the view that sent it, resolved to an endpoint
+ * only when asked. The call's arguments name its target; tracing one to its
+ * project may take a lookup, so the answer may come as a promise.
  */
 export type LeaseGate = (
   channel: string,
-  caller: { kind: "link"; endpoint: ClientEndpoint } | { kind: "local"; sender: WebContents }
-) => AppError | null;
+  caller: { kind: "link"; endpoint: ClientEndpoint } | { kind: "local"; sender: WebContents },
+  args: readonly unknown[]
+) => AppError | null | Promise<AppError | null>;
+
+type LeaseVerdict = ReturnType<LeaseGate>;
+
+function isPendingVerdict(verdict: LeaseVerdict): verdict is Promise<AppError | null> {
+  return typeof (verdict as { then?: unknown } | null)?.then === "function";
+}
+
+/** Run `call` once the verdict lets it through; a refusal is thrown in its place. */
+function afterLease<T>(verdict: LeaseVerdict, call: () => T): T | Promise<T> {
+  if (verdict === null) return call();
+  if (!isPendingVerdict(verdict)) throw verdict;
+  return verdict.then((refusal) => {
+    if (refusal) throw refusal;
+    return call();
+  });
+}
 
 type LocalInvokeListener = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 type LocalSendListener = (event: IpcMainEvent, ...args: unknown[]) => unknown;
@@ -127,10 +146,14 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     };
   }
 
-  private refuseForLease(channel: string, caller: Parameters<LeaseGate>[1]): AppError | null {
+  private checkLease(
+    channel: string,
+    caller: Parameters<LeaseGate>[1],
+    args: readonly unknown[]
+  ): LeaseVerdict {
     const gate = this.leaseGate;
     if (gate === null || !requiresDriveLease(channel, caller.kind)) return null;
-    return gate(channel, caller);
+    return gate(channel, caller, args);
   }
 
   /**
@@ -138,9 +161,13 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
    * executor's calls come through here too, as the host's own local-kind
    * caller acting where the MCP routing already consulted the lease.
    */
-  private refuseLinkCallForLease(channel: string, endpoint: ClientEndpoint): AppError | null {
+  private checkLinkCallLease(
+    channel: string,
+    endpoint: ClientEndpoint,
+    args: readonly unknown[]
+  ): LeaseVerdict {
     if (endpoint.kind !== "remote-view") return null;
-    return this.refuseForLease(channel, { kind: "link", endpoint });
+    return this.checkLease(channel, { kind: "link", endpoint }, args);
   }
 
   registerHybridSplit(channel: string, split: HybridSplit): () => void {
@@ -179,31 +206,33 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     args: unknown[]
   ): Promise<IpcEnvelope> {
     const listener = this.invokeListeners.get(channel);
-    const refusal =
-      this.refuseOverLink(channel, listener !== undefined) ??
-      this.refuseLinkCallForLease(channel, invocation.endpoint);
+    const refusal = this.refuseOverLink(channel, listener !== undefined);
     if (refusal) {
       return this.enveloper(channel, args, () => {
         throw refusal;
       });
     }
     const ctx = buildEndpointContext(invocation);
-    return this.enveloper(channel, args, () => listener!(ctx, ...args));
+    return this.enveloper(channel, args, () =>
+      afterLease(this.checkLinkCallLease(channel, invocation.endpoint, args), () =>
+        listener!(ctx, ...args)
+      )
+    );
   }
 
   sendForEndpoint(invocation: EndpointInvocation, channel: string, args: unknown[]): void {
     const listeners = this.sendListeners.get(channel);
-    const refusal =
-      this.refuseOverLink(channel, listeners !== undefined && listeners.size > 0) ??
-      this.refuseLinkCallForLease(channel, invocation.endpoint);
+    const refusal = this.refuseOverLink(channel, listeners !== undefined && listeners.size > 0);
     if (refusal) {
       console.warn(`[IPC] Dropped link send: ${refusal.message}`);
       return;
     }
     const ctx = buildEndpointContext(invocation);
-    void this.enveloper(channel, args, () => {
-      for (const listener of [...listeners!]) listener(ctx, ...args);
-    }).then((envelope) => {
+    void this.enveloper(channel, args, () =>
+      afterLease(this.checkLinkCallLease(channel, invocation.endpoint, args), () => {
+        for (const listener of [...listeners!]) listener(ctx, ...args);
+      })
+    ).then((envelope) => {
       if (!envelope.ok) {
         console.warn(`[IPC] Link send on ${channel} failed: ${envelope.error.message}`);
       }
@@ -236,13 +265,12 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     const router = this.router;
     const hostId = router ? router.hostForSender(event.sender.id) : null;
     if (router === null || hostId === null) {
-      const refusal = this.refuseForLease(channel, { kind: "local", sender: event.sender });
-      if (refusal) {
-        return this.enveloper(channel, args, () => {
-          throw refusal;
-        });
-      }
-      return this.enveloper(channel, args, runLocal);
+      return this.enveloper(channel, args, () =>
+        afterLease(
+          this.checkLease(channel, { kind: "local", sender: event.sender }, args),
+          runLocal
+        )
+      );
     }
 
     const webContentsId = event.sender.id;
@@ -303,12 +331,22 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     const router = this.router;
     const hostId = router ? router.hostForSender(event.sender.id) : null;
     if (router === null || hostId === null) {
-      const refusal = this.refuseForLease(channel, { kind: "local", sender: event.sender });
-      if (refusal) {
-        console.warn(`[IPC] Dropped send: ${refusal.message}`);
+      const verdict = this.checkLease(channel, { kind: "local", sender: event.sender }, args);
+      if (verdict === null) return listener(event, ...args);
+      if (!isPendingVerdict(verdict)) {
+        console.warn(`[IPC] Dropped send: ${verdict.message}`);
         return undefined;
       }
-      return listener(event, ...args);
+      // Only a send whose target needed a lookup waits for it; the rest keep
+      // their order with the sends around them.
+      void verdict.then(
+        (refusal) => {
+          if (refusal) console.warn(`[IPC] Dropped send: ${refusal.message}`);
+          else listener(event, ...args);
+        },
+        (error: unknown) => console.warn(`[IPC] Dropped send on ${channel}:`, error)
+      );
+      return undefined;
     }
 
     const locality = getChannelLocality(channel);

@@ -121,6 +121,23 @@ describe("DriveLeaseService", () => {
     expect(leaseTables).toEqual([]);
   });
 
+  it("lists the projects someone else drives, which a caller's calls may not change", async () => {
+    const hostWindow = local(1, "mine");
+    const laptop = remote("s1:e1", "greg-mbp-id", "theirs");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    await settle();
+    service.getHolder("mine");
+
+    expect([...service.projectsDrivenElsewhere(hostWindow).keys()]).toEqual(["theirs"]);
+    expect(service.projectsDrivenElsewhere(hostWindow).get("theirs")).toMatchObject({
+      endpointId: "s1:e1",
+    });
+    expect([...service.projectsDrivenElsewhere(laptop).keys()]).toEqual(["mine"]);
+    // Another of this machine's windows drives with the first.
+    expect([...service.projectsDrivenElsewhere(local(2, null)).keys()]).toEqual(["theirs"]);
+  });
+
   it("an unleased project reports nobody driving, and everyone may drive it", () => {
     expect(service.getState("empty")).toEqual({ projectId: "empty", holder: null });
     expect(service.isDriving("empty", local(9, "empty"))).toBe(true);

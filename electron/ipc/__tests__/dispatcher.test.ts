@@ -62,6 +62,7 @@ import { enforceIpcSenderValidation } from "../../setup/security.js";
 import { _resetIpcGuardForTesting } from "../ipcGuard.js";
 import { onWithContext, typedHandle, typedHandleWithContext } from "../utils.js";
 import { createDriveLeaseGate } from "../../services/DriveLeaseService.js";
+import type { LeaseTargetResolvers } from "../../services/driveLeaseTargets.js";
 import { getIpcDispatcher } from "../dispatcher.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
 import { _resetLocalEndpointsForTesting } from "../localEndpoint.js";
@@ -538,23 +539,51 @@ describe("drive-lease gate", () => {
   const HYBRID_DRIVER_CHANNEL = "app:set-state";
   const FREE_CHANNEL = "worktree:get-all";
 
+  const P1 = "/repo/proj-1";
+  const P2 = "/repo/proj-2";
+
   /** A lease table the tests set directly: projectId → holder. */
-  function installGate(holders: Map<string, { endpointId: string; clientId: string }>) {
-    const gate = createDriveLeaseGate({
-      getHolder: (projectId: string) => {
-        const holder = holders.get(projectId);
-        return holder
-          ? {
-              leaseId: 1,
-              endpointId: holder.endpointId,
-              clientId: holder.clientId,
-              clientName: holder.clientId === "local" ? "this-mac" : "greg-mbp",
-              isHostLocal: holder.clientId === "local",
-              acquiredAt: 0,
-            }
-          : null;
+  function installGate(
+    holders: Map<string, { endpointId: string; clientId: string }>,
+    resolvers: Partial<LeaseTargetResolvers> = {}
+  ) {
+    const holderOf = (projectId: string) => {
+      const holder = holders.get(projectId);
+      return holder
+        ? {
+            leaseId: 1,
+            endpointId: holder.endpointId,
+            clientId: holder.clientId,
+            clientName: holder.clientId === "local" ? "this-mac" : "greg-mbp",
+            isHostLocal: holder.clientId === "local",
+            acquiredAt: 0,
+          }
+        : null;
+    };
+    const gate = createDriveLeaseGate(
+      {
+        projectsDrivenElsewhere: (endpoint) => {
+          const out = new Map<string, NonNullable<ReturnType<typeof holderOf>>>();
+          for (const projectId of holders.keys()) {
+            const holder = holderOf(projectId)!;
+            const drives =
+              holder.endpointId === endpoint.endpointId ||
+              (holder.clientId === "local" && endpoint.clientId === "local");
+            if (!drives) out.set(projectId, holder);
+          }
+          return out;
+        },
       },
-    });
+      {
+        projectForPath: (p) => (p === P1 ? "proj-1" : p === P2 ? "proj-2" : null),
+        projectForTerminal: (id) => (id === "t1" ? "proj-1" : id === "t2" ? "proj-2" : null),
+        projectsForOperation: () => [],
+        projectsForDevPreviewPanel: () => [],
+        projectsForHelpSession: () => [],
+        currentProjectId: () => null,
+        ...resolvers,
+      }
+    );
     cleanups.push(getIpcDispatcher().setLeaseGate(gate));
   }
 
@@ -573,7 +602,7 @@ describe("drive-lease gate", () => {
     const refused = await getIpcDispatcher().invokeForEndpoint(
       { endpoint: displaced, client: REMOTE_CLIENT },
       DRIVER_CHANNEL,
-      [{}]
+      [{ rootPath: P1 }]
     );
     expect(refused.ok).toBe(false);
     expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
@@ -582,7 +611,7 @@ describe("drive-lease gate", () => {
     const allowed = await getIpcDispatcher().invokeForEndpoint(
       { endpoint: holder, client: REMOTE_CLIENT },
       DRIVER_CHANNEL,
-      [{}]
+      [{ rootPath: P1 }]
     );
     expect(allowed).toEqual(wrapSuccess("ran"));
   });
@@ -593,7 +622,9 @@ describe("drive-lease gate", () => {
     const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
     installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
     await expect(
-      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [])
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
+        { rootPath: P1 },
+      ])
     ).resolves.toEqual(wrapSuccess("ran"));
 
     installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
@@ -622,13 +653,15 @@ describe("drive-lease gate", () => {
     const handler = handle(DRIVER_CHANNEL);
     getProjectMock.mockReturnValue("proj-1");
     installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
-    const refused = await invokeLocal(DRIVER_CHANNEL, makeEvent(), {});
+    const refused = await invokeLocal(DRIVER_CHANNEL, makeEvent(), { rootPath: P1 });
     expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
     expect(handler).not.toHaveBeenCalled();
 
     // Its own machine holding: every local window drives together, as before.
     installGate(new Map([["proj-1", { endpointId: "local:77", clientId: "local" }]]));
-    await expect(invokeLocal(DRIVER_CHANNEL, makeEvent(), {})).resolves.toEqual(wrapSuccess("ran"));
+    await expect(invokeLocal(DRIVER_CHANNEL, makeEvent(), { rootPath: P1 })).resolves.toEqual(
+      wrapSuccess("ran")
+    );
   });
 
   it("leaves a local view's hybrid channel alone: its write carries this machine's fields too", async () => {
@@ -650,16 +683,139 @@ describe("drive-lease gate", () => {
     getIpcDispatcher().sendForEndpoint(
       { endpoint, client: REMOTE_CLIENT },
       "terminal:update-title",
-      ["t1", "x"]
+      [{ id: "t1", title: "x", titleMode: "user" }]
     );
     expect(listener).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
+  it("checks the project a call targets, not the one its caller is showing", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    // It drives its own project; another client drives proj-2.
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(
+      new Map([
+        ["proj-1", { endpointId: endpoint.endpointId, clientId: "client-b" }],
+        ["proj-2", { endpointId: "remote:-9", clientId: "client-c" }],
+      ])
+    );
+    const intoOther = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      DRIVER_CHANNEL,
+      [{ rootPath: P2 }]
+    );
+    expect(intoOther.ok ? null : intoOther.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(intoOther.ok ? null : intoOther.error.context).toMatchObject({ projectId: "proj-2" });
+    expect(handler).not.toHaveBeenCalled();
+
+    await expect(
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
+        { rootPath: P1 },
+      ])
+    ).resolves.toEqual(wrapSuccess("ran"));
+  });
+
+  it("holds a caller bound to no project to the lease of the project it targets", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    const { endpoint } = makeRemoteEndpoint(-4, null);
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      DRIVER_CHANNEL,
+      [{ rootPath: P1 }]
+    );
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("refuses a mutation whose target can't be traced while anyone else drives here, and lets it through when nobody does", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    for (const payload of [{ rootPath: "/somewhere/else" }, {}, "not-an-object"]) {
+      const refused = await getIpcDispatcher().invokeForEndpoint(
+        { endpoint, client: REMOTE_CLIENT },
+        DRIVER_CHANNEL,
+        [payload]
+      );
+      expect(refused.ok ? null : refused.error.code, JSON.stringify(payload)).toBe(
+        "DRIVEN_ELSEWHERE"
+      );
+    }
+    expect(handler).not.toHaveBeenCalled();
+
+    installGate(new Map());
+    await expect(
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
+        { rootPath: "/somewhere/else" },
+      ])
+    ).resolves.toEqual(wrapSuccess("ran"));
+  });
+
+  it("waits for a target lookup that answers later, from a link or a local view", async () => {
+    const handler = handle("terminal:kill");
+    getProjectMock.mockReturnValue("proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]), {
+      projectForTerminal: async (id) => (id === "t1" ? "proj-1" : "proj-2"),
+    });
+    await expect(invokeLocal("terminal:kill", makeEvent(), "t1")).resolves.toEqual(
+      wrapSuccess("ran")
+    );
+    const refused = await invokeLocal("terminal:kill", makeEvent(), "t2");
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    const listener = vi.fn();
+    cleanups.push(onWithContext("terminal:update-title", listener));
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    for (const id of ["t1", "t2"]) {
+      getIpcDispatcher().sendForEndpoint(
+        { endpoint, client: REMOTE_CLIENT },
+        "terminal:update-title",
+        [{ id, title: "x", titleMode: "user" }]
+      );
+    }
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+    expect(listener.mock.calls[0]![1]).toMatchObject({ id: "t1" });
+    warn.mockRestore();
+  });
+
+  it("judges a lookup that answered later against the leases as they stand then", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    const holders = new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]);
+    installGate(holders, {
+      projectForPath: async () => {
+        // Someone takes proj-1 while the lookup runs.
+        holders.set("proj-1", { endpointId: "remote:-8", clientId: "client-d" });
+        return "proj-1";
+      },
+    });
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      DRIVER_CHANNEL,
+      [{ rootPath: P1 }]
+    );
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("refuses a host-wide restart while any project is driven from elsewhere", async () => {
+    const handler = handle("terminal:restart-service");
+    getProjectMock.mockReturnValue("proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await invokeLocal("terminal:restart-service", makeEvent());
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("checks nothing with no gate installed, as for anyone who never used Remote Hosts", async () => {
     const handler = handle(DRIVER_CHANNEL);
     getProjectMock.mockReturnValue("proj-1");
-    await expect(invokeLocal(DRIVER_CHANNEL, makeEvent(), {})).resolves.toEqual(wrapSuccess("ran"));
+    await expect(invokeLocal(DRIVER_CHANNEL, makeEvent(), { rootPath: P1 })).resolves.toEqual(
+      wrapSuccess("ran")
+    );
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });
