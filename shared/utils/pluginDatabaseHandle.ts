@@ -44,33 +44,265 @@ interface SqliteStatement {
   run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
   setReadBigInts?(enabled: boolean): void;
 }
+type SqliteAuthorizer = (
+  action: number,
+  arg1: string | null,
+  arg2: string | null,
+  dbName: string | null,
+  trigger: string | null
+) => number;
 interface SqliteDatabase {
   exec(sql: string): void;
   prepare(sql: string): SqliteStatement;
   close(): void;
+  /** Node 24.10+; feature-detected. */
+  setAuthorizer?(callback: SqliteAuthorizer | null): void;
 }
 type DatabaseSyncCtor = new (
   path: string,
   options?: { enableForeignKeyConstraints?: boolean; readOnly?: boolean }
 ) => SqliteDatabase;
+interface SqliteModule {
+  DatabaseSync?: DatabaseSyncCtor;
+  constants?: Record<string, number>;
+}
 
-let cachedCtor: DatabaseSyncCtor | null = null;
-function loadDatabaseSync(): DatabaseSyncCtor {
-  if (cachedCtor) return cachedCtor;
+let cachedModule: (SqliteModule & { DatabaseSync: DatabaseSyncCtor }) | null = null;
+function loadSqlite(): SqliteModule & { DatabaseSync: DatabaseSyncCtor } {
+  if (cachedModule) return cachedModule;
   // Loaded lazily so a runtime without `node:sqlite` fails the first `open`
   // with a clear message instead of failing every import of the host.
   try {
-    const sqlite = process.getBuiltinModule("node:sqlite") as
-      { DatabaseSync?: DatabaseSyncCtor } | undefined;
+    const sqlite = process.getBuiltinModule("node:sqlite") as SqliteModule | undefined;
     if (!sqlite?.DatabaseSync) throw new Error("node:sqlite is not built into this runtime");
-    cachedCtor = sqlite.DatabaseSync;
+    cachedModule = sqlite as SqliteModule & { DatabaseSync: DatabaseSyncCtor };
   } catch (error) {
     throw databaseError(
       "SQLITE_UNAVAILABLE",
       `this plugin runtime has no node:sqlite (${formatErrorMessage(error, "unknown error")})`
     );
   }
-  return cachedCtor;
+  return cachedModule;
+}
+
+// ── SQL lexing ─────────────────────────────────────────────────────────────
+
+type SqlTokenKind =
+  "space" | "comment" | "string" | "quoted" | "word" | "variable" | "semicolon" | "other";
+interface SqlToken {
+  kind: SqlTokenKind;
+  text: string;
+}
+
+const isSqlSpace = (c: number): boolean => c === 0x20 || (c >= 0x09 && c <= 0x0d);
+// SQLite's IdChar: ASCII letters, digits, `_`, `$`, and every byte of a
+// multi-byte UTF-8 character (so every UTF-16 unit at or past 0x80).
+const isIdChar = (c: number): boolean =>
+  (c >= 0x30 && c <= 0x39) ||
+  (c >= 0x41 && c <= 0x5a) ||
+  (c >= 0x61 && c <= 0x7a) ||
+  c === 0x5f ||
+  c === 0x24 ||
+  c >= 0x80;
+
+/**
+ * Split SQL into tokens the way SQLite's own tokenizer (tokenize.c) does, as
+ * far as statement boundaries and keywords are concerned. It has to agree
+ * with SQLite exactly: any place it reads a quote or a comment differently is
+ * a place where a statement can hide from the checks below.
+ */
+function lexSql(sql: string): SqlToken[] {
+  const tokens: SqlToken[] = [];
+  let i = 0;
+  const push = (kind: SqlTokenKind, end: number): void => {
+    tokens.push({ kind, text: sql.slice(i, end) });
+    i = end;
+  };
+  const closeQuoted = (quote: string, from: number): number => {
+    let j = from;
+    for (;;) {
+      const next = sql.indexOf(quote, j);
+      if (next < 0) return sql.length;
+      // A doubled delimiter is an escaped one, except for `]`.
+      if (quote !== "]" && sql[next + 1] === quote) {
+        j = next + 2;
+        continue;
+      }
+      return next + 1;
+    }
+  };
+  while (i < sql.length) {
+    const c = sql.charCodeAt(i);
+    const ch = sql[i]!;
+    if (c === 0xfeff) {
+      // SQLite reads a byte-order mark that starts a token as whitespace.
+      push("space", i + 1);
+    } else if (isSqlSpace(c)) {
+      let j = i + 1;
+      while (j < sql.length && isSqlSpace(sql.charCodeAt(j))) j++;
+      push("space", j);
+    } else if (ch === "-" && sql[i + 1] === "-") {
+      // Only \n ends a line comment; a bare \r does not.
+      const end = sql.indexOf("\n", i + 2);
+      push("comment", end < 0 ? sql.length : end);
+    } else if (ch === "/" && sql[i + 1] === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      push("comment", end < 0 ? sql.length : end + 2);
+    } else if (ch === "'") {
+      push("string", closeQuoted("'", i + 1));
+    } else if (ch === '"' || ch === "`") {
+      push("quoted", closeQuoted(ch, i + 1));
+    } else if (ch === "[") {
+      push("quoted", closeQuoted("]", i + 1));
+    } else if (ch === ";") {
+      push("semicolon", i + 1);
+    } else if (ch === "$" || ch === "@" || ch === ":" || ch === "#") {
+      // A named parameter, including the Tcl forms `$a::b` and `$a(…)`,
+      // whose parentheses may hold anything up to whitespace or `)` —
+      // quotes and semicolons included.
+      let j = i + 1;
+      let named = 0;
+      while (j < sql.length) {
+        const d = sql.charCodeAt(j);
+        if (isIdChar(d)) {
+          named++;
+          j++;
+        } else if (sql[j] === "(" && named > 0) {
+          j++;
+          while (j < sql.length && !isSqlSpace(sql.charCodeAt(j)) && sql[j] !== ")") j++;
+          if (sql[j] === ")") j++;
+          break;
+        } else if (sql[j] === ":" && sql[j + 1] === ":") {
+          j += 2;
+        } else {
+          break;
+        }
+      }
+      push(named > 0 ? "variable" : "other", Math.max(j, i + 1));
+    } else if (isIdChar(c)) {
+      let j = i + 1;
+      while (j < sql.length && (isIdChar(sql.charCodeAt(j)) || sql[j] === ".")) {
+        // `.` only continues a number (`1.5`); after a name it is a separator.
+        if (sql[j] === "." && !(c >= 0x30 && c <= 0x39)) break;
+        j++;
+      }
+      push("word", j);
+    } else {
+      push("other", i + 1);
+    }
+  }
+  return tokens;
+}
+
+const isInsignificant = (token: SqlToken): boolean =>
+  token.kind === "space" || token.kind === "comment";
+
+/** A bare keyword; a quoted identifier is never one. */
+const isKeyword = (token: SqlToken | undefined, keyword: string): boolean =>
+  token?.kind === "word" && token.text.toUpperCase() === keyword;
+
+/**
+ * A name with its quotes removed. SQLite's `nm` rule takes a string literal as
+ * a name too (`PRAGMA 'temp_store_directory'`), so single quotes count.
+ */
+function identifierText(token: SqlToken | undefined): string | null {
+  if (!token) return null;
+  if (token.kind === "word") return token.text.toLowerCase();
+  if (token.kind === "quoted" || token.kind === "string") {
+    return token.text.slice(1, -1).toLowerCase();
+  }
+  return null;
+}
+
+/** Pragmas that point SQLite at a directory of its own choosing, process-wide. */
+const DIRECTORY_PRAGMAS = new Set(["temp_store_directory", "data_store_directory"]);
+
+/**
+ * A plugin database is one contained file. `ATTACH` and `VACUUM INTO` would
+ * open or create any other file the process can reach — `VACUUM INTO` even
+ * from a readonly handle — past the resolver's containment and the write
+ * consent, so they are refused; a copy goes through `backup()`, which the host
+ * approves. Where the runtime has `setAuthorizer` the connection also refuses
+ * them itself (see `fileAccessAuthorizer`); this scan is the check on runtimes
+ * without it, and gives the same refusal a clear code on those with it.
+ */
+function assertNoFileAccess(sql: string, id: string): void {
+  // SQLite itself rejects a non-string with its own error.
+  if (typeof sql !== "string") return;
+  const refuse = (what: string): never => {
+    throw databaseError(
+      "DB_STATEMENT_NOT_ALLOWED",
+      `database "${id}": ${what} is not allowed; a plugin database cannot open other files (use backup() for a copy)`
+    );
+  };
+  const significant = lexSql(sql).filter((token) => !isInsignificant(token));
+  let start = 0;
+  while (start < significant.length) {
+    let end = start;
+    while (end < significant.length && significant[end]!.kind !== "semicolon") end++;
+    const statement = significant.slice(start, end);
+    start = end + 1;
+    let at = 0;
+    if (isKeyword(statement[at], "EXPLAIN")) {
+      at++;
+      if (isKeyword(statement[at], "QUERY") && isKeyword(statement[at + 1], "PLAN")) at += 2;
+    }
+    const first = statement[at];
+    if (isKeyword(first, "ATTACH")) refuse("ATTACH");
+    if (isKeyword(first, "DETACH")) refuse("DETACH");
+    if (isKeyword(first, "VACUUM") && statement.some((token) => isKeyword(token, "INTO"))) {
+      refuse("VACUUM INTO");
+    }
+    if (isKeyword(first, "PRAGMA")) {
+      const name =
+        statement[at + 2]?.kind === "other" && statement[at + 2]!.text === "."
+          ? statement[at + 3]
+          : statement[at + 1];
+      const pragma = identifierText(name);
+      if (pragma !== null && DIRECTORY_PRAGMAS.has(pragma)) refuse(`PRAGMA ${pragma}`);
+    }
+    for (let k = at; k < statement.length - 1; k++) {
+      if (
+        identifierText(statement[k]) === "load_extension" &&
+        statement[k + 1]!.kind === "other" &&
+        statement[k + 1]!.text === "("
+      ) {
+        refuse("load_extension()");
+      }
+    }
+  }
+}
+
+/**
+ * The connection-level form of `assertNoFileAccess`, which SQLite consults
+ * for every statement it compiles — and for the `ATTACH` that `VACUUM INTO`
+ * issues internally when it runs — so no spelling of the SQL gets past it.
+ * A plain `VACUUM` attaches a private temporary database named "", which is
+ * the one attach allowed. Exported for its test on a runtime that has
+ * `setAuthorizer`.
+ */
+export function fileAccessAuthorizer(constants: Record<string, number>): SqliteAuthorizer | null {
+  const { SQLITE_OK, SQLITE_DENY, SQLITE_ATTACH, SQLITE_DETACH, SQLITE_FUNCTION, SQLITE_PRAGMA } =
+    constants;
+  if (
+    SQLITE_OK === undefined ||
+    SQLITE_DENY === undefined ||
+    SQLITE_ATTACH === undefined ||
+    SQLITE_DETACH === undefined ||
+    SQLITE_FUNCTION === undefined ||
+    SQLITE_PRAGMA === undefined
+  ) {
+    return null;
+  }
+  return (action, arg1, arg2) => {
+    if (action === SQLITE_ATTACH) return arg1 === "" ? SQLITE_OK : SQLITE_DENY;
+    if (action === SQLITE_DETACH) return SQLITE_DENY;
+    if (action === SQLITE_FUNCTION && arg2?.toLowerCase() === "load_extension") return SQLITE_DENY;
+    if (action === SQLITE_PRAGMA && arg1 !== null && DIRECTORY_PRAGMAS.has(arg1.toLowerCase())) {
+      return SQLITE_DENY;
+    }
+    return SQLITE_OK;
+  };
 }
 
 function bindArgs(params: PluginDatabaseParams | undefined): unknown[] {
@@ -115,13 +347,14 @@ function assertSingleStatement(sql: string, statement: SqliteStatement, id: stri
   if (typeof source !== "string") return;
   const start = sql.indexOf(source);
   if (start < 0) return;
-  const tail = sql
-    .slice(start + source.length)
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    // SQLite ends a line comment at \n or \r, so a \r must not hide a statement.
-    .replace(/--[^\r\n]*/g, "")
-    .replace(/[\s;]+/g, "");
-  if (tail.length > 0) {
+  const hidesStatement = lexSql(sql.slice(start + source.length)).some(
+    (token) =>
+      !(token.kind === "space" || token.kind === "semicolon") &&
+      // SQLite runs a line comment on past a bare \r, but most editors break
+      // the line there, so text after one reads as a statement SQLite skips.
+      !(token.kind === "comment" && !(token.text.startsWith("--") && /\r\s*\S/.test(token.text)))
+  );
+  if (hidesStatement) {
     throw databaseError(
       "DB_MULTIPLE_STATEMENTS",
       `database "${id}": only one statement is allowed here; use exec() for a batch`
@@ -141,6 +374,64 @@ function readIdentity(filePath: string): FileIdentity | null {
   } catch {
     return null;
   }
+}
+
+const sameIdentity = (a: FileIdentity | null, b: FileIdentity | null): boolean =>
+  a !== null && b !== null && a.dev === b.dev && a.ino === b.ino;
+
+/** Files SQLite pairs with a database by name, and replays into it on open. */
+export const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+
+export type BackupDestinationProblem =
+  | { kind: "source" }
+  | { kind: "symlink" }
+  | { kind: "not-file" }
+  | { kind: "journal-name" }
+  | { kind: "journal"; path: string };
+
+/**
+ * Why `target` cannot receive a snapshot of the database at `sourcePath`, or
+ * null. Both writers of a backup — `PluginDatabase.backup` and the panel menu's
+ * "Back up data…" — ask this before snapshotting and again just before
+ * publishing, with `target`'s directory already canonical.
+ *
+ * - The source and its own journals, by name and by identity: writing over a
+ *   live `-wal` or `-journal` destroys the recovery data of the database
+ *   itself. Names are compared case-insensitively, since the common desktop
+ *   disks are, and a journal that does not exist yet has no identity to test.
+ * - A journal already beside the target belongs to whatever database was
+ *   there before; SQLite would replay it into the snapshot the next time the
+ *   copy is opened.
+ */
+export async function backupDestinationProblem(
+  target: string,
+  sourcePath: string
+): Promise<BackupDestinationProblem | null> {
+  const sourceFiles = [sourcePath, ...SQLITE_SIDECAR_SUFFIXES.map((s) => `${sourcePath}${s}`)];
+  const targetName = path.resolve(target).toLowerCase();
+  if (sourceFiles.some((file) => path.resolve(file).toLowerCase() === targetName)) {
+    return { kind: "source" };
+  }
+  // A name SQLite reserves for some database's journal: writing a snapshot
+  // there would replace another live database's recovery data.
+  if (SQLITE_SIDECAR_SUFFIXES.some((suffix) => targetName.endsWith(suffix))) {
+    return { kind: "journal-name" };
+  }
+  const leaf = await fs.promises.lstat(target).catch(() => null);
+  if (leaf) {
+    if (leaf.isSymbolicLink()) return { kind: "symlink" };
+    if (!leaf.isFile()) return { kind: "not-file" };
+    for (const file of sourceFiles) {
+      const stat = await fs.promises.stat(file).catch(() => null);
+      if (stat && sameIdentity(stat, leaf)) return { kind: "source" };
+    }
+  }
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    const journal = `${target}${suffix}`;
+    const present = await fs.promises.lstat(journal).catch(() => null);
+    if (present) return { kind: "journal", path: journal };
+  }
+  return null;
 }
 
 const POLL_INTERVAL_MS = 1000;
@@ -177,21 +468,31 @@ export async function openPluginDatabase(
   location: PluginDatabaseLocation,
   options: OpenPluginDatabaseOptions = {}
 ): Promise<PluginDatabase> {
-  const migrations = options.migrations ?? [];
-  if (!Array.isArray(migrations) || migrations.some((m) => typeof m !== "string")) {
+  if (options.migrations !== undefined && !Array.isArray(options.migrations)) {
     throw databaseError("VALIDATION", "migrations must be an array of SQL strings");
   }
-  if (options.definitions !== undefined && typeof options.definitions !== "string") {
+  // A private copy: a reopen runs these again, and the array checked here must
+  // be the one that runs, whatever the caller does to theirs afterwards.
+  const migrations: readonly string[] = Object.freeze([...(options.migrations ?? [])]);
+  if (migrations.some((m) => typeof m !== "string")) {
+    throw databaseError("VALIDATION", "migrations must be an array of SQL strings");
+  }
+  const definitions = options.definitions;
+  if (definitions !== undefined && typeof definitions !== "string") {
     throw databaseError("VALIDATION", "definitions must be a SQL string");
   }
   const readonly = options.readonly === true;
-  if (readonly && (options.migrations !== undefined || options.definitions !== undefined)) {
+  if (readonly && (options.migrations !== undefined || definitions !== undefined)) {
     throw databaseError(
       "VALIDATION",
       "a readonly open cannot apply migrations or definitions; open it writable once to set the schema up"
     );
   }
-  const DatabaseSync = loadDatabaseSync();
+  for (const sql of migrations) assertNoFileAccess(sql, location.id);
+  if (definitions !== undefined) assertNoFileAccess(definitions, location.id);
+  const sqlite = loadSqlite();
+  const DatabaseSync = sqlite.DatabaseSync;
+  const authorizer = sqlite.constants ? fileAccessAuthorizer(sqlite.constants) : null;
   const filePath = location.path;
   const journalMode = location.journalMode === "wal" ? "WAL" : "DELETE";
 
@@ -205,9 +506,7 @@ export async function openPluginDatabase(
 
   // The version is read under the write lock, so two processes opening the
   // same file at once cannot both run migration n.
-  /** Returns whether any migration ran. */
-  const migrate = (connection: SqliteDatabase): boolean => {
-    let advanced = false;
+  const migrate = (connection: SqliteDatabase): void => {
     for (;;) {
       connection.exec("BEGIN IMMEDIATE");
       let version: number;
@@ -228,13 +527,12 @@ export async function openPluginDatabase(
       }
       if (version === migrations.length) {
         connection.exec("COMMIT");
-        return advanced;
+        return;
       }
       try {
         connection.exec(migrations[version]!);
         connection.exec(`PRAGMA user_version = ${version + 1}`);
         connection.exec("COMMIT");
-        advanced = true;
       } catch (error) {
         rollbackQuietly(connection);
         throw databaseError(
@@ -249,16 +547,20 @@ export async function openPluginDatabase(
   // open would modify the file each time a panel opens, so a committed
   // database would always show as changed in git. The hash lives in a small
   // host-owned table inside the database, read and written under the lock.
-  const definitionsHash =
-    options.definitions === undefined
-      ? null
-      : createHash("sha256").update(options.definitions).digest("hex");
-  // `force` after a migration ran: recreating a table drops its triggers, so
-  // an unchanged hash no longer proves the definitions are in place.
-  const applyDefinitions = (connection: SqliteDatabase, force: boolean): void => {
-    if (options.definitions === undefined || definitionsHash === null) return;
+  //
+  // The hash covers the schema version too. A migration that recreates a
+  // table drops its triggers, so definitions applied at an older version prove
+  // nothing — including when the process stopped between committing that
+  // migration and re-applying them, which a flag held in memory would miss.
+  const applyDefinitions = (connection: SqliteDatabase): void => {
+    if (definitions === undefined) return;
     connection.exec("BEGIN IMMEDIATE");
     try {
+      const versionRow = connection.prepare("PRAGMA user_version").get() as
+        { user_version?: number | bigint } | undefined;
+      const definitionsHash = createHash("sha256")
+        .update(`${Number(versionRow?.user_version ?? 0)}\0${definitions}`)
+        .digest("hex");
       const table = connection
         .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get(META_TABLE);
@@ -267,11 +569,11 @@ export async function openPluginDatabase(
             .prepare(`SELECT value FROM ${META_TABLE} WHERE key = 'definitions_sha256'`)
             .get() as { value?: string } | undefined)
         : undefined;
-      if (!force && recorded?.value === definitionsHash) {
+      if (recorded?.value === definitionsHash) {
         connection.exec("COMMIT");
         return;
       }
-      connection.exec(options.definitions);
+      connection.exec(definitions);
       connection.exec(
         `CREATE TABLE IF NOT EXISTS ${META_TABLE} (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID`
       );
@@ -297,6 +599,7 @@ export async function openPluginDatabase(
     connection: SqliteDatabase;
     identity: FileIdentity | null;
     stable: boolean;
+    created: boolean;
   } => {
     const leaf = fs.lstatSync(filePath, { throwIfNoEntry: false });
     if (leaf?.isSymbolicLink()) {
@@ -312,22 +615,29 @@ export async function openPluginDatabase(
         enableForeignKeyConstraints: true,
         ...(readonly && { readOnly: true }),
       });
+      // Before any statement runs, so migrations and definitions are held to
+      // it as much as the plugin's own queries.
+      if (authorizer && typeof connection.setAuthorizer === "function") {
+        connection.setAuthorizer(authorizer);
+      }
+      const opened = readIdentity(filePath);
       connection.exec("PRAGMA busy_timeout = 5000");
-      if (readonly) return { connection, identity: readIdentity(filePath), stable: true };
-      // Enforced on every open: an agent that ran `PRAGMA journal_mode=WAL`
-      // would otherwise leave committed data in a -wal sidecar that a commit
-      // of the .db alone silently misses.
-      connection.prepare(`PRAGMA journal_mode = ${journalMode}`).get();
-      const migrated = migrate(connection);
-      applyDefinitions(connection, migrated);
+      if (!readonly) {
+        // Enforced on every open: an agent that ran `PRAGMA journal_mode=WAL`
+        // would otherwise leave committed data in a -wal sidecar that a commit
+        // of the .db alone silently misses.
+        connection.prepare(`PRAGMA journal_mode = ${journalMode}`).get();
+        migrate(connection);
+        applyDefinitions(connection);
+      }
       const after = readIdentity(filePath);
-      // A file created by this open has no `before`; otherwise the path must
-      // still name the file the connection opened, or the recorded identity
-      // would belong to a replacement the connection never saw.
-      const stable =
-        after !== null &&
-        (before === null || (before.dev === after.dev && before.ino === after.ino));
-      return { connection, identity: after, stable };
+      // The path must name one file from before the open to after it, or the
+      // recorded identity could belong to a replacement the connection never
+      // saw — and it would then never notice the next one. A file this open
+      // created has no `before` to prove that with, so it is never trusted:
+      // the next attempt opens it as an existing file.
+      const stable = sameIdentity(before, opened) && sameIdentity(opened, after);
+      return { connection, identity: after, stable, created: before === null };
     } catch (error) {
       try {
         connection?.close();
@@ -338,19 +648,23 @@ export async function openPluginDatabase(
     }
   };
 
-  // One procedure for the first open and every reopen, so a file swapped in
-  // by `git checkout` gets the same policy, version check and migrations as
-  // the one the plugin started with.
   const initialize = (): { connection: SqliteDatabase; identity: FileIdentity | null } => {
-    for (let attempt = 0; ; attempt++) {
+    // Three unstable opens of an existing file give up; a creating open is
+    // always followed by one more and does not count, within a hard cap.
+    for (let attempt = 0, unstable = 0; attempt < 6 && unstable < 3; attempt++) {
       const result = initializeOnce();
-      if (result.stable || attempt >= 2) return result;
+      if (result.stable) return result;
+      if (!result.created) unstable++;
       try {
         result.connection.close();
       } catch {
         // already closed
       }
     }
+    throw databaseError(
+      "TARGET_UNAVAILABLE",
+      `database "${location.id}" kept being replaced while it was opening`
+    );
   };
 
   let { connection: db, identity } = initialize();
@@ -361,14 +675,32 @@ export async function openPluginDatabase(
       { data_version?: number | bigint } | undefined;
     return Number(row?.data_version ?? 0);
   };
-  // Counts this connection's own row changes. Our commits never advance
-  // `data_version` (it counts OTHER connections), so this is how a write made
-  // through query/get (`INSERT … RETURNING`) is still announced.
-  const readTotalChanges = (): number => {
-    const row = db.prepare("SELECT total_changes() AS n").get() as
+  // This connection's own writes. Our commits never advance `data_version`
+  // (it counts OTHER connections), so `total_changes()` is how a write made
+  // through query/get (`INSERT … RETURNING`) is still announced — and
+  // `schema_version` how DDL is, which changes no rows.
+  interface WriteMarks {
+    changes: number;
+    schema: number;
+    dataVersion: number;
+  }
+  const readWriteMarks = (): WriteMarks => {
+    const changes = db.prepare("SELECT total_changes() AS n").get() as
       { n?: number | bigint } | undefined;
-    return Number(row?.n ?? 0);
+    const schema = db.prepare("PRAGMA schema_version").get() as
+      { schema_version?: number | bigint } | undefined;
+    return {
+      changes: Number(changes?.n ?? 0),
+      schema: Number(schema?.schema_version ?? 0),
+      dataVersion: readDataVersion(),
+    };
   };
+  // `schema_version` is the file's, not this connection's: a schema change
+  // counts as ours only when no other connection committed in between, so
+  // an agent's `CREATE VIEW` is left for the external check to announce.
+  const wroteSince = (before: WriteMarks, after: WriteMarks): boolean =>
+    after.changes !== before.changes ||
+    (after.schema !== before.schema && after.dataVersion === before.dataVersion);
 
   let lastDataVersion = readDataVersion();
 
@@ -494,6 +826,7 @@ export async function openPluginDatabase(
   };
 
   const prepare = (sql: string): SqliteStatement => {
+    assertNoFileAccess(sql, location.id);
     const statement = db.prepare(sql);
     assertSingleStatement(sql, statement, location.id);
     statement.setReadBigInts?.(true);
@@ -545,6 +878,7 @@ export async function openPluginDatabase(
     },
     exec: async (sql: string) => {
       assertWritable("exec");
+      assertNoFileAccess(sql, location.id);
       try {
         db.exec(sql);
       } finally {
@@ -569,7 +903,7 @@ export async function openPluginDatabase(
         await reopen();
         emit("external");
       }
-      const before = readTotalChanges();
+      const before = readWriteMarks();
       let wrote = false;
       let rolledBack = false;
       try {
@@ -584,7 +918,7 @@ export async function openPluginDatabase(
       } finally {
         let changed = wrote;
         try {
-          changed ||= readTotalChanges() !== before;
+          changed ||= wroteSince(before, readWriteMarks());
         } catch {
           // the connection is gone; nothing to announce
         }
@@ -639,9 +973,34 @@ export async function openPluginDatabase(
         throw databaseError("DB_UNSUPPORTED", "this host cannot approve a backup destination");
       }
       const target = await options.prepareBackup(destPath);
-      if (path.resolve(target) === path.resolve(filePath)) {
-        throw databaseError("VALIDATION", "a backup cannot overwrite the database itself");
-      }
+      const assertDestination = async (): Promise<void> => {
+        const problem = await backupDestinationProblem(target, filePath);
+        if (problem?.kind === "source") {
+          throw databaseError(
+            "VALIDATION",
+            "a backup cannot overwrite the database itself or its journal"
+          );
+        }
+        if (problem?.kind === "symlink") {
+          throw databaseError("TARGET_IS_SYMLINK", "refusing to replace a symlink with a backup");
+        }
+        if (problem?.kind === "not-file") {
+          throw databaseError("TARGET_UNAVAILABLE", "the backup destination is not a regular file");
+        }
+        if (problem?.kind === "journal-name") {
+          throw databaseError(
+            "VALIDATION",
+            "a backup cannot be named like a database journal (-wal, -shm, -journal)"
+          );
+        }
+        if (problem?.kind === "journal") {
+          throw databaseError(
+            "DESTINATION_HAS_JOURNAL",
+            `${path.basename(problem.path)} is beside the destination, and SQLite would replay it into the copy`
+          );
+        }
+      };
+      await assertDestination();
       const sqlite = process.getBuiltinModule("node:sqlite") as
         { backup?: (db: unknown, dest: string) => Promise<number> } | undefined;
       if (typeof sqlite?.backup !== "function") {
@@ -668,11 +1027,12 @@ export async function openPluginDatabase(
         const temp = path.join(stage, "snapshot.db");
         try {
           await sqlite.backup!(db, temp);
+          // Again at the last moment: the snapshot can take long enough for
+          // another process to open a database at the destination. The parent
+          // is checked after the awaited leaf check so nothing async separates
+          // it from the rename.
+          await assertDestination();
           assertParentUnmoved();
-          const leaf = fs.lstatSync(target, { throwIfNoEntry: false });
-          if (leaf?.isSymbolicLink()) {
-            throw databaseError("TARGET_IS_SYMLINK", "refusing to replace a symlink with a backup");
-          }
           fs.renameSync(temp, target);
         } finally {
           fs.rmSync(stage, { recursive: true, force: true });
