@@ -986,7 +986,7 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
       correctionEnabled: false,
       recordingMode: options.recordingMode ?? "toggle",
     });
-    setupGlobals(electron);
+    const { windowListeners } = setupGlobals(electron);
 
     const panel = await import("@/store/panelStore");
     if (!hasMockState<PanelState>(panel)) throw new Error("panelStore mock lacks __state");
@@ -1017,7 +1017,16 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
     const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
     const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
-    return { voiceRecordingService, voiceState, finishSession, stopSpy, startSpy, toggleSpy };
+    return {
+      voiceRecordingService,
+      voiceState,
+      panelState: panel.__state,
+      windowListeners,
+      finishSession,
+      stopSpy,
+      startSpy,
+      toggleSpy,
+    };
   }
 
   for (const status of ["connecting", "recording", "paused", "reconnecting", "finishing"]) {
@@ -1095,6 +1104,56 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
 
     expect(stopSpy).not.toHaveBeenCalled();
     expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
+
+  it("reads focus at the moment of the press when starting from idle", async () => {
+    const { voiceRecordingService, panelState, toggleSpy } = await arrange({
+      status: "idle",
+      activeTarget: null,
+    });
+
+    const pending = voiceRecordingService.toggleFocusedPanel();
+    panelState.focusedId = "panel-a";
+    await pending;
+
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
+
+  it("does not send a stop on push-to-talk keyup after the press aborted arming", async () => {
+    const { voiceRecordingService, windowListeners, stopSpy } = await arrange({
+      status: "arming",
+      recordingMode: "push-to-talk",
+    });
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.matchesEvent).mockReturnValue(true);
+
+    const down = { code: "Period", key: ".", repeat: false, metaKey: true };
+    for (const listener of windowListeners["keydown"] ?? []) listener(down);
+    await voiceRecordingService.toggleFocusedPanel();
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
+
+    expect(stopSpy).not.toHaveBeenCalled();
+    vi.mocked(keybindingService.matchesEvent).mockReset();
+  });
+
+  it("cancels a pending retarget start when joining a stop already in flight", async () => {
+    const { voiceRecordingService, stopSpy } = await arrange({ status: "finishing" });
+    stopSpy.mockRestore();
+    let releaseDrain: () => void = () => {};
+    Reflect.set(
+      voiceRecordingService,
+      "stopPromise",
+      new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      })
+    );
+    const before: unknown = Reflect.get(voiceRecordingService, "startRequestId");
+
+    const pending = voiceRecordingService.toggleFocusedPanel();
+    releaseDrain();
+    await pending;
+
+    expect(Reflect.get(voiceRecordingService, "startRequestId")).not.toBe(before);
   });
 
   it("leaves explicit toggle(target) retargeting intact for panel mic buttons", async () => {
