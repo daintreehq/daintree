@@ -213,15 +213,25 @@ function boundedLine(value: string | undefined, max: number): string {
 }
 
 /**
- * The block a payload becomes in an agent's draft: a fenced block whose first
- * line is the heading (`Label: Title`) and whose body is the text.
+ * The info string on a handoff block's opening fence. It is what marks the
+ * block as a handoff — to the agent reading it, and to the input bar, which
+ * keeps exactly these blocks literal on submit and leaves every other fence the
+ * user writes alone. A line with an info string can never close a fence, so the
+ * opener cannot be swallowed by one the user left open above it.
+ */
+export const AGENT_CONTEXT_FENCE_INFO = "daintree-context";
+
+/**
+ * The block a payload becomes in an agent's draft: a fenced block, tagged
+ * `daintree-context`, whose first line is the heading (`Label: Title`) and
+ * whose body is the text.
  *
  * Everything — heading included — sits inside the fence, and the fence is one
  * backtick longer than any run in what it holds, so no line of the content can
  * close it. That is what keeps the handoff literal all the way to the agent:
- * the input bar leaves fenced text alone when it expands `@diff`, `@terminal`
- * and `@selection` on submit, so a card that mentions one is quoted, never
- * resolved into the user's diff.
+ * the input bar does not expand `@diff`, `@terminal` or `@selection` inside a
+ * handoff block, so a card that mentions one is quoted, never resolved into
+ * the user's diff.
  *
  * Every part is normalised here, whatever path it arrived by — control
  * characters dropped, the heading bounded to one line — so nothing reaches a
@@ -243,50 +253,68 @@ export function formatAgentContextBlock(payload: {
     .join(": ");
   const content = heading ? `${heading}\n\n${text}` : text;
   const fence = fenceFor(content);
-  return `${fence}\n${content}\n${fence}`;
+  return `${fence}${AGENT_CONTEXT_FENCE_INFO}\n${content}\n${fence}`;
+}
+
+/**
+ * The line that closes a fence `text` leaves open at its end, by CommonMark's
+ * rules (an opener of three or more backticks or tildes indented at most three
+ * spaces; a closer of the same character at least as long with nothing after
+ * it), or `null` when every fence is closed.
+ */
+export function closingFenceForOpenBlock(text: string): string | null {
+  let open: { char: string; length: number } | null = null;
+  for (const line of text.split("\n")) {
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!match) continue;
+    const run = match[1]!;
+    const rest = match[2]!;
+    if (open === null) {
+      // A backtick fence's info string may not contain a backtick.
+      if (!(run[0] === "`" && rest.includes("`"))) open = { char: run[0]!, length: run.length };
+    } else if (run[0] === open.char && run.length >= open.length && rest.trim() === "") {
+      open = null;
+    }
+  }
+  return open === null ? null : open.char.repeat(open.length);
 }
 
 /**
  * Append a context block to an existing draft. Never replaces or trims what is
  * there — trailing spaces and blank lines the user left stay exactly as typed —
  * and only adds the line breaks needed to start the block on its own line after
- * a blank one. Ends on a fresh line so the caret, parked at the end, is ready
- * for the user's instruction.
+ * a blank one. A fence the draft leaves open is closed first, on its own line,
+ * so the handoff never lands inside the user's code block. Ends on a fresh line
+ * so the caret, parked at the end, is ready for the user's instruction.
  */
 export function appendAgentContextToDraft(draft: string, block: string): string {
   if (draft.length === 0) return `${block}\n`;
-  const separator = draft.endsWith("\n\n") ? "" : draft.endsWith("\n") ? "\n" : "\n\n";
-  return `${draft}${separator}${block}\n`;
+  const closer = closingFenceForOpenBlock(draft);
+  const kept = closer === null ? draft : `${draft}${draft.endsWith("\n") ? "" : "\n"}${closer}`;
+  const separator = kept.endsWith("\n\n") ? "" : kept.endsWith("\n") ? "\n" : "\n\n";
+  return `${kept}${separator}${block}\n`;
 }
 
 /**
- * Character ranges of the fenced code blocks in `text`, by CommonMark's rules:
- * an opening line of three or more backticks or tildes (indented at most three
- * spaces), closed by a line of the same character at least as long with
- * nothing after it; an unclosed fence runs to the end. Ranges are `[start, end)`
- * and include the fence lines.
- *
- * The input bar's `@`-token parsers skip these ranges, which is what keeps a
- * handoff block (and anything else the user fences) literal on submit.
+ * Character ranges `[start, end)` of the handoff blocks in `text`: from a line
+ * that is a backtick fence tagged `daintree-context` to the next line that is
+ * exactly that fence. Matched on that pair alone, not by tracking every fence
+ * in the draft, so what the user writes around the block — an unclosed fence
+ * above it included — cannot move its edges; nothing inside can end it early
+ * either, because its fence is longer than any backtick run it holds. A block
+ * whose closing line was deleted runs to the end, staying literal.
  */
-export function fencedCodeRanges(text: string): Array<[number, number]> {
+export function agentContextBlockRanges(text: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
-  let open: { start: number; char: string; length: number } | null = null;
+  const opener = new RegExp(`^(\`{3,})${AGENT_CONTEXT_FENCE_INFO}$`);
+  let open: { start: number; fence: string } | null = null;
   let offset = 0;
   for (const line of text.split("\n")) {
     const lineEnd = offset + line.length;
-    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (open === null) {
-      // A backtick fence's info string may not contain a backtick.
-      if (match && !(match[1]![0] === "`" && match[2]!.includes("`"))) {
-        open = { start: offset, char: match[1]![0]!, length: match[1]!.length };
-      }
-    } else if (
-      match &&
-      match[1]![0] === open.char &&
-      match[1]!.length >= open.length &&
-      match[2]!.trim() === ""
-    ) {
+      const match = opener.exec(line);
+      if (match) open = { start: offset, fence: match[1]! };
+    } else if (line === open.fence) {
       ranges.push([open.start, lineEnd]);
       open = null;
     }

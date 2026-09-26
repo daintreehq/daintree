@@ -44,4 +44,21 @@ describe("context tokens inside a handoff block", () => {
   it("leaves tokens outside any fence untouched", () => {
     expect(getAllAtDiffTokens("look at @diff")).toHaveLength(1);
   });
+
+  it("still expands tokens in a fence the user wrote themselves", () => {
+    const own = "```\n@diff\n```\n~~~\n@terminal\n~~~";
+    expect(getAllAtDiffTokens(own)).toHaveLength(1);
+    expect(getAllAtTerminalTokens(own)).toHaveLength(1);
+  });
+
+  it("stays literal when the draft already had an unclosed fence", () => {
+    const withOpenFence = appendAgentContextToDraft(
+      "look at this\n```\nconst a = 1;",
+      formatAgentContextBlock({ text: "@diff @selection", title: "Card" })
+    );
+    expect(getAllAtDiffTokens(withOpenFence)).toEqual([]);
+    expect(getAllAtSelectionTokens(withOpenFence)).toEqual([]);
+    // The user's own fence was closed before the block, not by it.
+    expect(withOpenFence).toContain("const a = 1;\n```\n\n```daintree-context\n");
+  });
 });

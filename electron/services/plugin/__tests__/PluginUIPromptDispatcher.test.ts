@@ -53,6 +53,7 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 }));
 
 import {
+  IMMEDIATE_PROMPT_ACK_GRACE_MS,
   IMMEDIATE_PROMPT_TIMEOUT_MS,
   MAX_PENDING_TARGETED_SENDS_PER_PLUGIN,
   PluginUIPromptDispatcher,
@@ -573,7 +574,16 @@ describe("PluginUIPromptDispatcher", () => {
         )?.[1] as { expiresAt?: number };
         expect(sent.expiresAt).toBe(now + IMMEDIATE_PROMPT_TIMEOUT_MS);
 
+        // Past the deadline main still waits out the grace for a late answer.
+        let settled = false;
+        void promise.then(() => {
+          settled = true;
+        });
         vi.advanceTimersByTime(IMMEDIATE_PROMPT_TIMEOUT_MS);
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_ACK_GRACE_MS);
         await expect(promise).resolves.toEqual({
           status: "refused",
           reason: "project-unavailable",
@@ -587,6 +597,51 @@ describe("PluginUIPromptDispatcher", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("reports a draft whose answer lands just after the deadline, within the grace", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+        const promise = d.requestPrompt("p1", TARGETED);
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_TIMEOUT_MS + 1);
+        ipcMainMock._emit(
+          CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+          { sender: { id: 7 } },
+          { promptId: lastPromptId(wc), result: { status: "drafted", terminalId: "t-1" } }
+        );
+        await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+        d.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets neither an abort nor an unload pre-empt a targeted send's real answer", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const controller = new AbortController();
+      const promise = d.requestPrompt("p1", TARGETED, undefined, controller.signal);
+      const promptId = lastPromptId(wc);
+
+      controller.abort();
+      d.cancelForPlugin("p1");
+      // No dismissal is sent for it: there is nothing on screen, and the
+      // renderer has already acted on the request by the time a cancel arrives.
+      expect(
+        wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_CANCEL)
+      ).toHaveLength(0);
+
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+        { sender: { id: 7 } },
+        { promptId, result: { status: "drafted", terminalId: "t-1" } }
+      );
+      await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+      d.dispose();
     });
 
     it("never times out a picker, and sends it no deadline", async () => {

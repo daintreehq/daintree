@@ -1,16 +1,17 @@
 import type { CompletionTrigger } from "@shared/types";
 import { toWorktreeRelative } from "@shared/utils/path";
-import { fencedCodeRanges } from "@shared/utils/agentContextDrag";
+import { AGENT_CONTEXT_FENCE_INFO, agentContextBlockRanges } from "@shared/utils/agentContextDrag";
 
 /**
- * Drop the context tokens that sit inside a fenced code block. Fenced text is
- * quoted material — most importantly a plugin's handoff block, which is fenced
- * so a card mentioning `@diff` reaches the agent as written rather than as the
- * user's diff — so it neither shows a chip nor expands on submit.
+ * Drop the context tokens that sit inside a plugin's handoff block. The block
+ * is quoted material — a card that mentions `@diff` reaches the agent as
+ * written, not as the user's diff — so it neither shows a chip nor expands on
+ * submit. Only handoff blocks: a token the user types in a fence of their own
+ * still expands, as it always has.
  */
-function outsideFences<T extends { start: number }>(text: string, tokens: T[]): T[] {
-  if (tokens.length === 0 || !(text.includes("```") || text.includes("~~~"))) return tokens;
-  const ranges = fencedCodeRanges(text);
+function outsideHandoffBlocks<T extends { start: number }>(text: string, tokens: T[]): T[] {
+  if (tokens.length === 0 || !text.includes(AGENT_CONTEXT_FENCE_INFO)) return tokens;
+  const ranges = agentContextBlockRanges(text);
   return tokens.filter(
     (token) => !ranges.some(([from, to]) => token.start >= from && token.start < to)
   );
@@ -156,7 +157,7 @@ export function getAllAtDiffTokens(text: string): AtDiffToken[] {
     }
   }
 
-  return outsideFences(text, tokens);
+  return outsideHandoffBlocks(text, tokens);
 }
 
 // --- @terminal context ---
@@ -203,7 +204,7 @@ export function getAllAtTerminalTokens(text: string): AtTerminalToken[] {
     }
   }
 
-  return outsideFences(text, tokens);
+  return outsideHandoffBlocks(text, tokens);
 }
 
 // --- @selection context ---
@@ -250,7 +251,7 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
     }
   }
 
-  return outsideFences(text, tokens);
+  return outsideHandoffBlocks(text, tokens);
 }
 
 // --- @file token ---

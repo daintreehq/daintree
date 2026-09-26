@@ -7,7 +7,8 @@ import {
   appendAgentContextToDraft,
   decodeAgentContextDragPayload,
   encodeAgentContextDragPayload,
-  fencedCodeRanges,
+  agentContextBlockRanges,
+  closingFenceForOpenBlock,
   formatAgentContextBlock,
   sanitizeAgentContextSourceLabel,
   setAgentContextDragData,
@@ -127,26 +128,26 @@ describe("setAgentContextDragData", () => {
 });
 
 describe("formatAgentContextBlock", () => {
-  it("puts the heading and the text inside one fence", () => {
+  it("puts the heading and the text inside one tagged fence", () => {
     expect(
       formatAgentContextBlock({
         text: "line one\nline two\n\n",
         title: "Card",
         sourceLabel: "Kanban",
       })
-    ).toBe("```\nKanban: Card\n\nline one\nline two\n```");
+    ).toBe("```daintree-context\nKanban: Card\n\nline one\nline two\n```");
   });
 
   it("omits the heading when there is nothing to put in it", () => {
-    expect(formatAgentContextBlock({ text: "body" })).toBe("```\nbody\n```");
+    expect(formatAgentContextBlock({ text: "body" })).toBe("```daintree-context\nbody\n```");
   });
 
   it("fences with more backticks than the longest run in the text or heading", () => {
     const block = formatAgentContextBlock({ text: "before\n````\ninner\n````\nafter" });
-    expect(block.startsWith("`````\n")).toBe(true);
+    expect(block.startsWith("`````daintree-context\n")).toBe(true);
     expect(block.endsWith("\n`````")).toBe(true);
     const titled = formatAgentContextBlock({ text: "x", title: "``````" });
-    expect(titled.startsWith("```````\n")).toBe(true);
+    expect(titled.startsWith("```````daintree-context\n")).toBe(true);
   });
 
   it("sanitises every part, the host-supplied label included", () => {
@@ -190,29 +191,56 @@ describe("appendAgentContextToDraft", () => {
     ["a trailing blank line", "look at this\n\n", "look at this\n\nBLOCK\n"],
     ["several blank lines", "look at this\n\n\n\n", "look at this\n\n\n\nBLOCK\n"],
     ["whitespace only", "  \n", "  \n\nBLOCK\n"],
+    ["a closed fence", "see\n```\ncode\n```", "see\n```\ncode\n```\n\nBLOCK\n"],
   ])("keeps a draft with %s exactly as typed", (_name, draft, expected) => {
+    const result = appendAgentContextToDraft(draft, "BLOCK");
+    expect(result).toBe(expected);
+    expect(result.startsWith(draft)).toBe(true);
+  });
+
+  it.each([
+    ["mid-line", "see\n````js\nconst a = 1;", "see\n````js\nconst a = 1;\n````\n\nBLOCK\n"],
+    ["after a newline", "~~~\nnotes\n", "~~~\nnotes\n~~~\n\nBLOCK\n"],
+  ])("closes a fence the draft leaves open %s before appending", (_name, draft, expected) => {
     const result = appendAgentContextToDraft(draft, "BLOCK");
     expect(result).toBe(expected);
     expect(result.startsWith(draft)).toBe(true);
   });
 });
 
-describe("fencedCodeRanges", () => {
-  it("finds a closed fence, including its fence lines", () => {
-    const text = "before\n```\n@diff\n```\nafter";
-    expect(fencedCodeRanges(text)).toEqual([[7, 20]]);
+describe("closingFenceForOpenBlock", () => {
+  it.each<[string, string, string | null]>([
+    ["no fences", "plain text", null],
+    ["a closed fence", "```\ncode\n```", null],
+    ["an open backtick fence", "```ts\ncode", "```"],
+    ["an open fence a shorter run cannot close", "````\n```\ncode", "````"],
+    ["an open tilde fence a backtick run cannot close", "~~~\n```\ncode", "~~~"],
+    ["a line whose info string holds a backtick", "``` a`b\ntext", null],
+  ])("reports %s", (_name, text, expected) => {
+    expect(closingFenceForOpenBlock(text)).toBe(expected);
+  });
+});
+
+describe("agentContextBlockRanges", () => {
+  it("finds a handoff block, including its fence lines", () => {
+    const block = formatAgentContextBlock({ text: "@diff" });
+    const text = `before\n${block}\nafter`;
+    expect(agentContextBlockRanges(text)).toEqual([[7, 7 + block.length]]);
   });
 
-  it("closes only on a fence of the same character at least as long", () => {
-    const text = "````\n```\n~~~~\n````\ntail";
-    expect(fencedCodeRanges(text)).toEqual([[0, 18]]);
+  it("ignores fences the user wrote, whatever their info string", () => {
+    expect(agentContextBlockRanges("```\n@diff\n```\n```ts\n@diff\n```")).toEqual([]);
   });
 
-  it("runs an unclosed fence to the end", () => {
-    expect(fencedCodeRanges("x\n```js\nstill open")).toEqual([[2, 18]]);
+  it("keeps its edges when an unclosed user fence sits above it", () => {
+    const block = formatAgentContextBlock({ text: "@diff" });
+    const text = `\`\`\`\nopen fence\n${block}\n@terminal`;
+    const start = text.indexOf("```daintree-context");
+    expect(agentContextBlockRanges(text)).toEqual([[start, start + block.length]]);
   });
 
-  it("ignores a backtick line whose info string holds a backtick", () => {
-    expect(fencedCodeRanges("``` a`b\ntext")).toEqual([]);
+  it("runs a block whose closing line was deleted to the end", () => {
+    const text = "x\n```daintree-context\nbody @diff";
+    expect(agentContextBlockRanges(text)).toEqual([[2, text.length]]);
   });
 });

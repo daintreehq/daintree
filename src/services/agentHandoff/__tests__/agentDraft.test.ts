@@ -89,7 +89,7 @@ describe("draftAgentContext", () => {
     });
 
     expect(result).toEqual({ status: "drafted", terminalId: "a" });
-    expect(drafts.get("proj-1:a")).toBe("```\nKanban: Card\n\nCard body\n```\n");
+    expect(drafts.get("proj-1:a")).toBe("```daintree-context\nKanban: Card\n\nCard body\n```\n");
     expect(inputState.bumpExternalDraftRevision).toHaveBeenCalledTimes(1);
     expect(panelState.pingTerminal).toHaveBeenCalledWith("a");
     expect(useTypingLocatorStore.getState().message?.kind).toBe("draft-added");
@@ -102,7 +102,7 @@ describe("draftAgentContext", () => {
     draftAgentContext("a", { text: "second" });
 
     expect(drafts.get("proj-1:a")).toBe(
-      "please review this\n\n```\nfirst\n```\n\n```\nsecond\n```\n"
+      "please review this\n\n```daintree-context\nfirst\n```\n\n```daintree-context\nsecond\n```\n"
     );
   });
 
@@ -136,7 +136,7 @@ describe("draftAgentContext", () => {
     setPanels(agentPanel("a"));
     drafts.set("proj-1:a", "note  \n\n\n");
     draftAgentContext("a", { text: "body" });
-    expect(drafts.get("proj-1:a")).toBe("note  \n\n\n```\nbody\n```\n");
+    expect(drafts.get("proj-1:a")).toBe("note  \n\n\n```daintree-context\nbody\n```\n");
   });
 });
 
