@@ -510,6 +510,8 @@ describe("runHostInstall", () => {
     const deps = makeDeps({ shell, probes: [macProbe({ build: null, hostMode: false })] });
     await expect(install(deps)).rejects.toThrow(/expected commit/);
     expect(shell.scripts.some((s) => s.includes("Daintree.app.old"))).toBe(false);
+    // The build that didn't check out isn't left staged on the host.
+    expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
   });
 
   it("refuses a staged Mac build that carries no build marker, before stopping anything", async () => {
@@ -534,6 +536,8 @@ describe("runHostInstall", () => {
     const deps = makeDeps({ shell, probes: [LINUX_APPIMAGE_HOST] });
     await expect(install(deps, { hostId: "box" })).rejects.toThrow(/no build marker/);
     expect(shell.scripts.some((s) => s.includes("mv -f"))).toBe(false);
+    // The build that didn't check out isn't left staged on the host.
+    expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
   });
 
   it("refuses to pick between AppImages when nothing shows which one is in use", async () => {
