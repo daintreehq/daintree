@@ -78,7 +78,8 @@ export function buildHostProbeScript(): string {
     `if [ -d ${MAC_APP_PATH} ]; then echo "${MARK}install app-bundle ${MAC_APP_PATH}"`,
     `echo "${MARK}version $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ${MAC_APP_PATH}/Contents/Info.plist 2>/dev/null)"`,
     `${buildInfoRead(`${MAC_APP_PATH}/Contents/Resources/app.asar`)}; fi`,
-    `if pgrep -x Daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
+    // Only this SSH user's Daintree can take a handoff: another user's is someone else's.
+    `if pgrep -u "$(id -u)" -x Daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
     `echo "${MARK}sleep $(pmset -g 2>/dev/null | awk '$1=="sleep"{print $2; exit}')"`,
     `if [ -f "$HOME/${MAC_LAUNCH_AGENT_RELATIVE}" ]; then echo "${MARK}launchagent yes"; else echo "${MARK}launchagent no"; fi`,
   ].join("; ");
@@ -93,7 +94,7 @@ export function buildHostProbeScript(): string {
     `u=""; if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then u=$(sed -n 's/^ExecStart="\\([^"]*\\)".*/\\1/p' "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" | head -n 1); echo "${MARK}unitexec $u"; fi`,
     `r=""; p=$(pgrep -u "$(id -u)" -o -x daintree 2>/dev/null); if [ -n "$p" ]; then r=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^APPIMAGE=//p' | head -n 1); echo "${MARK}runningappimage $r"; fi`,
     `for f in "$HOME"/Applications/Daintree*.AppImage "$HOME"/Applications/daintree*.AppImage "$u" "$r"; do case "$f" in /*.AppImage) if [ -f "$f" ]; then b=""; i="$f${APPIMAGE_BUILD_INFO_SUFFIX}"; if [ -f "$i" ] && [ "$i" -nt "$f" ]; then b=$(head -c 512 "$i"); fi; echo "${MARK}appimage $f"; echo "${MARK}appimageinfo $b"; fi ;; esac; done`,
-    `if pgrep -x daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
+    `if pgrep -u "$(id -u)" -x daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
     `echo "${MARK}sleep $(systemctl is-enabled sleep.target 2>/dev/null)"`,
     `if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then echo "${MARK}unit yes"; echo "${MARK}unitenabled $(systemctl --user is-enabled ${LINUX_UNIT_NAME} 2>/dev/null)"; else echo "${MARK}unit no"; fi`,
     // What an AppImage needs to mount itself: the device, fusermount and libfuse2.
