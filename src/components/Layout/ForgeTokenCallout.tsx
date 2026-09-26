@@ -48,51 +48,55 @@ export interface ForgeTokenCalloutProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-/** Counts stats requests that have settled since mount. */
-function useSettledRequestCount(validating: boolean): number {
+/** Counts stats requests that have started since mount. */
+function useStartedRequestCount(validating: boolean): number {
   const [count, setCount] = useState(0);
   const wasValidatingRef = useRef(validating);
   useEffect(() => {
-    if (wasValidatingRef.current && !validating) setCount((c) => c + 1);
+    if (!wasValidatingRef.current && validating) setCount((c) => c + 1);
     wasValidatingRef.current = validating;
   }, [validating]);
   return count;
 }
 
 /**
- * The stored credential's fingerprint while `active`, or null until it is
- * known. Re-read each time a stats request settles, so a failure is judged
- * against the credential in place when it failed: replacing the token does
- * not re-arm the callout on the old token's error, and the replacement's own
- * first failure does, even when it carries the same message.
+ * The fingerprint of the credential the current failure was made with, or
+ * null until it is known. Read as each stats request starts (and once on
+ * mount, for a failure already on screen), and applied once that request has
+ * settled — so a token replaced while a request is in flight, or after it
+ * failed, is never blamed for the old token's error, while its own first
+ * failure re-arms the callout even when it carries the same message. A
+ * failed lookup leaves nothing to judge by; the next request asks again.
  */
-function useCredentialFingerprint(
+function useFailureFingerprint(
   providerId: string,
   active: boolean,
-  settledRequests: number
+  validating: boolean
 ): string | null {
-  const key = `${providerId}:${settledRequests}`;
-  const [resolved, setResolved] = useState<{ key: string; fingerprint: string } | null>(null);
+  const started = useStartedRequestCount(validating);
+  const settled = validating ? started - 1 : started;
+  const [read, setRead] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
+    const key = `${providerId}:${started}`;
+    const previousKey = `${providerId}:${started - 1}`;
+    // Not cancelled when the next request starts: its read belongs to the
+    // request still settling. Results are keyed, so a late one is inert.
     window.electron.forge.getCredentialStatus(providerId).then(
       (status) => {
-        if (cancelled) return;
-        setResolved({ key, fingerprint: status.fingerprint ?? UNSTORED_FINGERPRINT });
+        const fingerprint = status.fingerprint ?? UNSTORED_FINGERPRINT;
+        setRead((prev) => {
+          const next: Record<string, string> = { [key]: fingerprint };
+          const kept = prev[previousKey];
+          if (kept !== undefined) next[previousKey] = kept;
+          return next;
+        });
       },
-      () => {
-        // No fingerprint, no callout: the dimmed pill still says it, and the
-        // next settled request asks again.
-      }
+      () => {}
     );
-    return () => {
-      cancelled = true;
-    };
-  }, [providerId, active, key]);
+  }, [providerId, started]);
 
-  return active && resolved?.key === key ? resolved.fingerprint : null;
+  return active ? (read[`${providerId}:${settled}`] ?? null) : null;
 }
 
 interface CalloutPosition {
@@ -189,8 +193,7 @@ export function ForgeTokenCallout({
   const reconnectKind = errorKind !== null && errorKind !== "not-configured" ? errorKind : null;
   const health = useForgeProviderHealthStore(selectForgeProviderHealth(providerId));
   const reauthUrl = health.tokenHealth?.reauthUrl;
-  const settledRequests = useSettledRequestCount(validating);
-  const fingerprint = useCredentialFingerprint(providerId, reconnectKind !== null, settledRequests);
+  const fingerprint = useFailureFingerprint(providerId, reconnectKind !== null, validating);
   const dismissedFingerprint = useForgeTokenCalloutStore((s) => s.dismissed[providerId]);
   const dismiss = useForgeTokenCalloutStore((s) => s.dismiss);
 
@@ -202,6 +205,9 @@ export function ForgeTokenCallout({
   useEffect(() => {
     onOpenChange?.(open);
   }, [open, onOpenChange]);
+  // The toolbar unmounts the callout once the error clears; release the
+  // pill's tooltip with it.
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const pointerRef = useRef(false);

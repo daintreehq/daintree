@@ -121,7 +121,6 @@ describe("ForgeTokenCallout", () => {
     await flush();
 
     expect(screen.queryByTestId("forge-token-callout")).toBeNull();
-    expect(getCredentialStatus).not.toHaveBeenCalled();
   });
 
   it("stays quiet without a token error", async () => {
@@ -186,6 +185,21 @@ describe("ForgeTokenCallout", () => {
     await flush();
 
     expect(screen.getByText("GitHub token expired")).toBeTruthy();
+  });
+
+  it("does not blame a token saved mid-request for that request's failure", async () => {
+    const { rerender } = render(<Harness errorKind="invalid" />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss GitHub token warning" }));
+
+    // A request starts on token A, then token B is saved before it settles.
+    rerender(<Harness errorKind="invalid" validating />);
+    await flush();
+    getCredentialStatus.mockResolvedValue({ hasCredential: true, fingerprint: "fp-2" });
+    rerender(<Harness errorKind="invalid" validating={false} />);
+    await flush();
+
+    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
   });
 
   it("asks for the fingerprint again after a failed lookup once a request settles", async () => {

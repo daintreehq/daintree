@@ -1358,7 +1358,7 @@ export const ForgeStatsToolbarButton = memo(
           contextMenuContent={chromeMenuContent}
           onContextMenuOpenChange={handleStatsMenuOpenChange}
         />
-        {forgeMode && providerId ? (
+        {forgeMode && providerId && tokenErrorKind && tokenErrorKind !== "not-configured" ? (
           <ForgeTokenCallout
             id={tokenCalloutId}
             anchorRef={issuesButtonRef}
