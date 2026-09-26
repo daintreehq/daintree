@@ -809,11 +809,20 @@ export function createHost(
       : { projectRoot: boundScopeRoot };
 
   const fsApi = buildFsApi(deps, pluginId);
+  // By identity, not id: a host kept by a plugin that has since reloaded
+  // must not reach the new instance's declarations or register handles on it.
+  const requireBoundForDb = (op: string): void => {
+    if (!isBound()) {
+      throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" ${op}: plugin is no longer loaded`);
+    }
+  };
   const prepareDatabaseBackup = async (id: string, destPath: string): Promise<string> => {
     await resolveDatabase(id, { readonly: true });
     const approve = fsWriteApprovers.get(fsApi);
     if (!approve) throw new Error(`Plugin "${pluginId}" db.backup: unavailable`);
-    return approve(`db.backup:${id}`, destPath);
+    const approved = await approve(`db.backup:${id}`, destPath);
+    requireBoundForDb("db.backup");
+    return approved;
   };
 
   const resolveDatabase = async (id: string, options?: { readonly?: boolean }) => {
@@ -821,11 +830,10 @@ export function createHost(
     if (typeof id !== "string" || id.length === 0) {
       throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
     }
-    const plugin = deps.plugins.get(pluginId);
-    if (!plugin) {
-      throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" db: plugin is no longer loaded`);
-    }
-    const declaration = (plugin.manifest.contributes.databases ?? []).find((d) => d.id === id);
+    requireBoundForDb("db");
+    const declaration = (boundPlugin?.manifest.contributes.databases ?? []).find(
+      (d) => d.id === id
+    );
     if (!declaration) {
       throw new Error(
         `DB_NOT_DECLARED: plugin "${pluginId}" db: "${id}" is not declared in contributes.databases`
@@ -838,17 +846,17 @@ export function createHost(
     // A read-only open creates and writes nothing, so it needs no consent.
     if (declaration.location === "project" && !readonly) {
       await ensureCapabilityConsent(deps, pluginId, "fs:project-write");
-      if (!deps.plugins.has(pluginId)) {
-        throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" db: plugin is no longer loaded`);
-      }
+      requireBoundForDb("db");
     }
-    return resolvePluginDatabaseLocation({
+    const location = await resolvePluginDatabaseLocation({
       declaration,
       manifestId,
       projectRoot: boundProjectRoot,
       dataDir: deps.pluginDataDir(pluginId),
       existingOnly: readonly,
     });
+    requireBoundForDb("db");
+    return location;
   };
 
   const dbApi: PluginDatabaseApi = {
@@ -863,7 +871,7 @@ export function createHost(
         prepareBackup: (destPath) => prepareDatabaseBackup(id, destPath),
         onClosed: () => untrack?.(),
       });
-      if (!deps.plugins.has(pluginId)) {
+      if (!isBound()) {
         await database.close();
         throw new Error(
           `PLUGIN_UNLOADED: plugin "${pluginId}" db.open: plugin is no longer loaded`

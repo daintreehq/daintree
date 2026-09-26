@@ -23,11 +23,14 @@ vi.mock("../../plugin-capability/instances.js", () => ({
 }));
 
 import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
+import { approvePluginDatabaseBackup } from "../pluginInternalApprovers.js";
 import {
   makeProjectPluginInstanceKey,
   type PluginDatabaseContribution,
 } from "../../../../shared/types/plugin.js";
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
+
+const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
 
 const PROJECT_ID = "b".repeat(64);
 const INSTANCE = makeProjectPluginInstanceKey(PROJECT_ID, "acme.ledger");
@@ -36,28 +39,36 @@ let tmp: string;
 let projectRoot: string;
 let dataDir: string;
 
+function loadedPlugin(databases: PluginDatabaseContribution[]): LoadedPlugin {
+  return {
+    isBuiltin: false,
+    manifest: {
+      name: "acme.ledger",
+      capabilities: ["fs:project-read", "fs:project-write"],
+      contributes: { forgeProviders: [], fileDecorationProviders: [], databases },
+    },
+  } as unknown as LoadedPlugin;
+}
+
 function makeDeps(databases: PluginDatabaseContribution[]) {
-  const plugins = new Map<string, LoadedPlugin>([
-    [
-      INSTANCE,
-      {
-        isBuiltin: false,
-        manifest: {
-          name: "acme.ledger",
-          capabilities: ["fs:project-write"],
-          contributes: { forgeProviders: [], fileDecorationProviders: [], databases },
-        },
-      } as unknown as LoadedPlugin,
-    ],
-  ]);
+  const plugins = new Map<string, LoadedPlugin>([[INSTANCE, loadedPlugin(databases)]]);
   const pluginEventCleanups = new Map<string, Array<() => void>>();
   const deps = {
     plugins,
     pluginEventCleanups,
-    declaredCapabilities: () => new Set(["fs:project-write"]),
+    declaredCapabilities: () => new Set(["fs:project-read", "fs:project-write"]),
     pluginDataDir: () => dataDir,
     getHostGitFactory: () => undefined,
     getProcessManager: vi.fn(),
+    // What the host.fs write gate behind db.backup consults: the project is
+    // the one declared root.
+    isPathUnder: (root: string, candidate: string) => {
+      const rel = path.relative(root, candidate);
+      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    },
+    expandAllowedPathEntries: async () => [{ path: projectRoot, rootClass: "project" }],
+    safeAppendAudit: vi.fn(),
+    safeArgsHash: () => "hash",
   } as unknown as PluginHostFactoryDeps;
   return { deps, plugins, pluginEventCleanups };
 }
@@ -127,19 +138,72 @@ describe("host.db (in-process host)", () => {
   });
 
   it("backs up only to a destination the fs write gate approves", async () => {
-    ensureAllowed.mockClear();
     const { deps } = makeDeps([
       { id: "ledger", location: "project", path: "data/finance.db", journalMode: "delete" },
     ]);
-    (deps as unknown as { declaredCapabilities: () => Set<string> }).declaredCapabilities = () =>
-      new Set(["fs:project-write", "fs:project-read"]);
-    (deps as unknown as { declaredAllowedPaths?: unknown }).declaredAllowedPaths = undefined;
     const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
-    const db = await host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] });
+    const db = await host.db.open("ledger", {
+      migrations: ["CREATE TABLE t (x); INSERT INTO t VALUES (7)"],
+    });
     const outside = path.join(tmp, "elsewhere.db");
-    await expect(db.backup(outside)).rejects.toThrow();
+    await expect(db.backup(outside)).rejects.toThrow(/PATH_NOT_ALLOWED/);
     expect(fs.existsSync(outside)).toBe(false);
+
+    ensureAllowed.mockClear();
+    fs.mkdirSync(path.join(projectRoot, "backups"));
+    const dest = path.join(projectRoot, "backups", "finance.db");
+    expect(await db.backup(dest)).toEqual({ path: dest, bytes: fs.statSync(dest).size });
+    expect(ensureAllowed.mock.calls.map((call) => call[2])).toEqual(["fs:project-write"]);
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    expect(copy.prepare("SELECT x FROM t").all()).toEqual([{ x: 7 }]);
+    copy.close();
     await db.close();
+  });
+
+  it("approves a worker's backup destination through the same gate", async () => {
+    const { deps } = makeDeps([
+      { id: "ledger", location: "project", path: "data/finance.db", journalMode: "delete" },
+    ]);
+    const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
+    await (await host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] })).close();
+    const dest = path.join(projectRoot, "ledger-copy.db");
+    // What the main bridge runs for the worker's `db.prepareBackup` call.
+    await expect(approvePluginDatabaseBackup(host.db, "ledger", dest)).resolves.toBe(dest);
+    await expect(
+      approvePluginDatabaseBackup(host.db, "ledger", path.join(tmp, "elsewhere.db"))
+    ).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    await expect(approvePluginDatabaseBackup(host.db, "other", dest)).rejects.toThrow(
+      /DB_NOT_DECLARED/
+    );
+  });
+
+  it("gives a host kept across a same-id reload no access to the new instance's databases", async () => {
+    const declared: PluginDatabaseContribution[] = [
+      { id: "cache", location: "local", journalMode: "delete" },
+    ];
+    const { deps, plugins, pluginEventCleanups } = makeDeps(declared);
+    const { host: stale } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
+    plugins.set(
+      INSTANCE,
+      loadedPlugin([...declared, { id: "fresh", location: "local", journalMode: "delete" }])
+    );
+    await expect(stale.db.open("cache")).rejects.toThrow(/PLUGIN_UNLOADED/);
+    await expect(stale.db.resolve("fresh")).rejects.toThrow(/PLUGIN_UNLOADED/);
+    expect(pluginEventCleanups.get(INSTANCE)).toBeUndefined();
+  });
+
+  it("abandons an open whose plugin reloaded while it waited for consent", async () => {
+    const declared: PluginDatabaseContribution[] = [
+      { id: "ledger", location: "project", journalMode: "delete" },
+    ];
+    const { deps, plugins, pluginEventCleanups } = makeDeps(declared);
+    const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
+    ensureAllowed.mockImplementationOnce(async () => {
+      plugins.set(INSTANCE, loadedPlugin(declared));
+    });
+    await expect(host.db.open("ledger")).rejects.toThrow(/PLUGIN_UNLOADED/);
+    expect(fs.existsSync(path.join(projectRoot, ".daintree"))).toBe(false);
+    expect(pluginEventCleanups.get(INSTANCE)).toBeUndefined();
   });
 
   it("refuses an undeclared id", async () => {

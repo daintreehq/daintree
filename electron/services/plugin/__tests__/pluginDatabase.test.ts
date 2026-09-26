@@ -87,6 +87,20 @@ describe("resolvePluginDatabaseLocation", () => {
     ).rejects.toMatchObject({ code: "PATH_NOT_ALLOWED" });
   });
 
+  it("refuses a link into .git before creating any directory inside it", async () => {
+    fs.mkdirSync(path.join(projectRoot, ".git"));
+    fs.symlinkSync(path.join(projectRoot, ".git"), path.join(projectRoot, "data"));
+    await expect(
+      resolve({
+        id: "ledger",
+        location: "project",
+        path: "data/new/nested/finance.db",
+        journalMode: "delete",
+      })
+    ).rejects.toMatchObject({ code: "PATH_NOT_ALLOWED" });
+    expect(fs.readdirSync(path.join(projectRoot, ".git"))).toEqual([]);
+  });
+
   it("requires a project for a project database", async () => {
     await expect(
       resolvePluginDatabaseLocation({

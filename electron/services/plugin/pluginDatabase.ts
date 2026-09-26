@@ -26,9 +26,15 @@ function isInside(root: string, candidate: string): boolean {
  * Create `dir` (recursively) only if every ancestor that already exists
  * resolves inside `realRoot`. Checking the deepest existing ancestor is what
  * refuses a committed symlink — `data -> /Users/me/elsewhere` — before mkdir
- * follows it and materialises directories outside the project.
+ * follows it and materialises directories outside the project. `refuse` sees
+ * the canonical form `dir` will have, also before anything is created.
  */
-async function mkdirContained(realRoot: string, dir: string, label: string): Promise<string> {
+async function mkdirContained(
+  realRoot: string,
+  dir: string,
+  label: string,
+  refuse?: (canonicalDir: string) => void
+): Promise<string> {
   let probe = dir;
   for (;;) {
     try {
@@ -39,6 +45,7 @@ async function mkdirContained(realRoot: string, dir: string, label: string): Pro
           `database "${label}" resolves outside its root through ${probe}`
         );
       }
+      refuse?.(path.join(real, path.relative(probe, dir)));
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -134,13 +141,16 @@ export async function resolvePluginDatabaseLocation(options: {
   if (declaration.location === "project" && isInsideGitDir(path.relative(realRoot, lexical))) {
     throw databaseError("PATH_NOT_ALLOWED", `database "${declaration.id}" path is inside .git`);
   }
+  const refuseGitDir = (canonical: string): void => {
+    if (declaration.location === "project" && isInsideGitDir(path.relative(realRoot, canonical))) {
+      throw databaseError("PATH_NOT_ALLOWED", `database "${declaration.id}" resolves inside .git`);
+    }
+  };
   const realDir = existingOnly
     ? await existingContainedDir(realRoot, path.dirname(lexical), declaration.id, notFound)
-    : await mkdirContained(realRoot, path.dirname(lexical), declaration.id);
+    : await mkdirContained(realRoot, path.dirname(lexical), declaration.id, refuseGitDir);
   const target = path.join(realDir, path.basename(lexical));
-  if (declaration.location === "project" && isInsideGitDir(path.relative(realRoot, target))) {
-    throw databaseError("PATH_NOT_ALLOWED", `database "${declaration.id}" resolves inside .git`);
-  }
+  refuseGitDir(target);
   const leaf = await fsp.lstat(target).catch(() => null);
   if (leaf?.isSymbolicLink()) {
     throw databaseError("TARGET_IS_SYMLINK", `database "${declaration.id}" file is a symlink`);
