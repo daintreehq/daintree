@@ -86,6 +86,7 @@ import {
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
+import { isScratchpadElement } from "@/lib/terminalScratchpad";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -280,6 +281,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   useEffect(() => {
     if (!isOpen || !portalContainer || !activePanelId) return;
     if (activeFocusPolicy === "preserve") return;
+    // Re-runs on agent chrome changes while open; never while the user is
+    // writing in the pane's Scratchpad (#12835).
+    if (isScratchpadElement(document.activeElement, activePanelId)) return;
 
     const focusTarget = getTerminalFocusTarget({
       preferredTarget: preferredTerminalFocusTarget,

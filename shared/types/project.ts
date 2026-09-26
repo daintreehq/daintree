@@ -14,6 +14,7 @@ import type {
   FileBrowserTreeSnapshot,
   TerminalSpawnSource,
   PanelRestoreRecovery,
+  TerminalScratchpad,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
 import type { CommandOverride } from "./commands.js";
@@ -315,6 +316,8 @@ export interface PanelSnapshot {
    * restore holds it again instead of starting a fresh conversation.
    */
   restoreRecovery?: PanelRestoreRecovery;
+  /** The terminal's Scratchpad notes (#12835). Untrusted on read — sanitized at restore. */
+  scratchpad?: TerminalScratchpad;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */

@@ -4116,3 +4116,49 @@ describe("extension state and its version travel together (#12280)", () => {
     });
   }
 });
+
+describe("scratchpad restore (#12835)", () => {
+  const scratchpad = { content: "- rerun e2e\n", collapsed: true, width: 300 };
+
+  it("carries the notes through every PTY restore builder", () => {
+    const saved = { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid", scratchpad };
+
+    expect(buildArgsForBackendTerminal({ id: "t1", cwd: "/p" }, saved, "/p").scratchpad).toEqual(
+      scratchpad
+    );
+    expect(
+      buildArgsForReconnectedFallback({ id: "t1", cwd: "/p", title: "Shell" }, saved, "/p")
+        .scratchpad
+    ).toEqual(scratchpad);
+    // A reconnect that timed out respawns under a fresh id; the notes ride the
+    // snapshot, not the id, so they follow the pane anyway.
+    expect(
+      buildArgsForRespawn(saved, "terminal", "/p", undefined, true, undefined).scratchpad
+    ).toEqual(scratchpad);
+  });
+
+  it("round-trips through the serializer", () => {
+    const panel = {
+      id: "t1",
+      kind: "terminal",
+      title: "Shell",
+      cwd: "/p",
+      location: "grid",
+      scratchpad,
+    } as PtyPanelData;
+    const saved = { id: "t1", location: "grid", ...serializePtyPanel(panel) };
+
+    expect(
+      buildArgsForRespawn(saved, "terminal", "/p", undefined, false, undefined).scratchpad
+    ).toEqual(scratchpad);
+  });
+
+  it("drops a malformed on-disk value instead of handing it to the pane", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p" },
+      { id: "t1", location: "grid", scratchpad: { content: 42 } },
+      "/p"
+    );
+    expect(result.scratchpad).toBeUndefined();
+  });
+});
