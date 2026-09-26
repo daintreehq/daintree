@@ -14,6 +14,7 @@ vi.mock("../../../utils/logger.js", () => ({
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
+import { databaseBackupApprovers } from "../pluginInternalApprovers.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -240,6 +241,36 @@ describe("PluginDevWorkerMainBridge", () => {
     ).toHaveBeenCalledWith("ledger");
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-db");
     expect(result).toMatchObject({ ok: true, result: { id: "ledger" } });
+  });
+
+  it("relays db.prepareBackup to the host's internal approver, never to the plugin's host.db", async () => {
+    const { host, workerHost } = makeBridge();
+    const db = { resolve: vi.fn(), open: vi.fn() };
+    const approve = vi.fn(async (_id: string, destPath: string) => `/real${destPath}`);
+    databaseBackupApprovers.set(db as never, approve);
+    (host as unknown as { db: unknown }).db = db;
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-bk",
+      method: "db.prepareBackup",
+      params: { id: "ledger", destPath: "/p/backups/ledger.db" },
+    });
+    await flush();
+    expect(approve).toHaveBeenCalledWith("ledger", "/p/backups/ledger.db");
+    expect(workerHost.sent.find((m) => m.requestId === "c-bk")).toMatchObject({
+      ok: true,
+      result: "/real/p/backups/ledger.db",
+    });
+
+    (host as unknown as { db: unknown }).db = { resolve: vi.fn(), open: vi.fn() };
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-bk2",
+      method: "db.prepareBackup",
+      params: { id: "ledger", destPath: "/p/backups/ledger.db" },
+    });
+    await flush();
+    expect(workerHost.sent.find((m) => m.requestId === "c-bk2")).toMatchObject({ ok: false });
   });
 
   it("carries a host error's primitive fields to the worker, not just its message", async () => {
