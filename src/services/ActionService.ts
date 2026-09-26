@@ -16,6 +16,8 @@ import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { pickAppErrorDetails } from "@shared/utils/ipcErrorSerialization";
+import { currentHostId, getHostPlatformInfo, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { isClientAppError } from "@/utils/clientAppError";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { ConfirmationStagedError } from "./actions/confirmationStaged";
@@ -291,8 +293,17 @@ function computeSchemas(definition: AnyActionDefinition): CachedSchemas {
   return { inputSchema, outputSchema };
 }
 
+/** The most specific of the plugins whose namespace an action id falls in. */
+function longestOwner(pluginIds: readonly string[]): string | null {
+  let owner: string | null = null;
+  for (const id of pluginIds) if (owner === null || id.length > owner.length) owner = id;
+  return owner;
+}
+
 export class ActionService {
   private registry = new Map<ActionId, AnyActionDefinition>();
+  /** Every plugin that has registered an action in this view, kept after it unregisters. */
+  private pluginIdsSeen = new Set<string>();
   private requiresArgsCache = new Map<ActionId, boolean>();
   /**
    * Lazily-filled JSON schema cache. Populated on first `toManifestEntry()` for
@@ -327,6 +338,7 @@ export class ActionService {
     // startup would block ~150-300ms of frame budget for data no consumer
     // needs until the action palette or MCP manifest is first opened.
     const requiresArgs = computeRequiresArgs(typed);
+    if (typed.pluginId) this.pluginIdsSeen.add(typed.pluginId);
     this.registry.set(definition.id, typed);
     this.requiresArgsCache.set(definition.id, requiresArgs);
   }
@@ -440,6 +452,41 @@ export class ActionService {
     return this.lastAction;
   }
 
+  /**
+   * In a window attached to a remote host, an unregistered action of a plugin
+   * the host doesn't have comes back typed, naming the plugin and the host. A
+   * plugin action id is `{pluginId}.{id}`, and plugin ids may hold dots, so the
+   * owner is read from what was seen, never guessed from the id: a plugin
+   * that registered actions in this view before, or one this machine has and
+   * the host's plugin comparison lists as only here. Locally an unknown id
+   * stays NOT_FOUND.
+   */
+  private async pluginNotOnHost(actionId: string): Promise<ActionError | null> {
+    if (!isRemoteWindow()) return null;
+    const hostId = currentHostId();
+    const owns = (pluginId: string) => actionId.startsWith(`${pluginId}.`);
+    let pluginId = longestOwner([...this.pluginIdsSeen].filter(owns));
+    if (pluginId === null) {
+      try {
+        const rows = (await window.electron?.pluginParity?.diff({ hostId })) ?? [];
+        pluginId = longestOwner(
+          rows
+            .filter((row) => row.group === "only-here" && owns(row.pluginId))
+            .map((row) => row.pluginId)
+        );
+      } catch {
+        // No comparison to read: say only what is certain, that the action isn't here.
+      }
+    }
+    if (pluginId === null) return null;
+    const hostName = getHostPlatformInfo().hostName ?? hostId;
+    return {
+      code: "PLUGIN_NOT_ON_HOST",
+      message: `Plugin "${pluginId}" isn't installed on ${hostName}, so "${actionId}" can't run there`,
+      details: pickAppErrorDetails({ code: "PLUGIN_NOT_ON_HOST", pluginId, hostId }),
+    };
+  }
+
   async dispatch<Result = unknown>(
     actionId: ActionId,
     args?: unknown,
@@ -449,6 +496,8 @@ export class ActionService {
     const source: ActionSource = options?.source ?? "user";
 
     if (!definition) {
+      const notOnHost = await this.pluginNotOnHost(actionId);
+      if (notOnHost) return { ok: false, error: notOnHost };
       const error: ActionError = {
         code: "NOT_FOUND",
         message: `Action "${actionId}" not found in registry`,
