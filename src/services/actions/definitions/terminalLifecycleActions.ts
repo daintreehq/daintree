@@ -636,6 +636,10 @@ export function registerTerminalLifecycleActions(
         // Programmatic renames (MCP, assistant, plugins) are automation-tier:
         // they pin `titleMode: "custom"` and bounce off a user lock.
         usePanelStore.getState().updateTitle(targetId, name, "automation");
+        // The title the tab now shows, so a caller learns a hand-set title
+        // kept its place without listing terminals again.
+        const title = usePanelStore.getState().panelsById[targetId]?.title ?? null;
+        return { terminalId: targetId, title, applied: name === "" || title === name };
       } else {
         // Defer to a macrotask so menu/dropdown close handlers run before the
         // title input mounts. Do not use requestAnimationFrame here: CI Linux
