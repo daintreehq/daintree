@@ -3264,6 +3264,36 @@ describe("cross-project plugin control", () => {
     expect(mockUnregisterPluginAction).not.toHaveBeenCalled();
   });
 
+  it("applies the same ownership rule to a project plugin's settings view", async () => {
+    const settingsKind = `plugin-settings-view:${INSTANCE_A}`;
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, settingsKind)
+    ).rejects.toThrow(/different project/);
+    await expect(
+      getHandler("plugin:activate-for-view")(
+        { sender: { id: 1 } },
+        "plugin-settings-view:project____acme.dashboard"
+      )
+    ).rejects.toThrow(/different project/);
+    expect(mockActivatePluginForView).not.toHaveBeenCalled();
+
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, settingsKind);
+    expect(mockActivatePluginForView).toHaveBeenCalledWith(settingsKind, false);
+  });
+
+  it("reads missing required settings only for the sender's own project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:settings-missing-required")({ sender: { id: 1 } }, INSTANCE_A, PROJECT_A)
+    ).rejects.toThrow(/different project/);
+    await expect(
+      getHandler("plugin:settings-missing-required")({ sender: { id: 1 } }, "../evil", null)
+    ).rejects.toThrow(/invalid plugin id/);
+  });
+
   it("rejects a malformed project panel kind id rather than skipping the check", async () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
     await expect(

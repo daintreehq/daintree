@@ -1586,3 +1586,33 @@ describe("createMockHost host.db readonly", () => {
     await reader.close();
   });
 });
+
+describe("createMockHost settings.open and settings.missingRequired", () => {
+  it("records open as the dispatch the real host sends, for its own plugin", async () => {
+    const host = createMockHost({ pluginId: "acme.linear" });
+
+    await host.settings.open("apiKey");
+    await host.settings.open();
+
+    expect(host.dispatchedActions).toEqual([
+      { actionId: "plugin.openSettings", args: { pluginId: "acme.linear", key: "apiKey" } },
+      { actionId: "plugin.openSettings", args: { pluginId: "acme.linear" } },
+    ]);
+    await expect(host.settings.open("")).rejects.toThrow(/non-empty/);
+  });
+
+  it("lists required settings still unset, and a default never counts", async () => {
+    const host = createMockHost({
+      manifestSettings: [
+        { id: "apiKey", type: "secret", required: true },
+        { id: "team", scope: "project", required: true, default: "core" },
+        { id: "optional" },
+      ],
+    });
+
+    expect(await host.settings.missingRequired()).toEqual(["apiKey", "team"]);
+    await host.settings.set("apiKey", "sk");
+    await host.settings.set("team", "infra", "project");
+    expect(await host.settings.missingRequired()).toEqual([]);
+  });
+});

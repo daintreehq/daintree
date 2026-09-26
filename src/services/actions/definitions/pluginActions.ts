@@ -9,6 +9,12 @@ import {
   requestUserViewReload,
 } from "@/services/plugin/pluginPanelLifecycle";
 import { usePanelStore } from "@/store/panelStore";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useProjectStore } from "@/store/projectStore";
+import {
+  pluginHasSettings,
+  resolvePluginSettingsTarget,
+} from "@/services/plugin/pluginSettingsHome";
 import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
 import { isBuiltInPanelKind } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -32,7 +38,7 @@ import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmat
 const DIAGNOSTICS_LOG_LIMIT_DEFAULT = 50;
 const DIAGNOSTICS_LOG_LIMIT_MAX = 500;
 
-export function registerPluginActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+export function registerPluginActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("plugin.reloadWindow", () =>
     defineAction({
       id: "plugin.reloadWindow",
@@ -326,6 +332,78 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
             ? `No plugin "${args.pluginId}". Known ids: ${known.join(", ")}`
             : `No plugin "${args.pluginId}", and no plugins are loaded or discovered in this project.`
         );
+      },
+    })
+  );
+
+  actions.set("plugin.openSettings", () =>
+    defineAction({
+      id: "plugin.openSettings",
+      title: "Open plugin settings",
+      description:
+        "Show a plugin's settings where they live: the plugin manager for an installed plugin, Project settings for a project plugin or a project-scoped setting. A declared key is scrolled to and highlighted; an undeclared one is ignored.",
+      category: "plugins",
+      kind: "command",
+      danger: "safe",
+      nonRepeatable: true,
+      // Needs a plugin id, and there is no focused-plugin fallback to act on.
+      palette: { mode: "hidden" },
+      scope: "renderer",
+      argsSchema: z.object({
+        pluginId: z
+          .string()
+          .min(1)
+          .describe(
+            "Manifest id (publisher.name). In a project, its own plugin wins over an installed one with the same id."
+          ),
+        key: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("A setting id from the plugin's contributes.settings to land on."),
+      }),
+      examples: [
+        {
+          args: { pluginId: "acme.linear", key: "apiToken" },
+          description: "Take the user straight to a plugin's API token field.",
+        },
+      ],
+      resultSchema: z.object({
+        pluginId: z.string(),
+        home: z.enum(["plugin-manager", "project-settings"]),
+        /** The setting landed on, or null when none was named or it isn't declared. */
+        key: z.string().nullable(),
+      }),
+      mcpOutputSchema: true,
+      mcpAnnotations: {
+        readOnlyHint: false,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      run: async ({ pluginId, key }, ctx) => {
+        const projectId = ctx?.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
+        const target = resolvePluginSettingsTarget(
+          pluginId,
+          key,
+          await pluginClient.list(),
+          projectId
+        );
+        if (!target) throw new Error(`No plugin "${pluginId}" is running here`);
+        if (!pluginHasSettings(target.plugin)) {
+          throw new Error(`Plugin "${pluginId}" has no settings`);
+        }
+        usePluginManagerStore.getState().requestSettings({
+          pluginId: target.plugin.instanceId,
+          home: target.home,
+          ...(target.key !== undefined ? { key: target.key } : {}),
+        });
+        if (target.home === "project") callbacks.onOpenSettingsTab({ tab: "project:plugins" });
+        return {
+          pluginId,
+          home: target.home === "project" ? "project-settings" : "plugin-manager",
+          key: target.key ?? null,
+        };
       },
     })
   );

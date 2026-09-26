@@ -48,6 +48,7 @@ import type {
   RegisterHandlerParams,
   RegisterMcpToolsParams,
   SettingsGetParams,
+  SettingsOpenParams,
   SettingsSetParams,
   StorageGetParams,
   StorageSetParams,
@@ -841,6 +842,13 @@ export class PluginDevWorkerMainBridge {
         await this.host.settings.set(p.key, p.value, p.scope);
         return undefined;
       }
+      case "settings.open": {
+        const p = params as SettingsOpenParams;
+        await this.host.settings.open(p.key);
+        return undefined;
+      }
+      case "settings.missingRequired":
+        return this.host.settings.missingRequired();
       case "storage.get": {
         const p = params as StorageGetParams;
         return this.host.storage.get(p.key, p.scope);

@@ -50,6 +50,8 @@ const HOST_CALL_METHODS = {
   "actions.get": true,
   "settings.get": true,
   "settings.set": true,
+  "settings.open": true,
+  "settings.missingRequired": true,
   "storage.get": true,
   "storage.set": true,
   "storage.delete": true,

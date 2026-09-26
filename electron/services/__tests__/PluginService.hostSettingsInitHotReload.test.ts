@@ -73,6 +73,8 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  // A project plugin's settings writes are announced to its own project only.
+  broadcastToProjectRenderers: vi.fn(),
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,

@@ -1,4 +1,4 @@
-import type { ProjectPluginInfo } from "@shared/types/plugin";
+import type { LoadedPluginInfo, ProjectPluginInfo } from "@shared/types/plugin";
 import type { PluginDiagnosticsSnapshot } from "@shared/types/ipc/pluginDiagnostics";
 import type { PluginManifestValidationResult } from "@shared/types/ipc/pluginValidation";
 
@@ -23,4 +23,7 @@ export const pluginClient = {
   getProjectPlugins: (): Promise<ProjectPluginInfo[]> => window.electron.plugin.getProjectPlugins(),
 
   reloadProjectPlugins: (): Promise<void> => window.electron.plugin.reloadProjectPlugins(),
+
+  /** Every plugin the host is running, with the instance key each is addressed by. */
+  list: (): Promise<LoadedPluginInfo[]> => window.electron.plugin.list(),
 } as const;

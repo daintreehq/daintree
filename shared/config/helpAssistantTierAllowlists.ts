@@ -121,6 +121,10 @@ export const WORKBENCH_TIER_TOOLS = [
   // it cannot see.
   "plugin.validate",
   "plugin.diagnostics",
+  // Navigation only: shows a plugin's settings in the home they already live
+  // in and changes nothing, so an assistant walking the user through setting a
+  // plugin up can put them on the field instead of describing where it is.
+  "plugin.openSettings",
 
   "help.displayImage",
 ] as const satisfies readonly BuiltInActionId[];

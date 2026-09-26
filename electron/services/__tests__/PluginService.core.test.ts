@@ -409,6 +409,55 @@ describe("PluginService", () => {
     );
   });
 
+  it("flags every panel of a plugin with settings, and serves its settings view apart from panels", async () => {
+    await writePlugin("settings-plugin", {
+      name: "acme.settings-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "board", name: "Board", iconId: "eye", color: "#111" }],
+        views: [
+          { id: "board", componentPath: "dist/board.js", location: "panel" },
+          { id: "prefs", componentPath: "dist/prefs.js", location: "settings" },
+        ],
+        settings: [
+          { id: "apiKey", type: "secret", required: true },
+          { id: "team", type: "string" },
+        ],
+      },
+    });
+    await writePlugin("plain-plugin", {
+      name: "acme.plain-plugin",
+      version: "1.0.0",
+      contributes: { panels: [{ id: "board", name: "Board", iconId: "eye", color: "#111" }] },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const callFor = (id: string) =>
+      vi.mocked(registerPanelKind).mock.calls.find((call) => call[0]?.id === id)?.[0];
+    const board = callFor("acme.settings-plugin.board");
+    expect(board).toMatchObject({ hasPluginSettings: true, hasRequiredSettings: true });
+    // The panel keeps its own view; the settings view never becomes a panel.
+    expect(board?.componentPath).toContain("dist/board.js");
+    expect(callFor("acme.settings-plugin.prefs")).toBeUndefined();
+    const plain = callFor("acme.plain-plugin.board");
+    expect(Object.prototype.hasOwnProperty.call(plain, "hasPluginSettings")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(plain, "hasRequiredSettings")).toBe(false);
+
+    const listed = service.listPlugins();
+    const withView = listed.find((p) => p.instanceId === "acme.settings-plugin");
+    expect(withView?.settingsViewPath).toMatch(/^plugin:\/\/.*dist\/prefs\.js$/);
+    expect(listed.find((p) => p.instanceId === "acme.plain-plugin")?.settingsViewPath).toBe(
+      undefined
+    );
+
+    // The settings view activates its plugin like a panel view does.
+    await expect(
+      service.activatePluginForView("plugin-settings-view:acme.settings-plugin")
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("skips directories without plugin.json", async () => {
     await fs.mkdir(path.join(tmpDir, "empty-dir"));
 

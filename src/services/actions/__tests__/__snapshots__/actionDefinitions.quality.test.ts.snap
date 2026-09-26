@@ -3310,6 +3310,26 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "plugins",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Show a plugin's settings where they live: the plugin manager for an installed plugin, Project settings for a project plugin or a project-scoped setting. A declared key is scrolled to and highlighted; an undeclared one is ignored.",
+    "examples": [
+      {
+        "args": {
+          "key": "apiToken",
+          "pluginId": "acme.linear",
+        },
+        "description": "Take the user straight to a plugin's API token field.",
+      },
+    ],
+    "id": "plugin.openSettings",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Open plugin settings",
+  },
+  {
+    "category": "plugins",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Discard a plugin panel's view and mount a fresh one, keeping its backend and the state it persisted. View state it has not persisted is lost. A view that reports unsaved work is left alone, a confirmation is staged for the user, and the call fails rather than reporting success.",
     "examples": undefined,
     "id": "plugin.reloadPanel",

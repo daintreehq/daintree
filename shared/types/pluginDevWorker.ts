@@ -55,6 +55,8 @@ export type PluginHostCallMethod =
   | "actions.get"
   | "settings.get"
   | "settings.set"
+  | "settings.open"
+  | "settings.missingRequired"
   | "storage.get"
   | "storage.set"
   | "storage.delete"
@@ -450,6 +452,11 @@ export interface SettingsSetParams {
   key: string;
   value: unknown;
   scope: PluginSettingsScope;
+}
+
+/** Params for `settings.open` (`host-call`). `key` omitted opens the plugin's settings home. */
+export interface SettingsOpenParams {
+  key?: string;
 }
 
 /** Params for `storage.get` (`host-call`). */

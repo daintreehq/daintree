@@ -45,6 +45,12 @@ interface PluginSettingsManagerDeps {
   getManifest: (pluginId: string) => PluginManifest | undefined;
   /** Secret-value cipher for every store. Defaults to Electron `safeStorage`; tests inject a fake. */
   cipher?: SecretCipher;
+  /**
+   * Told after any stored value of `pluginId` changes, from either write path,
+   * so renderers can re-check what depends on it (the panel setup strip). Carries
+   * no key or value: a listener re-reads what it needs.
+   */
+  onSettingChanged?: (pluginId: string) => void;
 }
 
 /**
@@ -321,6 +327,7 @@ export class PluginSettingsManager {
     key: string,
     value: unknown
   ): void {
+    this.deps.onSettingChanged?.(pluginId);
     const subs = this.settingsSubscribers.get(pluginId);
     if (!subs) return;
     // Snapshot so a callback that disposes itself doesn't mutate the live set
@@ -336,6 +343,45 @@ export class PluginSettingsManager {
         () => this.removeSubscriber(pluginId, sub)
       );
     }
+  }
+
+  /**
+   * Declared `required: true` settings with nothing stored, in manifest order.
+   * A declared `default` never satisfies one — the user has to choose — and a
+   * key whose scope has no target (a project scope with no project) is missing,
+   * since nothing the plugin reads there can be set.
+   */
+  private async missingRequired(
+    pluginId: string,
+    resolveFile: (def: SettingDefinition, scope: PluginSettingsScope) => string | null | undefined
+  ): Promise<string[]> {
+    const required = this.uiSettingDefinitions(pluginId).filter((def) => def.required === true);
+    const missing = await Promise.all(
+      required.map(async (def) => {
+        const filePath = resolveFile(def, def.scope ?? "user");
+        if (!filePath) return true;
+        const stored = await this.getOrCreateSettingsStore(pluginId, filePath).get<unknown>(
+          def.id,
+          { secret: this.isSecretSetting(def) }
+        );
+        return stored === undefined || stored === null || stored === "";
+      })
+    );
+    return required.filter((_, index) => missing[index]).map((def) => def.id);
+  }
+
+  /** {@link missingRequired} for the host `settings` API, resolved exactly as its reads are. */
+  missingRequiredForHost(pluginId: string, projectRoot?: string | null): Promise<string[]> {
+    return this.missingRequired(pluginId, (def, scope) =>
+      this.resolveSettingsFilePathForKey(pluginId, def.id, scope, projectRoot)
+    );
+  }
+
+  /** {@link missingRequired} for a renderer, pinned to its own project like the form's reads. */
+  missingRequiredForUi(pluginId: string, projectId: string | null): Promise<string[]> {
+    return this.missingRequired(pluginId, (def, scope) =>
+      this.resolveUiSettingsFilePathForKey(pluginId, def.id, scope, projectId)
+    );
   }
 
   clearPluginSettingsState(pluginId: string): void {

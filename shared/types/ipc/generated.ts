@@ -1411,6 +1411,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../plugin.js").PluginSettingsUiValues;
   };
+  "plugin:settings-missing-required": {
+    args: [pluginId: string, projectId: string | null];
+    result: string[];
+  };
   "plugin:settings-reveal-secret": {
     args: [
       pluginId: string,

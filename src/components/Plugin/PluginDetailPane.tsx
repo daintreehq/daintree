@@ -276,6 +276,13 @@ interface PluginDetailPaneProps {
   onRetry?: () => void;
   onUninstall: () => void;
   onCheckForUpdate: () => void;
+  /**
+   * A pending `plugin.openSettings` for this plugin: switches to the Settings
+   * tab and, with a `key`, lands on that setting. `nonce` distinguishes repeats.
+   */
+  settingsRequest?: { key?: string; nonce: number } | null;
+  /** Told once `settingsRequest` has been applied, so its source can drop it. */
+  onSettingsRequestHandled?: (nonce: number) => void;
 }
 
 /**
@@ -306,6 +313,8 @@ export function PluginDetailPane({
   onRetry,
   onUninstall,
   onCheckForUpdate,
+  settingsRequest = null,
+  onSettingsRequestHandled,
 }: PluginDetailPaneProps) {
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
@@ -319,7 +328,9 @@ export function PluginDetailPane({
   const categoryId = resolvePluginCategory(plugin.manifest);
   const categoryLabel = categoryId === "other" ? null : getPluginCategoryMeta(categoryId).label;
   const blocklisted = plugin.blocklisted === true;
-  const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
+  const hasSettings =
+    (plugin.manifest.contributes.settings?.length ?? 0) > 0 ||
+    plugin.settingsViewPath !== undefined;
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
   const granted = grantedCapabilities(plugin);
@@ -387,6 +398,17 @@ export function PluginDetailPane({
   useEffect(() => {
     if (currentTab !== activeTab) setActiveTab(currentTab);
   }, [currentTab, activeTab]);
+
+  // A settings deep link opens the Settings tab. With a key, the form lands on
+  // the row once its value has loaded and reports back itself; without one,
+  // opening the tab is the whole request.
+  const requestNonce = settingsRequest?.nonce;
+  const requestKey = settingsRequest?.key;
+  useEffect(() => {
+    if (requestNonce === undefined || !hasSettings) return;
+    setActiveTab("settings");
+    if (requestKey === undefined) onSettingsRequestHandled?.(requestNonce);
+  }, [requestNonce, requestKey, hasSettings, onSettingsRequestHandled]);
 
   return (
     <div className="text-text-primary">
@@ -667,7 +689,18 @@ export function PluginDetailPane({
           plugin before turning it on, or keep editing it while it's off. The tab
           only exists when the plugin declares settings, so there's no empty
           branch to fall back to. */}
-        {currentTab === "settings" && <PluginSettingsForm plugin={plugin} />}
+        {currentTab === "settings" && (
+          <PluginSettingsForm
+            plugin={plugin}
+            viewScope="user"
+            focusRequest={
+              requestNonce !== undefined && requestKey !== undefined
+                ? { key: requestKey, nonce: requestNonce }
+                : null
+            }
+            onFocusHandled={onSettingsRequestHandled}
+          />
+        )}
 
         {currentTab === "capabilities" && (
           <PluginCapabilityList plugin={plugin} granted={granted} />

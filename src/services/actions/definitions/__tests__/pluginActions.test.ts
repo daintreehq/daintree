@@ -5,6 +5,7 @@ const clientMocks = vi.hoisted(() => ({
   getDiagnosticsSnapshot: vi.fn(),
   getProjectPlugins: vi.fn(),
   reloadProjectPlugins: vi.fn(),
+  list: vi.fn(),
 }));
 
 vi.mock("@/clients/pluginClient", () => ({ pluginClient: clientMocks }));
@@ -29,6 +30,7 @@ import {
 import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
 import { ConfirmationStagedError } from "../../confirmationStaged";
 import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
 
 /**
  * These actions ignore the callbacks entirely — they reach main through the
@@ -561,5 +563,115 @@ describe("plugin.reloadPanel (#12611)", () => {
     await expect(run("plugin.reloadPanel", { panelId: "plugin-2" })).rejects.toBeInstanceOf(
       ConfirmationStagedError
     );
+  });
+});
+
+describe("plugin.openSettings", () => {
+  const PROJECT_KEY = "project__project-1__acme.linear";
+
+  function loaded(
+    instanceId: string,
+    overrides: {
+      settings?: Array<{ id: string; scope?: "user" | "project" | "local" }>;
+      settingsViewPath?: string;
+    } = {}
+  ) {
+    const parts = instanceId.split("__");
+    const isProject = parts.length === 3;
+    return {
+      instanceId,
+      origin: isProject ? "project" : "global",
+      projectId: isProject ? parts[1] : null,
+      manifest: {
+        name: isProject ? parts[2] : instanceId,
+        contributes: { settings: overrides.settings ?? [{ id: "apiKey" }] },
+      },
+      ...(overrides.settingsViewPath ? { settingsViewPath: overrides.settingsViewPath } : {}),
+    };
+  }
+
+  async function openSettings(args: unknown, ctx: ActionContext = PROJECT_1) {
+    const onOpenSettingsTab = vi.fn();
+    const registry: ActionRegistry = new Map();
+    registerPluginActions(registry, { ...stubCallbacks(), onOpenSettingsTab });
+    const result = await registry.get("plugin.openSettings")!().run(args, ctx);
+    return { result, onOpenSettingsTab };
+  }
+
+  beforeEach(() => {
+    usePluginManagerStore.setState({ isOpen: false, settingsRequest: null });
+  });
+
+  it("sends an installed plugin's own settings to the plugin manager", async () => {
+    clientMocks.list.mockResolvedValue([loaded("acme.linear")]);
+
+    const { result, onOpenSettingsTab } = await openSettings({
+      pluginId: "acme.linear",
+      key: "apiKey",
+    });
+
+    expect(result).toEqual({ pluginId: "acme.linear", home: "plugin-manager", key: "apiKey" });
+    expect(onOpenSettingsTab).not.toHaveBeenCalled();
+    const state = usePluginManagerStore.getState();
+    expect(state.isOpen).toBe(true);
+    expect(state.settingsRequest).toMatchObject({
+      pluginId: "acme.linear",
+      key: "apiKey",
+      home: "manager",
+    });
+  });
+
+  it("sends an installed plugin's project-scoped key to Project settings → Plugins", async () => {
+    clientMocks.list.mockResolvedValue([
+      loaded("acme.linear", { settings: [{ id: "apiKey" }, { id: "team", scope: "project" }] }),
+    ]);
+
+    const { result, onOpenSettingsTab } = await openSettings({
+      pluginId: "acme.linear",
+      key: "team",
+    });
+
+    expect(result).toMatchObject({ home: "project-settings", key: "team" });
+    expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
+    expect(usePluginManagerStore.getState().isOpen).toBe(false);
+    expect(usePluginManagerStore.getState().settingsRequest?.home).toBe("project");
+  });
+
+  it("sends a project plugin to its project's settings, by manifest id or instance key", async () => {
+    clientMocks.list.mockResolvedValue([loaded("acme.linear"), loaded(PROJECT_KEY)]);
+
+    for (const pluginId of ["acme.linear", PROJECT_KEY]) {
+      const { result, onOpenSettingsTab } = await openSettings({ pluginId });
+      expect(result).toEqual({ pluginId, home: "project-settings", key: null });
+      expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
+      expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(PROJECT_KEY);
+    }
+  });
+
+  it("never reaches another project's plugin", async () => {
+    const otherKey = "project__project-2__acme.linear";
+    clientMocks.list.mockResolvedValue([loaded(otherKey)]);
+
+    await expect(openSettings({ pluginId: otherKey })).rejects.toThrow(/No plugin/);
+    await expect(openSettings({ pluginId: "acme.linear" })).rejects.toThrow(/No plugin/);
+  });
+
+  it("opens without a highlight for an undeclared key, and refuses a plugin with no settings", async () => {
+    clientMocks.list.mockResolvedValue([
+      loaded("acme.linear"),
+      loaded("acme.bare", { settings: [] }),
+      loaded("acme.custom", { settings: [], settingsViewPath: "plugin://x/settings.js" }),
+    ]);
+
+    const { result } = await openSettings({ pluginId: "acme.linear", key: "nope" });
+    expect(result).toMatchObject({ home: "plugin-manager", key: null });
+    await expect(openSettings({ pluginId: "acme.bare" })).rejects.toThrow(/has no settings/);
+    const custom = await openSettings({ pluginId: "acme.custom" });
+    expect(custom.result).toMatchObject({ home: "plugin-manager" });
+  });
+
+  it("is reachable from a plugin's own host.dispatch", () => {
+    expect(definition("plugin.openSettings").denyPluginDispatch).not.toBe(true);
+    expect(DENY_PLUGIN_DISPATCH_ACTION_IDS).not.toContain("plugin.openSettings");
   });
 });

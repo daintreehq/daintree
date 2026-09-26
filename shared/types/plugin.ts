@@ -219,17 +219,56 @@ export interface ContextMenuContribution {
 }
 
 /**
- * View contribution location. Only `panel` is supported — it registers a panel
- * kind at plugin load with `showInPalette: true` so the view is spawnable from
- * the panel palette. It is wired today by the inline renderer host (#9229); see
- * `docs/plugins/architecture.md` for the renderer host design. `sidebar` is
- * rejected at the manifest gate (`ViewContributionSchema`) because the sidebar
- * host does not exist yet — accepting it would validate a contribution the
- * runtime cannot honor. The `experimental_` prefix on the contribution point
- * signals that the shape may still change before the feature exits experiment
- * status.
+ * View contribution location.
+ *
+ * `panel` renders into the `contributes.panels` entry with the same id; it is
+ * wired by the inline renderer host (#9229), see `docs/plugins/architecture.md`.
+ *
+ * `settings` is the plugin's custom settings section: at most one per plugin,
+ * tied to no panel, and mounted by the host inside the plugin's settings home
+ * below its declared `contributes.settings` fields (the plugin manager for an
+ * installed plugin, Project settings → Plugins for a project plugin). It
+ * receives {@link PanelViewProps.settingsContext}.
+ *
+ * `sidebar` is rejected at the manifest gate (`ViewContributionSchema`) because
+ * the sidebar host does not exist yet — accepting it would validate a
+ * contribution the runtime cannot honor.
  */
-export type ViewLocation = "panel";
+export type ViewLocation = "panel" | "settings";
+
+/**
+ * Where a `location: "settings"` view is mounted, handed to it as
+ * {@link PanelViewProps.settingsContext}. An installed plugin's section mounts
+ * in the plugin manager with `scope: "user"` and in Project settings → Plugins
+ * with `scope: "project"`, so it renders the rows that belong to that scope; a
+ * project plugin's section always mounts with `scope: "project"`.
+ */
+export interface PluginSettingsViewContext {
+  readonly scope: "user" | "project";
+  /** The project the section is shown for; `null` in the `"user"` home. */
+  readonly projectId: string | null;
+}
+
+/**
+ * The synthetic view-kind id a plugin's `location: "settings"` view mounts
+ * under. It names no panel kind: it exists so the shared plugin-view loader can
+ * activate the owning plugin and key its per-view state, and main recognises
+ * the prefix in `activatePluginForView`.
+ */
+export const PLUGIN_SETTINGS_VIEW_KIND_PREFIX = "plugin-settings-view:";
+
+export function pluginSettingsViewKindId(pluginId: string): string {
+  return `${PLUGIN_SETTINGS_VIEW_KIND_PREFIX}${pluginId}`;
+}
+
+/** The plugin instance key a settings-view kind id names, or `null` for any other id. */
+export function pluginIdFromSettingsViewKindId(kindId: string): string | null {
+  if (typeof kindId !== "string" || !kindId.startsWith(PLUGIN_SETTINGS_VIEW_KIND_PREFIX)) {
+    return null;
+  }
+  const pluginId = kindId.slice(PLUGIN_SETTINGS_VIEW_KIND_PREFIX.length);
+  return pluginId.length > 0 ? pluginId : null;
+}
 
 export interface ViewContribution {
   id: string;
@@ -527,6 +566,11 @@ export interface PanelViewProps {
    * ```
    */
   readonly styleRootAttributes: Readonly<Record<string, string>>;
+  /**
+   * Present only for a `location: "settings"` view: which settings home it is
+   * mounted in, so it renders the rows for that scope. Absent for a panel view.
+   */
+  readonly settingsContext?: PluginSettingsViewContext;
 }
 
 /**
@@ -1310,6 +1354,14 @@ export interface SettingDefinition {
    * plaintext when no keychain is available (see {@link PluginSecretStorageTier}).
    */
   secret?: boolean;
+  /**
+   * The plugin can't do its job until this is set. While any required setting
+   * is unset — a secret counts as set only once a value is stored, and a
+   * declared `default` never satisfies it — each of the plugin's open panels
+   * shows a "needs setup" strip above its view that opens the setting, and
+   * {@link SettingsApi.missingRequired} lists it.
+   */
+  required?: boolean;
 }
 
 /**
@@ -1478,6 +1530,24 @@ export interface SettingsApi {
     callback: (value: T | undefined) => void,
     scope?: PluginSettingsScope
   ): Promise<() => void>;
+  /**
+   * Take the user to this plugin's settings, in whichever home they live in —
+   * the plugin manager for an installed plugin's own settings, Project
+   * settings → Plugins for a project plugin or a project-scoped key — and, when
+   * `key` names a declared setting, scroll to it and highlight it briefly.
+   *
+   * A bound (project) plugin opens in its own project's window. Resolves once
+   * the request is handed to the renderer; rejects when no window can show it.
+   */
+  open(key?: string): Promise<void>;
+  /**
+   * The ids of declared `required: true` settings that are still unset, in
+   * manifest order. A secret counts as set only once a value is stored, and a
+   * declared `default` never counts. Project-scoped keys are read against the
+   * plugin's project (or the active project for an installed plugin) and are
+   * reported missing when there is none. Empty when nothing is required.
+   */
+  missingRequired(): Promise<string[]>;
 }
 
 /**
@@ -2144,6 +2214,12 @@ export interface LoadedPluginInfo {
    * `PluginMcpTierAuth`; do not re-declare it anywhere else.
    */
   pluginDanger: "safe" | "confirm";
+  /**
+   * The `plugin://` module URL of the plugin's `location: "settings"` view,
+   * built by main under this load's authority and generation. Present only
+   * while the plugin is running and declares one.
+   */
+  settingsViewPath?: string;
   /**
    * True when the plugin was refused at load time by the remote blocklist /
    * kill-switch (#10891) — its `manifest.name` matched a blocklist entry whose

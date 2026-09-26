@@ -522,6 +522,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     clearFocusPluginId();
   }, [focusPluginId, clearFocusPluginId, pm.plugins, skipMotion]);
 
+  // A `plugin.openSettings` whose home is the manager: select the plugin the
+  // same way a deep-link `open` does. The detail pane then opens its Settings
+  // tab and lands on the key, and consumes the request once it has.
+  const settingsRequest = usePluginManagerStore((s) =>
+    s.settingsRequest?.home === "manager" ? s.settingsRequest : null
+  );
+  const consumeSettingsRequest = usePluginManagerStore((s) => s.consumeSettingsRequest);
+  const settingsRequestPluginId = settingsRequest?.pluginId ?? null;
+  const settingsRequestNonce = settingsRequest?.nonce;
+  useEffect(() => {
+    if (!isOpen || settingsRequestPluginId === null) return;
+    if (!pm.plugins.some((p) => p.manifest.name === settingsRequestPluginId)) return;
+    setQuery("");
+    setSelectedProjectPluginId(null);
+    setSelectedPluginId(settingsRequestPluginId);
+  }, [isOpen, settingsRequestPluginId, settingsRequestNonce, pm.plugins]);
+
   // Fade the deep-link highlight after a beat. Kept separate from the consume
   // effect above: clearing focusPluginId there flips that effect's own
   // dependency, so an inline timer would be torn down a render later before it
@@ -1017,6 +1034,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               onRetry={() => void pm.retryPlugin(selectedPlugin)}
               onUninstall={() => pm.armUninstall(selectedPlugin)}
               onCheckForUpdate={() => void pm.handleCheckForUpdate(selectedPlugin)}
+              settingsRequest={
+                settingsRequest !== null && settingsRequest.pluginId === selectedPlugin.instanceId
+                  ? settingsRequest
+                  : null
+              }
+              onSettingsRequestHandled={consumeSettingsRequest}
             />
           ) : hasPlugins ? (
             // Catalog home — the marketplace face of the manager. Clicking a

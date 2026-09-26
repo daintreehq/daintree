@@ -840,6 +840,28 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
+    // Recorded as the dispatch the real host sends, so a test asserts it the
+    // same way it asserts any other `host.dispatch`.
+    async open(key?: string): Promise<void> {
+      if (key !== undefined && (typeof key !== "string" || key.length === 0)) {
+        throw new Error("settings.open: key must be a non-empty string when given");
+      }
+      dispatchedActions.push({
+        actionId: "plugin.openSettings",
+        args: key === undefined ? { pluginId } : { pluginId, key },
+      });
+    },
+    // Manifest-aware only: with no `manifestSettings` nothing is declared, so
+    // nothing can be required. A default never satisfies a required key.
+    async missingRequired(): Promise<string[]> {
+      return (options.manifestSettings ?? [])
+        .filter((def) => def.required === true)
+        .filter((def) => {
+          const value = settingsStore[(def.scope ?? "user") as PluginSettingsScope].get(def.id);
+          return value === undefined || value === null || value === "";
+        })
+        .map((def) => def.id);
+    },
   };
 
   // Private machine-owned storage (#10556). Mirrors the settings mock but adds

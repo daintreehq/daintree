@@ -115,6 +115,19 @@ describe("contributes.settings schema (#9301)", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts required on any type and keeps it", () => {
+    const result = parseSettings([
+      { id: "token", type: "secret", required: true },
+      { id: "team", type: "string", scope: "project", required: false },
+    ]);
+    expect(result.success).toBe(true);
+    expect(settingsOf(result).map((s) => s.required)).toEqual([true, false]);
+  });
+
+  it("rejects a non-boolean required", () => {
+    expect(parseSettings([{ id: "token", required: "yes" }]).success).toBe(false);
+  });
+
   it("rejects an unknown field key (strict)", () => {
     const result = parseSettings([{ id: "name", type: "string", bogus: true }]);
     expect(result.success).toBe(false);

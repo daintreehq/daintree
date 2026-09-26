@@ -137,6 +137,7 @@ import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
+  pluginIdFromSettingsViewKindId,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../../shared/types/plugin.js";
@@ -1118,6 +1119,7 @@ export class PluginService {
       // renders a settings form whether or not the plugin is running.
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
+      onSettingChanged: (pluginId) => this.emitSettingsChanged(pluginId),
     });
 
     this.storage = new PluginStorageManager({
@@ -2117,9 +2119,11 @@ export class PluginService {
     const viewsByBareId = new Map<string, ViewContribution>();
     const unmatchedViewIds = new Set<string>();
     for (const view of manifest.contributes.views) {
-      // `location` is narrowed to `"panel"` and `componentPath` safety is
-      // enforced by `ViewContributionSchema` at manifest parse — an unsupported
-      // location or unsafe path fails validation before we reach this loop.
+      // `componentPath` safety is enforced by `ViewContributionSchema` at
+      // manifest parse. A settings view renders in the plugin's settings home,
+      // never into a panel, so it is left out of the panel match entirely —
+      // `settingsViewPath` builds its URL on demand.
+      if (view.location === "settings") continue;
       if (viewsByBareId.has(view.id)) {
         // Two entries with the same bare id — last would silently overwrite
         // earlier. Surface the authoring mistake; keep the first to make the
@@ -2147,6 +2151,19 @@ export class PluginService {
       tourIdByPanelId.set(tour.panelKind, makePluginTourId(manifest.name, tour.id));
     }
 
+    // Every panel of the plugin offers "Plugin settings…" when there is anything
+    // to configure, and checks its required settings when it declares any.
+    // Only present-when-true, so a plugin with no settings registers exactly
+    // the config it did before.
+    const declaredSettings = manifest.contributes.settings;
+    const pluginSettingsKindFlags = {
+      ...(declaredSettings.length > 0 ||
+      manifest.contributes.views.some((v) => v.location === "settings")
+        ? { hasPluginSettings: true }
+        : {}),
+      ...(declaredSettings.some((s) => s.required === true) ? { hasRequiredSettings: true } : {}),
+    };
+
     for (const panel of manifest.contributes.panels) {
       // A project plugin's panel kinds register under the project-qualified
       // runtime id, so two projects can each contribute `acme.dash/overview`
@@ -2170,6 +2187,7 @@ export class PluginService {
       if (view) unmatchedViewIds.delete(panel.id);
       const tourId = tourIdByPanelId.get(panel.id);
       registerPanelKind({
+        ...pluginSettingsKindFlags,
         id: panelId,
         name: panel.name,
         iconId: panel.iconId,
@@ -3124,6 +3142,10 @@ export class PluginService {
     requestRecoveryPath = false
   ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
+    const settingsPluginId = pluginIdFromSettingsViewKindId(panelKindId);
+    if (settingsPluginId !== null) {
+      return this.activatePluginForSettingsView(settingsPluginId, requestRecoveryPath);
+    }
     for (const [pluginId, plugin] of this.plugins) {
       const projectId = plugin.binding?.projectId ?? null;
       for (const panel of plugin.manifest.contributes.panels) {
@@ -3151,7 +3173,9 @@ export class PluginService {
           if (!live || live !== plugin) return { ok: true };
           const view = panel.hasPty
             ? undefined
-            : live.manifest.contributes.views.find((v) => v.id === panel.id);
+            : live.manifest.contributes.views.find(
+                (v) => v.id === panel.id && v.location !== "settings"
+              );
           if (!view) return { ok: true };
           // Same reason the map re-read above exists: without a live authority
           // the URL would address nothing, so offer no recovery path at all
@@ -3171,6 +3195,51 @@ export class PluginService {
       }
     }
     return { ok: true };
+  }
+
+  /**
+   * {@link activatePluginForView} for a plugin's `location: "settings"` view,
+   * which names no panel kind: the id carries the instance key directly. Same
+   * activation, failure reporting and recovery-URL contract as a panel view.
+   */
+  private async activatePluginForSettingsView(
+    pluginId: string,
+    requestRecoveryPath: boolean
+  ): Promise<PluginActivationResult> {
+    const plugin = this.plugins.get(pluginId);
+    const view = plugin?.manifest.contributes.views.find((v) => v.location === "settings");
+    if (!plugin || !view) return { ok: true };
+    await this.activatePlugin(pluginId);
+    const loadError = this.getPluginLoadError(pluginId);
+    if (loadError) return { ok: false, error: loadError.message, stack: loadError.stack };
+    if (!requestRecoveryPath) return { ok: true };
+    const live = this.plugins.get(pluginId);
+    if (!live || live !== plugin) return { ok: true };
+    const authority = this.pluginAuthorities.get(pluginId);
+    if (!authority) return { ok: true };
+    live.recoveryViewGeneration ??= allocatePluginViewGeneration();
+    return {
+      ok: true,
+      recoveryComponentPath: buildPluginViewUrl(
+        authority,
+        view.componentPath,
+        live.recoveryViewGeneration
+      ),
+    };
+  }
+
+  /**
+   * The `plugin://` URL of a running plugin's settings view under this load's
+   * authority and generation, or `undefined` when it declares none (or has no
+   * live authority, in which case the URL would address nothing).
+   */
+  private settingsViewPath(pluginId: string): string | undefined {
+    const plugin = this.plugins.get(pluginId);
+    const view = plugin?.manifest.contributes.views.find((v) => v.location === "settings");
+    if (!plugin || !view) return undefined;
+    const authority = this.pluginAuthorities.get(pluginId);
+    if (!authority) return undefined;
+    return buildPluginViewUrl(authority, view.componentPath, plugin.viewGeneration);
   }
 
   /**
@@ -4796,6 +4865,30 @@ export class PluginService {
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
+  /**
+   * Tell renderers a plugin's stored settings changed, so anything derived from
+   * them (the panel "needs setup" strip) re-reads. Scoped like runtime status:
+   * a project instance's key stays in its own project's views.
+   */
+  private emitSettingsChanged(pluginId: string): void {
+    if (this.disposed) return;
+    const event = { name: "plugin:settings-changed" as const, payload: { pluginId } };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /** {@link PluginSettingsManager.missingRequiredForUi}, for the renderer bridge. */
+  async getMissingRequiredSettingsForUi(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<string[]> {
+    return this.settings.missingRequiredForUi(pluginId, projectId);
+  }
+
   private setDevSessionDetail(pluginId: string, detail: string | null): void {
     const session = this.devSessions.get(pluginId);
     if (!session || session.detail === detail) return;
@@ -5946,9 +6039,12 @@ export class PluginService {
       const blocklisted = blocklistReason !== undefined;
       const pendingRestart = blocklisted ? false : isRunning ? disabled : !disabled;
       const pluginDanger = computePluginDanger(p.manifest);
+      const settingsViewPath = isRunning ? this.settingsViewPath(instanceId) : undefined;
+      const settingsView = settingsViewPath !== undefined ? { settingsViewPath } : {};
       if (p.isBuiltin) {
         return {
           ...identity,
+          ...settingsView,
           manifest: p.manifest,
           dir: p.dir,
           loadedAt,
@@ -5970,6 +6066,7 @@ export class PluginService {
       const record = isProject ? undefined : installed[p.manifest.name];
       return {
         ...identity,
+        ...settingsView,
         manifest: p.manifest,
         dir: p.dir,
         loadedAt,

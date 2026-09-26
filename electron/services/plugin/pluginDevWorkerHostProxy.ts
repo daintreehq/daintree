@@ -1138,6 +1138,8 @@ export class PluginDevWorkerHostProxy {
           this.call<T | undefined>("settings.get", { key, scope }),
         set: <T = unknown>(key: string, value: T, scope: PluginSettingsScope = "user") =>
           this.call<void>("settings.set", { key, value, scope }),
+        open: (key?: string) => this.call<void>("settings.open", key === undefined ? {} : { key }),
+        missingRequired: () => this.call<string[]>("settings.missingRequired", {}),
         onDidChange: <T = unknown>(
           key: string,
           callback: (value: T | undefined) => void,

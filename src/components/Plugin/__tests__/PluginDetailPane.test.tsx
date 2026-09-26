@@ -550,3 +550,53 @@ describe("PluginDetailPane blocklist (#10891)", () => {
     expect(screen.queryByText(/Blocked from loading/)).toBeNull();
   });
 });
+
+describe("PluginDetailPane settings deep link", () => {
+  function withSettings(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
+    const base = makePlugin(overrides);
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: { ...base.manifest.contributes, settings: [{ id: "region" }] },
+      },
+    };
+  }
+
+  function renderWithRequest(
+    plugin: LoadedPluginInfo,
+    settingsRequest: { key?: string; nonce: number } | null,
+    onSettingsRequestHandled = vi.fn()
+  ) {
+    render(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={plugin}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+          settingsRequest={settingsRequest}
+          onSettingsRequestHandled={onSettingsRequestHandled}
+        />
+      </TooltipProvider>
+    );
+    return onSettingsRequestHandled;
+  }
+
+  it("opens the Settings tab and reports a key-less request handled", () => {
+    const handled = renderWithRequest(withSettings(), { nonce: 4 });
+    expect(screen.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
+    expect(handled).toHaveBeenCalledWith(4);
+  });
+
+  it("offers a Settings tab to a plugin whose only settings are its custom view", () => {
+    renderWithRequest(makePlugin({ settingsViewPath: "plugin://acme/settings.js" }), null);
+    expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
+  });
+});

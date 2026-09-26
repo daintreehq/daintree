@@ -302,6 +302,7 @@ export const BUILT_IN_ACTION_IDS = [
   "plugin.reloadProject",
   "plugin.reloadPanel",
   "plugin.reloadWindow",
+  "plugin.openSettings",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
