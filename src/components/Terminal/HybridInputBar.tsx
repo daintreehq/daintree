@@ -62,7 +62,7 @@ import { useDragDrop } from "./hooks/useDragDrop";
 import { useAttachFiles } from "./hooks/useAttachFiles";
 import { useVoiceDecorations } from "./hooks/useVoiceDecorations";
 import { useContextDetection } from "./hooks/useContextDetection";
-import { useTokenResolution } from "./hooks/useTokenResolution";
+import { draftUnchangedSince, useTokenResolution } from "./hooks/useTokenResolution";
 import { useEditorKeymap } from "./hooks/useEditorKeymap";
 import { useCompartmentDriver } from "./hooks/useCompartmentDriver";
 import { usePasteExtensions } from "./hooks/usePasteExtensions";
@@ -574,7 +574,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       agentId,
     });
 
+    // The outside-write revision the effect below last brought into the editor.
+    // While the store's count is ahead of it, a write sits in the draft store
+    // that the editor does not show yet.
+    const appliedExternalDraftRevisionRef = useRef(externalDraftRevision);
+
     useEffect(() => {
+      appliedExternalDraftRevisionRef.current = externalDraftRevision;
       if (externalDraftRevision === 0) return;
       const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
       const view = editorViewRef.current;
@@ -595,6 +601,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [externalDraftRevision, terminalId, currentProject?.id]);
 
     useVoiceDecorations({ terminalId, editorViewRef });
+
+    /**
+     * The `isDraftUnchanged` for a send of the editor's text as it reads now:
+     * the send clears only that text, never what landed in the draft since or
+     * was still on its way to the editor when it began.
+     */
+    const guardSentDraft = useCallback(
+      (projectIdAtSend: string | undefined) =>
+        draftUnchangedSince(
+          () => editorViewRef.current?.state.doc.toString() ?? latestRef.current?.value,
+          () => useTerminalInputStore.getState().getDraftInput(terminalId, projectIdAtSend),
+          useTerminalInputStore.getState().externalDraftRevision !==
+            appliedExternalDraftRevisionRef.current
+        ),
+      [editorViewRef, terminalId]
+    );
 
     const resetEditorDoc = () => {
       applyEditorValue("", {
@@ -619,7 +641,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (intercepted) return;
       }
 
-      sendText(text, { imagePaths: readImageChipPaths(view) });
+      sendText(text, {
+        imagePaths: readImageChipPaths(view),
+        // A `@diff` fetch is awaited, and a handoff or the user's own typing can
+        // land in the draft meanwhile; only the text that went out is cleared.
+        isDraftUnchanged: guardSentDraft(latest?.projectId),
+      });
     };
 
     const { startVoiceWaitSubmit, cancelVoiceWaitSubmit } = useVoiceWaitSubmit({
@@ -742,25 +769,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // either. Say no and let the caller keep its banner up.
           if (!view || !latest || latest.disabled) return false;
           const snapshot = view.state.doc.toString();
-          const readStoredDraft = () =>
-            useTerminalInputStore.getState().getDraftInput(terminalId, latest.projectId);
-          const storedAtSend = readStoredDraft();
           return sendText(snapshot, {
             compose: (draft) => composeDraftWithInstruction(draft, instruction),
             submit,
             // What was sent is a snapshot; what the user has by the time the
             // submit lands may not be. Only the snapshot is ours to clear.
-            // The store is checked as well as the document because voice,
-            // prompt history, file references and type-anywhere all write the
-            // draft store first and reach CodeMirror an effect later — during
-            // that window the document alone still looks untouched.
-            isDraftUnchanged: () =>
-              editorViewRef.current?.state.doc.toString() === snapshot &&
-              readStoredDraft() === storedAtSend,
+            isDraftUnchanged: guardSentDraft(latest.projectId),
           });
         },
       }),
-      [focusEditor, sendText]
+      [focusEditor, guardSentDraft, sendText]
     );
 
     // Claim the type-anywhere routing target (#11134) whenever the user really

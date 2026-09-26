@@ -159,6 +159,35 @@ export interface SendTextOptions {
   isDraftUnchanged?: () => boolean;
 }
 
+/**
+ * An `isDraftUnchanged` for a send of the draft as it reads now. A send can
+ * await — a `@diff` fetch, a targeted submit — and in that window the user can
+ * type, and voice, prompt history, file references, type-anywhere and plugin
+ * handoffs can append to the draft. Those write the draft store first and reach
+ * the editor an effect later, so both are compared: the editor against what was
+ * sent, and the store against what it held at send time — or against what was
+ * sent, for a store that was a keystroke behind and has since caught up.
+ *
+ * `externalWritePending` says an outside write had reached the store but not
+ * yet the editor when the send began. A store that differs from the editor
+ * then is ahead of it, not behind: it holds that write, which was never sent,
+ * so the draft is never cleared.
+ */
+export function draftUnchangedSince(
+  readDoc: () => string | undefined,
+  readStored: () => string,
+  externalWritePending = false
+): () => boolean {
+  const snapshot = readDoc();
+  const storedAtSend = readStored();
+  const storeAhead = externalWritePending && storedAtSend !== snapshot;
+  return () => {
+    if (storeAhead || readDoc() !== snapshot) return false;
+    const stored = readStored();
+    return stored === storedAtSend || stored === snapshot;
+  };
+}
+
 interface UseTokenResolutionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
   applyEditorValue: (

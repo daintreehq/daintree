@@ -6,7 +6,7 @@ import {
   closingFenceForOpenBlock,
   formatAgentContextBlock,
 } from "@shared/utils/agentContextDrag";
-import { useTokenResolution } from "../useTokenResolution";
+import { draftUnchangedSince, useTokenResolution } from "../useTokenResolution";
 
 const cachedSelection = vi.hoisted(() => ({ value: null as string | null }));
 
@@ -194,6 +194,92 @@ describe("useTokenResolution.sendText", () => {
     const before = sent.slice(0, sent.indexOf("\nPAYLOAD LINE\n") + 1);
     expect(closingFenceForOpenBlock(before)).toBe(handoffFence);
     expect(closingFenceForOpenBlock(sent)).toBeNull();
+  });
+
+  it("keeps a handoff that lands in the draft while a @diff fetch is awaited", async () => {
+    let releaseDiff!: (diff: string) => void;
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        git: {
+          getWorkingDiff: () =>
+            new Promise<string>((resolve) => {
+              releaseDiff = resolve;
+            }),
+        },
+      },
+    });
+    const typed = "review @diff";
+    // The editor and the draft store, as the input bar reads them.
+    let doc = typed;
+    let stored = typed;
+    const { sendText, onSend, applyEditorValue, clearDraftInput } = setup();
+
+    let sending!: Promise<boolean>;
+    await act(async () => {
+      sending = sendText(typed, {
+        isDraftUnchanged: draftUnchangedSince(
+          () => doc,
+          () => stored
+        ),
+      });
+      await Promise.resolve();
+    });
+
+    // A plugin hands work over mid-fetch: it lands in the store, then the editor.
+    stored = appendAgentContextToDraft(
+      stored,
+      formatAgentContextBlock({ text: "Card body", title: "Card" })
+    );
+    doc = stored;
+
+    await act(async () => {
+      releaseDiff("BODY");
+      await sending;
+    });
+
+    expect(onSend.mock.calls[0]![0].text).toBe("review ```diff\nBODY\n```");
+    // The handoff was reported as drafted; the finished send must not erase it.
+    expect(applyEditorValue).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
+  });
+
+  it("keeps a handoff already in the store but not yet in the editor at Enter", async () => {
+    const typed = "old text";
+    const stored = appendAgentContextToDraft(
+      typed,
+      formatAgentContextBlock({ text: "Card body", title: "Card" })
+    );
+    const { sendText, onSend, clearDraftInput } = setup();
+    await act(async () => {
+      await sendText(typed, {
+        isDraftUnchanged: draftUnchangedSince(
+          () => typed,
+          () => stored,
+          true
+        ),
+      });
+    });
+    // What the user saw went out; the handoff they never saw stays drafted.
+    expect(onSend.mock.calls[0]![0].text).toBe(typed);
+    expect(clearDraftInput).not.toHaveBeenCalled();
+  });
+
+  it("still clears the draft it sent when nothing landed meanwhile", async () => {
+    const { sendText, clearDraftInput } = setup();
+    // The store a keystroke behind the editor at Enter, catching up after.
+    let stored = "review";
+    const doc = "review @diff";
+    const guard = draftUnchangedSince(
+      () => doc,
+      () => stored
+    );
+    stored = doc;
+    await act(async () => {
+      await sendText(doc, { isDraftUnchanged: guard });
+    });
+    expect(clearDraftInput).toHaveBeenCalledTimes(1);
   });
 
   it("sends no image paths for a draft without any", async () => {
