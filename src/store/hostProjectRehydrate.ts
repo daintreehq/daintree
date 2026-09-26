@@ -37,9 +37,14 @@ export async function rehydrateHostProjectState(
 ): Promise<void> {
   // Drafts as they stood before asking: one typed into since is newer than
   // anything the host's answer can carry, so it is left alone.
-  const draftsBefore = (await import("@/store/terminalInputStore")).useTerminalInputStore
-    .getState()
-    .getProjectDraftInputs(projectId);
+  const [{ useTerminalInputStore }, { draftInputPersistence: persistence }] = await Promise.all([
+    import("@/store/terminalInputStore"),
+    import("@/store/persistence/draftInputPersistence"),
+  ]);
+  const draftsBefore = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
+  // What this view last knew the host held, read before asking, so a write of
+  // ours acknowledged while the answer travels can't pass for a host deletion.
+  const baselineBefore = persistence.getBaseline(projectId) ?? {};
   const hydrate: HydrateResult = await window.electron.app.hydrate();
   if (!options.isCurrent()) return;
   const workspaceId = hydrate.workspaceId ?? hydrate.project?.id ?? null;
@@ -105,7 +110,22 @@ export async function rehydrateHostProjectState(
     if ((local[terminalId] ?? "") !== (draftsBefore[terminalId] ?? "")) continue;
     incoming[terminalId] = text;
   }
-  if (Object.keys(incoming).length > 0) input.restoreProjectDraftInputs(projectId, incoming);
+  let draftsChanged = Object.keys(incoming).length > 0;
+  if (draftsChanged) input.restoreProjectDraftInputs(projectId, incoming);
+  // A draft the host held at our baseline and no longer holds was sent or
+  // cleared by another driver. Kept here, the rebase below would make the next
+  // flush write it back as new; one edited here since the baseline is ours and
+  // stays.
+  for (const [terminalId, text] of Object.entries(baselineBefore)) {
+    if (typeof hostDrafts[terminalId] === "string" && hostDrafts[terminalId] !== "") continue;
+    if (local[terminalId] === undefined) continue;
+    if (local[terminalId] !== text || (draftsBefore[terminalId] ?? "") !== text) continue;
+    input.clearDraftInput(terminalId, projectId);
+    draftsChanged = true;
+  }
+  // A mounted editor holds its own copy of the text: without this it keeps
+  // showing a cleared draft, and its next keystroke writes it back.
+  if (draftsChanged) input.bumpExternalDraftRevision();
   // The host holds exactly its snapshot now, so the next flush diffs against
   // it: a restored draft that is then sent gets its tombstone, and an edit
   // made here during hydration (kept above) goes up as a change.
