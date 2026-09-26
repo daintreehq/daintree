@@ -5,7 +5,10 @@ import {
   bootstrapHostMode,
   ENABLE_LINGER_SCRIPT,
   hostModeConfirmed,
+  DROP_UNIT_BACKUP_SCRIPT,
   REMOVE_UNIT_SCRIPT,
+  restoreUnitScript,
+  SAVE_UNIT_SCRIPT,
   linuxHandoffScript,
   MAC_ENABLE_SCRIPT,
   START_UNIT_SCRIPT,
@@ -93,9 +96,13 @@ interface Recorded {
   input?: CommandInput;
 }
 
-/** A running Daintree takes the handoff; anything else succeeds quietly. */
+/** A running Daintree takes the handoff; there was no unit before; anything else succeeds quietly. */
 const handedOver = (script: string) =>
-  script.includes("--host-mode-handoff") ? ok("@@dt:handoff 0\n") : ok();
+  script.includes("--host-mode-handoff")
+    ? ok("@@dt:handoff 0\n")
+    : script === SAVE_UNIT_SCRIPT
+      ? ok("@@dt:unitsaved no\n")
+      : ok();
 
 function scripted(answer: (script: string) => CommandResult = handedOver) {
   const calls: Recorded[] = [];
@@ -246,16 +253,17 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     });
     expect(calls.map((c) => c.script)).toEqual([
       ENABLE_LINGER_SCRIPT,
+      SAVE_UNIT_SCRIPT,
       writeUnitScript(),
       START_UNIT_SCRIPT,
       linuxHandoffScript({ ...target, appImageExtractAndRun: false }),
     ]);
     // The very text the host writes for itself, so it finds its unit current.
-    expect(calls[1]!.input).toEqual({ text: systemdUnitFor(target) });
+    expect(calls[2]!.input).toEqual({ text: systemdUnitFor(target) });
     expect(writeUnitScript()).toBe(
       'mkdir -p "$HOME/.config/systemd/user" && cat > "$HOME/.config/systemd/user/daintree-host.service.tmp" && chmod 644 "$HOME/.config/systemd/user/daintree-host.service.tmp" && mv -f "$HOME/.config/systemd/user/daintree-host.service.tmp" "$HOME/.config/systemd/user/daintree-host.service" && systemctl --user daemon-reload && systemctl --user enable daintree-host.service'
     );
-    expect(calls[3]!.script).toBe(
+    expect(calls[4]!.script).toBe(
       "'/opt/Daintree/daintree' --host-mode --enable-host-mode --host-mode-handoff </dev/null >/dev/null 2>&1; echo \"@@dt:handoff $?\""
     );
     expect(result).toMatchObject({ lingerRefused: null, probe: { hostModeListening: true } });
@@ -267,7 +275,7 @@ describe("bootstrapHostMode on a headless Linux host", () => {
         ? fail("Could not enable linger: Interactive authentication required.")
         : script.includes("--host-mode-handoff")
           ? ok("@@dt:handoff 0\n")
-          : ok()
+          : handedOver(script)
     );
     const result = await bootstrapHostMode("bigbox", await outcomeOf(linux({})), {
       channel,
@@ -284,9 +292,7 @@ describe("bootstrapHostMode on a headless Linux host", () => {
   });
 
   it("runs an AppImage unpacked, in the unit and the handoff, where there is no FUSE", async () => {
-    const { channel, calls } = scripted((script) =>
-      script.includes("--host-mode-handoff") ? ok("@@dt:handoff 0\n") : ok()
-    );
+    const { channel, calls } = scripted();
     const before = linux({ install: "appimage", fuse: false, linger: "yes" });
     await bootstrapHostMode("bigbox", await outcomeOf(before), {
       channel,
@@ -358,7 +364,9 @@ describe("bootstrapHostMode on a headless Linux host", () => {
 
   it("reports systemctl's own words when the user's service manager can't be reached", async () => {
     const { channel } = scripted((script) =>
-      script === writeUnitScript() ? fail("Failed to connect to bus: No medium found") : ok()
+      script === writeUnitScript()
+        ? fail("Failed to connect to bus: No medium found")
+        : handedOver(script)
     );
     await expect(
       bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes" })), {
@@ -383,9 +391,13 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     expect(calls.at(-1)!.script).toBe(REMOVE_UNIT_SCRIPT);
   });
 
-  it("leaves a unit alone that was there before setup", async () => {
+  it("puts back a disabled, stopped unit that was there before, as it was, when setup fails", async () => {
     const { channel, calls } = scripted((script) =>
-      script === START_UNIT_SCRIPT ? fail("Job failed") : handedOver(script)
+      script === SAVE_UNIT_SCRIPT
+        ? ok("@@dt:unitsaved yes\n@@dt:unitwanted no\n@@dt:unitactive inactive\n")
+        : script === START_UNIT_SCRIPT
+          ? fail("Job failed")
+          : handedOver(script)
     );
     await expect(
       bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
@@ -395,7 +407,112 @@ describe("bootstrapHostMode on a headless Linux host", () => {
         now: clock(),
       })
     ).rejects.toThrow(/Couldn't start the Host mode service/);
+    const restore = restoreUnitScript({ existed: true, wanted: false, active: false });
+    expect(calls.map((c) => c.script)).toEqual([
+      SAVE_UNIT_SCRIPT,
+      writeUnitScript(),
+      START_UNIT_SCRIPT,
+      restore,
+    ]);
+    expect(restore).toBe(
+      'rm -f "$HOME/.config/systemd/user/default.target.wants/daintree-host.service" && mv -f "$HOME/.config/systemd/user/daintree-host.service.daintree-setup-backup" "$HOME/.config/systemd/user/daintree-host.service" && systemctl --user daemon-reload && { systemctl --user stop daintree-host.service >/dev/null 2>&1; true; }'
+    );
     expect(calls.some((c) => c.script === REMOVE_UNIT_SCRIPT)).toBe(false);
+  });
+
+  it("puts back an enabled, running unit without touching its links, and running", async () => {
+    const { channel, calls } = scripted((script) =>
+      script === SAVE_UNIT_SCRIPT
+        ? ok("@@dt:unitsaved yes\n@@dt:unitwanted yes\n@@dt:unitactive active\n")
+        : script.includes("--host-mode-handoff")
+          ? ok("@@dt:handoff 1\n")
+          : ok()
+    );
+    await expect(
+      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
+        channel,
+        probe: probes([linux({ unit: "enabled", listening: true, linger: "yes" })]).probe,
+        sleep: async () => {},
+        now: clock(),
+      })
+    ).rejects.toThrow(/didn't take the request/);
+    const restore = restoreUnitScript({ existed: true, wanted: true, active: true });
+    expect(calls.at(-1)!.script).toBe(restore);
+    expect(restore).toBe(
+      'mv -f "$HOME/.config/systemd/user/daintree-host.service.daintree-setup-backup" "$HOME/.config/systemd/user/daintree-host.service" && systemctl --user daemon-reload && systemctl --user start daintree-host.service'
+    );
+  });
+
+  it("drops its copy of the earlier unit once Host mode reads back on", async () => {
+    const { channel, calls } = scripted((script) =>
+      script === SAVE_UNIT_SCRIPT
+        ? ok("@@dt:unitsaved yes\n@@dt:unitwanted no\n@@dt:unitactive inactive\n")
+        : handedOver(script)
+    );
+    await bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
+      channel,
+      probe: probes([linux({ unit: "enabled", listening: true, linger: "yes", state: state() })])
+        .probe,
+      sleep: async () => {},
+      now: clock(),
+    });
+    expect(calls.at(-1)!.script).toBe(DROP_UNIT_BACKUP_SCRIPT);
+  });
+
+  it("touches nothing when it can't keep a copy of the unit already there", async () => {
+    const { channel, calls } = scripted((script) =>
+      script === SAVE_UNIT_SCRIPT
+        ? ok("@@dt:unitsaved failed\n@@dt:unitwanted yes\n@@dt:unitactive inactive\n")
+        : handedOver(script)
+    );
+    await expect(
+      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
+        channel,
+        probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
+        sleep: async () => {},
+        now: clock(),
+      })
+    ).rejects.toThrow(/Couldn't keep a copy of the Host mode service/);
+    expect(calls.map((c) => c.script)).toEqual([SAVE_UNIT_SCRIPT]);
+  });
+
+  it("touches nothing when it can't tell whether the unit already there was running", async () => {
+    const { channel, calls } = scripted((script) =>
+      script === SAVE_UNIT_SCRIPT
+        ? ok("@@dt:unitsaved yes\n@@dt:unitwanted yes\n@@dt:unitactive \n")
+        : handedOver(script)
+    );
+    await expect(
+      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
+        channel,
+        probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
+        sleep: async () => {},
+        now: clock(),
+      })
+    ).rejects.toThrow(/Couldn't keep a copy of the Host mode service/);
+    expect(calls.map((c) => c.script)).toEqual([SAVE_UNIT_SCRIPT]);
+  });
+
+  it("says where the earlier unit's copy is when it can't be put back", async () => {
+    const { channel } = scripted((script) =>
+      script === SAVE_UNIT_SCRIPT
+        ? ok("@@dt:unitsaved yes\n@@dt:unitwanted no\n@@dt:unitactive inactive\n")
+        : script === START_UNIT_SCRIPT
+          ? fail("Job failed")
+          : script.startsWith("rm -f")
+            ? fail("mv: cannot move: Read-only file system")
+            : handedOver(script)
+    );
+    await expect(
+      bootstrapHostMode("bigbox", await outcomeOf(linux({ linger: "yes", unit: "enabled" })), {
+        channel,
+        probe: probes([linux({ unit: "enabled", linger: "yes" })]).probe,
+        sleep: async () => {},
+        now: clock(),
+      })
+    ).rejects.toThrow(
+      /Couldn't start the Host mode service: Job failed\. Setup couldn't put back the Host mode service that was already on bigbox: its copy is at ~\/\.config\/systemd\/user\/daintree-host\.service\.daintree-setup-backup there \(mv: cannot move: Read-only file system\)/
+    );
   });
 
   it("doesn't take a host whose listener pid wasn't seen alive as switched on", async () => {

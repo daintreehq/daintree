@@ -165,13 +165,15 @@ describe("HostSetupService", () => {
         if (script.includes("@@dt:uname"))
           return ok(outputs.length > 1 ? outputs.shift()! : outputs[0]!);
         scripts.push({ script, input: options?.input });
+        if (script.includes("unitsaved")) return ok("@@dt:unitsaved no\n");
         return ok(script.includes("--host-mode-handoff") ? "@@dt:handoff 0\n" : "");
       },
     });
     const result = await setup.startHostMode({ sshTarget: "bigbox" });
     expect(result.probe.hostModeState).toMatchObject({ enabled: true, startAtLogin: true });
-    expect(scripts[0]!.input).toMatchObject({ text: expect.stringContaining("[Service]") });
+    expect(scripts[1]!.input).toMatchObject({ text: expect.stringContaining("[Service]") });
     expect(scripts.map((s) => s.script)).toEqual([
+      expect.stringContaining("daintree-setup-backup"),
       expect.stringMatching(/^sh -c '.*systemctl --user enable daintree-host\.service'$/),
       "sh -c 'systemctl --user start daintree-host.service'",
       expect.stringContaining("--host-mode --enable-host-mode --host-mode-handoff"),
