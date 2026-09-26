@@ -4,6 +4,7 @@ import { HELP_METHOD_CHANNELS } from "./help.preload.js";
 import type * as HelpServiceModule from "../../services/HelpService.js";
 import type * as HelpSessionServiceModule from "../../services/HelpSessionService.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
+import type { ClientEndpoint } from "../endpoint.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { PinnedActionContextSnapshot } from "../../../shared/types/ipc/help.js";
@@ -106,7 +107,8 @@ async function handleProvisionSession(
   mcpUrl: string | null;
   windowId: number;
 } | null> {
-  if (!ctx.senderWindow) {
+  const remote = ctx.senderWindow ? null : ctx.endpoint;
+  if (!ctx.senderWindow && remote?.kind !== "remote-view") {
     console.warn("[help] provisionSession invoked without a senderWindow — skipping");
     return null;
   }
@@ -116,12 +118,66 @@ async function handleProvisionSession(
     return null;
   }
   const { helpSessionService } = await getHelpSessionService();
+  if (remote) return provisionForRemoteView(helpSessionService, remote, input, slot);
   return helpSessionService.provisionSession({
     projectId: input.projectId,
     projectPath: input.projectPath,
     agentId: input.agentId,
-    windowId: ctx.senderWindow.id,
+    windowId: ctx.senderWindow!.id,
     projectViewWebContentsId: ctx.webContentsId,
+    actionContext: input.context,
+    slot,
+  });
+}
+
+// Remote views whose help sessions are already revoked when their endpoint closes.
+const revokeOnCloseWired = new WeakSet<ClientEndpoint>();
+
+/**
+ * The assistant for a view on another machine runs here, as an agent PTY on
+ * this host: the session directory, the bearer and the MCP config are this
+ * host's own, written under its own userData and pointing at its own MCP
+ * server, which is where the assistant's process will run. The project is the
+ * one the endpoint is bound to, read from this host's records; the view names
+ * it but cannot choose another, nor where it lives. The endpoint's handle
+ * stands in for both the window and the view the session is pinned to, so the
+ * assistant's tool calls go back to that view through its endpoint.
+ */
+async function provisionForRemoteView(
+  helpSessionService: HelpSessionServiceModule.HelpSessionService,
+  endpoint: ClientEndpoint,
+  input: { projectId: string; agentId: string; context?: ActionContext },
+  slot: number
+): Promise<HelpSessionServiceModule.ProvisionResult | null> {
+  // Loaded on use: the project store reads Electron's paths as it loads.
+  const { projectStore } = await import("../../services/ProjectStore.js");
+  const project =
+    endpoint.projectId !== null && endpoint.projectId === input.projectId
+      ? projectStore.getProjectById(endpoint.projectId)
+      : null;
+  if (!project) {
+    console.warn("[help] provisionSession: project is not the remote view's — refusing", {
+      requested: input.projectId,
+      fromView: endpoint.projectId,
+    });
+    return null;
+  }
+  if (!revokeOnCloseWired.has(endpoint)) {
+    revokeOnCloseWired.add(endpoint);
+    // A remote view has no WebContents here to be destroyed or evicted; its
+    // endpoint closing is the same moment, so its sessions go with it.
+    endpoint.onClose(() => {
+      void helpSessionService.revokeByWebContentsId(endpoint.handle).catch((err: unknown) => {
+        console.warn("[help] revoke for a closed remote view failed:", err);
+      });
+    });
+  }
+  return helpSessionService.provisionSession({
+    projectId: project.id,
+    projectPath: project.path,
+    agentId: input.agentId,
+    windowId: endpoint.handle,
+    projectViewWebContentsId: endpoint.handle,
     actionContext: input.context,
     slot,
   });

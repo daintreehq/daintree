@@ -1542,8 +1542,10 @@ export function createHost(
       // A bound dispatch reaches only its own project's renderer and rejects
       // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;
       // unbound stays ambient, since an app-global plugin's action belongs
-      // wherever the user is looking.
-      return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+      // wherever the user is looking. In Host mode it goes to the view that
+      // drives the project, which may be on another machine, and answers
+      // NO_FRONTEND_ATTACHED when nobody does.
+      return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId, pluginId);
     },
     // Built-in action catalog (#10561). NOT revoke-guarded for the same reason
     // as dispatch: plugins introspect from post-activation callbacks/timers.
@@ -1556,7 +1558,7 @@ export function createHost(
       list: async () => {
         if (!deps.plugins.has(pluginId)) return [];
         try {
-          return await deps.dispatcher.sendActionsListToRenderer(boundProjectId);
+          return await deps.dispatcher.sendActionsListToRenderer(boundProjectId, pluginId);
         } catch (err) {
           // A bound host whose project has no live view is the catalog's
           // documented "no renderer available" case, not an error — this
@@ -1569,7 +1571,7 @@ export function createHost(
       get: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return null;
         try {
-          return await deps.dispatcher.sendActionsGetToRenderer(actionId, boundProjectId);
+          return await deps.dispatcher.sendActionsGetToRenderer(actionId, boundProjectId, pluginId);
         } catch (err) {
           if (isProjectViewUnavailable(err)) return null;
           throw err;

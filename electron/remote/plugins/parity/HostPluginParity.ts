@@ -17,6 +17,7 @@ import {
   EmptySchema,
   InstallStatusSchema,
   PluginParityLinkMethod,
+  PluginLoadedSchema,
   StageBeginSchema,
   StageChunkSchema,
   StageInstallSchema,
@@ -26,6 +27,7 @@ import {
 /** What the host needs from its own plugin service. */
 export interface HostPluginParityPlugins {
   getPluginInventory(options: { includeSecrets?: boolean }): Promise<PluginInventory>;
+  hasPlugin(pluginId: string): boolean;
   installPluginFromAnotherMachine(
     archivePath: string,
     expect: { pluginId?: string; update?: boolean; jobId?: string }
@@ -139,6 +141,9 @@ export class HostPluginParity {
     const unregister = [
       on(PluginParityLinkMethod.INVENTORY, EmptySchema, async () =>
         (await this.options.plugins()).getPluginInventory({ includeSecrets: true })
+      ),
+      on(PluginParityLinkMethod.LOADED, PluginLoadedSchema, async ({ pluginId }) =>
+        (await this.options.plugins()).hasPlugin(pluginId)
       ),
       on(PluginParityLinkMethod.STAGE_BEGIN, StageBeginSchema, (p) => this.begin(state, p)),
       on(PluginParityLinkMethod.STAGE_CHUNK, StageChunkSchema, (p) => this.chunk(state, p)),

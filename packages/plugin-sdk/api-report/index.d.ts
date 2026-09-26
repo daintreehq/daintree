@@ -1584,7 +1584,12 @@ type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
  * forge or git failure that merely *looks* like one arrives as
  * `EXECUTION_ERROR` and is refused (#11909).
  */
- | "PARTIAL_SUCCESS" | "INVALID_URL";
+ | "PARTIAL_SUCCESS" | "INVALID_URL"
+/**
+ * A plugin on a remote host dispatched an action while no frontend drives
+ * its project: nobody is attached whose view could run it.
+ */
+ | "NO_FRONTEND_ATTACHED";
 interface ActionError {
     code: ActionErrorCode;
     message: string;

@@ -3,6 +3,14 @@ import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
 import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
+import {
+  isPluginFrontendRoutingEnabled,
+  noFrontendAttached,
+  resolvePluginFrontend,
+  type PluginFrontend,
+} from "./pluginFrontendRouting.js";
+import { PluginFrontendMethod, RemoteDispatchAnswerSchema } from "./pluginFrontendRequests.js";
 import type {
   ActionDispatchResult,
   PluginActionManifestEntry,
@@ -160,7 +168,120 @@ export class PluginRendererDispatcher {
   sendDispatchToRenderer(
     actionId: string,
     args: unknown,
-    projectId?: PluginTargetProjectId
+    projectId?: PluginTargetProjectId,
+    pluginId?: string
+  ): Promise<ActionDispatchResult> {
+    if (this.deps.isDisposed()) {
+      return Promise.resolve({
+        ok: false,
+        error: {
+          code: "EXECUTION_ERROR",
+          message: "PluginService is disposed",
+        },
+      });
+    }
+    // Host mode: the plugin's action belongs in the view that drives its
+    // project, which may be on another machine, or nowhere at all.
+    const frontend = this.routedFrontend(projectId, pluginId);
+    if (frontend?.kind === "remote") {
+      return this.dispatchToEndpoint(frontend.endpoint, pluginId!, actionId, args);
+    }
+    if (frontend?.kind === "none") {
+      return Promise.resolve({
+        ok: false,
+        error: {
+          code: "NO_FRONTEND_ATTACHED",
+          message: noFrontendAttached(pluginId!, `dispatch ${actionId}`).message,
+        },
+      });
+    }
+    let webContents: Electron.WebContents | null;
+    try {
+      // Unbound: deliberately ambient — an installed plugin has no project, so
+      // the focused view is the only target its `host.dispatch` can mean.
+      webContents = resolveTargetWebContents(projectId, `Plugin dispatch ${actionId}`);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    if (!webContents) {
+      return Promise.resolve({
+        ok: false,
+        error: {
+          code: "EXECUTION_ERROR",
+          message: "No active renderer available to dispatch plugin action",
+        },
+      });
+    }
+    return this.sendDispatchToWebContents(webContents, actionId, args);
+  }
+
+  /**
+   * Where a plugin's round-trip goes when Host-mode routing is on, or `null`
+   * when it is off (or the caller named no plugin) and the local view is found
+   * exactly as it always was.
+   */
+  private routedFrontend(
+    projectId: PluginTargetProjectId,
+    pluginId: string | undefined
+  ): PluginFrontend | null {
+    if (pluginId === undefined || !isPluginFrontendRoutingEnabled()) return null;
+    return resolvePluginFrontend(projectId ?? null, pluginId);
+  }
+
+  /**
+   * A dispatch for the view on another machine that drives the plugin's
+   * project, asked through its endpoint. The answer is checked for shape
+   * before the plugin sees it; a view that left, or never answered, is the
+   * same `EXECUTION_ERROR` a local view that went away reports.
+   */
+  private async dispatchToEndpoint(
+    endpoint: ClientEndpoint,
+    pluginId: string,
+    actionId: string,
+    args: unknown
+  ): Promise<ActionDispatchResult> {
+    let answer: unknown;
+    try {
+      answer = await endpoint.request(
+        PluginFrontendMethod.DISPATCH,
+        { pluginId, actionId, args },
+        { timeoutMs: PLUGIN_DISPATCH_TIMEOUT_MS }
+      );
+    } catch (err) {
+      const code = (err as { code?: unknown } | null)?.code;
+      return {
+        ok: false,
+        error: {
+          code: "EXECUTION_ERROR",
+          message:
+            code === "OUTCOME_UNKNOWN"
+              ? `No answer came back for plugin action ${actionId}; it may or may not have run`
+              : `The driving view couldn't run plugin action ${actionId}`,
+        },
+      };
+    }
+    const parsed = RemoteDispatchAnswerSchema.safeParse(answer);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "EXECUTION_ERROR",
+          message: `Malformed answer to ${actionId} from the driving view`,
+        },
+      };
+    }
+    return parsed.data as ActionDispatchResult;
+  }
+
+  /**
+   * Send a plugin-sourced action dispatch to one renderer and await its
+   * response. The Shell uses this directly for a host's plugin, having already
+   * scoped the view to the host and project that asked.
+   */
+  sendDispatchToWebContents(
+    webContents: Electron.WebContents,
+    actionId: string,
+    args: unknown
   ): Promise<ActionDispatchResult> {
     return new Promise((resolve) => {
       if (this.deps.isDisposed()) {
@@ -169,19 +290,6 @@ export class PluginRendererDispatcher {
           error: {
             code: "EXECUTION_ERROR",
             message: "PluginService is disposed",
-          },
-        });
-        return;
-      }
-      // Unbound: deliberately ambient — an installed plugin has no project, so
-      // the focused view is the only target its `host.dispatch` can mean.
-      const webContents = resolveTargetWebContents(projectId, `Plugin dispatch ${actionId}`);
-      if (!webContents) {
-        resolve({
-          ok: false,
-          error: {
-            code: "EXECUTION_ERROR",
-            message: "No active renderer available to dispatch plugin action",
           },
         });
         return;
@@ -258,9 +366,12 @@ export class PluginRendererDispatcher {
    * that project has no live view.
    */
   sendActionsListToRenderer(
-    projectId?: PluginTargetProjectId
+    projectId?: PluginTargetProjectId,
+    pluginId?: string
   ): Promise<PluginActionManifestEntry[]> {
     return this.requestFromRenderer<PluginActionManifestEntry[]>({
+      pluginId,
+      remote: { method: PluginFrontendMethod.ACTIONS_LIST, payload: { pluginId } },
       requestChannel: CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST,
       responseChannel: CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
       buildRequest: (requestId) => ({ requestId }),
@@ -281,9 +392,12 @@ export class PluginRendererDispatcher {
    */
   sendActionsGetToRenderer(
     actionId: string,
-    projectId?: PluginTargetProjectId
+    projectId?: PluginTargetProjectId,
+    pluginId?: string
   ): Promise<PluginActionManifestEntry | null> {
     return this.requestFromRenderer<PluginActionManifestEntry | null>({
+      pluginId,
+      remote: { method: PluginFrontendMethod.ACTIONS_GET, payload: { pluginId, actionId } },
       requestChannel: CHANNELS.PLUGIN_ACTIONS_GET_REQUEST,
       responseChannel: CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
       buildRequest: (requestId) => ({ requestId, actionId }),
@@ -346,16 +460,84 @@ export class PluginRendererDispatcher {
     fallback: T;
     projectId?: PluginTargetProjectId;
     detail: string;
+    pluginId?: string;
+    remote: { method: string; payload: Record<string, unknown> };
   }): Promise<T> {
-    return new Promise((resolve) => {
-      if (this.deps.isDisposed()) {
-        resolve(opts.fallback);
-        return;
-      }
+    if (this.deps.isDisposed()) return Promise.resolve(opts.fallback);
+    // Host mode: the catalog is the driving view's, wherever it is. With
+    // nobody attached there is no catalog to read, which this surface
+    // reports as empty, as it does a project with no live view.
+    const frontend = this.routedFrontend(opts.projectId, opts.pluginId);
+    if (frontend?.kind === "none") return Promise.resolve(opts.fallback);
+    if (frontend?.kind === "remote") {
+      return frontend.endpoint
+        .request(opts.remote.method, opts.remote.payload, {
+          timeoutMs: PLUGIN_DISPATCH_TIMEOUT_MS,
+        })
+        .then(
+          (answer) =>
+            answer !== null && typeof answer === "object"
+              ? opts.extract(answer as Record<string, unknown>)
+              : opts.fallback,
+          () => opts.fallback
+        );
+    }
+    let webContents: Electron.WebContents | null;
+    try {
       // Unbound: deliberately ambient — the catalog an installed plugin reads is
       // whichever project's ActionService the user is currently looking at.
-      const webContents = resolveTargetWebContents(opts.projectId, opts.detail);
-      if (!webContents) {
+      webContents = resolveTargetWebContents(opts.projectId, opts.detail);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    if (!webContents) return Promise.resolve(opts.fallback);
+    return this.requestFromWebContents(webContents, opts);
+  }
+
+  /** The Shell's half of a host plugin's `host.actions.list()`, for one scoped view. */
+  sendActionsListToWebContents(
+    webContents: Electron.WebContents
+  ): Promise<{ entries: PluginActionManifestEntry[] }> {
+    return this.requestFromWebContents(webContents, {
+      requestChannel: CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      buildRequest: (requestId) => ({ requestId }),
+      extract: (payload) => {
+        const entries = (payload as { entries?: unknown }).entries;
+        return { entries: Array.isArray(entries) ? (entries as PluginActionManifestEntry[]) : [] };
+      },
+      fallback: { entries: [] },
+    });
+  }
+
+  /** The Shell's half of a host plugin's `host.actions.get()`, for one scoped view. */
+  sendActionsGetToWebContents(
+    webContents: Electron.WebContents,
+    actionId: string
+  ): Promise<{ entry: PluginActionManifestEntry | null }> {
+    return this.requestFromWebContents(webContents, {
+      requestChannel: CHANNELS.PLUGIN_ACTIONS_GET_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      buildRequest: (requestId) => ({ requestId, actionId }),
+      extract: (payload) => ({
+        entry: ((payload as { entry?: unknown }).entry ?? null) as PluginActionManifestEntry | null,
+      }),
+      fallback: { entry: null },
+    });
+  }
+
+  private requestFromWebContents<T>(
+    webContents: Electron.WebContents,
+    opts: {
+      requestChannel: string;
+      responseChannel: string;
+      buildRequest: (requestId: string) => Record<string, unknown>;
+      extract: (payload: Record<string, unknown>) => T;
+      fallback: T;
+    }
+  ): Promise<T> {
+    return new Promise((resolve) => {
+      if (this.deps.isDisposed()) {
         resolve(opts.fallback);
         return;
       }

@@ -526,7 +526,12 @@ export type ActionErrorCode =
    * `EXECUTION_ERROR` and is refused (#11909).
    */
   | "PARTIAL_SUCCESS"
-  | "INVALID_URL";
+  | "INVALID_URL"
+  /**
+   * A plugin on a remote host dispatched an action while no frontend drives
+   * its project: nobody is attached whose view could run it.
+   */
+  | "NO_FRONTEND_ATTACHED";
 
 export interface ActionError {
   code: ActionErrorCode;

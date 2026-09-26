@@ -309,6 +309,52 @@ describe("HelpSessionService", () => {
     expect(result.windowId).toBe(7);
   });
 
+  describe("a view on a remote Shell (remote hosts)", () => {
+    const HANDLE = -3;
+
+    it("provisions under this host's userData, with this host's MCP bearer, pinned to the endpoint handle", async () => {
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        windowId: HANDLE,
+        projectViewWebContentsId: HANDLE,
+      });
+      if (!result) throw new Error("expected result");
+
+      expect(result.windowId).toBe(HANDLE);
+      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/sse");
+      // Daintree-owned files under this machine's userData, nothing else.
+      expect(path.relative(userData, result.sessionPath).startsWith("..")).toBe(false);
+      const lane = await readLaneConfig(result);
+      expect(lane.mcpServers.daintree?.url).toBe("http://127.0.0.1:45454/sse");
+      expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${result.token}`);
+      // The assistant's tool calls go back to the view that launched it.
+      expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+
+      await service.revokeByWebContentsId(HANDLE);
+      expect(service.validateToken(result.token)).toBe(false);
+    });
+
+    it("refuses a negative id that isn't the same handle for window and view", async () => {
+      await expect(
+        service.provisionSession({ ...provisionInput(), windowId: 7, projectViewWebContentsId: -3 })
+      ).rejects.toThrow(/windowId|projectViewWebContentsId/);
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: -3,
+          projectViewWebContentsId: 42,
+        })
+      ).rejects.toThrow(/windowId/);
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: -3.5,
+          projectViewWebContentsId: -3.5,
+        })
+      ).rejects.toThrow(/windowId/);
+    });
+  });
+
   it("returns mcpUrl=null when daintreeControl is false", async () => {
     mockStoreGet.mockReturnValue({ daintreeControl: false });
 

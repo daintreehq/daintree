@@ -17,6 +17,8 @@ export const PluginParityLinkMethod = {
   STAGE_DISCARD: "plugins.parity.stage-discard",
   /** What became of an install by its operation id: running (with its phase), settled, or unknown. */
   INSTALL_STATUS: "plugins.parity.install-status",
+  /** Whether one plugin is loaded on the host right now; answers a boolean. */
+  LOADED: "plugins.parity.loaded",
 } as const;
 
 /** A package travels in pieces this size, so no one frame holds a whole plugin. */
@@ -68,6 +70,7 @@ export const StageInstallSchema = z.object({
 });
 export const StageTokenSchema = z.object({ token });
 export const InstallStatusSchema = z.object({ opId });
+export const PluginLoadedSchema = z.object({ pluginId: z.string().min(1).max(256) });
 
 /** The host's record of an install, validated before this Shell acts on it. */
 export const InstallStatusResultSchema = z.union([

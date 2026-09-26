@@ -29,6 +29,7 @@ import {
   WORKTREE_RATE_LIMIT_BURST,
 } from "./constants.js";
 import { shouldPlayUiFeedbackSound } from "../../../utils/uiFeedbackSound.js";
+import { WORKTREE_PORT_REDELIVER_METHOD, type ClientEndpoint } from "../../endpoint.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
@@ -74,6 +75,53 @@ function getWorktreeCreateRequestKey(
     sourcePrNumber: payload.options.sourcePrNumber ?? null,
     sourcePrLinkedIssueNumber: payload.options.sourcePrLinkedIssueNumber ?? null,
   });
+}
+
+/**
+ * The view on another machine a call came from, or null for a call from a
+ * window here. A local window's context never reaches for its endpoint, so the
+ * local paths below run exactly as they always have.
+ */
+function remoteViewEndpoint(ctx: IpcContext): ClientEndpoint | null {
+  if (ctx.senderWindow !== null) return null;
+  return ctx.endpoint?.kind === "remote-view" ? ctx.endpoint : null;
+}
+
+/**
+ * Retry for a view on a remote Shell: reload the endpoint's project here (the
+ * same host activation its switch ran, so the view holds the project
+ * resident), connect the endpoint to the reloaded workspace host, then ask the
+ * view's Shell to post it a fresh relayed port and wait for the renderer's
+ * receipt, as the local path does. Any shortfall throws so the banner stays.
+ */
+async function retryProjectLoadForRemoteView(
+  deps: HandlerDependencies,
+  endpoint: ClientEndpoint
+): Promise<void> {
+  const worktreeService = deps.worktreeService!;
+  const project = endpoint.projectId ? projectStore.getProjectById(endpoint.projectId) : null;
+  if (!project) {
+    throw new Error("No active project to reload");
+  }
+  try {
+    // Loaded here: only a view on another machine takes this path.
+    const { activateProjectOnHost } = await import("../../../services/ProjectSwitchService.js");
+    await activateProjectOnHost(worktreeService, project, endpoint.handle);
+    const host = worktreeService.getHostForProject(project.path);
+    const broker = deps.worktreePortBroker;
+    const connected =
+      host !== undefined &&
+      broker !== undefined &&
+      broker.connectEndpointPort(host, endpoint.handle) &&
+      (await endpoint.request(WORKTREE_PORT_REDELIVER_METHOD, null, {
+        timeoutMs: RETRY_PORT_CONFIRM_TIMEOUT_MS,
+      })) === true;
+    if (!connected) {
+      throw new Error("Reloaded the project but couldn't connect to the worktree service");
+    }
+  } catch (error) {
+    throw new Error(formatErrorMessage(error, "Failed to load worktrees"), { cause: error });
+  }
 }
 
 export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): () => void {
@@ -221,6 +269,19 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleWorktreeRestartService = async (ctx: IpcContext): Promise<void> => {
     if (!deps.worktreeService) return;
+    const remote = remoteViewEndpoint(ctx);
+    if (remote) {
+      // A view on another machine has no window here: the workspace host to
+      // restart is its own project's, which the endpoint names.
+      const project = remote.projectId ? projectStore.getProjectById(remote.projectId) : null;
+      const host = project ? deps.worktreeService.getHostForProject(project.path) : undefined;
+      if (!host) {
+        console.warn("[worktree.restart-service] No workspace host for the remote view's project");
+        return;
+      }
+      host.manualRestart();
+      return;
+    }
     const windowId = ctx.senderWindow?.id;
     if (windowId === undefined) {
       console.warn(
@@ -238,6 +299,11 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
   const handleWorktreeRetryProjectLoad = async (ctx: IpcContext): Promise<void> => {
     if (!deps.worktreeService) {
       throw new Error("Workspace service is not available");
+    }
+    const remote = remoteViewEndpoint(ctx);
+    if (remote) {
+      await retryProjectLoadForRemoteView(deps, remote);
+      return;
     }
     const windowId = ctx.senderWindow?.id;
     if (windowId === undefined) {

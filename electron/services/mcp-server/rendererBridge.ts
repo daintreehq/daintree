@@ -1,7 +1,8 @@
 import { webContents as electronWebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
-import type { ClientEndpoint } from "../../ipc/endpoint.js";
+import { isRemoteEndpointHandle, type ClientEndpoint } from "../../ipc/endpoint.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import type { IpcContext } from "../../ipc/types.js";
 import { onWithContext } from "../../ipc/utils.js";
 import {
@@ -842,6 +843,7 @@ export function createRendererBridge(
    * `lookupManifestEntry` hot path consults to avoid re-fetching every dispatch.
    */
   function requestManifestForWebContents(id: number): Promise<ActionManifestEntry[]> {
+    if (isRemoteEndpointHandle(id)) return requestManifestForPinnedEndpoint(id);
     const inflight = perWebContentsInflight.get(id);
     if (inflight) return inflight.promise;
 
@@ -895,6 +897,12 @@ export function createRendererBridge(
     approval?: Pick<WorkspaceDispatchOptions, "offerSessionApproval" | "approvalOnly">,
     callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {
+    if (isRemoteEndpointHandle(id)) {
+      return dispatchToPinnedEndpoint(id, actionId, args, confirmed, sessionOrigin, {
+        ...(contextOverride ? { contextOverride } : {}),
+        ...approval,
+      });
+    }
     return sendDispatchRequest(
       () => getPinnedWebContents(id),
       actionId,
@@ -1083,6 +1091,67 @@ export function createRendererBridge(
     if (result === null) throw new NoFrontendAttachedError(workspaceId, actionId);
     const dispatchedWorkspace = await describeViewlessWorkspace(workspaceId).catch(() => undefined);
     return { result, ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}) };
+  }
+
+  /**
+   * A session pinned to a view on another machine (the assistant a remote
+   * Shell launched on this host) is pinned to that view's endpoint handle.
+   * Its calls go to that endpoint, never to whichever view here shows the
+   * project, and fail closed, as a destroyed local pin does, once it closes.
+   */
+  function getPinnedEndpoint(id: number): ClientEndpoint {
+    const endpoint = getEndpointRegistry().getByHandle(id);
+    if (!endpoint || endpoint.kind !== "remote-view" || endpoint.isClosed()) {
+      throw new SessionBindingError(id);
+    }
+    return endpoint;
+  }
+
+  async function requestManifestForPinnedEndpoint(id: number): Promise<ActionManifestEntry[]> {
+    const endpoint = getPinnedEndpoint(id);
+    let manifest: ActionManifestEntry[];
+    try {
+      manifest = await requestManifestFromEndpoint(endpoint, endpoint.projectId ?? "");
+    } catch (err) {
+      if (err instanceof WorkspaceBindingError) throw new SessionBindingError(id);
+      throw err;
+    }
+    if (!endpoint.isClosed()) {
+      perWebContentsCache.set(id, manifest);
+      if (!perWebContentsEvictionWired.has(id)) {
+        perWebContentsEvictionWired.add(id);
+        endpoint.onClose(() => {
+          evictWebContentsManifest(id);
+          perWebContentsEvictionWired.delete(id);
+        });
+      }
+    }
+    return manifest;
+  }
+
+  async function dispatchToPinnedEndpoint(
+    id: number,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
+    options: WorkspaceDispatchOptions
+  ): Promise<DispatchEnvelope> {
+    const endpoint = getPinnedEndpoint(id);
+    try {
+      return await dispatchToEndpoint(
+        endpoint,
+        endpoint.projectId ?? "",
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options
+      );
+    } catch (err) {
+      if (err instanceof WorkspaceBindingError) throw new SessionBindingError(id);
+      throw err;
+    }
   }
 
   /**

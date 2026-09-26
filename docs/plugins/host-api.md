@@ -688,7 +688,7 @@ Invoke an action by id through Daintree's `ActionService` with a `"plugin"` sour
 ```ts
 const result = await host.dispatch("acme.linear-planner.sync-now", { team: "engineering" });
 if (!result.ok) {
-  // result.error.code: "RESTRICTED" | "CONFIRMATION_REQUIRED" | "PLUGIN_UNLOADED" | ...
+  // result.error.code: "RESTRICTED" | "CONFIRMATION_REQUIRED" | "PLUGIN_UNLOADED" | "NO_FRONTEND_ATTACHED" | ...
 }
 ```
 
@@ -1194,6 +1194,7 @@ A Daintree can serve its projects to windows on other machines. Your plugin's ma
 
 - **Invoke context.** A call from a window on another machine carries `ctx.origin: { kind: "remote", clientId, endpointId }`, and `ctx.webContentsId` is a negative handle that names no local renderer. `ctx.projectId` and `ctx.worktreeId` are the host's own. A call from a window on the host itself has no `origin`, exactly as before.
 - **Person-facing calls** — prompts, toasts, capability consent and the clipboard — go to the window that drives the project. See [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm) for what happens when nobody is attached; first-use capability consent nobody can answer is a denial (`PERMISSION_REQUIRED:`), never a wait.
+- **`dispatch` and the `actions` catalog** reach the window that drives the project, wherever it is. With nobody attached, `dispatch` returns `{ ok: false, error: { code: "NO_FRONTEND_ATTACHED" } }` without running anything, and `actions.list()` / `actions.get()` answer `[]` / `null`.
 - **`system.openPath` / `showItemInFolder`** reject for a driver on another machine.
 - **`"remote": "unsupported"`** in the manifest keeps a plugin that assumes the renderer's `localhost` is the project's machine, or that relies on local OS behaviour, from starting for a window on another machine. See [Manifest → `remote`](./manifest.md#remote).
 
