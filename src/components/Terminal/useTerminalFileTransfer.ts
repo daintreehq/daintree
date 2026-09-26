@@ -357,12 +357,14 @@ export function useTerminalFileTransfer(
     // image, uploaded to the host and typed as its path. "empty" lets the
     // caller hand the key to the agent untouched.
     const pasteClipboardImageForCtrlV = async (): Promise<"inserted" | "empty" | "failed"> => {
+      const lockEpoch = lockEpochRef.current;
       try {
         const { hostPath: filePath } = await materialize({ kind: "clipboard-image" });
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return "failed";
+        if (lockEpochRef.current !== lockEpoch) return "failed";
         if (!filePath || !isDeliverablePath(filePath)) return "failed";
         const isAgent = isAgentTerminal();
-        writeSegments(buildSegments([filePath], isAgent), isAgent);
+        writeSegments(buildSegments([filePath], isAgent), isAgent, lockEpoch);
         return "inserted";
       } catch (error) {
         const empty =
@@ -456,6 +458,10 @@ export function useTerminalFileTransfer(
       // a while to resolve the paths; if the user has moved on to another
       // surface by then, the late landing must not pull focus back to here.
       const focusAtGesture = document.activeElement;
+      // Taken at the gesture, as the image paste does: a lock that comes and
+      // goes while the paths resolve, or while an earlier drop is still
+      // landing, still cancels this one.
+      const lockEpoch = lockEpochRef.current;
       // Resolution starts now so drops still resolve concurrently, but each
       // one writes only after the one before it on this terminal has: a small
       // drop made second must not insert ahead of a large one made first.
@@ -475,6 +481,7 @@ export function useTerminalFileTransfer(
         // Same re-checks as the image paste: the pane may have unmounted or
         // locked, and the running agent changed, while the paths resolved.
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+        if (lockEpochRef.current !== lockEpoch) return;
         const paths = materialized.map((result) => result?.hostPath ?? "");
 
         const isAgent = isAgentTerminal();
@@ -486,7 +493,7 @@ export function useTerminalFileTransfer(
 
         // Trailing space terminates the last token and leaves the caret ready for
         // the next argument or prompt word, matching the hybrid input's drop.
-        writeSegments(buildSegments(deliverable, isAgent), isAgent);
+        writeSegments(buildSegments(deliverable, isAgent), isAgent, lockEpoch);
 
         const activeNow = document.activeElement;
         if (activeNow !== focusAtGesture && activeNow && !container.contains(activeNow)) return;
