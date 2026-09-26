@@ -4853,9 +4853,11 @@ interface PluginHostApi extends PluginActivationApi {
      * project's panes. Never moves focus.
      *
      * Resolves `{ status: "drafted", terminalId }`, `{ status: "cancelled" }`
-     * (the user dismissed the picker, or the plugin unloaded), or
-     * `{ status: "refused", reason }` when the target cannot take a draft —
-     * see {@link PluginSendToAgentRefusalReason}.
+     * (the user dismissed the picker, or the call was aborted or the plugin
+     * unloaded while it was open), or `{ status: "refused", reason }` when the
+     * target cannot take a draft — see {@link PluginSendToAgentRefusalReason}.
+     * Once the user picks a row that starts an agent, the launch is theirs: an
+     * abort or unload no longer cancels it, and the call reports its outcome.
      *
      * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
      *   `agent:input`, or the user denies the consent prompt.

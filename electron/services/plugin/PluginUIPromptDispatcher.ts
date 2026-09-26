@@ -5,6 +5,7 @@ import { resolveTargetWebContents, type PluginTargetProjectId } from "./renderer
 import {
   promptOpensDialog,
   type PluginUiPromptParams,
+  type PluginUiPromptResponse,
   type PluginUiPromptResultValue,
 } from "../../../shared/types/pluginUiPrompt.js";
 
@@ -95,6 +96,20 @@ interface PendingPrompt {
   /** Whether it put a dialog on screen, which is what the per-plugin cap counts. */
   opensDialog: boolean;
   /**
+   * A send-to-agent picker whose user chose a row that starts an agent first.
+   * The dialog is closed and the work is the user's: the prompt settles on the
+   * renderer's report of what happened, never on a cancel.
+   */
+  accepted?: boolean;
+  /**
+   * Whether a caller's abort waits for the renderer's answer instead of
+   * settling at once. Only a send-to-agent picker can be accepted, and an
+   * acceptance already on its way must win over an abort that arrives after it.
+   */
+  answersAbort: boolean;
+  /** Bounds the wait for that answer, so a hung renderer cannot hold the caller. */
+  abortAckTimer?: ReturnType<typeof setTimeout>;
+  /**
    * Detaches every listener this prompt registered — the WebContents
    * `destroyed` hook and the caller's `abort` hook. One combined disposer so a
    * settlement path can never remember to drop one and leak the other; called
@@ -137,10 +152,7 @@ export class PluginUIPromptDispatcher {
    */
   private ensureResponseListener(): void {
     if (this.responseListenerCleanup) return;
-    const handler = (
-      event: Electron.IpcMainEvent,
-      payload: { promptId: string; result: PluginUiPromptResultValue }
-    ) => {
+    const handler = (event: Electron.IpcMainEvent, payload: PluginUiPromptResponse) => {
       if (!payload || typeof payload.promptId !== "string") return;
       const pending = this.pending.get(payload.promptId);
       if (!pending) return;
@@ -148,6 +160,14 @@ export class PluginUIPromptDispatcher {
         console.warn(
           `[PluginService] Ignoring UI-prompt response from unexpected sender ${event.sender.id} (expected ${pending.webContentsId}, promptId=${payload.promptId})`
         );
+        return;
+      }
+      if (!("result" in payload)) {
+        if (payload.accepted === true && pending.answersAbort) {
+          pending.accepted = true;
+          if (pending.abortAckTimer !== undefined) clearTimeout(pending.abortAckTimer);
+          pending.abortAckTimer = undefined;
+        }
         return;
       }
       pending.cleanup?.();
@@ -174,7 +194,9 @@ export class PluginUIPromptDispatcher {
    * dismisses the open dialog and resolves the cancel value — it never rejects,
    * because a cancelled prompt is a dismissal and callers document a
    * never-throws contract. This is what lets a dev worker's retired generation
-   * take its own questions off the user's screen (#12279).
+   * take its own questions off the user's screen (#12279). A send-to-agent
+   * picker the user has already accepted is the exception: it resolves with
+   * what the launch it started actually did.
    */
   requestPrompt(
     pluginId: string,
@@ -210,6 +232,9 @@ export class PluginUIPromptDispatcher {
       const opensDialog = promptOpensDialog(params);
       let activeOfKind = 0;
       for (const pending of this.pending.values()) {
+        // An accepted picker has left the screen; what it still waits on is
+        // the user's own launch.
+        if (pending.accepted) continue;
         if (pending.pluginId === pluginId && pending.opensDialog === opensDialog) {
           activeOfKind += 1;
         }
@@ -245,12 +270,28 @@ export class PluginUIPromptDispatcher {
       // it and find nothing to stop — so resolving "cancelled" early would be a
       // guess that can be wrong. It keeps waiting for the answer instead, which
       // the deadline below bounds.
+      //
+      // A send-to-agent picker the user has accepted is past cancelling: the
+      // work is theirs, and its outcome is the answer. One not yet accepted is
+      // dismissed and answered by the renderer, whose acceptance — if the user
+      // chose a row just before this abort — arrives first on the same channel,
+      // so "cancelled" is never reported for an agent that is starting.
       const onAbort = () => {
         const pending = this.pending.get(promptId);
-        if (!pending) return;
+        if (!pending || pending.accepted) return;
+        this.sendCancel(webContentsId, pluginId, promptId);
+        if (pending.answersAbort) {
+          pending.abortAckTimer = setTimeout(() => {
+            const current = this.pending.get(promptId);
+            if (current !== pending || current.accepted) return;
+            current.cleanup?.();
+            this.pending.delete(promptId);
+            resolve(cancelValue);
+          }, IMMEDIATE_PROMPT_ACK_GRACE_MS);
+          return;
+        }
         pending.cleanup?.();
         this.pending.delete(promptId);
-        this.sendCancel(webContentsId, pluginId, promptId);
         resolve(cancelValue);
       };
       if (opensDialog) signal?.addEventListener("abort", onAbort, { once: true });
@@ -272,6 +313,8 @@ export class PluginUIPromptDispatcher {
 
       const cleanup = () => {
         if (timer !== undefined) clearTimeout(timer);
+        const entry = this.pending.get(promptId);
+        if (entry?.abortAckTimer !== undefined) clearTimeout(entry.abortAckTimer);
         try {
           webContents.removeListener("destroyed", onDestroyed);
         } catch {
@@ -286,6 +329,7 @@ export class PluginUIPromptDispatcher {
         pluginId,
         cancelValue,
         opensDialog,
+        answersAbort: opensDialog && params.kind === "sendToAgent",
         cleanup,
       });
 
@@ -313,11 +357,13 @@ export class PluginUIPromptDispatcher {
    * Immediate requests are left to settle on their own answer or deadline:
    * there is nothing on screen to dismiss, and the renderer has either acted on
    * one already or will drop it, so reporting "cancelled" now could be wrong.
+   * An accepted picker is left the same way — its dialog is gone, and the
+   * launch it started is the user's.
    */
   cancelForPlugin(pluginId: string): void {
     let notifiedWebContentsId: number | null = null;
     for (const [promptId, pending] of [...this.pending.entries()]) {
-      if (pending.pluginId !== pluginId || !pending.opensDialog) continue;
+      if (pending.pluginId !== pluginId || !pending.opensDialog || pending.accepted) continue;
       pending.cleanup?.();
       this.pending.delete(promptId);
       // Dismiss the visible dialog. One broadcast per affected window suffices —
