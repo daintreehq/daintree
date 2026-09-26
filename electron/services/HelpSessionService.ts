@@ -289,10 +289,27 @@ interface BundledClaudeSettings {
   permissions?: {
     allow?: string[];
     deny?: string[];
+    additionalDirectories?: string[];
   };
   defaultMode?: string;
   enableAllProjectMcpServers?: boolean;
   [key: string]: unknown;
+}
+
+/**
+ * A project path in Claude Code's absolute-rule form (`//abs/path`), plus its
+ * realpath when that differs (macOS reports temp dirs through `/private`).
+ */
+async function projectRuleRoots(projectPath: string): Promise<string[]> {
+  const toRule = (p: string) => {
+    const posix = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    const drive = /^([A-Za-z]):\//.exec(posix);
+    return drive ? `//${drive[1]!.toLowerCase()}${posix.slice(2)}` : `/${posix}`;
+  };
+  const paths = new Set([projectPath]);
+  const real = await fs.realpath(projectPath).catch(() => null);
+  if (real) paths.add(real);
+  return [...paths].map(toRule);
 }
 
 function deepClonePlainJson<T>(value: T): T {
@@ -1232,7 +1249,13 @@ export class HelpSessionService {
             token,
             userConfig.mcpServers
           );
-          await this.writeClaudeSettings(sessionPath, helpFolder, settings, userConfig.claudeHooks);
+          await this.writeClaudeSettings(
+            sessionPath,
+            helpFolder,
+            settings,
+            userConfig.claudeHooks,
+            input.projectPath
+          );
         } else if (input.agentId === "copilot") {
           await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
         } else {
@@ -2545,7 +2568,8 @@ export class HelpSessionService {
     sessionPath: string,
     bundledHelpFolder: string,
     settings: { daintreeControl: boolean; bypassPermissions: boolean },
-    userHooks: Record<string, unknown> | null = null
+    userHooks: Record<string, unknown> | null = null,
+    projectPath?: string
   ): Promise<void> {
     const bundledSettingsPath = path.join(bundledHelpFolder, ".claude", "settings.json");
     const baseline = await this.readBundledSettings(bundledSettingsPath);
@@ -2561,6 +2585,18 @@ export class HelpSessionService {
 
     if (settings.daintreeControl && !merged.permissions.allow.includes("mcp__daintree__*")) {
       merged.permissions.allow.push("mcp__daintree__*");
+    }
+
+    // The bundled `Read(**)`/`Edit(**)` are relative to the session folder, so
+    // without these every read of the project it serves stops on a directory
+    // prompt. Reads are allowed there; edits stay the launched agents' job.
+    if (projectPath) {
+      const roots = await projectRuleRoots(projectPath);
+      merged.permissions.additionalDirectories = [projectPath];
+      for (const root of roots) {
+        merged.permissions.allow.push(`Read(${root}/**)`);
+        merged.permissions.deny.push(`Edit(${root}/**)`);
+      }
     }
 
     // Auto-trust the project-scoped MCP servers we wrote into the session-dir

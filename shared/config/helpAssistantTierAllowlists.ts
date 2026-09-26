@@ -113,6 +113,9 @@ export const CORE_TIER_TOOLS = [
   // Brings a panel this session created into view (#12315).
   "terminal.revealOwned",
   "terminal.rename",
+  // Read-only. How much usage is left lives only in each CLI's own view, and
+  // the command that opens it is only typed after this confirms it exists.
+  "slashCommands.list",
 
   "help.displayImage",
 ] as const satisfies readonly BuiltInActionId[];
@@ -184,7 +187,6 @@ export const FULL_TIER_ADDONS = [
 
   "skills.search",
   "skills.load",
-  "slashCommands.list",
   // Read-only snapshot of the user's fleet broadcast run (#10930). Dispatching
   // a broadcast stays off MCP.
   "fleet.getRunStatus",

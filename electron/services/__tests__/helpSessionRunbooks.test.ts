@@ -37,10 +37,13 @@ describe("resolveRunbooksMcpUrl", () => {
 describe("buildRunbooksAddendum", () => {
   const text = buildRunbooksAddendum();
 
-  it("makes the search a requirement before acting, and exempts questions", () => {
+  // A how-to exemption alone let "how much usage is left?" skip the search
+  // and the runbook that reads it from the CLIs.
+  it("makes the search a requirement before acting, and exempts only chat and how-to", () => {
     expect(text).toContain("**Before acting on any request to do something, call it**");
     expect(text).toContain("before your first `daintree` call");
-    expect(text).toContain("Questions and chat aren't tasks");
+    expect(text).toContain('Only chat and "how do I…" questions skip it');
+    expect(text).toContain("A question you answer by checking something");
   });
 
   // The query shape was measured against the selector: a one-sentence summary

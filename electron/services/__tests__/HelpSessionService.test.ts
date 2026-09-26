@@ -749,6 +749,19 @@ describe("HelpSessionService", () => {
     expect(settings.enableAllProjectMcpServers).toBe(true);
   });
 
+  it("lets Claude read the project it serves without a prompt, but never edit it", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    expect(settings.permissions.additionalDirectories).toEqual(["/tmp/project"]);
+    expect(settings.permissions.allow).toContain("Read(//tmp/project/**)");
+    expect(settings.permissions.deny).toContain("Edit(//tmp/project/**)");
+    expect(settings.permissions.deny).toContain("Edit(**)");
+  });
+
   it("appends mcp__daintree__* to the bundled allowlist when daintreeControl is enabled", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
@@ -822,9 +835,12 @@ describe("HelpSessionService", () => {
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
     );
 
-    // mcp__daintree__* is appended at provision time; compare the static
-    // forge surface only.
-    expect(new Set(fallback.permissions.deny)).toEqual(new Set(bundled.permissions.deny));
+    // mcp__daintree__* and the project's own path rules are appended at
+    // provision time; compare the static forge surface only.
+    const staticDeny = (fallback.permissions.deny as string[]).filter(
+      (rule) => !rule.includes("/tmp/project")
+    );
+    expect(new Set(staticDeny)).toEqual(new Set(bundled.permissions.deny));
     for (const allowed of bundled.permissions.allow) {
       expect(fallback.permissions.allow).toContain(allowed);
     }
