@@ -475,6 +475,7 @@ Declares user-configurable settings for your plugin.
 | `extensions` | no | For `file` only: restrict the native chooser to these extensions (no leading dot, e.g. `["json", "md"]`). Rejected on any other type. |
 | `secret` | no | Legacy boolean; `secret: true` normalizes to `type: "secret"`. Prefer `type: "secret"`. |
 | `required` | no | `true` when the plugin can't do its job without a value. While one is unset, each of the plugin's open panels and surfaces shows a neutral "<Plugin> needs setup" strip above its content whose **Open plugin settings** lands on that setting, and [`host.settings.missingRequired()`](./host-api.md#settings) lists it. A `default` never satisfies it — the form offers **Use default** to store it explicitly — and a secret counts as set only once a value is stored. |
+| `editor` | no | `"form"` (default) or `"view"`. `"view"` hands the value to your own `location: "settings"` view — for something a plain field edits badly, like a per-channel table stored as `json` — and the generated form leaves it out instead of showing it twice. Without a settings view the field is shown anyway. |
 
 The `path` and `directory` types render a read-only text input plus a **Browse** button that opens a native folder chooser; `file` opens a single-file chooser narrowed by `extensions`. The stored value is an absolute filesystem path. Plugins read it back through the host settings API like any other setting.
 

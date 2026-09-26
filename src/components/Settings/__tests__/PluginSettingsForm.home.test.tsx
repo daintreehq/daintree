@@ -310,3 +310,32 @@ describe("PluginSettingsForm deep-link landing", () => {
     expect(document.querySelector(".settings-highlight")).toBeNull();
   });
 });
+
+describe("PluginSettingsForm settings edited by the plugin's own section", () => {
+  const cadence: SettingDefinition = {
+    id: "cadence",
+    type: "json",
+    label: "Posting cadence",
+    editor: "view",
+  };
+  const channel: SettingDefinition = { id: "channel", type: "string", label: "Default channel" };
+
+  it("leaves a view-edited value to the plugin's section instead of showing it twice", () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([cadence, channel], "plugin://a/settings.js")}
+        viewScope="user"
+      />
+    );
+
+    expect(screen.queryByText("Posting cadence")).toBeNull();
+    expect(screen.getByText("Default channel")).toBeTruthy();
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+  });
+
+  it("still shows the field when the plugin declares no section to edit it", () => {
+    render(<PluginSettingsForm plugin={makePlugin([cadence, channel])} viewScope="user" />);
+
+    expect(screen.getByText("Posting cadence")).toBeTruthy();
+  });
+});

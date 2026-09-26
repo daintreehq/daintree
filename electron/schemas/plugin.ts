@@ -1466,6 +1466,9 @@ export const SettingDefinitionObjectSchema = z
     secret: z.boolean().optional(),
     // Drives the panel "needs setup" strip and `host.settings.missingRequired`.
     required: z.boolean().optional(),
+    // "view": the plugin's own settings section edits this value, so the
+    // generated form leaves it out rather than showing it twice.
+    editor: z.enum(["form", "view"]).optional(),
   })
   .strict();
 

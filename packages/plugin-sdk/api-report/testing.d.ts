@@ -1775,6 +1775,15 @@ interface SettingDefinition {
      * {@link SettingsApi.missingRequired} lists it.
      */
     required?: boolean;
+    /**
+     * Who edits the value in Settings. `"view"` hands it to the plugin's own
+     * `location: "settings"` view — for a value a plain field can't edit well,
+     * such as a per-channel table stored as `json` — and the generated form
+     * leaves it out rather than showing it twice. Without such a view the form
+     * shows the field anyway, so the value is never left uneditable. Default
+     * `"form"`.
+     */
+    editor?: "form" | "view";
 }
 /**
  * Where a `contributes.settings` value is stored.

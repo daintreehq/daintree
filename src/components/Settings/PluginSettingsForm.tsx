@@ -936,6 +936,8 @@ export function PluginSettingsForm({
 
   const hasView = pluginDeclaresSettingsView(plugin);
   if (settings.length === 0 && elsewhere.length === 0 && !hasView) return null;
+  // A value the plugin's own section edits is shown there, not twice.
+  const fields = hasView ? settings.filter((def) => def.editor !== "view") : settings;
 
   const anyFailed = userScope.failed || projectScope.failed || localScope.failed;
   const elsewhereRow =
@@ -959,9 +961,9 @@ export function PluginSettingsForm({
           onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
-      {(settings.length > 0 || elsewhereRow) && (
+      {(fields.length > 0 || elsewhereRow) && (
         <SettingsGroup>
-          {settings.map((def) => {
+          {fields.map((def) => {
             const scope = settingScope(def);
             const state = byScope[scope];
             const loaded = state.values !== null;

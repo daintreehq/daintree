@@ -1160,6 +1160,13 @@
               },
               "required": {
                 "type": "boolean"
+              },
+              "editor": {
+                "type": "string",
+                "enum": [
+                  "form",
+                  "view"
+                ]
               }
             },
             "required": [

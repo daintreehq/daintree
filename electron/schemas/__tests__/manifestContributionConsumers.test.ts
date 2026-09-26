@@ -843,6 +843,11 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "An unset required setting shows the panel's needs-setup strip and is listed by host.settings.missingRequired.",
     },
+    editor: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SETTINGS_FORM, symbol: "PluginSettingsForm (fields)" }],
+      note: 'editor: "view" leaves the field to the plugin\'s own settings view, when it declares one.',
+    },
   },
   agentMcp: {
     id: {
