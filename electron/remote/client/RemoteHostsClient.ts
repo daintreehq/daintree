@@ -13,6 +13,7 @@ import type {
   HostProjectSummary,
   RemoteHostsEvent,
   SwitchWindowHostPayload,
+  SwitchWindowHostResult,
   UpdateHostPayload,
   WindowHostInfo,
 } from "../../../shared/types/ipc/remoteHosts.js";
@@ -38,6 +39,12 @@ export interface WindowControl {
     projectPath: string
   ): Promise<void>;
   openLocalProject(windowId: number, projectId: string): Promise<void>;
+  /**
+   * The local project to return a window to when it switches back to this
+   * machine without naming one: the last this window showed, else the one
+   * most recently opened here. Null when there is none.
+   */
+  lastLocalProjectId(windowId: number | null): string | null;
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
 }
@@ -215,10 +222,22 @@ export class RemoteHostsClient {
     };
   }
 
-  async switchWindowHost(ctx: IpcContext, payload: SwitchWindowHostPayload): Promise<void> {
+  /**
+   * Put a window (or a new one) on a host. With a project named, that project
+   * opens there. Without one the window returns to the project it last showed
+   * on that host, as the host remembers it for this machine (or, for this
+   * machine, as its own history does); when there is none, nothing moves and
+   * the caller is told to offer that host's project list instead. A window
+   * is only ever rebound together with the view it shows, so its binding and
+   * its view never name different hosts.
+   */
+  async switchWindowHost(
+    ctx: IpcContext,
+    payload: SwitchWindowHostPayload
+  ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
-    const projectId = payload.projectId;
+    let projectId = payload.projectId;
     if (
       projectId !== undefined &&
       (typeof projectId !== "string" ||
@@ -229,27 +248,38 @@ export class RemoteHostsClient {
     }
 
     const remote = !isLocalHostId(hostId);
+    const sourceWindowId = newWindow ? null : this.windowOf(ctx);
     let projectPath: string | null = null;
+    let connection: ReturnType<RemoteHostManager["connect"]> | null = null;
     if (remote) {
       this.options.registry.require(hostId);
       this.ensureRouter();
-      const connection = this.options.manager.connect(hostId);
+      connection = this.options.manager.connect(hostId);
       if (connection.linkState.status === "version-mismatch") throw versionMismatch(hostId);
-      if (projectId !== undefined) {
-        // A cold switch dials the host now. The view is created only once the
-        // link is up and the host has named the project's path: a view made
-        // before that would open with no path and its first calls would fail.
-        const readiness = await connection.whenReady(
-          this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
-        );
-        if (readiness === "version-mismatch") throw versionMismatch(hostId);
-        if (readiness !== "ready") {
+      // A cold switch dials the host now. The view is created only once the
+      // link is up and the host has named the project's path: a view made
+      // before that would open with no path and its first calls would fail.
+      const readiness = await connection.whenReady(
+        this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
+      );
+      if (readiness === "version-mismatch") throw versionMismatch(hostId);
+      if (readiness !== "ready") {
+        // A new window can show the host's project list while it connects;
+        // anything that has to find a project there needs the host's answer.
+        if (projectId !== undefined || !newWindow) {
           throw new AppError({
             code: "HOST_DISCONNECTED",
             message: `Host ${hostId} did not connect (${readiness})`,
             userMessage: "Couldn't reach this host. Check that it is on and try again.",
           });
         }
+      } else if (projectId === undefined) {
+        const last = await connection.lastActiveProject().catch(() => null);
+        if (last?.path) {
+          projectId = last.projectId;
+          projectPath = last.path;
+        }
+      } else {
         const description = await connection.describeProject(projectId).catch(() => null);
         if (!description?.path) {
           throw new AppError({
@@ -260,9 +290,15 @@ export class RemoteHostsClient {
         }
         projectPath = description.path;
       }
+    } else if (projectId === undefined) {
+      projectId = this.options.windows.lastLocalProjectId(sourceWindowId) ?? undefined;
     }
 
-    const windowId = newWindow ? await this.options.windows.openWindow() : this.windowOf(ctx);
+    // Nothing to return to, and no new window to show the host's project list
+    // in: leave this window as it is and let the caller offer the list.
+    if (projectId === undefined && !newWindow) return { outcome: "choose-project", hostId };
+
+    const windowId = newWindow ? await this.options.windows.openWindow() : sourceWindowId;
     if (windowId === null) {
       throw new AppError({ code: "INTERNAL", message: "No window to attach to the host" });
     }
@@ -275,14 +311,18 @@ export class RemoteHostsClient {
       });
     }
 
-    if (projectId === undefined) return;
+    // Only a new window reaches here without a project: its unbound view
+    // follows the binding and lists the host's projects.
+    if (projectId === undefined) return { outcome: "window-opened", hostId };
     if (!remote) {
       await this.options.windows.openLocalProject(windowId, projectId);
-      return;
+      return { outcome: "switched", hostId: LOCAL_HOST_ID, projectId };
     }
     // Set above for every remote switch that names a project; never open a pathless view.
     if (projectPath === null) throw new AppError({ code: "INTERNAL", message: "No host path" });
     await this.options.windows.openRemoteProject(windowId, hostId, projectId, projectPath);
+    connection?.noteActiveProject(projectId);
+    return { outcome: "switched", hostId, projectId };
   }
 
   async dispose(): Promise<void> {

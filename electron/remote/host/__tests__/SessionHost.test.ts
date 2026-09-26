@@ -366,3 +366,77 @@ describe("SessionHost", () => {
     expect(handle.link()).toBeNull();
   });
 });
+
+describe("SessionHost: the project a Shell last showed here", () => {
+  const client = (clientName: string) => ({
+    clientId: `${clientName}-launch`,
+    clientName,
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  });
+  const known = new Set(["p1", "p2"]);
+
+  function remembering() {
+    return new SessionHost(fakeServer(), {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      describeProject: (projectId) =>
+        known.has(projectId) ? { projectId, path: `/srv/${projectId}`, name: projectId } : null,
+    });
+  }
+
+  it("remembers per Shell machine, across that Shell's relaunches", () => {
+    const sessions = remembering();
+    sessions.noteActiveProject(client("greg-mbp"), "p1");
+    sessions.noteActiveProject(client("studio-02"), "p2");
+    // A relaunched Shell has a new client id but the same machine.
+    expect(
+      sessions.lastActiveProject({ ...client("greg-mbp"), clientId: "second-launch" })
+    ).toEqual({ projectId: "p1", path: "/srv/p1", name: "p1" });
+    expect(sessions.lastActiveProject(client("studio-02"))?.projectId).toBe("p2");
+    expect(sessions.lastActiveProject(client("elsewhere"))).toBeNull();
+    sessions.dispose();
+  });
+
+  it("keeps only projects this host has, and forgets one it no longer has", () => {
+    const sessions = remembering();
+    sessions.noteActiveProject(client("greg-mbp"), "p1");
+    sessions.noteActiveProject(client("greg-mbp"), "not-here");
+    expect(sessions.lastActiveProject(client("greg-mbp"))?.projectId).toBe("p1");
+    known.delete("p1");
+    try {
+      expect(sessions.lastActiveProject(client("greg-mbp"))).toBeNull();
+      known.add("p1");
+      // Forgotten, not merely hidden.
+      expect(sessions.lastActiveProject(client("greg-mbp"))).toBeNull();
+    } finally {
+      known.add("p1");
+      sessions.dispose();
+    }
+  });
+
+  it("answers both over the link", () => {
+    const handlers = new Map<string, (payload: never) => unknown>();
+    const link = fakeLink();
+    link.registerCallHandler = ((method: string, _schema: unknown, handler: never) => {
+      handlers.set(method, handler);
+      return () => {};
+    }) as never;
+    const fake = fakeServer();
+    const sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      describeProject: (projectId) =>
+        known.has(projectId) ? { projectId, path: `/srv/${projectId}`, name: projectId } : null,
+    });
+    fake.attach("s1", link);
+    expect(handlers.get(LinkMethod.LAST_ACTIVE_PROJECT)!(null as never)).toBeNull();
+    expect(handlers.get(LinkMethod.NOTE_ACTIVE_PROJECT)!({ projectId: "p2" } as never)).toBeNull();
+    expect(handlers.get(LinkMethod.LAST_ACTIVE_PROJECT)!(null as never)).toEqual({
+      projectId: "p2",
+      path: "/srv/p2",
+      name: "p2",
+    });
+    sessions.dispose();
+  });
+});

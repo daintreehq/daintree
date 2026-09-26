@@ -25,6 +25,8 @@ function fakeManager() {
       state: () => HostConnectionState;
       describeProject: ReturnType<typeof vi.fn>;
       listProjects: ReturnType<typeof vi.fn>;
+      lastActiveProject: ReturnType<typeof vi.fn>;
+      noteActiveProject: ReturnType<typeof vi.fn>;
       whenReady: ReturnType<typeof vi.fn>;
       boundViews: () => number[];
     }
@@ -34,6 +36,8 @@ function fakeManager() {
     status: "connected" as string,
     readiness: "ready" as string,
     bound: [] as number[],
+    /** What the host remembers this Shell last showed there. */
+    last: null as { projectId: string; path: string; name: string } | null,
     connect: vi.fn((hostId: string) => {
       let connection = connections.get(hostId);
       if (!connection) {
@@ -47,6 +51,8 @@ function fakeManager() {
             name: projectId,
           })),
           listProjects: vi.fn(async () => [{ id: "proj-1", name: "App", path: "/srv/app" }]),
+          lastActiveProject: vi.fn(async () => manager.last),
+          noteActiveProject: vi.fn(),
           whenReady: vi.fn(async () => manager.readiness),
           boundViews: () => [...manager.bound],
         };
@@ -110,6 +116,7 @@ describe("RemoteHostsClient", () => {
       openRemoteProject: vi.fn(async () => {}),
       openLocalProject: vi.fn(async () => {}),
       watchWindow: vi.fn(),
+      lastLocalProjectId: vi.fn(() => null),
     };
     installRouter = vi.fn<(router: RemoteRouter | null) => void>();
     events = [];
@@ -188,6 +195,95 @@ describe("RemoteHostsClient", () => {
     expect(router.hostForSender(8)).toBeNull();
   });
 
+  describe("a switch that names no project", () => {
+    it("returns the window to the project the host remembers for this machine", async () => {
+      manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-2" });
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        1,
+        "studio-01",
+        "proj-2",
+        "/srv/proj-2"
+      );
+      expect(bindings.get(1)).toBe("studio-01");
+      expect(manager.get("studio-01")!.noteActiveProject).toHaveBeenCalledWith("proj-2");
+    });
+
+    it("moves nothing and asks for the host's project list when there is nothing to return to", async () => {
+      keys.set(5, "proj-local");
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      // Binding and view still agree: the local view keeps running here.
+      expect(bindings.get(1)).toBe("local");
+      expect(router.hostForSender(5)).toBeNull();
+    });
+
+    it("treats a host that can't say as having nothing to return to", async () => {
+      manager.connect("studio-01").lastActiveProject.mockRejectedValueOnce(new Error("gone"));
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+    });
+
+    it("refuses when the host never answers, rather than moving the window blind", async () => {
+      manager.readiness = "unreachable";
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+      expect(bindings.get(1)).toBe("local");
+    });
+
+    it("opens a new window on the host's project list when there is nothing to return to", async () => {
+      manager.readiness = "unreachable";
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true })
+      ).resolves.toEqual({ outcome: "window-opened", hostId: "studio-01" });
+      expect(bindings.get(7)).toBe("studio-01");
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    });
+
+    it("returns to this machine's last project, or asks for its list", async () => {
+      manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
+      await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
+
+      vi.mocked(windows.lastLocalProjectId).mockReturnValueOnce("local-a");
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
+      ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "local-a" });
+      expect(windows.lastLocalProjectId).toHaveBeenLastCalledWith(1);
+      expect(windows.openLocalProject).toHaveBeenCalledWith(1, "local-a");
+      expect(bindings.get(1)).toBe("local");
+
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
+      ).resolves.toEqual({ outcome: "choose-project", hostId: "local" });
+    });
+  });
+
+  it("tells the host which project a switch showed, and only once it showed", async () => {
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    const connection = manager.get("studio-01")!;
+    expect(connection.noteActiveProject).toHaveBeenCalledWith("proj-1");
+
+    vi.mocked(windows.openRemoteProject).mockRejectedValueOnce(new Error("view failed"));
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-2",
+      })
+    ).rejects.toThrow("view failed");
+    expect(connection.noteActiveProject).not.toHaveBeenCalledWith("proj-2");
+  });
+
   it("opens a new window for a Cmd/Ctrl-click and leaves the current one alone", async () => {
     await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true });
     expect(windows.openWindow).toHaveBeenCalled();
@@ -218,6 +314,7 @@ describe("RemoteHostsClient", () => {
   });
 
   it("switches a window back to this machine", async () => {
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
     await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "local",
@@ -229,6 +326,7 @@ describe("RemoteHostsClient", () => {
   });
 
   it("forgets a host: disconnects it and returns its windows to this machine", async () => {
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
     await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
     await client.forget({ hostId: "studio-01" });
     expect(manager.disconnect).toHaveBeenCalledWith("studio-01");

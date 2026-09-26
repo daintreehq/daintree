@@ -1875,7 +1875,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "remote-hosts:switch-window-host": {
     args: [payload: import("./remoteHosts.js").SwitchWindowHostPayload];
-    result: void;
+    result: import("./remoteHosts.js").SwitchWindowHostResult;
   };
   "remote-hosts:update": {
     args: [payload: import("./remoteHosts.js").UpdateHostPayload];

@@ -150,6 +150,30 @@ describe("view reverse requests", () => {
     }
   });
 
+  it.each(["browser.captureScreenshot", "host.switch", "project.openOnHost"])(
+    "runs %s for a host, unconfirmed, so the view decides",
+    async (actionId) => {
+      installViewReverseRequests();
+      m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });
+      await ask("mcp:dispatch-action", {
+        actionId,
+        args: {},
+        confirmed: true,
+        sessionOrigin: "external",
+      });
+      expect(m.dispatchActionForHost).toHaveBeenCalledWith(
+        11,
+        actionId,
+        {},
+        false,
+        undefined,
+        "external",
+        undefined,
+        { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "udio" }
+      );
+    }
+  );
+
   it("refuses a malformed dispatch without touching the view", async () => {
     installViewReverseRequests();
     await expect(
