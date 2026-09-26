@@ -229,7 +229,7 @@ describe("RemoteHostsClient", () => {
   });
 
   it("ignores a stale host lookup's failure once a newer switch was asked for", async () => {
-    registry.add({ name: "studio-02", sshTarget: "studio2.example" });
+    registry.add({ name: "studio-02", connection: { kind: "ssh", target: "studio2.example" } });
     let failLookup!: () => void;
     manager
       .connect("studio-01")
@@ -252,7 +252,7 @@ describe("RemoteHostsClient", () => {
   });
 
   it("moves the window for the latest request only, whatever order the hosts answer in", async () => {
-    registry.add({ name: "studio-02", sshTarget: "studio2.example" });
+    registry.add({ name: "studio-02", connection: { kind: "ssh", target: "studio2.example" } });
     let releaseSlow!: (value: string) => void;
     manager
       .connect("studio-01")

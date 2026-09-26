@@ -285,7 +285,7 @@ export async function bootstrapHostMode(
         previousUnit = parseSavedUnit(saved.stdout);
         if (!previousUnit) {
           throw failed(
-            `Couldn't keep a copy of the Host mode service already on ${sshTarget}`,
+            `Couldn't keep a copy of the Host mode service already on ${hostLabel}`,
             `~/.config/systemd/user/${LINUX_UNIT_NAME}`
           );
         }
@@ -340,7 +340,7 @@ export async function bootstrapHostMode(
       if (undone?.code !== 0) {
         const why = formatErrorMessage(error, "Host mode setup failed");
         throw failed(
-          `${why}. Setup couldn't put back the Host mode service that was already on ${sshTarget}`,
+          `${why}. Setup couldn't put back the Host mode service that was already on ${hostLabel}`,
           `its copy is at ${UNIT_BACKUP_PATH} there${undone ? ` (${failureDetail(undone, "ssh failed")})` : ""}`
         );
       }
