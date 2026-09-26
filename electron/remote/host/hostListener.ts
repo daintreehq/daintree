@@ -30,6 +30,7 @@ import { HostServer } from "./HostServer.js";
 import { hostSocketLocation, type HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
+import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 
 declare module "../runtime.js" {
@@ -138,6 +139,7 @@ async function buildHostListener(
     location,
     handshake: getLocalHandshakeInfo(),
     hostName: os.hostname(),
+    observeWorkingAgents: async () => (await observeAgents())?.working ?? null,
   });
   teardowns.push(() => server.close());
   teardowns.push(registerRemoteService("hostServer", server));

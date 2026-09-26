@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import { probeHost } from "../hostProbe.js";
 import { runHostInstall, type InstallProgress, type InstallerDeps } from "../hostInstaller.js";
 import type { ClientBuild } from "../installPlan.js";
-import type { RemoteShell } from "../remoteShell.js";
+import type { HostCommandChannel } from "../remoteShell.js";
 
 const CLIENT: ClientBuild = {
   platform: "darwin",
@@ -44,17 +45,22 @@ const ok = (stdout = ""): CommandResult => ({
   timedOut: false,
 });
 
-interface FakeShell extends RemoteShell {
+interface FakeShell extends HostCommandChannel {
   scripts: string[];
   uploads: Array<[string, string]>;
+  /** The sha256 of what each upload carried, by remote path, as the host would read it back. */
+  received: Map<string, string>;
 }
 
 function fakeShell(answer: (script: string) => CommandResult = () => ok()): FakeShell {
   const shell: FakeShell = {
     scripts: [],
     uploads: [],
+    received: new Map(),
     exec: async (script) => {
       shell.scripts.push(script);
+      const sha = /@@dt:sha256/.test(script) ? /sha256sum '([^']+)'/.exec(script)?.[1] : null;
+      if (sha) return ok(`@@dt:sha256 ${shell.received.get(sha) ?? "missing"}\n`);
       if (script.includes("mktemp -d")) return ok("@@dt:stage /tmp/daintree-stage.abc123\n");
       if (script.includes("ditto -x -k"))
         return ok(`@@dt:version 1.4.0\n@@dt:buildinfo ${NEW_BUILD}\n`);
@@ -64,8 +70,11 @@ function fakeShell(answer: (script: string) => CommandResult = () => ok()): Fake
       if (script.includes("@@dt:rolledback")) return ok("@@dt:rolledback yes\n");
       return answer(script);
     },
-    upload: async (local, remote) => {
+    execWithInput: async (script) => shell.exec(script),
+    sendFile: async (local, remote) => {
       shell.uploads.push([local, remote]);
+      const bytes = await fs.readFile(local).catch(() => Buffer.from("unreadable"));
+      shell.received.set(remote, crypto.createHash("sha256").update(bytes).digest("hex"));
       return ok();
     },
   };
@@ -114,7 +123,11 @@ function makeDeps(params: {
     client: params.client ?? CLIENT,
     probe: async () => {
       const stdout = probes.length > 1 ? probes.shift()! : probes[0]!;
-      const probeShell: RemoteShell = { exec: async () => ok(stdout), upload: async () => ok() };
+      const probeShell: HostCommandChannel = {
+        exec: async () => ok(stdout),
+        execWithInput: async () => ok(stdout),
+        sendFile: async () => ok(),
+      };
       return probeHost({ sshTarget: "studio", shell: probeShell, client: CLIENT });
     },
     workingAgents: async () => (working.length > 1 ? working.shift()! : working[0]!),
@@ -158,20 +171,22 @@ describe("runHostInstall", () => {
     const order = shell.scripts.map((s) =>
       s.includes("mktemp")
         ? "stage"
-        : s === "rm -rf '/Applications/Daintree.app.old'"
-          ? "drop-backup"
-          : s.includes("ditto -x")
-            ? "verify"
-            : s.includes("Daintree.app.old")
-              ? "swap"
-              : s.includes("@@dt:stopped")
-                ? "stop"
-                : s.startsWith("open ")
-                  ? "start"
-                  : "other"
+        : s.includes("@@dt:sha256")
+          ? "check-copy"
+          : s === "rm -rf '/Applications/Daintree.app.old'"
+            ? "drop-backup"
+            : s.includes("ditto -x")
+              ? "verify"
+              : s.includes("Daintree.app.old")
+                ? "swap"
+                : s.includes("@@dt:stopped")
+                  ? "stop"
+                  : s.startsWith("open ")
+                    ? "start"
+                    : "other"
     );
     // Nothing was running, so nothing is stopped or started.
-    expect(order).toEqual(["stage", "verify", "swap", "drop-backup"]);
+    expect(order).toEqual(["stage", "check-copy", "verify", "swap", "drop-backup"]);
     // The packed copy doesn't outlive the upload.
     await expect(fs.access(path.join(cacheDir, "Daintree-1.4.0-arm64.zip"))).rejects.toThrow();
   });
@@ -270,13 +285,11 @@ describe("runHostInstall", () => {
 
   it("leaves the old build in place when the host doesn't quit", async () => {
     const shell = fakeShell();
+    const answer = shell.exec;
     shell.exec = async (script) => {
+      if (!script.includes("@@dt:stopped")) return answer(script);
       shell.scripts.push(script);
-      if (script.includes("mktemp -d")) return ok("@@dt:stage /tmp/daintree-stage.abc123\n");
-      if (script.includes("ditto -x -k"))
-        return ok(`@@dt:version 1.4.0\n@@dt:buildinfo ${NEW_BUILD}\n`);
-      if (script.includes("@@dt:stopped")) return ok("@@dt:stopped no\n");
-      return ok();
+      return ok("@@dt:stopped no\n");
     };
     const deps = makeDeps({ shell, probes: [macProbe({ build: OLD_BUILD, hostMode: true })] });
     await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(/didn't quit/);
@@ -306,6 +319,105 @@ describe("runHostInstall", () => {
     // Daintree never runs sudo and restarts nothing for a deb.
     expect(shell.scripts.some((s) => s.includes("sudo"))).toBe(false);
     expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+  });
+
+  describe("a host with curl but no way to the release feed", () => {
+    const LINUX_DEB = [
+      "@@dt:uname Linux x86_64",
+      "@@dt:install deb /opt/Daintree",
+      "@@dt:version 1.3.0",
+      "@@dt:download yes",
+      "@@dt:end",
+    ].join("\n");
+    const DEB = "daintree_1.4.0_amd64.deb";
+    const STAGED = `/tmp/daintree-stage.abc123/${DEB}`;
+    const offline = (script: string): CommandResult =>
+      script.includes("curl -fsSL")
+        ? {
+            code: 6,
+            stdout: "",
+            stderr: "curl: (6) Could not resolve host: updates.daintree.org",
+            spawnError: null,
+            timedOut: false,
+          }
+        : ok();
+
+    it("keeps the host's own download when it works", async () => {
+      const shell = fakeShell();
+      const deps = makeDeps({ shell, probes: [LINUX_DEB] });
+      const download = vi.fn(deps.download);
+      deps.download = download;
+      await expect(install(deps)).resolves.toMatchObject({ status: "needs-user-command" });
+      expect(download).not.toHaveBeenCalled();
+      expect(shell.uploads).toEqual([]);
+    });
+
+    it("downloads the artifact here, copies it over and checks its sha256 there", async () => {
+      const shell = fakeShell(offline);
+      const deps = makeDeps({ shell, probes: [LINUX_DEB] });
+      const download = vi.fn(deps.download);
+      deps.download = download;
+      await expect(install(deps)).resolves.toMatchObject({
+        status: "needs-user-command",
+        command: { command: `sudo apt install ${STAGED}` },
+      });
+      expect(download).toHaveBeenCalledWith(
+        `https://updates.daintree.org/releases/${DEB}`,
+        path.join(cacheDir, DEB),
+        expect.anything()
+      );
+      expect(shell.uploads).toEqual([[path.join(cacheDir, DEB), STAGED]]);
+      const order = shell.scripts.map((s) =>
+        s.includes("curl -fsSL")
+          ? "host-fetch"
+          : s === `rm -f '${STAGED}'`
+            ? "drop-partial"
+            : s.includes("@@dt:sha256")
+              ? "check-copy"
+              : s.includes("test -s")
+                ? "verify"
+                : s.includes("mktemp")
+                  ? "stage"
+                  : "other"
+      );
+      expect(order).toEqual(["stage", "host-fetch", "drop-partial", "check-copy", "verify"]);
+      expect(deps.progress.map((p) => p.message)).toContain(
+        "The host couldn't download the build, so this machine is fetching it"
+      );
+      // The downloaded copy doesn't outlive the upload.
+      await expect(fs.access(path.join(cacheDir, DEB))).rejects.toThrow();
+    });
+
+    it("discards a copy whose sha256 differs on the host, leaving nothing staged", async () => {
+      const shell = fakeShell(offline);
+      const upload = shell.sendFile;
+      shell.sendFile = async (local, remote, options) => {
+        const result = await upload(local, remote, options);
+        shell.received.set(remote, "0".repeat(64));
+        return result;
+      };
+      const deps = makeDeps({ shell, probes: [LINUX_DEB] });
+      await expect(install(deps)).rejects.toThrow(/doesn't match this machine's \(sha256\)/);
+      expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
+      expect(shell.scripts.some((s) => s.includes("test -s"))).toBe(false);
+    });
+
+    it("says both sides failed when this machine can't download it either", async () => {
+      const shell = fakeShell(offline);
+      const deps = makeDeps({ shell, probes: [LINUX_DEB] });
+      deps.download = async () => {
+        throw new Error("getaddrinfo ENOTFOUND updates.daintree.org");
+      };
+      const error = (await install(deps).then(
+        () => new Error("installed"),
+        (e: unknown) => e
+      )) as Error;
+      expect(error.message).toContain("Neither the host nor this machine could download the build");
+      expect(error.message).toContain("curl: (6) Could not resolve host");
+      expect(error.message).toContain("ENOTFOUND");
+      expect(shell.uploads).toEqual([]);
+      expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
+    });
   });
 
   it("replaces an AppImage in place and restarts only through the user's own unit", async () => {

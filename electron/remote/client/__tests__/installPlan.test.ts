@@ -39,7 +39,10 @@ function probe(overrides: Partial<HostProbeResult> = {}): HostProbeResult {
       keyring: null,
       linger: null,
       hostModeUnit: null,
+      startAtLoginInstalled: null,
+      fuse: null,
     },
+    hostModeState: null,
     ...overrides,
   };
 }

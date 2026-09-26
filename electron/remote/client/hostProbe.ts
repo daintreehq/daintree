@@ -6,8 +6,11 @@ import type {
 import type {
   HostAdvice,
   HostInstallInfo,
+  HostModeObservation,
   HostProbeResult,
 } from "../../../shared/types/ipc/remoteHosts.js";
+import { HOST_MODE_STATUS_NAME, parseHostModeStatus } from "../host/hostModeStatusFile.js";
+import { launchAgentLabel } from "../host/startAtLogin.js";
 import {
   HOST_DISCOVERY_NAME,
   HOST_SOCKET_NAME,
@@ -15,7 +18,7 @@ import {
   MAC_APP_DIR_NAME,
 } from "../host/hostSocketPath.js";
 import type { CommandOptions } from "./commandRunner.js";
-import { failureDetail, type RemoteShell } from "./remoteShell.js";
+import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
 /**
  * Check a machine before adding or updating it: one SSH command (BatchMode,
@@ -29,6 +32,9 @@ import { failureDetail, type RemoteShell } from "./remoteShell.js";
 export const MAC_APP_PATH = "/Applications/Daintree.app";
 export const DEB_INSTALL_DIR = "/opt/Daintree";
 export const LINUX_UNIT_NAME = "daintree-host.service";
+/** The deb's executable: what a unit for a deb install runs. */
+export const DEB_EXECUTABLE = `${DEB_INSTALL_DIR}/daintree`;
+export const MAC_LAUNCH_AGENT_RELATIVE = `Library/LaunchAgents/${launchAgentLabel(true)}.plist`;
 
 const MARK = "@@dt:";
 
@@ -74,6 +80,7 @@ export function buildHostProbeScript(): string {
     `${buildInfoRead(`${MAC_APP_PATH}/Contents/Resources/app.asar`)}; fi`,
     `if pgrep -x Daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
     `echo "${MARK}sleep $(pmset -g 2>/dev/null | awk '$1=="sleep"{print $2; exit}')"`,
+    `if [ -f "$HOME/${MAC_LAUNCH_AGENT_RELATIVE}" ]; then echo "${MARK}launchagent yes"; else echo "${MARK}launchagent no"; fi`,
   ].join("; ");
   const linux = [
     `d=${linuxDir}`,
@@ -88,7 +95,9 @@ export function buildHostProbeScript(): string {
     `for f in "$HOME"/Applications/Daintree*.AppImage "$HOME"/Applications/daintree*.AppImage "$u" "$r"; do case "$f" in /*.AppImage) if [ -f "$f" ]; then b=""; i="$f${APPIMAGE_BUILD_INFO_SUFFIX}"; if [ -f "$i" ] && [ "$i" -nt "$f" ]; then b=$(head -c 512 "$i"); fi; echo "${MARK}appimage $f"; echo "${MARK}appimageinfo $b"; fi ;; esac; done`,
     `if pgrep -x daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
     `echo "${MARK}sleep $(systemctl is-enabled sleep.target 2>/dev/null)"`,
-    `if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then echo "${MARK}unit yes"; else echo "${MARK}unit no"; fi`,
+    `if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then echo "${MARK}unit yes"; echo "${MARK}unitenabled $(systemctl --user is-enabled ${LINUX_UNIT_NAME} 2>/dev/null)"; else echo "${MARK}unit no"; fi`,
+    // What an AppImage needs to mount itself: the device, fusermount and libfuse2.
+    `f=no; if [ -e /dev/fuse ] && { command -v fusermount >/dev/null 2>&1 || command -v fusermount3 >/dev/null 2>&1; } && { { /sbin/ldconfig -p 2>/dev/null || ldconfig -p 2>/dev/null; } | grep -q 'libfuse[.]so[.]2' || ls /lib/*/libfuse.so.2 /usr/lib/*/libfuse.so.2 /lib64/libfuse.so.2 /usr/lib64/libfuse.so.2 /usr/lib/libfuse.so.2 >/dev/null 2>&1; }; then f=yes; fi; echo "${MARK}fuse $f"`,
     `echo "${MARK}linger $(loginctl show-user "$(id -un)" -p Linger 2>/dev/null)"`,
     // Only this SSH user's processes: another user's keyring is no use here.
     `k=none; for n in gnome-keyring-d kwalletd5 kwalletd6; do if pgrep -u "$(id -u)" -x $n >/dev/null 2>&1; then k=$n; break; fi; done; echo "${MARK}keyring $k"`,
@@ -97,6 +106,7 @@ export function buildHostProbeScript(): string {
     `echo "${MARK}uname $(uname -sm)"`,
     `case "$(uname -s)" in Darwin) ${mac} ;; Linux) ${linux} ;; *) d=/nonexistent ;; esac`,
     `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}")"; fi`,
+    `if [ -f "$d/${HOST_MODE_STATUS_NAME}" ]; then printf '%s %s\\n' "${MARK}hostmodestate" "$(head -c 4096 "$d/${HOST_MODE_STATUS_NAME}" | tr -d '\\n')"; fi`,
     `if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then echo "${MARK}download yes"; fi`,
     `echo "${MARK}end"`,
   ].join("; ");
@@ -119,6 +129,8 @@ export interface ParsedProbe {
   hostPid: number | null;
   canDownload: boolean;
   advice: HostAdvice;
+  /** What the host's Daintree last recorded about Host mode (host-mode.json). */
+  hostModeState: HostModeObservation | null;
   complete: boolean;
 }
 
@@ -282,6 +294,16 @@ export function parseHostProbe(stdout: string): ParsedProbe {
       : null;
   const keyringText = one("keyring");
   const hostPidText = one("hostpid");
+  const unitPresent = platform === "linux" ? one("unit") === "yes" : null;
+  const unitEnabled = one("unitenabled");
+  let startAtLoginInstalled: boolean | null = null;
+  if (platform === "darwin" && values.has("launchagent")) {
+    startAtLoginInstalled = one("launchagent") === "yes";
+  } else if (platform === "linux" && values.has("unit")) {
+    // `is-enabled` printing nothing means systemctl couldn't be asked.
+    startAtLoginInstalled = unitPresent ? (unitEnabled ? unitEnabled === "enabled" : null) : false;
+  }
+  const fuseText = one("fuse");
 
   return {
     platform,
@@ -304,8 +326,11 @@ export function parseHostProbe(stdout: string): ParsedProbe {
             : "running"
           : null,
       linger,
-      hostModeUnit: platform === "linux" ? one("unit") === "yes" : null,
+      hostModeUnit: unitPresent,
+      startAtLoginInstalled,
+      fuse: platform === "linux" && fuseText ? fuseText === "yes" : null,
     },
+    hostModeState: parseHostModeStatus(one("hostmodestate") ?? ""),
     complete: values.has("end"),
   };
 }
@@ -352,7 +377,7 @@ export interface ProbeOutcome {
 
 export async function probeHost(params: {
   sshTarget: string;
-  shell: RemoteShell;
+  shell: HostCommandChannel;
   client: Pick<HostHandshakeInfo, "version" | "commit">;
   options?: CommandOptions;
 }): Promise<ProbeOutcome> {
@@ -384,7 +409,10 @@ export async function probeHost(params: {
           keyring: null,
           linger: null,
           hostModeUnit: null,
+          startAtLoginInstalled: null,
+          fuse: null,
         },
+        hostModeState: null,
       },
     };
   }
@@ -405,6 +433,7 @@ export async function probeHost(params: {
       // Which AppImage runs is unknown, so whether it matches is too.
       matchesClient: parsed.appImageConflict ? null : installMatches(parsed.install, params.client),
       advice: parsed.advice,
+      hostModeState: parsed.hostModeState,
     },
   };
 }

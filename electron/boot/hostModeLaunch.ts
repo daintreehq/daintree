@@ -4,9 +4,30 @@
 
 export const HOST_MODE_FLAG = "--host-mode";
 export const HIDDEN_LAUNCH_FLAG = "--hidden";
+/**
+ * Host setup from another machine: switch Host mode on as the Settings switch
+ * does (saved, start at login installed, keychain checked), not just listen
+ * for this run. Implies `--host-mode`.
+ */
+export const ENABLE_HOST_MODE_FLAG = "--enable-host-mode";
+/**
+ * Only hand the other flags to a Daintree that is already running; never
+ * become one. Setup runs it from an SSH session, where the backend must not run.
+ */
+export const HOST_MODE_HANDOFF_FLAG = "--host-mode-handoff";
+/** A handoff launch that found no Daintree running to hand over to. */
+export const HOST_MODE_HANDOFF_NOBODY_EXIT_CODE = 3;
 
 export function isHostModeRequested(argv: readonly string[]): boolean {
-  return argv.includes(HOST_MODE_FLAG);
+  return argv.includes(HOST_MODE_FLAG) || argv.includes(ENABLE_HOST_MODE_FLAG);
+}
+
+export function isHostModeEnableRequested(argv: readonly string[]): boolean {
+  return argv.includes(ENABLE_HOST_MODE_FLAG);
+}
+
+export function isHostModeHandoffOnly(argv: readonly string[]): boolean {
+  return argv.includes(HOST_MODE_HANDOFF_FLAG);
 }
 
 /**

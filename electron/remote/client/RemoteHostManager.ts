@@ -260,6 +260,45 @@ export class HostConnection {
     this.link.retryNow();
   }
 
+  /**
+   * Agents the host reports working while it refuses this build, asked
+   * afresh (another handshake) unless the last refusal is recent enough. Null
+   * when the link isn't in a build mismatch, the host didn't say, or it didn't
+   * answer in time: unknown, never zero.
+   */
+  async workingAgentsWhileMismatched(options: {
+    maxAgeMs: number;
+    timeoutMs: number;
+    now?: () => number;
+  }): Promise<number | null> {
+    const now = options.now ?? Date.now;
+    const current = this.link.getState();
+    if (current.status !== "version-mismatch") return null;
+    if (current.observed && now() - current.observed.at <= options.maxAgeMs) {
+      return current.observed.workingAgents;
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        off();
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(null), options.timeoutMs);
+      const off = this.link.onStateChange((state) => {
+        if (state.status === "connecting") return;
+        finish(
+          state.status === "version-mismatch" ? (state.observed?.workingAgents ?? null) : null
+        );
+      });
+      this.link.retryNow();
+      // A stopped link doesn't retry: nothing fresh is coming, and a stale count isn't one.
+      if (this.link.getState() === current) finish(null);
+    });
+  }
+
   async stop(): Promise<void> {
     this.started = false;
     this.checkReady();

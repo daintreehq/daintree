@@ -321,10 +321,59 @@ describe("HostServer authentication", () => {
       mismatch: { kind: "commit", local: "def456", remote: "abc123" },
       local: other,
       remote: TEST_HANDSHAKE,
+      // This server wasn't given a way to see its agents, so it says nothing about them.
+      observed: null,
     });
     await new Promise((r) => setTimeout(r, 100));
     expect(client.getState().status).toBe("version-mismatch");
     expect(attempts).toBe(0);
+  });
+
+  it("tells a client on another build what its agents are doing, fresh on every handshake", async () => {
+    let working: number | null = 2;
+    const server = await startServer({ observeWorkingAgents: async () => working });
+    const client = startClient(server, { handshake: { ...TEST_HANDSHAKE, commit: "def456" } });
+    await waitFor(() => client.getState().status === "version-mismatch");
+    const first = client.getState();
+    expect(first).toMatchObject({ observed: { workingAgents: 2 } });
+
+    working = 0;
+    client.retryNow();
+    await waitFor(() => {
+      const state = client.getState();
+      return state.status === "version-mismatch" && state.observed?.workingAgents === 0;
+    });
+  });
+
+  it("says unknown, never zero, when its agents can't be seen or don't answer in time", async () => {
+    const server = await startServer({
+      observeWorkingAgents: () => new Promise<number | null>(() => {}),
+    });
+    const client = startClient(server, { handshake: { ...TEST_HANDSHAKE, commit: "def456" } });
+    await waitFor(() => client.getState().status === "version-mismatch", 5_000);
+    expect(client.getState()).toMatchObject({ observed: { workingAgents: null } });
+  });
+
+  it("tells an unauthenticated client nothing about its agents", async () => {
+    const observe = vi.fn(async () => 3);
+    await startServer({ observeWorkingAgents: observe });
+    const raw = await rawConnect();
+    raw.socket.write(
+      encodeFrame(
+        messageToFrame({
+          lane: Lane.CONTROL,
+          kind: ControlKind.HELLO,
+          body: {
+            handshake: { ...TEST_HANDSHAKE, commit: "def456" },
+            token: "0".repeat(64),
+            client: { clientId: "client-x", clientName: "x", platform: "darwin" },
+            resumeSessionId: null,
+          },
+        })
+      )
+    );
+    await closedSocket(raw.socket);
+    expect(observe).not.toHaveBeenCalled();
   });
 
   it("rejects a different wire protocol with reason protocol", async () => {

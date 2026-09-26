@@ -441,7 +441,10 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     handler({}, ["/opt/Daintree/daintree", "--host-mode"], "/");
 
-    expect(onHostModeRequested).toHaveBeenCalledOnce();
+    expect(onHostModeRequested).toHaveBeenCalledExactlyOnceWith([
+      "/opt/Daintree/daintree",
+      "--host-mode",
+    ]);
     expect(win.focus).not.toHaveBeenCalled();
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
@@ -457,6 +460,20 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     handle.onLaunchSettled();
 
     expect(onHostModeRequested).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("hands a setup launch that enables Host mode over with its command line", async () => {
+    const onHostModeRequested = vi.fn();
+    const { opts, handler } = await register({ onHostModeRequested });
+
+    handler({}, ["daintree", "--enable-host-mode", "--host-mode-handoff"], "/");
+
+    expect(onHostModeRequested).toHaveBeenCalledExactlyOnceWith([
+      "daintree",
+      "--enable-host-mode",
+      "--host-mode-handoff",
+    ]);
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 

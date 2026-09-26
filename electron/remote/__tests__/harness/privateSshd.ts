@@ -147,7 +147,13 @@ export async function makeShortTempRoot(): Promise<string> {
   return fs.realpath(await fs.mkdtemp(path.join(parent, "dse-")));
 }
 
-export async function startPrivateSshd(root: string): Promise<PrivateSshd> {
+export async function startPrivateSshd(
+  root: string,
+  options: {
+    /** More environment for every session (e.g. a PATH with stand-in tools first). */
+    env?: Record<string, string>;
+  } = {}
+): Promise<PrivateSshd> {
   const home = path.join(root, "home");
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   const hostKey = path.join(root, "hostkey");
@@ -177,7 +183,9 @@ export async function startPrivateSshd(root: string): Promise<PrivateSshd> {
       // Never run the real user's ~/.ssh/rc.
       "PermitUserRC no",
       // Probe and discovery read the session's HOME: point it at the run's directory.
-      `SetEnv HOME=${home}`,
+      `SetEnv HOME=${home}${Object.entries(options.env ?? {})
+        .map(([name, value]) => ` "${name}=${value}"`)
+        .join("")}`,
       "",
     ].join("\n")
   );

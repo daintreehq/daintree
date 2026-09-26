@@ -57,6 +57,9 @@ type WorkingAgentsSource = (hostId: HostId) => number | null;
 
 let workingAgentsSource: WorkingAgentsSource | null = null;
 
+/** A refusal's agent count older than this is asked for again before an update relies on it. */
+const MISMATCH_OBSERVATION_MAX_AGE_MS = 5_000;
+
 /**
  * Where "agents working on this host" comes from for the update gate. Until a
  * source is set the host list's summary frame is read; with no summary the
@@ -332,6 +335,15 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     },
     async workingAgents(hostId) {
       if (!hostId) return null;
+      // A host on another build refuses the link, and with it the summaries
+      // that carry this count; its refusal says what its agents are doing.
+      const connection = manager.get(hostId);
+      if (connection?.linkState.status === "version-mismatch") {
+        return connection.workingAgentsWhileMismatched({
+          maxAgeMs: MISMATCH_OBSERVATION_MAX_AGE_MS,
+          timeoutMs: 15_000,
+        });
+      }
       if (workingAgentsSource) return workingAgentsSource(hostId);
       const entry = client.list().find((host) => host.descriptor.id === hostId);
       return entry?.summary?.agentsObserved?.working ?? null;

@@ -4,7 +4,11 @@ import type {
   HostDescriptor,
   HostPlatform,
 } from "@shared/types/remoteHosts";
-import type { HostInstallInfo, HostInstallPlan } from "@shared/types/ipc/remoteHosts";
+import type {
+  HostInstallInfo,
+  HostInstallPlan,
+  HostProbeResult,
+} from "@shared/types/ipc/remoteHosts";
 
 export function platformLabel(platform: HostPlatform | null, arch: HostArch | null): string {
   if (!platform) return "Platform not seen yet";
@@ -67,7 +71,7 @@ export function deliveryLabel(plan: HostInstallPlan): string {
     case "push-bundle":
       return `Copies this machine's own build (${what}) to the host`;
     case "host-fetch":
-      return `The host downloads ${what} for Daintree ${plan.version} from the ${plan.channel} release feed`;
+      return `The host downloads ${what} for Daintree ${plan.version} from the ${plan.channel} release feed; if it can't reach the feed, this machine downloads it and copies it over`;
     case "client-download-push":
       return `Downloads ${what} for Daintree ${plan.version} here and copies it to the host`;
     default:
@@ -79,4 +83,20 @@ export function deliveryLabel(plan: HostInstallPlan): string {
 export function defaultHostName(sshTarget: string): string {
   const host = sshTarget.slice(sshTarget.lastIndexOf("@") + 1);
   return host.split(".")[0] || host;
+}
+
+/**
+ * Host mode is on for good there: listening, saved as on and set to start at
+ * login, as the host's own Daintree recorded it and the probe saw it.
+ */
+export function hostModeSwitchedOn(probe: HostProbeResult | null): boolean {
+  const state = probe?.hostModeState;
+  return (
+    probe?.hostModeListening === true &&
+    !!state &&
+    state.enabled &&
+    state.startAtLogin &&
+    state.startAtLoginInstalled === true &&
+    probe.advice.startAtLoginInstalled === true
+  );
 }

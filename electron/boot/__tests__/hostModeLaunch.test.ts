@@ -82,3 +82,22 @@ describe("hostModeLaunch", () => {
     });
   });
 });
+
+describe("host setup flags", () => {
+  it("treats --enable-host-mode as a Host mode launch that also switches it on", async () => {
+    const { isHostModeEnableRequested, isHostModeHandoffOnly } =
+      await import("../hostModeLaunch.js");
+    expect(isHostModeRequested(["daintree", "--enable-host-mode"])).toBe(true);
+    expect(isHostModeEnableRequested(["daintree", "--host-mode", "--enable-host-mode"])).toBe(true);
+    expect(isHostModeEnableRequested(["daintree", "--host-mode"])).toBe(false);
+    expect(isHostModeHandoffOnly(["daintree", "--host-mode", "--host-mode-handoff"])).toBe(true);
+    expect(isHostModeHandoffOnly(["daintree", "--host-mode"])).toBe(false);
+    expect(
+      resolveHostModeLaunch({
+        argv: ["daintree", "--enable-host-mode"],
+        hostModeEnabled: false,
+        openedAsHidden: false,
+      })
+    ).toBe(true);
+  });
+});

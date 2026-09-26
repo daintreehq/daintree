@@ -11,6 +11,7 @@ import {
   hostModeLaunchArguments,
   parseLinger,
   systemdQuote,
+  systemdUnitFor,
 } from "../startAtLogin.js";
 
 let home: string;
@@ -217,5 +218,43 @@ WantedBy=default.target
     await expect(controller.install()).rejects.toThrow(
       "systemctl isn't installed, so systemctl --user daemon-reload couldn't run"
     );
+  });
+});
+
+describe("AppImage without FUSE", () => {
+  it("runs the image unpacked through its runtime's environment switch", () => {
+    const unit = systemdUnitFor({
+      executable: "/home/greg/Applications/Daintree.AppImage",
+      appPath: null,
+      appImageExtractAndRun: true,
+    });
+    expect(unit).toContain('ExecStart="/home/greg/Applications/Daintree.AppImage" "--host-mode"\n');
+    expect(unit).toContain("\nEnvironment=APPIMAGE_EXTRACT_AND_RUN=1\n");
+    expect(systemdUnitFor({ executable: "/opt/Daintree/daintree", appPath: null })).not.toContain(
+      "APPIMAGE_EXTRACT_AND_RUN"
+    );
+  });
+
+  it("keeps the switch when the host rewrites its own unit, so the two never disagree", async () => {
+    const target = {
+      executable: "/home/greg/Applications/Daintree.AppImage",
+      appPath: null,
+      appImageExtractAndRun: true,
+    };
+    const run: CommandRunner = async () => ({ code: 0, stdout: "", stderr: "" });
+    const controller = createSystemdUserController({
+      homeDir: home,
+      packaged: true,
+      userName: "greg",
+      target,
+      run,
+    });
+    await controller.install();
+    const written = await fs.readFile(
+      path.join(home, ".config", "systemd", "user", "daintree-host.service"),
+      "utf8"
+    );
+    expect(written).toBe(systemdUnitFor(target));
+    expect((await controller.observe()).current).toBe(true);
   });
 });

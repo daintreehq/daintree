@@ -46,6 +46,12 @@ export type LinkClientState =
       mismatch: HandshakeMismatch;
       local: HostHandshakeInfo;
       remote: HostHandshakeInfo;
+      /**
+       * What the host said its agents were doing when it refused us, and
+       * when; null when it didn't say (a host before this, or a refusal that
+       * came as a welcome).
+       */
+      observed: { workingAgents: number | null; at: number } | null;
     };
 
 export interface LinkSessionEstablished {
@@ -185,7 +191,7 @@ export class LinkClient {
       if (mismatch) {
         session.close("version mismatch");
         await this.release(connection);
-        this.mismatch(mismatch, outcome.welcome.handshake);
+        this.mismatch(mismatch, outcome.welcome.handshake, null);
         return;
       }
       this.established(session, connection, outcome.welcome);
@@ -199,7 +205,7 @@ export class LinkClient {
         ? compareHandshake(this.options.handshake, reject.handshake)
         : null;
       if (mismatch && reject.handshake) {
-        this.mismatch(mismatch, reject.handshake);
+        this.mismatch(mismatch, reject.handshake, reject.observed ?? null);
         return;
       }
       this.fail(
@@ -319,9 +325,19 @@ export class LinkClient {
     return done;
   }
 
-  private mismatch(mismatch: HandshakeMismatch, remote: HostHandshakeInfo): void {
+  private mismatch(
+    mismatch: HandshakeMismatch,
+    remote: HostHandshakeInfo,
+    observed: { workingAgents: number | null } | null
+  ): void {
     this.failures = 0;
-    this.setState({ status: "version-mismatch", mismatch, local: this.options.handshake, remote });
+    this.setState({
+      status: "version-mismatch",
+      mismatch,
+      local: this.options.handshake,
+      remote,
+      observed: observed ? { workingAgents: observed.workingAgents, at: this.now() } : null,
+    });
   }
 
   private fail(detail: string | null): void {
