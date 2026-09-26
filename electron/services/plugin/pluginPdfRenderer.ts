@@ -23,6 +23,7 @@ export const MAX_RESOURCE_BYTES = 100 * 1024 * 1024;
 export const RENDER_TIMEOUT_MS = 30_000;
 export const MAX_OUTSTANDING_RENDERS = 8;
 export const MAX_OUTSTANDING_RENDERS_PER_OWNER = 2;
+export const MAX_AWAITING_CONSENT_PER_OWNER = 2;
 const CLEANUP_TIMEOUT_MS = 5_000;
 const MAX_MARGIN_INCHES = 3;
 const MAX_PAGE_RANGES_LENGTH = 200;
@@ -197,6 +198,12 @@ function isNetworkPath(p: string): boolean {
  * realpath of one opens an SMB connection and can hand the user's credentials
  * to whoever runs the server.
  *
+ * The byte budget is an admission check on each file's size at the moment it
+ * is requested, not a bound on the bytes Chromium then reads: a file that
+ * grows after the check delivers more. What it does refuse outright is
+ * anything that is not a non-empty regular file — a FIFO, a device, or a
+ * size-0 special like `/proc/*` whose real length `stat` cannot report.
+ *
  * The realpath is taken here and Chromium opens the path a moment later, so a
  * leaf swapped for a symlink in between is not caught. That grants nothing a
  * plugin's own unsandboxed `main` could not already do with `node:fs`.
@@ -205,10 +212,10 @@ export function createDocumentRequestFilter(
   scope: DocumentRequestScope,
   io: {
     realpath: (p: string) => Promise<string>;
-    size: (p: string) => Promise<number>;
+    stat: (p: string) => Promise<{ isFile(): boolean; size: number }>;
   } = {
     realpath: fs.realpath,
-    size: async (p) => (await fs.stat(p)).size,
+    stat: (p) => fs.stat(p),
   }
 ): (url: string) => Promise<boolean> {
   let budget = scope.maxResourceBytes ?? MAX_RESOURCE_BYTES;
@@ -235,7 +242,9 @@ export function createDocumentRequestFilter(
     if (scope.resourceRoot === null || !isInside(scope.resourceRoot, target)) return false;
     let bytes: number;
     try {
-      bytes = await io.size(target);
+      const stat = await io.stat(target);
+      if (!stat.isFile() || stat.size === 0) return false;
+      bytes = stat.size;
     } catch {
       return false;
     }
@@ -375,22 +384,67 @@ async function wipeAndRelease(
   releasePartition(wiped ? partition : freshPartition());
 }
 
-// Outstanding = queued + rendering. Counted from before the consent prompt so
-// a plugin cannot park an unbounded number of HTML payloads in main.
+// Two separate bounds on calls parked in main, each holding its HTML:
+//  - awaiting consent: per plugin only, and untimed — the prompt goes at the
+//    user's pace, and one plugin's unanswered prompt must not hold a render
+//    slot that other plugins are waiting for;
+//  - outstanding (queued + rendering): per plugin and in total, and on the
+//    clock from the moment the slot is taken.
 let outstanding = 0;
 const outstandingByOwner = new Map<string, number>();
+const awaitingConsentByOwner = new Map<string, number>();
+
+function releaseCount(counts: Map<string, number>, owner: string): void {
+  const left = (counts.get(owner) ?? 1) - 1;
+  if (left <= 0) counts.delete(owner);
+  else counts.set(owner, left);
+}
+
+export interface ConsentWaitReservation {
+  release(): void;
+}
+
+/**
+ * Admit one more call from `owner` to wait on the consent prompt, or reject
+ * with `RENDER_BUSY:` when it already has the maximum waiting. Holds no render
+ * slot and starts no clock.
+ */
+export function reserveConsentWait(owner: string): ConsentWaitReservation {
+  const mine = awaitingConsentByOwner.get(owner) ?? 0;
+  if (mine >= MAX_AWAITING_CONSENT_PER_OWNER) {
+    throw renderError(
+      "RENDER_BUSY",
+      `plugin "${owner}" already has ${mine} renders waiting on the consent prompt`
+    );
+  }
+  awaitingConsentByOwner.set(owner, mine + 1);
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      releaseCount(awaitingConsentByOwner, owner);
+    },
+  };
+}
 
 export interface RenderReservation {
   readonly owner: string;
+  /** Rejects with `RENDER_TIMEOUT:` once the deadline passes; never resolves. */
+  readonly expired: Promise<never>;
+  /** Milliseconds left before the deadline, never below zero. */
+  remainingMs(): number;
   release(): void;
 }
 
 /**
  * Claim one of the bounded render slots for `owner`, or reject with
  * `RENDER_BUSY:` when too many renders are already queued or running — across
- * all plugins, or for this one. Release it once the call is over.
+ * all plugins, or for this one. The deadline starts here and covers everything
+ * the slot is held for: reading the input, the queue wait and the render.
+ * Release it once the call is over.
  */
-export function reserveRender(owner: string): RenderReservation {
+export function reserveRender(owner: string, timeoutMs = RENDER_TIMEOUT_MS): RenderReservation {
   const mine = outstandingByOwner.get(owner) ?? 0;
   if (mine >= MAX_OUTSTANDING_RENDERS_PER_OWNER || outstanding >= MAX_OUTSTANDING_RENDERS) {
     throw renderError(
@@ -402,16 +456,26 @@ export function reserveRender(owner: string): RenderReservation {
   }
   outstanding++;
   outstandingByOwner.set(owner, mine + 1);
+  const deadline = Date.now() + timeoutMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(renderError("RENDER_TIMEOUT", `render did not finish within ${timeoutMs} ms`)),
+      timeoutMs
+    );
+  });
+  expired.catch(() => undefined);
   let released = false;
   return {
     owner,
+    expired,
+    remainingMs: () => Math.max(0, deadline - Date.now()),
     release() {
       if (released) return;
       released = true;
+      clearTimeout(timer);
       outstanding--;
-      const left = (outstandingByOwner.get(owner) ?? 1) - 1;
-      if (left <= 0) outstandingByOwner.delete(owner);
-      else outstandingByOwner.set(owner, left);
+      releaseCount(outstandingByOwner, owner);
     },
   };
 }
@@ -426,6 +490,7 @@ export interface RenderPdfRequest {
   print: Electron.PrintToPDFOptions;
   /** Aborting cancels a queued or running render with `RENDER_CANCELLED:`. */
   signal?: AbortSignal;
+  /** Time left for this call; the host passes what remains of its reservation. */
   timeoutMs?: number;
   /** Bound on the session wipe after the render; a wipe past it retires the partition. */
   cleanupTimeoutMs?: number;
@@ -443,13 +508,14 @@ function renderError(code: RenderErrorCode, message: string): Error & { code: st
  * page is always a private snapshot written by this call — never a path the
  * plugin can swap — and the window, snapshot and session state never outlive
  * the call: success, failure, timeout and cancellation share one teardown.
- * The timeout starts when the call is made, so it bounds the queue wait too.
+ * `timeoutMs` runs from the moment of the call, so it bounds the queue wait
+ * too; the host passes what is left of the deadline its reservation started.
  */
 export async function renderHtmlToPdf(request: RenderPdfRequest): Promise<Buffer> {
   const timeoutMs = request.timeoutMs ?? RENDER_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(
-    () => controller.abort(renderError("RENDER_TIMEOUT", `render exceeded ${timeoutMs} ms`)),
+    () => controller.abort(renderError("RENDER_TIMEOUT", "the render did not finish in time")),
     timeoutMs
   );
   const onCancel = (): void =>
@@ -544,7 +610,17 @@ export async function renderHtmlToPdf(request: RenderPdfRequest): Promise<Buffer
         );
       }
       stillWanted();
-      const pdf = await contents.printToPDF(request.print);
+      let pdf: Buffer;
+      try {
+        pdf = await contents.printToPDF(request.print);
+      } catch (error) {
+        // Electron rejects with bare Chromium messages; give them the same
+        // code as a failed load so callers have one prefix to match.
+        throw renderError(
+          "RENDER_FAILED",
+          `printing failed: ${formatErrorMessage(error, "unknown print error")}`
+        );
+      }
       if (pdf.byteLength > MAX_PDF_BYTES) {
         throw renderError(
           "PAYLOAD_TOO_LARGE",
@@ -578,4 +654,5 @@ export function _resetPdfRendererForTests(): void {
   resetPool();
   outstanding = 0;
   outstandingByOwner.clear();
+  awaitingConsentByOwner.clear();
 }
