@@ -44,7 +44,9 @@ import {
   imageChipField,
   addImageChip,
   readImageChipPaths,
+  minimalDocChange,
 } from "../inputEditorExtensions";
+import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
 import type { SlashCommand } from "@shared/types";
 
 function makeSlashCommand(label: string, description = ""): SlashCommand {
@@ -757,6 +759,49 @@ describe("readImageChipPaths (#12792)", () => {
 
   it("returns nothing without a view", () => {
     expect(readImageChipPaths(null)).toEqual([]);
+  });
+
+  it("keeps an attached image through a handoff appended to the draft", () => {
+    // image → handoff → submit: the input bar syncs an outside write with
+    // `minimalDocChange`, and the send reads the attachments off the field.
+    const typed = "/a/one.png fix this";
+    const view = makeEditor(typed);
+    view.dispatch({
+      effects: addImageChip.of({ from: 0, to: 10, filePath: "/a/one.png", thumbnailUrl: "" }),
+    });
+    const draft = appendAgentContextToDraft(
+      typed,
+      formatAgentContextBlock({ text: "Card body", title: "Card", sourceLabel: "Kanban" })
+    );
+
+    view.dispatch({ changes: minimalDocChange(view.state.doc.toString(), draft)! });
+
+    expect(view.state.doc.toString()).toBe(draft);
+    expect(readImageChipPaths(view)).toEqual(["/a/one.png"]);
+    view.destroy();
+  });
+});
+
+describe("minimalDocChange", () => {
+  it("is an insertion at the end for an append", () => {
+    expect(minimalDocChange("abc", "abc\n\nxyz")).toEqual({ from: 3, to: 3, insert: "\n\nxyz" });
+  });
+
+  it("replaces only the differing middle", () => {
+    expect(minimalDocChange("keep OLD tail", "keep NEW! tail")).toEqual({
+      from: 5,
+      to: 8,
+      insert: "NEW!",
+    });
+  });
+
+  it("is nothing when the text is unchanged", () => {
+    expect(minimalDocChange("same", "same")).toBeNull();
+  });
+
+  it("handles a deletion and a full rewrite", () => {
+    expect(minimalDocChange("abcdef", "abef")).toEqual({ from: 2, to: 4, insert: "" });
+    expect(minimalDocChange("abc", "xyz")).toEqual({ from: 0, to: 3, insert: "xyz" });
   });
 });
 
