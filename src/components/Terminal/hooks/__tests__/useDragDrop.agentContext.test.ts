@@ -106,6 +106,18 @@ describe("useDragDrop — agent context", () => {
     expect(over.dataTransfer.dropEffect).toBe("none");
   });
 
+  it("judges a drag carrying files too by its agent context, as the drop does", () => {
+    getDraftRefusal.mockReturnValue("input-locked");
+    const { result } = render(TERMINAL_ID);
+    const types = ["Files", AGENT_CONTEXT_DRAG_MIME, "text/plain"];
+    act(() => result.current.handleDragEnter(dragEvent(types)));
+    const over = dragEvent(types);
+    act(() => result.current.handleDragOver(over));
+
+    expect(result.current.isDragOverFiles).toBe(false);
+    expect(over.dataTransfer.dropEffect).toBe("none");
+  });
+
   it("refuses it on a bar with no pane behind it (the Assistant)", () => {
     const { result } = render(undefined);
     const over = dragEvent([AGENT_CONTEXT_DRAG_MIME]);

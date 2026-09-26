@@ -45,7 +45,7 @@ vi.mock("@/store/preferencesStore", () => ({
 }));
 vi.mock("@/store/createWorktreeStore", () => ({ getCurrentViewStoreOrNull: () => null }));
 
-const { draftAgentContext, listAgentPanes } = await import("../agentDraft");
+const { canDraftAnywhere, draftAgentContext, listAgentPanes } = await import("../agentDraft");
 const { useTypingLocatorStore } = await import("@/store/typingLocatorStore");
 
 function agentPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -89,7 +89,7 @@ describe("draftAgentContext", () => {
     });
 
     expect(result).toEqual({ status: "drafted", terminalId: "a" });
-    expect(drafts.get("proj-1:a")).toBe("Kanban: Card\n```\nCard body\n```\n");
+    expect(drafts.get("proj-1:a")).toBe("```\nKanban: Card\n\nCard body\n```\n");
     expect(inputState.bumpExternalDraftRevision).toHaveBeenCalledTimes(1);
     expect(panelState.pingTerminal).toHaveBeenCalledWith("a");
     expect(useTypingLocatorStore.getState().message?.kind).toBe("draft-added");
@@ -132,12 +132,22 @@ describe("draftAgentContext", () => {
     expect(draftAgentContext("a", { text: "body" }).status).toBe("drafted");
   });
 
-  it("can skip the gate for a pane launched a moment ago", () => {
-    expect(draftAgentContext("fresh", { text: "body" }, { skipChecks: true })).toEqual({
-      status: "drafted",
-      terminalId: "fresh",
-    });
-    expect(drafts.get("proj-1:fresh")).toBe("```\nbody\n```\n");
+  it("keeps the user's trailing whitespace exactly", () => {
+    setPanels(agentPanel("a"));
+    drafts.set("proj-1:a", "note  \n\n\n");
+    draftAgentContext("a", { text: "body" });
+    expect(drafts.get("proj-1:a")).toBe("note  \n\n\n```\nbody\n```\n");
+  });
+});
+
+describe("canDraftAnywhere", () => {
+  it("is false while the input bar is off or the terminal service is down", () => {
+    expect(canDraftAnywhere()).toBe(true);
+    inputState.hybridInputEnabled = false;
+    expect(canDraftAnywhere()).toBe(false);
+    inputState.hybridInputEnabled = true;
+    panelState.backendStatus = "recovering";
+    expect(canDraftAnywhere()).toBe(false);
   });
 });
 

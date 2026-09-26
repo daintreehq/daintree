@@ -60,6 +60,13 @@ export interface PluginUiPromptRequest {
   promptId: string;
   pluginId: string;
   params: PluginUiPromptParams;
+  /**
+   * Epoch ms after which main has already answered for this request. Set only
+   * on requests that open no dialog (a targeted send-to-agent), which main
+   * times out; a renderer that receives one late drops it rather than acting
+   * on something the caller was told did not happen.
+   */
+  expiresAt?: number;
 }
 
 /**

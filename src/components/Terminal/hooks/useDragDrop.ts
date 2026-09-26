@@ -46,7 +46,9 @@ export function useDragDrop(
   const handleDragEnter = useCallback(
     (e: React.DragEvent) => {
       const types = e.dataTransfer.types;
-      const accepted = hasFileDrag(types) || (hasAgentContextDrag(types) && acceptsAgentContext());
+      // The agent-context type wins over files at every stage, as it does at
+      // drop, so the affordance never promises what the drop won't do.
+      const accepted = hasAgentContextDrag(types) ? acceptsAgentContext() : hasFileDrag(types);
       if (!accepted) return;
       e.preventDefault();
       e.stopPropagation();
@@ -59,19 +61,19 @@ export function useDragDrop(
   const handleDragOver = useCallback(
     (e: React.DragEvent) => {
       const types = e.dataTransfer.types;
-      if (hasFileDrag(types)) {
+      if (hasAgentContextDrag(types)) {
+        // The editor is contenteditable, so left alone Chromium would accept
+        // the drag's `text/plain` on its own terms. Refusing here is what makes
+        // a bar that cannot take the draft say so instead of pasting raw text.
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer.dropEffect = "copy";
+        e.dataTransfer.dropEffect = acceptsAgentContext() ? "copy" : "none";
         return;
       }
-      if (!hasAgentContextDrag(types)) return;
-      // The editor is contenteditable, so left alone Chromium would accept the
-      // drag's `text/plain` on its own terms. Refusing here is what makes a bar
-      // that cannot take the draft say so instead of pasting raw text into it.
+      if (!hasFileDrag(types)) return;
       e.preventDefault();
       e.stopPropagation();
-      e.dataTransfer.dropEffect = acceptsAgentContext() ? "copy" : "none";
+      e.dataTransfer.dropEffect = "copy";
     },
     [acceptsAgentContext]
   );

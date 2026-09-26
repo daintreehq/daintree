@@ -71,6 +71,7 @@ import type { PluginSendToAgentRequest } from "../../../shared/types/pluginUiPro
 import {
   AGENT_CONTEXT_MAX_TEXT_LENGTH,
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
+  sanitizeAgentContextSourceLabel,
   validateAgentContextPayload,
 } from "../../../shared/utils/agentContextDrag.js";
 import type { PluginDiagnosticsLogLine } from "../../../shared/types/ipc/pluginDiagnostics.js";
@@ -238,6 +239,7 @@ const SEND_TO_AGENT_REFUSAL_REASONS = new Set(
     "project-unavailable": true,
     "launch-failed": true,
     "prompt-open": true,
+    busy: true,
   } satisfies Record<PluginSendToAgentRefusalReason, true>)
 );
 
@@ -310,7 +312,13 @@ function toSendToAgentResult(value: unknown): PluginSendToAgentResult {
       typeof result.reason === "string" &&
       SEND_TO_AGENT_REFUSAL_REASONS.has(result.reason as PluginSendToAgentRefusalReason)
     ) {
-      return { status: "refused", reason: result.reason as PluginSendToAgentRefusalReason };
+      return {
+        status: "refused",
+        reason: result.reason as PluginSendToAgentRefusalReason,
+        ...(typeof result.worktreeId === "string" && result.worktreeId.length > 0
+          ? { worktreeId: result.worktreeId.slice(0, SEND_TO_AGENT_MAX_ID_LENGTH) }
+          : {}),
+      };
     }
   }
   return { status: "cancelled" };
@@ -1118,7 +1126,12 @@ export function createHost(
           pluginId,
           {
             kind: "sendToAgent",
-            request: { ...request, sourceLabel: deps.pluginDisplayName(pluginId) },
+            // The display name comes from the manifest unbounded; it is held to
+            // the same one-line, length-capped shape as a drag's label.
+            request: {
+              ...request,
+              sourceLabel: sanitizeAgentContextSourceLabel(deps.pluginDisplayName(pluginId)),
+            },
           },
           boundProjectId,
           callOptions?.signal

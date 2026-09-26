@@ -74,7 +74,18 @@ const REFUSAL_RECEIPT = {
   "project-unavailable": "the project isn't open",
   "launch-failed": "the new agent didn't start",
   "prompt-open": "another picker is open",
+  busy: "too many handoffs at once",
 } as const satisfies Record<PluginSendToAgentRefusalReason, string>;
+
+/**
+ * Whether any pane could take a draft at all: the input bar is on and the
+ * terminal service is up. When not, a new agent would only get a draft nobody
+ * can see, so the picker offers no creation rows.
+ */
+export function canDraftAnywhere(): boolean {
+  const inputs = readDraftTargetInputs();
+  return inputs.hybridInputEnabled && inputs.backendStatus === "connected";
+}
 
 /**
  * The pill for sighted users and a polite announcement for everyone else, the
@@ -87,7 +98,12 @@ function report(message: TypingLocatorMessage): void {
 }
 
 export function reportDraftRefused(reason: PluginSendToAgentRefusalReason): void {
-  report({ kind: "draft-refused", lead: `Not added to draft: ${REFUSAL_RECEIPT[reason]}` });
+  reportDraftNotAdded(REFUSAL_RECEIPT[reason]);
+}
+
+/** The refusal pill with a specific reason, completing "Not added to draft: …". */
+export function reportDraftNotAdded(why: string): void {
+  report({ kind: "draft-refused", lead: `Not added to draft: ${why}` });
 }
 
 /**
@@ -103,16 +119,16 @@ export function reportDraftRefused(reason: PluginSendToAgentRefusalReason): void
  * Deliberately does not move focus. A drop that wants the pane focused does
  * that itself, because the gesture was aimed at it; a plugin call was not.
  *
- * `skipChecks` is for a pane this handoff launched a moment ago, whose input
- * bar has not mounted yet — the gate would refuse it for being new, and the
- * draft store holds the text until it does.
+ * Every write passes the gate, a freshly launched pane included — its input
+ * bar may not have mounted yet, but the draft store holds the text until it
+ * does, and a pane that locked or exited during the launch is refused like any
+ * other.
  */
 export function draftAgentContext(
   terminalId: string,
-  content: AgentHandoffContent,
-  options: { skipChecks?: boolean } = {}
+  content: AgentHandoffContent
 ): PluginSendToAgentResult {
-  const refusal = options.skipChecks ? null : getDraftRefusal(terminalId);
+  const refusal = getDraftRefusal(terminalId);
   if (refusal !== null) {
     reportDraftRefused(refusal);
     return { status: "refused", reason: refusal };

@@ -11,6 +11,8 @@ import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
@@ -26,6 +28,7 @@ import {
   launchAgentForHandoff,
 } from "@/services/agentHandoff/launchForHandoff";
 import type { PanelInstance } from "@shared/types/panel";
+import { promptOpensDialog } from "@shared/types/pluginUiPrompt";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { AgentState } from "@shared/types/agent";
 import {
@@ -60,7 +63,7 @@ function ObservedStateBadge({ state }: { state: AgentState | undefined }) {
       className={cn("shrink-0", waiting ? "text-state-waiting" : "text-text-secondary")}
       data-state={state}
     >
-      {waiting ? "Waiting" : "Working"}
+      {waiting ? "Last seen waiting" : "Last seen working"}
     </Badge>
   );
 }
@@ -110,12 +113,17 @@ export function PluginSendToAgentDialog() {
   const availability = useCliAvailabilityStore((state) => state.availability);
   const availabilityReady = useCliAvailabilityStore((state) => state.isInitialized);
 
+  const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
+  const backendStatus = usePanelStore((state) => state.backendStatus);
+
+  // A new agent would get a draft nobody can see while the input bar is off or
+  // the terminal service is down, so neither creation row is offered then.
   const agent = useMemo<HandoffAgentChoice | null>(() => {
-    if (!availabilityReady) return null;
+    if (!availabilityReady || !hybridInputEnabled || backendStatus !== "connected") return null;
     const agentId = getDefaultAgentId(defaultAgent, undefined, availability);
     if (agentId === null) return null;
     return { agentId, agentName: getAgentConfig(agentId)?.name ?? agentId };
-  }, [availabilityReady, defaultAgent, availability]);
+  }, [availabilityReady, hybridInputEnabled, backendStatus, defaultAgent, availability]);
 
   const [mode, setMode] = useState<PickerMode>("pick");
 
@@ -194,6 +202,15 @@ export function PluginSendToAgentDialog() {
     (value: Parameters<typeof resolveCurrent>[0]) => {
       if (!promptId || handledPromptIdRef.current === promptId) return;
       handledPromptIdRef.current = promptId;
+      // Answering advances the prompt queue. If what comes next is another
+      // dialog, it installs its own focus while this palette plays its exit —
+      // restoring focus to our opener afterwards would pull the keyboard out of
+      // it. A queued picker reuses this palette, which then does not close, so
+      // it must not arm the one-shot suppression.
+      const next = usePluginPromptStore.getState().queue[0];
+      if (next && promptOpensDialog(next.params) && next.params.kind !== "sendToAgent") {
+        suppressPaletteFocusRestore();
+      }
       resolveCurrent(value);
     },
     [promptId, resolveCurrent]
@@ -300,8 +317,11 @@ export function PluginSendToAgentDialog() {
           break;
         case "create-branch":
           icon = <GitBranchPlus className="size-4" aria-hidden="true" />;
-          label = query.trim() ? `Create ${query.trim()}` : "Type a branch name";
-          detail = `New worktree, then start ${row.agent.agentName}`;
+          // Names both operations Enter performs, not just the first.
+          label = query.trim()
+            ? `Create worktree ${query.trim()} and start ${row.agent.agentName}`
+            : "Type a branch name";
+          detail = "Then adds this to its draft";
           break;
       }
 
@@ -362,7 +382,11 @@ export function PluginSendToAgentDialog() {
 
   const title = request?.title;
   const label =
-    mode === "branch" ? "Name the new branch" : title ? `Send "${title}" to` : "Send to agent";
+    mode === "branch"
+      ? "Name the new branch"
+      : title
+        ? `Add "${title}" to an agent's draft`
+        : "Add to an agent's draft";
 
   return (
     <ErrorBoundary

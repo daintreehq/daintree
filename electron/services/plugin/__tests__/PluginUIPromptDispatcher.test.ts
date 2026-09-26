@@ -52,7 +52,11 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   isCachedViewWebContents: registryMock.isCachedViewWebContents,
 }));
 
-import { PluginUIPromptDispatcher } from "../PluginUIPromptDispatcher.js";
+import {
+  IMMEDIATE_PROMPT_TIMEOUT_MS,
+  MAX_PENDING_TARGETED_SENDS_PER_PLUGIN,
+  PluginUIPromptDispatcher,
+} from "../PluginUIPromptDispatcher.js";
 import { isAppError } from "../../../utils/errorTypes.js";
 import type { PluginUiPromptParams } from "../../../../shared/types/pluginUiPrompt.js";
 
@@ -534,6 +538,80 @@ describe("PluginUIPromptDispatcher", () => {
       expect(sends()).toBe(5);
       d2.dispose();
       await Promise.all([pending, dialog]);
+    });
+
+    it("gives a targeted send its own cap and refuses past it as busy", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const inFlight = Array.from({ length: MAX_PENDING_TARGETED_SENDS_PER_PLUGIN }, () =>
+        d.requestPrompt("p1", TARGETED)
+      );
+      await expect(d.requestPrompt("p1", TARGETED)).resolves.toEqual({
+        status: "refused",
+        reason: "busy",
+      });
+      // Another plugin is not held to p1's cap.
+      const other = d.requestPrompt("p2", TARGETED);
+      expect(
+        wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+      ).toHaveLength(MAX_PENDING_TARGETED_SENDS_PER_PLUGIN + 1);
+      d.dispose();
+      await Promise.all([...inFlight, other]);
+    });
+
+    it("times out a targeted send the renderer never answers, and stamps its deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+        const now = Date.now();
+        const promise = d.requestPrompt("p1", TARGETED);
+        const sent = wc.send.mock.calls.find(
+          (c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST
+        )?.[1] as { expiresAt?: number };
+        expect(sent.expiresAt).toBe(now + IMMEDIATE_PROMPT_TIMEOUT_MS);
+
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_TIMEOUT_MS);
+        await expect(promise).resolves.toEqual({
+          status: "refused",
+          reason: "project-unavailable",
+        });
+        // The slot is released: another targeted send goes out.
+        void d.requestPrompt("p1", TARGETED);
+        expect(
+          wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+        ).toHaveLength(2);
+        d.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never times out a picker, and sends it no deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+        let settled = false;
+        const promise = d.requestPrompt("p1", PICKER).then((value) => {
+          settled = true;
+          return value;
+        });
+        const sent = wc.send.mock.calls.find(
+          (c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST
+        )?.[1] as { expiresAt?: number };
+        expect(sent).not.toHaveProperty("expiresAt");
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_TIMEOUT_MS * 10);
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        d.dispose();
+        await promise;
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

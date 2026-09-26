@@ -203,30 +203,104 @@ function fenceFor(text: string): string {
 }
 
 /**
- * The block a payload becomes in an agent's draft: an optional heading line
- * (`Label: Title`) and the text in a fenced block. Fenced so the agent reads it
- * as quoted material rather than as the user's instruction, and so it survives
- * intact whatever it contains.
+ * A heading part cut to `max` characters on one line. Truncated rather than
+ * refused: the source label can be a plugin's display name, which the manifest
+ * does not bound, and a long name is no reason to lose the handoff.
+ */
+function boundedLine(value: string | undefined, max: number): string {
+  const line = normalizeLine(value ?? "");
+  return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`;
+}
+
+/**
+ * The block a payload becomes in an agent's draft: a fenced block whose first
+ * line is the heading (`Label: Title`) and whose body is the text.
+ *
+ * Everything — heading included — sits inside the fence, and the fence is one
+ * backtick longer than any run in what it holds, so no line of the content can
+ * close it. That is what keeps the handoff literal all the way to the agent:
+ * the input bar leaves fenced text alone when it expands `@diff`, `@terminal`
+ * and `@selection` on submit, so a card that mentions one is quoted, never
+ * resolved into the user's diff.
+ *
+ * Every part is normalised here, whatever path it arrived by — control
+ * characters dropped, the heading bounded to one line — so nothing reaches a
+ * draft unsanitised even if a caller skipped validation.
  */
 export function formatAgentContextBlock(payload: {
   text: string;
   title?: string;
   sourceLabel?: string;
 }): string {
-  const text = payload.text.replace(/\n+$/, "");
-  const heading = [payload.sourceLabel, payload.title].filter(Boolean).join(": ");
-  const fence = fenceFor(text);
-  const body = `${fence}\n${text}\n${fence}`;
-  return heading ? `${heading}\n${body}` : body;
+  const text = normalizeText(payload.text)
+    .slice(0, AGENT_CONTEXT_MAX_TEXT_LENGTH)
+    .replace(/\n+$/, "");
+  const heading = [
+    boundedLine(payload.sourceLabel, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH),
+    boundedLine(payload.title, AGENT_CONTEXT_MAX_TITLE_LENGTH),
+  ]
+    .filter(Boolean)
+    .join(": ");
+  const content = heading ? `${heading}\n\n${text}` : text;
+  const fence = fenceFor(content);
+  return `${fence}\n${content}\n${fence}`;
 }
 
 /**
- * Append a context block to an existing draft. Never replaces what is there:
- * a non-empty draft keeps its text and gains a blank line before the block.
- * Ends on a fresh line so the caret, parked at the end, is ready for the
- * user's instruction.
+ * Append a context block to an existing draft. Never replaces or trims what is
+ * there — trailing spaces and blank lines the user left stay exactly as typed —
+ * and only adds the line breaks needed to start the block on its own line after
+ * a blank one. Ends on a fresh line so the caret, parked at the end, is ready
+ * for the user's instruction.
  */
 export function appendAgentContextToDraft(draft: string, block: string): string {
-  const kept = draft.replace(/\s+$/, "");
-  return kept.length === 0 ? `${block}\n` : `${kept}\n\n${block}\n`;
+  if (draft.length === 0) return `${block}\n`;
+  const separator = draft.endsWith("\n\n") ? "" : draft.endsWith("\n") ? "\n" : "\n\n";
+  return `${draft}${separator}${block}\n`;
+}
+
+/**
+ * Character ranges of the fenced code blocks in `text`, by CommonMark's rules:
+ * an opening line of three or more backticks or tildes (indented at most three
+ * spaces), closed by a line of the same character at least as long with
+ * nothing after it; an unclosed fence runs to the end. Ranges are `[start, end)`
+ * and include the fence lines.
+ *
+ * The input bar's `@`-token parsers skip these ranges, which is what keeps a
+ * handoff block (and anything else the user fences) literal on submit.
+ */
+export function fencedCodeRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let open: { start: number; char: string; length: number } | null = null;
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    const lineEnd = offset + line.length;
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (open === null) {
+      // A backtick fence's info string may not contain a backtick.
+      if (match && !(match[1]![0] === "`" && match[2]!.includes("`"))) {
+        open = { start: offset, char: match[1]![0]!, length: match[1]!.length };
+      }
+    } else if (
+      match &&
+      match[1]![0] === open.char &&
+      match[1]!.length >= open.length &&
+      match[2]!.trim() === ""
+    ) {
+      ranges.push([open.start, lineEnd]);
+      open = null;
+    }
+    offset = lineEnd + 1;
+  }
+  if (open !== null) ranges.push([open.start, text.length]);
+  return ranges;
+}
+
+/**
+ * The source label a host call drafts under: the plugin's display name, which
+ * comes from its manifest and is not otherwise bounded. Normalised to one line
+ * and cut to the label limit, like a drag's `source.label`.
+ */
+export function sanitizeAgentContextSourceLabel(label: string): string {
+  return boundedLine(label, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH);
 }

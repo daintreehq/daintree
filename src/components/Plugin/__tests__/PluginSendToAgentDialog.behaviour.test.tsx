@@ -38,7 +38,7 @@ vi.mock("@/store/paletteStore", () => {
   return { usePaletteStore };
 });
 
-const { panelState, asStore } = vi.hoisted(() => ({
+const { panelState, inputState, asStore, suppressPaletteFocusRestore } = vi.hoisted(() => ({
   asStore: <S,>(state: S) => {
     const hook = (selector: (s: S) => unknown) => selector(state);
     hook.getState = () => state;
@@ -48,9 +48,17 @@ const { panelState, asStore } = vi.hoisted(() => ({
     panelsById: {} as Record<string, unknown>,
     panelIds: [] as string[],
     focusedId: null as string | null,
+    backendStatus: "connected",
   },
+  inputState: { hybridInputEnabled: true },
+  suppressPaletteFocusRestore: vi.fn(),
 }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: asStore(panelState) }));
+vi.mock("@/store/terminalInputStore", () => ({ useTerminalInputStore: asStore(inputState) }));
+vi.mock("@/components/ui/paletteFocusRestore", () => ({
+  suppressPaletteFocusRestore,
+  consumePaletteFocusRestoreSuppression: () => false,
+}));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: asStore({ showAgentTaskTitles: true }),
 }));
@@ -92,7 +100,7 @@ vi.mock("@/services/agentHandoff/launchForHandoff", async (importOriginal) => ({
 }));
 
 import { PluginSendToAgentDialog } from "../PluginSendToAgentDialog";
-import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { usePluginPromptStore, type PendingUiPrompt } from "@/store/pluginPromptStore";
 import type { PluginSendToAgentRequest } from "@shared/types/pluginUiPrompt";
 
 function agentPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -124,10 +132,10 @@ const REQUEST: PluginSendToAgentRequest = {
   worktreeId: "wt-feat",
 };
 
-function open(request: PluginSendToAgentRequest = REQUEST) {
+function open(request: PluginSendToAgentRequest = REQUEST, queue: PendingUiPrompt[] = []) {
   const resolve = vi.fn();
   usePluginPromptStore.setState({
-    queue: [],
+    queue,
     current: {
       promptId: "p1",
       pluginId: "acme",
@@ -164,6 +172,8 @@ function press(key: string): void {
 beforeEach(() => {
   vi.clearAllMocks();
   panelState.focusedId = "main-1";
+  panelState.backendStatus = "connected";
+  inputState.hybridInputEnabled = true;
   setPanels(
     agentPanel("main-1"),
     agentPanel("feat-1", { worktreeId: "wt-feat" }),
@@ -246,5 +256,76 @@ describe("PluginSendToAgentDialog", () => {
     press("Escape");
     expect(resolve).not.toHaveBeenCalled();
     expect(option("feat-1")).toBeTruthy();
+  });
+
+  it("names both operations on the branch step, and says add to draft in the heading", () => {
+    open();
+    expect(document.body.textContent).toContain(`Add "Fix login redirect" to an agent's draft`);
+    act(() => {
+      fireEvent.click(option("new-worktree"));
+    });
+    expect(option("create-branch").textContent).toContain(
+      "Create worktree fix-login-redirect and start Claude"
+    );
+  });
+
+  it("labels observed state as an observation", () => {
+    setPanels(agentPanel("feat-1", { worktreeId: "wt-feat", agentState: "working" }));
+    open();
+    expect(option("feat-1").textContent).toContain("Last seen working");
+  });
+
+  it("offers no creation rows while the input bar is off", () => {
+    inputState.hybridInputEnabled = false;
+    open();
+    expect(document.getElementById("plugin-send-to-agent-new-here")).toBeNull();
+    expect(document.getElementById("plugin-send-to-agent-new-worktree")).toBeNull();
+  });
+
+  it("starts New agent here only in a worktree this project has", () => {
+    open({ ...REQUEST, worktreeId: "wt-elsewhere" });
+    act(() => {
+      fireEvent.click(option("new-here"));
+    });
+    // Falls back to the preselected (focused) agent's worktree, never the stranger.
+    expect(launchAgentForHandoff).toHaveBeenCalledWith(
+      "claude",
+      { kind: "existing-worktree", worktreeId: "wt-main" },
+      { ...REQUEST, worktreeId: "wt-elsewhere" }
+    );
+  });
+
+  describe("focus when the queue moves on", () => {
+    const quickPick: PendingUiPrompt = {
+      promptId: "p2",
+      pluginId: "other",
+      params: { kind: "quickPick", items: [], options: {} },
+      resolve: vi.fn(),
+    };
+    const anotherPicker: PendingUiPrompt = {
+      promptId: "p3",
+      pluginId: "other",
+      params: { kind: "sendToAgent", request: { text: "x", sourceLabel: "Other" } },
+      resolve: vi.fn(),
+    };
+
+    it("does not hand focus back to the opener when another dialog is next", () => {
+      open(REQUEST, [quickPick]);
+      press("Enter");
+      expect(suppressPaletteFocusRestore).toHaveBeenCalledTimes(1);
+      expect(usePluginPromptStore.getState().current?.promptId).toBe("p2");
+    });
+
+    it("restores focus as usual when nothing is queued", () => {
+      open();
+      press("Enter");
+      expect(suppressPaletteFocusRestore).not.toHaveBeenCalled();
+    });
+
+    it("leaves restoration alone when the next prompt reuses this palette", () => {
+      open(REQUEST, [anotherPicker]);
+      press("Enter");
+      expect(suppressPaletteFocusRestore).not.toHaveBeenCalled();
+    });
   });
 });

@@ -179,7 +179,7 @@ import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
 onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
 ```
 
-What lands is the same block `host.sendToAgent` drafts: your `source.label` and `title` as a heading, the text fenced below, appended under whatever the user already typed. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, a locked or restarting agent, or one in an armed fleet refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — the host validates it in full and drops anything malformed. For the keyboard or menu route to the same place, see [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft).
+What lands is the same block `host.sendToAgent` drafts: one fenced block holding your `source.label` and `title` as a heading and then the text, appended after whatever the user already typed and kept literal on submit. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, a locked or restarting agent, or one in an armed fleet refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — the host validates it in full and drops anything malformed. For the keyboard or menu route to the same place, see [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft).
 
 ## Resources your view owns
 

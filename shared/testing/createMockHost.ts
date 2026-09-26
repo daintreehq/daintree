@@ -1150,8 +1150,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       }
       for (const key of ["terminalId", "worktreeId"] as const) {
         const value = options?.[key];
-        if (value !== undefined && (typeof value !== "string" || value.length === 0)) {
-          throw new Error(`sendToAgent: options.${key} must be a non-empty string`);
+        // Same bound as production's `SEND_TO_AGENT_MAX_ID_LENGTH`.
+        if (
+          value !== undefined &&
+          (typeof value !== "string" || value.length === 0 || value.length > 512)
+        ) {
+          throw new Error(
+            `sendToAgent: options.${key} must be a non-empty string of at most 512 characters`
+          );
         }
       }
       if (callOptions?.signal?.aborted) return { status: "cancelled" };

@@ -1236,7 +1236,14 @@ describe("createMockHost production-parity validation (#10617)", () => {
       await expect(host.sendToAgent("  ")).rejects.toThrow(/non-empty/);
       await expect(host.sendToAgent("x", { title: "t".repeat(121) })).rejects.toThrow(/limit/);
       await expect(host.sendToAgent("x", { terminalId: "" })).rejects.toThrow(/terminalId/);
-      expect(host.sentToAgentCalls).toEqual([]);
+      await expect(host.sendToAgent("x", { worktreeId: "w".repeat(513) })).rejects.toThrow(
+        /worktreeId/
+      );
+      await expect(host.sendToAgent("x", { terminalId: "t".repeat(512) })).resolves.toEqual({
+        status: "refused",
+        reason: "unknown-terminal",
+      });
+      expect(host.sentToAgentCalls).toHaveLength(1);
     });
 
     it("sendToAgent drafts into a named pane, and refuses one that cannot take it", async () => {

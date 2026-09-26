@@ -62,6 +62,21 @@ describe("usePluginPromptBridge — sendToAgent", () => {
     });
   });
 
+  it("drops a targeted send that arrives after main's deadline, drafting nothing", async () => {
+    renderHook(() => usePluginPromptBridge());
+    await deliver!({
+      promptId: "late",
+      pluginId: "acme",
+      expiresAt: Date.now() - 1,
+      params: {
+        kind: "sendToAgent",
+        request: { text: "body", sourceLabel: "Acme", terminalId: "t-1" },
+      },
+    });
+    expect(draftAgentContext).not.toHaveBeenCalled();
+    expect(sendUiPromptResponse).not.toHaveBeenCalled();
+  });
+
   it("queues an untargeted send as a picker", () => {
     renderHook(() => usePluginPromptBridge());
     void deliver!({

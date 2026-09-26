@@ -380,7 +380,9 @@ export function useTerminalFileTransfer(
     const handleDragEnter = (e: DragEvent) => {
       if (!e.dataTransfer) return;
       const types = e.dataTransfer.types;
-      const accepted = hasFileDrag(types) || (hasAgentContextDrag(types) && acceptsAgentContext());
+      // Agent context wins over files here as it does at drop, so a mixed drag
+      // over a shell is refused rather than shown a file affordance.
+      const accepted = hasAgentContextDrag(types) ? acceptsAgentContext() : hasFileDrag(types);
       if (!accepted) return;
       e.preventDefault();
       e.stopPropagation();
@@ -391,19 +393,19 @@ export function useTerminalFileTransfer(
     const handleDragOver = (e: DragEvent) => {
       if (!e.dataTransfer) return;
       const types = e.dataTransfer.types;
-      if (hasFileDrag(types)) {
+      if (hasAgentContextDrag(types)) {
+        // Refused explicitly rather than ignored: the drag also carries
+        // `text/plain`, and xterm's helper textarea would otherwise take a drop
+        // that lands on it as typed input — the one thing a shell must not get.
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer.dropEffect = isInputLockedRef.current ? "none" : "copy";
+        e.dataTransfer.dropEffect = acceptsAgentContext() ? "copy" : "none";
         return;
       }
-      if (!hasAgentContextDrag(types)) return;
-      // Refused explicitly rather than ignored: the drag also carries
-      // `text/plain`, and xterm's helper textarea would otherwise take a drop
-      // that lands on it as typed input — the one thing a shell must not get.
+      if (!hasFileDrag(types)) return;
       e.preventDefault();
       e.stopPropagation();
-      e.dataTransfer.dropEffect = acceptsAgentContext() ? "copy" : "none";
+      e.dataTransfer.dropEffect = isInputLockedRef.current ? "none" : "copy";
     };
 
     const handleDragLeave = (e: DragEvent) => {

@@ -2265,11 +2265,14 @@ interface PluginAgentSnapshot {
  *   is not on screen.
  * - `fleet-armed` — a fleet broadcast is armed, so Enter in that draft would go
  *   to every armed agent.
- * - `project-unavailable` — the plugin's project has no open view.
- * - `launch-failed` — the user chose to start a new agent and it did not start.
+ * - `project-unavailable` — the plugin's project has no open view, or it did not
+ *   answer in time.
+ * - `launch-failed` — the user chose to start a new agent and it did not start,
+ *   or the new worktree's setup failed, needs approval or is still running.
  * - `prompt-open` — another picker from this plugin is already open.
+ * - `busy` — too many targeted sends from this plugin are already in flight.
  */
-type PluginSendToAgentRefusalReason = "unknown-terminal" | "not-agent" | "exited" | "input-bar-off" | "backend-unavailable" | "input-locked" | "restarting" | "input-busy" | "not-in-grid" | "fleet-armed" | "project-unavailable" | "launch-failed" | "prompt-open";
+type PluginSendToAgentRefusalReason = "unknown-terminal" | "not-agent" | "exited" | "input-bar-off" | "backend-unavailable" | "input-locked" | "restarting" | "input-busy" | "not-in-grid" | "fleet-armed" | "project-unavailable" | "launch-failed" | "prompt-open" | "busy";
 /**
  * One agent pane in the plugin's project, as {@link PluginAgentsApi.list}
  * reports it.
@@ -2333,7 +2336,9 @@ interface PluginSendToAgentOptions {
 }
 /**
  * How a {@link PluginHostApi.sendToAgent} call ended. `drafted` means the text
- * is in that agent's draft and nothing was submitted.
+ * is in that agent's draft and nothing was submitted. A `launch-failed` refusal
+ * that got as far as creating a worktree names it in `worktreeId`, so the
+ * plugin can tell the user where it is.
  */
 type PluginSendToAgentResult = {
     status: "drafted";
@@ -2343,6 +2348,7 @@ type PluginSendToAgentResult = {
 } | {
     status: "refused";
     reason: PluginSendToAgentRefusalReason;
+    worktreeId?: string;
 };
 /**
  * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
