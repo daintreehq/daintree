@@ -312,6 +312,51 @@ describe("updateFrontmatter", () => {
     });
   });
 
+  it("drops a core tag from a flow mapping value rather than keeping the old type", () => {
+    const updated = updateFrontmatter("---\n{ count: !!str 1, other: x }\n---\n", { count: 2 });
+    expect(parseFrontmatter(updated).data).toEqual({ count: 2, other: "x" });
+    const list = updateFrontmatter("---\n{ tags: !!seq [a] }\n---\n", { tags: ["b", "c"] });
+    expect(parseFrontmatter(list).data).toEqual({ tags: ["b", "c"] });
+  });
+
+  it("refuses to patch a flow mapping value whose tag the new value cannot carry", () => {
+    for (const [source, tag] of [
+      ["blob: !!binary SGVsbG8=", "!!binary"],
+      ["pos: !point 3", "!point"],
+      ["pos: !point { x: 3 }", "!point"],
+    ] as const) {
+      const text = `---\n{ title: t, ${source} }\n---\n`;
+      const key = source.slice(0, source.indexOf(":"));
+      let caught: unknown;
+      try {
+        updateFrontmatter(text, { [key]: "replaced" });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught, source).toBeInstanceOf(FrontmatterError);
+      expect((caught as FrontmatterError).message).toContain(`tagged ${tag}`);
+      expect((caught as FrontmatterError).line).toBe(2);
+      expect(parseFrontmatter(updateFrontmatter(text, { [key]: undefined })).data).toEqual({
+        title: "t",
+      });
+    }
+  });
+
+  it("keeps a flow mapping value's comment when replacing it", () => {
+    const updated = updateFrontmatter("---\n{ a: one # note\n, b: two }\n---\n", { a: "three" });
+    expect(updated).toContain("# note");
+    expect(parseFrontmatter(updated).data).toEqual({ a: "three", b: "two" });
+  });
+
+  it("keeps a flow mapping value's anchor when replacing it", () => {
+    const scalar = updateFrontmatter("---\n{ a: &x one, b: *x }\n---\n", { a: "two" });
+    expect(parseFrontmatter(scalar).data).toEqual({ a: "two", b: "two" });
+    const tagged = updateFrontmatter("---\n{ a: &x !!str 1, b: *x }\n---\n", { a: 5 });
+    expect(parseFrontmatter(tagged).data).toEqual({ a: 5, b: 5 });
+    const collection = updateFrontmatter("---\n{ a: &x [1], b: *x }\n---\n", { a: [2] });
+    expect(parseFrontmatter(collection).data).toEqual({ a: [2], b: [2] });
+  });
+
   it("throws on invalid frontmatter rather than guessing", () => {
     expect(() => updateFrontmatter("---\na: [\n---\n", { a: 1 })).toThrow(FrontmatterError);
   });

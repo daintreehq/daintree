@@ -319,6 +319,18 @@ function shortTag(tag: string): string {
   return tag.startsWith(CORE_TAG_PREFIX) ? `!!${tag.slice(CORE_TAG_PREFIX.length)}` : tag;
 }
 
+/** Refuse to replace a value whose tag the new, plain value would lose. */
+function refuseLossyTag(source: string, key: string, value: unknown, fallbackOffset: number): void {
+  const tag = isNode(value) ? value.tag : undefined;
+  if (tag === undefined || REWRITABLE_TAGS.has(tag)) return;
+  const at = (value as { range?: [number, number, number] }).range?.[0] ?? fallbackOffset;
+  throw failure(
+    source,
+    at,
+    `cannot patch "${key}": its value is tagged ${shortTag(tag)}, a type a plain value cannot carry, so the edit would silently change it`
+  );
+}
+
 /**
  * Change only the named top-level frontmatter keys and leave every other byte
  * of the document alone — comments, key order, quoting, blank lines, and the
@@ -334,7 +346,8 @@ function shortTag(tag: string): string {
  * a collection, a multi-line string or an explicitly tagged scalar rewrites
  * that entry's lines in the library's default style, keeping its anchor. A
  * top-level flow mapping (`{ a: 1 }`) cannot be edited in place, so a
- * non-empty patch re-serialises it as a whole.
+ * non-empty patch re-serialises it as a whole, under the same tag and anchor
+ * rules.
  *
  * Throws {@link FrontmatterError} when the existing frontmatter is invalid,
  * when a patched value carries a tag beyond the core types (`!!binary`,
@@ -360,8 +373,26 @@ export function updateFrontmatter(text: string, patch: Record<string, unknown>):
 
   if (map !== null && isMap(map) && map.flow) {
     for (const key of keys) {
-      if (patch[key] === undefined) doc.delete(key);
-      else doc.set(key, patch[key]);
+      const value = patch[key];
+      if (value === undefined) {
+        doc.delete(key);
+        continue;
+      }
+      const pair = (map.items as Pair[]).find((candidate) => keyMatches(candidate, key));
+      const previous = pair?.value;
+      refuseLossyTag(source, key, previous, 0);
+      // Always a fresh node: setting a plain value over a scalar updates that
+      // scalar in place, tag and all, so `!!str 1` patched with 2 would still
+      // read back as a string. The anchor is carried over as the block path
+      // does, so an alias to it still resolves, and so are the comments the
+      // in-place update used to keep.
+      const node = doc.createNode(value);
+      if (isNode(previous) && isNode(node)) {
+        if (previous.anchor !== undefined) node.anchor = previous.anchor;
+        if (previous.comment !== undefined) node.comment = previous.comment;
+        if (previous.commentBefore !== undefined) node.commentBefore = previous.commentBefore;
+      }
+      doc.set(key, node);
     }
     yaml = withEol(doc.toString(STRINGIFY_OPTIONS), block.eol);
   } else {
@@ -386,15 +417,7 @@ export function updateFrontmatter(text: string, patch: Record<string, unknown>):
         splices.push({ start: range.start, end: range.end, text: "" });
         continue;
       }
-      const tag = isNode(pair.value) ? pair.value.tag : undefined;
-      if (tag !== undefined && !REWRITABLE_TAGS.has(tag)) {
-        const at = (pair.value as { range?: [number, number, number] }).range?.[0] ?? range.start;
-        throw failure(
-          source,
-          at,
-          `cannot patch "${key}": its value is tagged ${shortTag(tag)}, a type a plain value cannot carry, so the edit would silently change it`
-        );
-      }
+      refuseLossyTag(source, key, pair.value, range.start);
       const inline = inlineScalarText(value);
       if (inline !== null && isInlineScalarNode(pair.value)) {
         const [start, end] = pair.value.range;
