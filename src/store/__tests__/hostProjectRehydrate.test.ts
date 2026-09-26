@@ -132,6 +132,17 @@ describe("rehydrateHostProjectState", () => {
     });
   });
 
+  it("never overwrites a draft typed while the host's answer was on its way", async () => {
+    hydrate.mockImplementation(async () => {
+      drafts.local = { t1: "typed after taking over" };
+      return hostSaved();
+    });
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+    expect(drafts.restoreProjectDraftInputs).toHaveBeenCalledWith("proj-1", {
+      t2: "only on the host",
+    });
+  });
+
   it("ignores a worktree this view doesn't know", async () => {
     hydrate.mockResolvedValue(
       hostSaved({ appState: { activeWorktreeId: "wt-unknown", terminals: [] } })

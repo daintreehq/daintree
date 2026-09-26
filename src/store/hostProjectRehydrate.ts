@@ -35,6 +35,11 @@ export async function rehydrateHostProjectState(
   projectId: string,
   options: HostProjectRehydrateOptions
 ): Promise<void> {
+  // Drafts as they stood before asking: one typed into since is newer than
+  // anything the host's answer can carry, so it is left alone.
+  const draftsBefore = (await import("@/store/terminalInputStore")).useTerminalInputStore
+    .getState()
+    .getProjectDraftInputs(projectId);
   const hydrate: HydrateResult = await window.electron.app.hydrate();
   if (!options.isCurrent()) return;
   const workspaceId = hydrate.workspaceId ?? hydrate.project?.id ?? null;
@@ -92,6 +97,7 @@ export async function rehydrateHostProjectState(
   for (const [terminalId, text] of Object.entries(hostDrafts)) {
     if (typeof text !== "string" || text === "") continue;
     if (!options.authoritative && local[terminalId]) continue;
+    if ((local[terminalId] ?? "") !== (draftsBefore[terminalId] ?? "")) continue;
     incoming[terminalId] = text;
   }
   if (Object.keys(incoming).length > 0) input.restoreProjectDraftInputs(projectId, incoming);
