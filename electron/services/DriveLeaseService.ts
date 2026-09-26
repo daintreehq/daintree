@@ -2,7 +2,8 @@ import { CHANNELS } from "../ipc/channels.js";
 import { LOCAL_CLIENT_ID } from "../ipc/endpoint.js";
 import type { ClientEndpoint, ClientRef, EndpointRegistry } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { getLocalClientRef } from "../ipc/localEndpoint.js";
+import type { LeaseGate } from "../ipc/dispatcher.js";
+import { getLocalClientRef, getLocalEndpoint } from "../ipc/localEndpoint.js";
 import { AppError } from "../utils/errorTypes.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 import type { DriveLeaseHolder, DriveLeaseState } from "../../shared/types/remoteHosts.js";
@@ -434,6 +435,29 @@ function drives(
 ): boolean {
   if (holder === null || holder.endpointId === endpoint.endpointId) return true;
   return holder.clientId === LOCAL_CLIENT_ID && endpoint.clientId === LOCAL_CLIENT_ID;
+}
+
+/**
+ * The dispatcher's lease gate: a caller that doesn't drive its project is
+ * refused on the channels that change it, exactly as its terminal input is.
+ * A caller bound to no project has no lease to consult.
+ */
+export function createDriveLeaseGate(lease: Pick<DriveLeaseService, "getHolder">): LeaseGate {
+  return (channel, caller) => {
+    const endpoint = caller.kind === "link" ? caller.endpoint : getLocalEndpoint(caller.sender);
+    const projectId = endpoint.projectId;
+    if (projectId === null) return null;
+    const holder = lease.getHolder(projectId);
+    if (drives(holder, endpoint)) return null;
+    return new AppError({
+      code: "DRIVEN_ELSEWHERE",
+      message: `${channel} changes a project driven by another window`,
+      userMessage: holder
+        ? `This project is being driven from ${holder.clientName}. Take it over first.`
+        : "This project is being driven from another screen. Take it over first.",
+      context: { channel, projectId },
+    });
+  };
 }
 
 let service: DriveLeaseService | null = null;
