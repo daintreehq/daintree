@@ -73,7 +73,7 @@ import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
 import { useEditorFactory } from "./hooks/useEditorFactory";
-import { readImageChipPaths } from "./inputEditorExtensions";
+import { minimalDocChange, readImageChipPaths } from "./inputEditorExtensions";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -579,13 +579,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
       const view = editorViewRef.current;
       if (!view) return;
-      const current = view.state.doc.toString();
-      if (draft !== current) {
+      // Only the span that differs is replaced, so an append leaves the
+      // image and file chips already in the draft attached.
+      const change = minimalDocChange(view.state.doc.toString(), draft);
+      if (change !== null) {
         setValue(draft);
         lastEmittedValueRef.current = draft;
         isApplyingExternalValueRef.current = true;
         view.dispatch({
-          changes: { from: 0, to: current.length, insert: draft },
+          changes: change,
           selection: { anchor: draft.length },
           scrollIntoView: true,
         });
