@@ -638,8 +638,13 @@ export function registerTerminalLifecycleActions(
         usePanelStore.getState().updateTitle(targetId, name, "automation");
         // The title the tab now shows, so a caller learns a hand-set title
         // kept its place without listing terminals again.
-        const title = usePanelStore.getState().panelsById[targetId]?.title ?? null;
-        return { terminalId: targetId, title, applied: name === "" || title === name };
+        // An automation rename is ignored only under a user's lock.
+        const panel = usePanelStore.getState().panelsById[targetId];
+        return {
+          terminalId: targetId,
+          title: panel?.title ?? null,
+          applied: panel !== undefined && panel.titleMode !== "user",
+        };
       } else {
         // Defer to a macrotask so menu/dropdown close handlers run before the
         // title input mounts. Do not use requestAnimationFrame here: CI Linux

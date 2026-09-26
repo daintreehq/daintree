@@ -1420,18 +1420,23 @@ describe("agent dispatch target binding (#11532)", () => {
           return {
             ...state,
             updateTitle: (_id: string, name: string) => {
-              if (!userLocked) title = name;
+              if (!userLocked) title = name.trim();
             },
             panelsById: {
               ...state.panelsById,
-              "explicit-panel": { id: "explicit-panel", location: "grid", title },
+              "explicit-panel": {
+                id: "explicit-panel",
+                location: "grid",
+                title,
+                titleMode: userLocked ? "user" : "custom",
+              },
             },
           };
         });
 
         const result = await run(
           "terminal.rename",
-          { terminalId: "explicit-panel", name: "build" },
+          { terminalId: "explicit-panel", name: "build " },
           { dispatchSource: "agent" }
         );
 
