@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
   vscode: "VS Code",
@@ -178,8 +179,9 @@ export function EditorIntegrationTab() {
         path: activeProjectPath,
         projectId: activeProjectId,
       });
-      if (!isMountedRef.current) return;
       // A remote window copies the host path when no editor here can open it: not a pass.
+      announceOpenInEditorFallback(fallback);
+      if (!isMountedRef.current) return;
       setTestResult(fallback ? "error" : "ok");
     } catch {
       if (!isMountedRef.current) return;

@@ -9,6 +9,8 @@ import { store } from "../../store.js";
 /** How long an account the provider reported stands before it is asked again. */
 const FORGE_ACCOUNT_TTL_MS = 10 * 60_000;
 const FORGE_ACCOUNT_TIMEOUT_MS = 5_000;
+/** The summary schema's own caps. */
+const MAX_FORGES = 64;
 
 /** True when the saved credential record has any non-empty value. */
 function hasSavedCredential(raw: string | undefined): boolean {
@@ -55,9 +57,14 @@ export function createForgeObserver(now: () => number = Date.now) {
   const accounts = new Map<string, { credential: string; account: string | null; at: number }>();
   return async function observeForges(): Promise<HostForgeObservation[]> {
     const saved = store.get("forgeCredentials") ?? {};
-    const providers = getRegisteredForgeProviders().filter(
-      ({ contribution }) => contribution.kind !== "local"
-    );
+    // Within the summary's wire limits, so a long list or name can't cost the whole summary.
+    const providers = getRegisteredForgeProviders()
+      .filter(
+        ({ pluginId, contribution }) =>
+          contribution.kind !== "local" &&
+          makeForgeProviderId(pluginId, contribution.id).length <= 256
+      )
+      .slice(0, MAX_FORGES);
     const seen = new Set<string>();
     const observed = await Promise.all(
       providers.map(async ({ pluginId, contribution }) => {
@@ -77,7 +84,7 @@ export function createForgeObserver(now: () => number = Date.now) {
         } else {
           accounts.delete(providerId);
         }
-        return { providerId, name: contribution.name, hasCredential, account };
+        return { providerId, name: contribution.name.slice(0, 256), hasCredential, account };
       })
     );
     for (const providerId of [...accounts.keys()]) {
