@@ -487,9 +487,11 @@ export const actionDispatchScenarios: PerfScenario[] = [
         const expected = new Set<string>();
         for (const id of permitted) {
           const entry = entryById.get(id);
-          // An id the allowlist advertises that the catalog never produced.
+          // An id the allowlist advertises that the catalog never produced —
+          // bar a host-gated one, which a window with no host leaves out of
+          // the listing by design (checked against the registration above).
           if (!entry) {
-            surfaceMisses += 1;
+            if (!isHostGatedActionId(id)) surfaceMisses += 1;
             continue;
           }
           if (entry.danger !== "restricted" && entry.mcpVisibility !== "hidden") expected.add(id);
