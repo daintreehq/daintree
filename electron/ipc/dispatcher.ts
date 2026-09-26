@@ -1,10 +1,12 @@
-import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
+import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from "electron";
 import type { IpcEnvelope } from "../../shared/types/ipc/errors.js";
 import { isIpcEnvelope } from "../../shared/types/ipc/errors.js";
 import { deserializeError, wrapError } from "../../shared/utils/ipcErrorSerialization.js";
 import { AppError } from "../utils/errorTypes.js";
+import { requiresDriveLease } from "./channelLeasePolicy.js";
 import { getChannelLocality } from "./channelLocality.js";
 import type {
+  ClientEndpoint,
   EndpointInvocation,
   HybridSplit,
   InvokeListener,
@@ -27,6 +29,17 @@ export type InvokeEnveloper = (
   call: () => unknown,
   options?: { verbatim?: boolean }
 ) => Promise<IpcEnvelope>;
+
+/**
+ * Decides whether the caller may drive its project, for a channel whose lease
+ * policy requires it (`channelLeasePolicy.ts`): null to let the call through,
+ * or the error to refuse it with. A link call names its endpoint; a local call
+ * names the view that sent it, resolved to an endpoint only when asked.
+ */
+export type LeaseGate = (
+  channel: string,
+  caller: { kind: "link"; endpoint: ClientEndpoint } | { kind: "local"; sender: WebContents }
+) => AppError | null;
 
 type LocalInvokeListener = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 type LocalSendListener = (event: IpcMainEvent, ...args: unknown[]) => unknown;
@@ -65,6 +78,8 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
   // would leak this machine's half of the merge.
   private readonly linkHybrids = new Map<string, number>();
   private router: RemoteRouter | null = null;
+  // Installed by Host mode alongside the drive lease; with none, nothing is gated.
+  private leaseGate: LeaseGate | null = null;
   private enveloper: InvokeEnveloper = unconfiguredEnveloper;
   // Several ipcMain.on listeners can share one channel; a forwarded send must
   // leave this process once per message, not once per listener.
@@ -104,6 +119,30 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     this.router = router;
   }
 
+  /** Install the drive-lease gate; the disposer removes it if it is still the one installed. */
+  setLeaseGate(gate: LeaseGate | null): () => void {
+    this.leaseGate = gate;
+    return () => {
+      if (this.leaseGate === gate) this.leaseGate = null;
+    };
+  }
+
+  private refuseForLease(channel: string, caller: Parameters<LeaseGate>[1]): AppError | null {
+    const gate = this.leaseGate;
+    if (gate === null || !requiresDriveLease(channel, caller.kind)) return null;
+    return gate(channel, caller);
+  }
+
+  /**
+   * A link call from a remote view is held to the lease. The viewless
+   * executor's calls come through here too, as the host's own local-kind
+   * caller acting where the MCP routing already consulted the lease.
+   */
+  private refuseLinkCallForLease(channel: string, endpoint: ClientEndpoint): AppError | null {
+    if (endpoint.kind !== "remote-view") return null;
+    return this.refuseForLease(channel, { kind: "link", endpoint });
+  }
+
   registerHybridSplit(channel: string, split: HybridSplit): () => void {
     this.hybridSplits.set(channel, split);
     return () => {
@@ -140,7 +179,9 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     args: unknown[]
   ): Promise<IpcEnvelope> {
     const listener = this.invokeListeners.get(channel);
-    const refusal = this.refuseOverLink(channel, listener !== undefined);
+    const refusal =
+      this.refuseOverLink(channel, listener !== undefined) ??
+      this.refuseLinkCallForLease(channel, invocation.endpoint);
     if (refusal) {
       return this.enveloper(channel, args, () => {
         throw refusal;
@@ -152,7 +193,9 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
 
   sendForEndpoint(invocation: EndpointInvocation, channel: string, args: unknown[]): void {
     const listeners = this.sendListeners.get(channel);
-    const refusal = this.refuseOverLink(channel, listeners !== undefined && listeners.size > 0);
+    const refusal =
+      this.refuseOverLink(channel, listeners !== undefined && listeners.size > 0) ??
+      this.refuseLinkCallForLease(channel, invocation.endpoint);
     if (refusal) {
       console.warn(`[IPC] Dropped link send: ${refusal.message}`);
       return;
@@ -192,7 +235,15 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     const runLocal = () => listener(event, ...args);
     const router = this.router;
     const hostId = router ? router.hostForSender(event.sender.id) : null;
-    if (router === null || hostId === null) return this.enveloper(channel, args, runLocal);
+    if (router === null || hostId === null) {
+      const refusal = this.refuseForLease(channel, { kind: "local", sender: event.sender });
+      if (refusal) {
+        return this.enveloper(channel, args, () => {
+          throw refusal;
+        });
+      }
+      return this.enveloper(channel, args, runLocal);
+    }
 
     const webContentsId = event.sender.id;
     const locality = getChannelLocality(channel);
@@ -251,7 +302,14 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
   ): unknown {
     const router = this.router;
     const hostId = router ? router.hostForSender(event.sender.id) : null;
-    if (router === null || hostId === null) return listener(event, ...args);
+    if (router === null || hostId === null) {
+      const refusal = this.refuseForLease(channel, { kind: "local", sender: event.sender });
+      if (refusal) {
+        console.warn(`[IPC] Dropped send: ${refusal.message}`);
+        return undefined;
+      }
+      return listener(event, ...args);
+    }
 
     const locality = getChannelLocality(channel);
     if (locality === "shell" || locality === "hybrid") return listener(event, ...args);

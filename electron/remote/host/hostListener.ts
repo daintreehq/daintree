@@ -4,7 +4,8 @@ import {
   getFleetSnapshotService,
   getProjectStatsService,
 } from "../../ipc/handlers/projectCrud/index.js";
-import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
+import { createDriveLeaseGate, getDriveLeaseService } from "../../services/DriveLeaseService.js";
+import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { setMcpDriveTargetResolver } from "../../services/mcp-server/driveTarget.js";
 import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
 import { attachHostFiles, installHostFileService } from "../files/hostInstall.js";
@@ -171,6 +172,9 @@ async function buildHostListener(
   // the resolver is also what lets the host run actions with no frontend
   // attached: only Host mode does, so a plain local app routes as it always did.
   const lease = getDriveLeaseService();
+  // Only the holder changes a project: the channels that do are refused to
+  // everyone else, from a link or from this machine's own views.
+  teardowns.push(getIpcDispatcher().setLeaseGate(createDriveLeaseGate(lease)));
   teardowns.push(
     setMcpDriveTargetResolver((projectId) => {
       const target = lease.getDriveTarget(projectId);

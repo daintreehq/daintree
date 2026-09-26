@@ -60,7 +60,8 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
 
 import { enforceIpcSenderValidation } from "../../setup/security.js";
 import { _resetIpcGuardForTesting } from "../ipcGuard.js";
-import { typedHandle, typedHandleWithContext } from "../utils.js";
+import { onWithContext, typedHandle, typedHandleWithContext } from "../utils.js";
+import { createDriveLeaseGate } from "../../services/DriveLeaseService.js";
 import { getIpcDispatcher } from "../dispatcher.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
 import { _resetLocalEndpointsForTesting } from "../localEndpoint.js";
@@ -529,5 +530,136 @@ describe("remote router", () => {
     const handler = vi.fn(() => "local");
     cleanups.push(typedHandle(HOST_CHANNEL as never, handler as never));
     await expect(invokeLocal(HOST_CHANNEL, makeEvent())).resolves.toEqual(wrapSuccess("local"));
+  });
+});
+
+describe("drive-lease gate", () => {
+  const DRIVER_CHANNEL = "worktree:create";
+  const HYBRID_DRIVER_CHANNEL = "app:set-state";
+  const FREE_CHANNEL = "worktree:get-all";
+
+  /** A lease table the tests set directly: projectId → holder. */
+  function installGate(holders: Map<string, { endpointId: string; clientId: string }>) {
+    const gate = createDriveLeaseGate({
+      getHolder: (projectId: string) => {
+        const holder = holders.get(projectId);
+        return holder
+          ? {
+              leaseId: 1,
+              endpointId: holder.endpointId,
+              clientId: holder.clientId,
+              clientName: holder.clientId === "local" ? "this-mac" : "greg-mbp",
+              isHostLocal: holder.clientId === "local",
+              acquiredAt: 0,
+            }
+          : null;
+      },
+    });
+    cleanups.push(getIpcDispatcher().setLeaseGate(gate));
+  }
+
+  function handle(channel: string) {
+    const handler = vi.fn(() => "ran");
+    cleanups.push(typedHandleWithContext(channel as never, handler as never));
+    return handler;
+  }
+
+  it("refuses a displaced remote view's mutation with DRIVEN_ELSEWHERE and lets the holder through", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    const { endpoint: holder } = makeRemoteEndpoint(-3, "proj-1");
+    const { endpoint: displaced } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-1", { endpointId: holder.endpointId, clientId: "client-b" }]]));
+
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: displaced, client: REMOTE_CLIENT },
+      DRIVER_CHANNEL,
+      [{}]
+    );
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+
+    const allowed = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: holder, client: REMOTE_CLIENT },
+      DRIVER_CHANNEL,
+      [{}]
+    );
+    expect(allowed).toEqual(wrapSuccess("ran"));
+  });
+
+  it("lets anyone through while nobody holds the lease, and always on free channels", async () => {
+    const driver = handle(DRIVER_CHANNEL);
+    const free = handle(FREE_CHANNEL);
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    await expect(
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [])
+    ).resolves.toEqual(wrapSuccess("ran"));
+
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    await expect(
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, FREE_CHANNEL, [])
+    ).resolves.toEqual(wrapSuccess("ran"));
+    expect(driver).toHaveBeenCalledTimes(1);
+    expect(free).toHaveBeenCalledTimes(1);
+  });
+
+  it("gates a hybrid channel's host leg over a link", async () => {
+    const handler = handle(HYBRID_DRIVER_CHANNEL);
+    cleanups.push(getIpcDispatcher().allowHybridOverLink(HYBRID_DRIVER_CHANNEL));
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      HYBRID_DRIVER_CHANNEL,
+      [{}]
+    );
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("refuses this machine's own view while a remote client drives its project", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    getProjectMock.mockReturnValue("proj-1");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await invokeLocal(DRIVER_CHANNEL, makeEvent(), {});
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+
+    // Its own machine holding: every local window drives together, as before.
+    installGate(new Map([["proj-1", { endpointId: "local:77", clientId: "local" }]]));
+    await expect(invokeLocal(DRIVER_CHANNEL, makeEvent(), {})).resolves.toEqual(wrapSuccess("ran"));
+  });
+
+  it("leaves a local view's hybrid channel alone: its write carries this machine's fields too", async () => {
+    const handler = handle(HYBRID_DRIVER_CHANNEL);
+    getProjectMock.mockReturnValue("proj-1");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    await expect(invokeLocal(HYBRID_DRIVER_CHANNEL, makeEvent(), {})).resolves.toEqual(
+      wrapSuccess("ran")
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a displaced remote view's mutating send", () => {
+    const listener = vi.fn();
+    cleanups.push(onWithContext("terminal:update-title", listener));
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    getIpcDispatcher().sendForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      "terminal:update-title",
+      ["t1", "x"]
+    );
+    expect(listener).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("checks nothing with no gate installed, as for anyone who never used Remote Hosts", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    getProjectMock.mockReturnValue("proj-1");
+    await expect(invokeLocal(DRIVER_CHANNEL, makeEvent(), {})).resolves.toEqual(wrapSuccess("ran"));
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });
