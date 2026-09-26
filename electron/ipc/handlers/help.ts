@@ -5,6 +5,7 @@ import type * as HelpServiceModule from "../../services/HelpService.js";
 import type * as HelpSessionServiceModule from "../../services/HelpSessionService.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import type { ClientEndpoint } from "../endpoint.js";
+import { getEndpointRegistry } from "../endpointRegistry.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { PinnedActionContextSnapshot } from "../../../shared/types/ipc/help.js";
@@ -130,8 +131,47 @@ async function handleProvisionSession(
   });
 }
 
-// Remote views whose help sessions are already revoked when their endpoint closes.
-const revokeOnCloseWired = new WeakSet<ClientEndpoint>();
+/**
+ * The project each remote view's help sessions were provisioned for. A
+ * session is pinned to the view's endpoint handle, and an endpoint can be
+ * rebound to another project without closing: its sessions go when it closes
+ * or moves, so an assistant launched for one project never acts in another.
+ */
+const remoteSessionProjects = new WeakMap<ClientEndpoint, { projectId: string | null }>();
+
+function revokeRemoteViewSessions(
+  helpSessionService: HelpSessionServiceModule.HelpSessionService,
+  endpoint: ClientEndpoint
+): Promise<void> {
+  return helpSessionService.revokeByWebContentsId(endpoint.handle).catch((err: unknown) => {
+    console.warn("[help] revoke for a remote view failed:", err);
+  });
+}
+
+function trackRemoteViewSessions(
+  helpSessionService: HelpSessionServiceModule.HelpSessionService,
+  endpoint: ClientEndpoint,
+  projectId: string
+): void {
+  const existing = remoteSessionProjects.get(endpoint);
+  if (existing) {
+    existing.projectId = projectId;
+    return;
+  }
+  const tracked = { projectId: projectId as string | null };
+  remoteSessionProjects.set(endpoint, tracked);
+  const offChange = getEndpointRegistry().onChange(() => {
+    if (endpoint.isClosed() || endpoint.projectId === tracked.projectId) return;
+    tracked.projectId = endpoint.projectId;
+    void revokeRemoteViewSessions(helpSessionService, endpoint);
+  });
+  // A remote view has no WebContents here to be destroyed or evicted; its
+  // endpoint closing is the same moment, so its sessions go with it.
+  endpoint.onClose(() => {
+    offChange();
+    void revokeRemoteViewSessions(helpSessionService, endpoint);
+  });
+}
 
 /**
  * The assistant for a view on another machine runs here, as an agent PTY on
@@ -162,17 +202,8 @@ async function provisionForRemoteView(
     });
     return null;
   }
-  if (!revokeOnCloseWired.has(endpoint)) {
-    revokeOnCloseWired.add(endpoint);
-    // A remote view has no WebContents here to be destroyed or evicted; its
-    // endpoint closing is the same moment, so its sessions go with it.
-    endpoint.onClose(() => {
-      void helpSessionService.revokeByWebContentsId(endpoint.handle).catch((err: unknown) => {
-        console.warn("[help] revoke for a closed remote view failed:", err);
-      });
-    });
-  }
-  return helpSessionService.provisionSession({
+  trackRemoteViewSessions(helpSessionService, endpoint, project.id);
+  const result = await helpSessionService.provisionSession({
     projectId: project.id,
     projectPath: project.path,
     agentId: input.agentId,
@@ -181,6 +212,13 @@ async function provisionForRemoteView(
     actionContext: input.context,
     slot,
   });
+  // The view closed or moved while this ran: the revoke for that found no
+  // session yet, so this one would be left live with nobody to end it.
+  if (result && (endpoint.isClosed() || endpoint.projectId !== project.id)) {
+    await helpSessionService.revokeSession(result.sessionId);
+    return null;
+  }
+  return result;
 }
 
 /**

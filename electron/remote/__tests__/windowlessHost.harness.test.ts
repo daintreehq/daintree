@@ -94,6 +94,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     revokeByWebContentsId: async (id: number) => {
       helpSessions.revoked.push(id);
     },
+    revokeSession: async () => undefined,
   },
 }));
 
@@ -351,10 +352,15 @@ describe("host handlers with no window here, over the real link", () => {
       expect(foreign).toBeNull();
       expect(helpSessions.provisioned).toHaveLength(1);
 
+      // Moved to another project, the endpoint's sessions go: an assistant
+      // launched for proj-1 never acts in proj-2.
+      getEndpointRegistry().rebind(endpoint.endpointId, "proj-2");
+      expect(helpSessions.revoked).toEqual([endpoint.handle]);
+
       // The view going (its endpoint closes on the host) takes its sessions with it.
       view.destroy();
       await waitUntil(
-        () => helpSessions.revoked.includes(endpoint.handle),
+        () => helpSessions.revoked.length === 2,
         "the remote view's help sessions revoked"
       );
     },
