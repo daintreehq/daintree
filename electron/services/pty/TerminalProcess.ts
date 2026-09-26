@@ -2147,6 +2147,7 @@ export class TerminalProcess {
     );
     if (hit === undefined) return;
     t.lastHandback = hit.handback;
+    t.lastHandbackUnpublished = true;
     tracker.retire(hit.code);
     events.emit("agent:handback-observed", {
       terminalId: this.id,

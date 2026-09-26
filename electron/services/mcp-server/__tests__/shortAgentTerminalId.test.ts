@@ -26,4 +26,9 @@ describe("shortAgentTerminalId", () => {
       /^codex-[0-9a-f]{8}$/
     );
   });
+
+  it("still returns a free id when every generated suffix collides", () => {
+    const id = shortAgentTerminalId("codex", (candidate) => !candidate.includes("-", 6));
+    expect(id).toMatch(/^codex-[0-9a-f-]{36}$/);
+  });
 });

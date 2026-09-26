@@ -8,6 +8,7 @@ import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
@@ -153,8 +154,10 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         const worktreeId = args?.worktreeId;
         // Read from disk first: a view can hold a store that never loaded this
         // project (a live run listed nothing while .daintree/recipes held one).
+        // Not while an editor is open, for the same reason the focus reload
+        // waits: a refreshed cache would let the open form save over disk.
         const projectId = useProjectStore.getState().currentProject?.id;
-        if (projectId) {
+        if (projectId && !useRecipeEditorActivityStore.getState().isOpen()) {
           await useRecipeStore
             .getState()
             .loadRecipes(projectId)

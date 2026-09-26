@@ -1059,6 +1059,85 @@ describe("terminal notices", () => {
       });
     });
 
+    it("keeps going past an item that fails, and cancels only that item's wait", async () => {
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => {
+        const { terminalId } = args as { terminalId: string };
+        if (terminalId === "t-a") throw new Error("renderer gone");
+        return { result: { ok: true, result: { sent: true, terminalId, submissionToken: "tok" } } };
+      });
+      const cancels: string[] = [];
+      const wait = vi.fn((options: { terminalId?: string }) => ({
+        bind: vi.fn(),
+        cancel: vi.fn(() => cancels.push(options.terminalId ?? "")),
+        promise: Promise.resolve({
+          terminalId: options.terminalId ?? "",
+          outcome: "settled" as const,
+        }),
+      }));
+      const { start } = notifyDeps({ origin: "help" }, { dispatchAction, replyWaiter: { wait } });
+      const server = await start("session-batch-item-error");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: "t-a", command: "x" },
+            { terminalId: "t-b", command: "x" },
+          ],
+          waitForReply: true,
+        },
+      });
+
+      const items = (
+        result.structuredContent as { results: Array<{ target: string; ok: boolean }> }
+      ).results;
+      expect(items.map((r) => [r.target, r.ok])).toEqual([
+        ["t-a", false],
+        ["t-b", true],
+      ]);
+      expect(cancels).toEqual(["t-a"]);
+    });
+
+    it("shares the response ceiling across replies, keeping each reply's end", async () => {
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => {
+        const { terminalId } = args as { terminalId: string };
+        return { result: { ok: true, result: { sent: true, terminalId, submissionToken: "tok" } } };
+      });
+      const long = "a".repeat(20_000) + "END";
+      const wait = vi.fn((options: { terminalId?: string }) => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({
+          terminalId: options.terminalId ?? "",
+          outcome: "settled" as const,
+          reply: { text: long, lineCount: 1, truncated: false },
+        }),
+      }));
+      const { start } = notifyDeps({ origin: "help" }, { dispatchAction, replyWaiter: { wait } });
+      const server = await start("session-batch-reply-budget");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: ["t-a", "t-b", "t-c", "t-d"].map((terminalId) => ({ terminalId, command: "x" })),
+          waitForReply: true,
+        },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const items = (
+        result.structuredContent as {
+          results: Array<{ reply: { reply: { text: string; truncated: boolean } } }>;
+        }
+      ).results;
+      expect(items).toHaveLength(4);
+      for (const item of items) {
+        expect(item.reply.reply.text.endsWith("END")).toBe(true);
+        expect(item.reply.reply.text.length).toBeLessThan(long.length);
+        expect(item.reply.reply.truncated).toBe(true);
+      }
+    });
+
     it("rejects malformed batch arguments before any item runs", async () => {
       const { dispatchAction, start } = notifyDeps({ origin: "help" });
       const server = await start("session-batch-invalid");

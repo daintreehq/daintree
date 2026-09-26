@@ -143,7 +143,7 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
   };
 });
 
-import { HelpSessionService, codexTrustArgs } from "../HelpSessionService.js";
+import { HelpSessionService, codexTrustArgs, projectRuleRoots } from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
@@ -760,6 +760,15 @@ describe("HelpSessionService", () => {
     expect(settings.permissions.allow).toContain("Read(//tmp/project/**)");
     expect(settings.permissions.deny).toContain("Edit(//tmp/project/**)");
     expect(settings.permissions.deny).toContain("Edit(**)");
+  });
+
+  it("writes project rules as literal paths, escaping glob characters", async () => {
+    await expect(projectRuleRoots("/work/repo[1]/*", "darwin")).resolves.toEqual([
+      "//work/repo\\[1\\]/\\*",
+    ]);
+    await expect(projectRuleRoots("C:\\Users\\me\\proj", "win32")).resolves.toEqual([
+      "//c/Users/me/proj",
+    ]);
   });
 
   it("appends mcp__daintree__* to the bundled allowlist when daintreeControl is enabled", async () => {

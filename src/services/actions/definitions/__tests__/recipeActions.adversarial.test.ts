@@ -12,6 +12,8 @@ const createWorktreeStoreMock = vi.hoisted(() => ({
 
 const notifySpawnFailuresMock = vi.hoisted(() => vi.fn());
 
+const editorActivityMock = vi.hoisted(() => ({ isOpen: vi.fn(() => false) }));
+
 const projectStoreMock = vi.hoisted(() => ({
   getState: vi.fn(() => ({ currentProject: null as { id: string } | null })),
 }));
@@ -19,6 +21,9 @@ const projectStoreMock = vi.hoisted(() => ({
 vi.mock("@/store/recipeStore", () => ({ useRecipeStore: recipeStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => createWorktreeStoreMock);
 vi.mock("@/store/projectStore", () => ({ useProjectStore: projectStoreMock }));
+vi.mock("@/store/recipeEditorActivityStore", () => ({
+  useRecipeEditorActivityStore: { getState: () => editorActivityMock },
+}));
 vi.mock("@/utils/recipeNotify", () => ({
   notifyRecipeSpawnFailures: notifySpawnFailuresMock,
 }));
@@ -434,6 +439,23 @@ describe("recipeActions adversarial", () => {
 
     expect(loadRecipes).toHaveBeenCalledWith("p1");
     expect(result.recipes.map((r) => r.id)).toEqual(["inrepo-pair"]);
+  });
+
+  it("recipe.list leaves the store alone while a recipe editor is open", async () => {
+    const loadRecipes = vi.fn(async () => undefined);
+    recipeStoreMock.getState.mockImplementation(() => ({
+      recipes: [{ id: "cached", terminals: [] }],
+      isLoading: false,
+      loadRecipes,
+    }));
+    projectStoreMock.getState.mockReturnValueOnce({ currentProject: { id: "p1" } });
+    editorActivityMock.isOpen.mockReturnValueOnce(true);
+
+    const run = setupActions();
+    const result = (await run("recipe.list")) as { recipes: Array<{ id: string }> };
+
+    expect(loadRecipes).not.toHaveBeenCalled();
+    expect(result.recipes.map((r) => r.id)).toEqual(["cached"]);
   });
 
   it("recipe.saveToRepo rejects when no project is open, before mutating", async () => {

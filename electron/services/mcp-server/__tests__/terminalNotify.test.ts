@@ -519,6 +519,26 @@ describe("TerminalNotifyService", () => {
       expect(h.client.submitted[0].text).toContain("Fact: the Pig War of 1859.");
     });
 
+    it("keeps its first quote when the target starts another turn before delivery", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "Answer to A.");
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      // The caller is busy, so the notice waits.
+      h.client.terminals.set(OWN, { agentState: "working", hasPty: true });
+
+      h.settle("t-a");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 10);
+      await vi.advanceTimersByTimeAsync(10);
+      h.resume("t-a");
+      h.client.screens.set("t-a", "Answer to B.");
+      h.client.terminals.set("t-a", atPrompt(Date.now()));
+      h.client.terminals.set(OWN, atPrompt(Date.now()));
+      await flushNotice();
+
+      expect(h.client.submitted[0]?.text).toContain("Answer to A.");
+      expect(h.client.submitted[0]?.text).not.toContain("Answer to B.");
+    });
+
     it("quotes nothing when asked for no lines", async () => {
       const h = setup();
       h.client.screens.set("t-a", "The answer is 42.");

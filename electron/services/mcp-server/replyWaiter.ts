@@ -60,6 +60,8 @@ export interface ReplyWaitOptions {
   replyLines: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  /** A send: only the handback for its own submission ends the wait, once bound. */
+  expectsToken?: boolean;
 }
 
 export interface ReplyWait {
@@ -76,6 +78,7 @@ const MAX_RECENT_CHANGES = 16;
 interface Waiter {
   terminalId?: string;
   submissionToken?: string;
+  expectsToken: boolean;
   since: number;
   replyLines: number;
   settleTimer?: ReturnType<typeof setTimeout>;
@@ -88,6 +91,10 @@ interface Waiter {
 export class ReplyWaiterService {
   private readonly waiters = new Set<Waiter>();
   private readonly recent = new Map<string, NotifyStateChange[]>();
+  /** Terminals closed while waiters exist, so a late bind learns of it. */
+  private readonly recentlyClosed = new Set<string>();
+  /** Handbacks seen while waiters exist: the PTY reports each marker once. */
+  private readonly recentHandbacks = new Map<string, TerminalHandback[]>();
   private unsubscribers: Array<() => void> = [];
   private subscribedClient: ReplyWaiterPtyClient | null = null;
   private readonly now: () => number;
@@ -106,6 +113,7 @@ export class ReplyWaiterService {
 
     const waiter: Waiter = {
       terminalId: options.terminalId,
+      expectsToken: options.expectsToken === true,
       since: options.since,
       replyLines: options.replyLines,
       done: false,
@@ -128,7 +136,8 @@ export class ReplyWaiterService {
       },
     };
     this.waiters.add(waiter);
-    options.signal?.addEventListener("abort", () => waiter.finish("timeout"), { once: true });
+    if (options.signal?.aborted) waiter.finish("timeout");
+    else options.signal?.addEventListener("abort", () => waiter.finish("timeout"), { once: true });
 
     return {
       bind: (terminalId, submissionToken) => {
@@ -136,6 +145,16 @@ export class ReplyWaiterService {
         if (terminalId !== undefined) waiter.terminalId = terminalId;
         if (submissionToken !== undefined) waiter.submissionToken = submissionToken;
         if (waiter.terminalId === undefined) return;
+        if (this.recentlyClosed.has(waiter.terminalId)) {
+          waiter.finish("closed");
+          return;
+        }
+        for (const handback of this.recentHandbacks.get(waiter.terminalId) ?? []) {
+          if (handback.observedAt >= waiter.since && this.handbackMatches(waiter, handback)) {
+            waiter.finish("handback");
+            return;
+          }
+        }
         for (const change of this.recent.get(waiter.terminalId) ?? []) {
           this.apply(waiter, change);
           if (waiter.done) return;
@@ -198,6 +217,13 @@ export class ReplyWaiterService {
       return;
     }
     if (change.state === "working") {
+      // Replay can deliver a settle that already held before the next turn
+      // began: that finished turn is the reply.
+      const settled = waiter.settling;
+      if (settled && change.timestamp - settled.startedAt >= NOTIFY_TARGET_SETTLE_MS) {
+        waiter.finish("settled", settled.state, settled.waitingReason);
+        return;
+      }
       if (waiter.settleTimer) clearTimeout(waiter.settleTimer);
       waiter.settleTimer = undefined;
       waiter.settling = undefined;
@@ -222,9 +248,8 @@ export class ReplyWaiterService {
   }
 
   private handbackMatches(waiter: Waiter, handback: TerminalHandback): boolean {
-    return (
-      waiter.submissionToken === undefined || handback.submissionToken === waiter.submissionToken
-    );
+    if (waiter.submissionToken === undefined) return !waiter.expectsToken;
+    return handback.submissionToken === waiter.submissionToken;
   }
 
   private ensureSubscribed(client: ReplyWaiterPtyClient): void {
@@ -243,14 +268,23 @@ export class ReplyWaiterService {
         this.recent.set(change.terminalId, list);
         this.forTerminal(change.terminalId, (w) => this.apply(w, change));
       }),
-      this.deps.onHandbackObserved((terminalId, handback) =>
+      this.deps.onHandbackObserved((terminalId, handback) => {
+        const list = this.recentHandbacks.get(terminalId) ?? [];
+        list.push(handback);
+        if (list.length > MAX_RECENT_CHANGES) list.shift();
+        this.recentHandbacks.set(terminalId, list);
         this.forTerminal(terminalId, (w) => {
           if (this.handbackMatches(w, handback)) w.finish("handback");
-        })
-      ),
-      this.deps.onKilled((terminalId) => this.forTerminal(terminalId, (w) => w.finish("closed"))),
-      this.deps.onTrashed((terminalId) => this.forTerminal(terminalId, (w) => w.finish("closed"))),
+        });
+      }),
+      this.deps.onKilled((terminalId) => this.closeTerminal(terminalId)),
+      this.deps.onTrashed((terminalId) => this.closeTerminal(terminalId)),
     ];
+  }
+
+  private closeTerminal(terminalId: string): void {
+    this.recentlyClosed.add(terminalId);
+    this.forTerminal(terminalId, (w) => w.finish("closed"));
   }
 
   private forTerminal(terminalId: string, fn: (waiter: Waiter) => void): void {
@@ -263,6 +297,8 @@ export class ReplyWaiterService {
     if (this.waiters.size === 0) {
       this.unsubscribe();
       this.recent.clear();
+      this.recentlyClosed.clear();
+      this.recentHandbacks.clear();
     }
   }
 

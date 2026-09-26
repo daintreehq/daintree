@@ -43,6 +43,36 @@ describe("planChoice", () => {
     });
   });
 
+  it("matches option rows, not headings or echoed text that contain the label", () => {
+    const screen = [
+      "Yes, I trust this folder is the safe choice here",
+      "❯ 1. No, exit",
+      "  2. Yes, I trust this folder",
+      "",
+      "> answered: Yes, I trust this folder",
+    ].join("\n");
+    expect(planChoice(screen, "Yes, I trust this folder")).toEqual({
+      ok: true,
+      keys: ["Down", "Enter"],
+    });
+  });
+
+  it("takes an exact label over a longer one, and the newest dialog over an old one", () => {
+    const screen = [
+      "  › 1. Allow                   Run the tool",
+      "    2. Allow for this session  Run the tool",
+      "",
+      "  1. Allow                     Run the tool",
+      "  › 2. Allow for this session  Run the tool",
+    ].join("\n");
+    expect(planChoice(screen, "Allow")).toEqual({ ok: true, keys: ["Up", "Enter"] });
+  });
+
+  it("refuses a label two options fit equally well", () => {
+    const screen = ["❯ Yes, once", "  Yes, always", "  No"].join("\n");
+    expect(planChoice(screen, "Yes")).toMatchObject({ ok: false });
+  });
+
   it("refuses rather than guessing when the label or the highlight is missing", () => {
     expect(planChoice("❯ No, exit\n  Maybe", "Yes")).toMatchObject({ ok: false });
     expect(planChoice("No, exit\nYes, I trust this folder", "Yes")).toMatchObject({ ok: false });

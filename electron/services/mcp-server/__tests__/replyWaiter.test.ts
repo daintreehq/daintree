@@ -177,6 +177,91 @@ describe("ReplyWaiterService", () => {
     await expect(wait.promise).resolves.toEqual({ terminalId: "t-a", outcome: "closed" });
   });
 
+  it("ignores an earlier turn's handback while a send's own token is unbound", async () => {
+    const h = setup();
+    h.screens.set("t-a", "new answer");
+    const wait = h.service.wait({
+      terminalId: "t-a",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+      expectsToken: true,
+    });
+    let done = false;
+    void wait.promise.then(() => {
+      done = true;
+    });
+
+    h.handback("t-a", "tok-old");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(done).toBe(false);
+
+    wait.bind("t-a", "tok-new");
+    h.handback("t-a", "tok-new");
+    await expect(wait.promise).resolves.toMatchObject({ outcome: "handback" });
+  });
+
+  it("replays a launch's handback that printed before it was bound", async () => {
+    const h = setup();
+    h.screens.set("t-new", "done");
+    const wait = h.service.wait({ since: Date.now(), replyLines: 40, timeoutMs: 60_000 });
+
+    h.handback("t-new");
+    wait.bind("t-new");
+
+    await expect(wait.promise).resolves.toMatchObject({ terminalId: "t-new", outcome: "handback" });
+  });
+
+  it("keeps a settle that held before the next turn began, when replayed late", async () => {
+    const h = setup();
+    h.screens.set("t-new", "first answer");
+    const t0 = Date.now();
+    const wait = h.service.wait({ since: t0, replyLines: 40, timeoutMs: 60_000 });
+
+    h.change("t-new", { state: "working", previousState: "idle", timestamp: t0 + 1 });
+    h.change("t-new", { timestamp: t0 + 2 });
+    h.change("t-new", {
+      state: "working",
+      previousState: "waiting",
+      timestamp: t0 + 2 + NOTIFY_TARGET_SETTLE_MS + 500,
+    });
+    wait.bind("t-new");
+
+    await expect(wait.promise).resolves.toMatchObject({ outcome: "settled" });
+  });
+
+  it("ends at once for a request that was already aborted", async () => {
+    const h = setup();
+    const controller = new AbortController();
+    controller.abort();
+    const wait = h.service.wait({
+      terminalId: "t-a",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
+
+    await expect(wait.promise).resolves.toMatchObject({ outcome: "timeout" });
+  });
+
+  it("reports a launch that closed before it was bound as closed", async () => {
+    const h = setup();
+    const other = h.service.wait({
+      terminalId: "t-other",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+    });
+    const wait = h.service.wait({ since: Date.now(), replyLines: 40, timeoutMs: 60_000 });
+
+    h.kill("t-new");
+    wait.bind("t-new");
+
+    await expect(wait.promise).resolves.toEqual({ terminalId: "t-new", outcome: "closed" });
+    other.cancel();
+  });
+
   it("settles at once when the send failed, and unsubscribes when nothing waits", async () => {
     const h = setup();
     const wait = h.service.wait({

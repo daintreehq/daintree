@@ -300,11 +300,21 @@ interface BundledClaudeSettings {
  * A project path in Claude Code's absolute-rule form (`//abs/path`), plus its
  * realpath when that differs (macOS reports temp dirs through `/private`).
  */
-async function projectRuleRoots(projectPath: string): Promise<string[]> {
+export async function projectRuleRoots(
+  projectPath: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
+  // Rules are gitignore patterns: a literal `[`, `*` or backslash in the path must
+  // not become a glob, or the deny would miss the directory it names.
+  const escapeGlob = (p: string) => p.replace(/[\\*?[\]{}!]/g, (c) => `\\${c}`);
   const toRule = (p: string) => {
-    const posix = p.replace(/\\/g, "/").replace(/\/+$/, "");
-    const drive = /^([A-Za-z]):\//.exec(posix);
-    return drive ? `//${drive[1]!.toLowerCase()}${posix.slice(2)}` : `/${posix}`;
+    if (platform === "win32") {
+      const posix = p.replace(/\\/g, "/").replace(/\/+$/, "");
+      const drive = /^([A-Za-z]):(\/.*)?$/.exec(posix);
+      if (drive) return `//${drive[1]!.toLowerCase()}${escapeGlob(drive[2] ?? "")}`;
+      return `/${escapeGlob(posix)}`;
+    }
+    return `/${escapeGlob(p.replace(/\/+$/, ""))}`;
   };
   const paths = new Set([projectPath]);
   const real = await fs.realpath(projectPath).catch(() => null);

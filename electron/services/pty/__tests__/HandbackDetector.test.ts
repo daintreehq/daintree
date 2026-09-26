@@ -174,3 +174,12 @@ describe("detectHandback over the raw stream", () => {
     expect(raw("DAINTREE-DONE-", "k7f3qa: done END-k7f3qa")).toBeNull();
   });
 });
+
+describe("rawHandbackText bound", () => {
+  it("reads only the end of a buffer whose last line never breaks", () => {
+    const huge = "x".repeat(200_000) + "DAINTREE-DONE-abc123: done END-abc123";
+    const text = rawHandbackText(["earlier", huge]);
+    expect(text.length).toBeLessThanOrEqual(32_768);
+    expect(text.endsWith("DAINTREE-DONE-abc123: done END-abc123")).toBe(true);
+  });
+});

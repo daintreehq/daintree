@@ -408,6 +408,9 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
  * the new panel's id (#12407).
  */
 const AGENT_LAUNCH_TOOL = "agent.launch";
+
+/** Characters of quoted reply a batch may carry across all its items. */
+const BATCH_REPLY_TEXT_BUDGET = 32_000;
 const AGENT_NAMING_LAUNCH_TOOLS: ReadonlySet<string> = new Set([
   AGENT_LAUNCH_TOOL,
   "workflow.startWorkOnIssue",
@@ -435,11 +438,11 @@ export function shortAgentTerminalId(
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 24) || "agent";
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const candidate = `${slug}-${randomBytes(2).toString("hex")}`;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const candidate = `${slug}-${randomBytes(attempt < 8 ? 2 : 4).toString("hex")}`;
     if (!isInUse(candidate)) return candidate;
   }
-  return `${slug}-${randomBytes(4).toString("hex")}`;
+  return `${slug}-${randomUUID()}`;
 }
 
 /** The listing whose `owned` filter main resolves against the ledger (#12308). */
@@ -555,7 +558,8 @@ const BATCH_TOOLS: Record<string, BatchTool<unknown>> = {
  * Tie a waiter to the terminal and submission a dispatch reported, or settle
  * it at once when the send or launch did not happen.
  */
-function bindWait(result: CallToolResult, wait: ReplyWait): void {
+/** Binds the wait to what the dispatch reported; false when it failed and the wait was cancelled. */
+function bindWait(result: CallToolResult, wait: ReplyWait): boolean {
   const parsed = resultValue(result);
   const value =
     parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
@@ -567,15 +571,18 @@ function bindWait(result: CallToolResult, wait: ReplyWait): void {
     (value?.spawnStatus !== undefined && value.spawnStatus !== null);
   if (failed) {
     wait.cancel();
-    return;
+    return false;
   }
   const token = typeof value?.submissionToken === "string" ? value.submissionToken : undefined;
   wait.bind(terminalId, token);
+  return true;
 }
 
 /** A send's or launch's result with the reply it waited for. */
 async function attachReply(result: CallToolResult, wait: ReplyWait): Promise<CallToolResult> {
-  bindWait(result, wait);
+  // A failed dispatch is returned as it came, even when its wait had already
+  // ended: rebuilding it around a reply would drop `isError`.
+  if (!bindWait(result, wait)) return result;
   const reply = await wait.promise;
   if (reply.terminalId === "") return result;
   const base = resultValue(result);
@@ -2504,29 +2511,56 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // as long as the slowest agent, not the sum of them.
           const waits: Array<ReplyWait | undefined> = [];
           for (const item of batch.expand(parsed.data, rendererOwnedOrigin)) {
+            // A cancelled call starts nothing more; what already went out stands.
+            if (extra.signal.aborted) break;
             const wait =
               batchArgs.waitForReply === true && replyWaiter !== undefined
                 ? replyWaiter.wait({
-                    ...(item.tool === AGENT_LAUNCH_TOOL ? {} : { terminalId: item.target }),
+                    ...(item.tool === AGENT_LAUNCH_TOOL
+                      ? {}
+                      : { terminalId: item.target, expectsToken: true }),
                     since: Date.now(),
                     replyLines: batchArgs.replyLines ?? NOTIFY_REPLY_LINES_DEFAULT,
                     timeoutMs: (batchArgs.waitSeconds ?? REPLY_WAIT_DEFAULT_SECONDS) * 1_000,
                     signal: extra.signal,
                   })
                 : undefined;
-            const itemResult = await handleCallTool(
-              { method: "tools/call", params: { name: item.tool, arguments: item.args } },
-              extra
-            );
+            let itemResult: CallToolResult;
+            try {
+              itemResult = await handleCallTool(
+                { method: "tools/call", params: { name: item.tool, arguments: item.args } },
+                extra
+              );
+            } catch (error) {
+              // One item's refusal is its own outcome, not the batch's.
+              wait?.cancel();
+              waits.push(undefined);
+              results.push({
+                target: item.target,
+                ok: false,
+                error: { message: error instanceof Error ? error.message : String(error) },
+              });
+              continue;
+            }
             if (wait !== undefined) bindWait(itemResult, wait);
             waits.push(wait);
             results.push(batchItemOutcome(item.target, itemResult));
           }
           const replies = await Promise.all(waits.map((wait) => wait?.promise));
+          // Share the response ceiling so every item's receipt survives:
+          // replies are trimmed from their start, keeping their ends.
+          const replyBudget = Math.floor(BATCH_REPLY_TEXT_BUDGET / Math.max(1, replies.length));
           replies.forEach((reply, index) => {
             const entry = results[index];
             if (entry !== undefined && reply !== undefined && reply.terminalId !== "") {
-              entry.reply = reply;
+              const text = reply.reply?.text;
+              entry.reply =
+                text !== undefined && text.length > replyBudget
+                  ? {
+                      ...reply,
+                      reply: { ...reply.reply!, text: text.slice(-replyBudget), truncated: true },
+                    }
+                  : reply;
             }
           });
           const value = { results };
@@ -2540,7 +2574,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           replyWait = replyWaiter.wait({
             ...(actionId === AGENT_LAUNCH_TOOL
               ? {}
-              : { terminalId: ownedResourceId ?? readStringArg(args, "terminalId") }),
+              : {
+                  terminalId: ownedResourceId ?? readStringArg(args, "terminalId"),
+                  expectsToken: true,
+                }),
             since: Date.now(),
             replyLines: replyLines ?? NOTIFY_REPLY_LINES_DEFAULT,
             timeoutMs: (waitSeconds ?? REPLY_WAIT_DEFAULT_SECONDS) * 1_000,

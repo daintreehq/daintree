@@ -431,7 +431,8 @@ interface FiredEntry {
   /** The reply being read off the target's screen; delivery waits for it. */
   capture?: Promise<void>;
   /** How to read the reply again just before delivery; absent for no quote. */
-  quote?: { lines: number; endAtHandback: boolean };
+  /** `frozen` once the target starts another turn: its screen then answers that one. */
+  quote?: { lines: number; endAtHandback: boolean; firedAt: number; frozen?: boolean };
   /** The line that carries it, while that line's outcome is unknown. */
   wakeToken?: string;
 }
@@ -1166,6 +1167,22 @@ export class TerminalNotifyService {
     const own = this.ownersByTerminal.get(terminalId);
     if (own !== undefined) this.handleOwnStateChanged(own, payload);
 
+    // A target back at work after a notice fired has moved to another turn;
+    // that notice keeps the reply it captured rather than quoting the next.
+    if (payload.state === "working") {
+      for (const owner of this.ownersByTerminal.values()) {
+        for (const entry of owner.fired) {
+          if (
+            entry.quote !== undefined &&
+            entry.notice.terminalId === terminalId &&
+            payload.timestamp > entry.quote.firedAt
+          ) {
+            entry.quote.frozen = true;
+          }
+        }
+      }
+    }
+
     const watchers = this.watchersByTarget.get(terminalId);
     if (watchers === undefined) return;
     for (const owner of [...watchers]) {
@@ -1315,7 +1332,7 @@ export class TerminalNotifyService {
       observation.kind === "handback";
     if (notice.replyLines > 0 && quotable) {
       const endAtHandback = observation.kind === "handback" || observation.handback;
-      entry.quote = { lines: notice.replyLines, endAtHandback };
+      entry.quote = { lines: notice.replyLines, endAtHandback, firedAt: Date.now() };
       const capture = this.captureReply(entry, notice.replyLines, endAtHandback);
       entry.capture = capture;
       void capture.finally(() => {
@@ -1371,6 +1388,7 @@ export class TerminalNotifyService {
         const info = await client.getTerminalAsync(entry.notice.terminalId).catch(() => null);
         if (info === null || info.agentState === "working") return;
         const quote = entry.quote!;
+        if (quote.frozen === true) return;
         await this.captureReply(entry, quote.lines, quote.endAtHandback);
       })
     );

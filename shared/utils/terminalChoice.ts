@@ -11,6 +11,7 @@
  */
 
 const HIGHLIGHT_MARKER = /^\s*[❯›>▶➜→●]\s*/;
+const OPTION_PREFIX = /^\s*(?:[❯›>▶➜→●]\s*)?(?:\d+[.)]\s*)?/;
 
 /** Rows within this distance of the label are searched for the highlight. */
 const MAX_LIST_ROWS = 12;
@@ -29,14 +30,35 @@ export function planChoice(screen: string, label: string): ChoicePlan {
   const lines = screen.split("\n");
   const rows = (i: number): string => lines[i] ?? "";
 
-  let target = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (rows(i).toLowerCase().includes(wanted)) {
-      target = i;
-      break;
-    }
+  // An option row starts with its label, after any marker or number; a
+  // heading, a description or echoed text that merely contains it does not.
+  // A description column after a wide gap is not part of the label.
+  const optionText = (i: number) =>
+    (
+      rows(i)
+        .replace(OPTION_PREFIX, "")
+        .trim()
+        .split(/\s{2,}/)[0] ?? ""
+    ).toLowerCase();
+  const candidates: number[] = [];
+  for (let i = 0; i < lines.length; i++) if (optionText(i).startsWith(wanted)) candidates.push(i);
+  if (candidates.length === 0) {
+    return { ok: false, reason: `No option "${label}" is on the screen.` };
   }
-  if (target === -1) return { ok: false, reason: `No option "${label}" is on the screen.` };
+  // The newest dialog is the last one drawn, so the last exact label wins;
+  // a label that only prefixes two rows of that list is ambiguous.
+  const exact = candidates.filter((i) => optionText(i) === wanted);
+  let target: number;
+  if (exact.length > 0) {
+    target = exact[exact.length - 1]!;
+  } else {
+    const last = candidates[candidates.length - 1]!;
+    const inList = candidates.filter((i) => last - i <= MAX_LIST_ROWS);
+    if (inList.length > 1) {
+      return { ok: false, reason: `More than one option matches "${label}"; use its full label.` };
+    }
+    target = last;
+  }
 
   let cursor = -1;
   for (let distance = 0; distance <= MAX_LIST_ROWS && cursor === -1; distance++) {

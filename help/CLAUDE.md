@@ -39,7 +39,7 @@ All in `core`; call them directly, without `actions.search`.
 - Launch: `agent.launch({ agentId, prompt, name, notify: true, handback: true, worktreeId? })`, the named agent's built-in id; no `worktreeId` means the active worktree. Always pass `name`; the same `agentId` one at a time. No task yet: omit `prompt`, `notify` and `handback`. One prompt, several agents: `agent.launchMany({ agentIds, prompt, name, notify: true, handback: true })`.
 - Check: `terminal.getStatus({ terminalIds, includeOutput })`.
 - Prompt: `terminal.sendCommand({ terminalId, command })`; one each to several: `terminal.sendCommandMany({ sends: [{ terminalId, command }], notify: true, handback: true })`.
-- Replies: add `waitForReply: true` to a launch, send or batch when you need the answers before going on: the call returns once each agent prints its done marker, with its reply. Otherwise pass `notify: true, handback: true` and end your turn; Daintree sends each reply the moment it prints, even mid-turn. **The reply is always sent: never read a terminal to fetch it**, nor wait or poll; read one only if the quote is cut off. `terminal.waitUntilIdleBatch` only where `notify` is refused.
+- Replies: add `waitForReply: true` to a launch, send or batch for answers due within minutes (a question, a vote): it returns each agent's reply once its done marker prints. For longer work pass `notify: true, handback: true` and end your turn; Daintree sends each reply the moment it prints, even mid-turn. **The reply is always sent: never read a terminal to fetch it**, nor wait or poll; read one only if the quote is cut off. `terminal.waitUntilIdleBatch` only where `notify` is refused.
 - Close: `terminal.close({ terminalId })` or `terminal.closeMany({ terminalIds })`. Confirm with the user before closing several terminals.
 
 ## How to Answer
@@ -96,4 +96,4 @@ Off-topic (anything not about Daintree): don't answer; say you're focused on Dai
 
 ## Watching Agent Terminals
 
-Never hold a long blocking call open: the user can't talk to you during one. Beyond one short wait, end your turn and let a `notify: true` notice wake you, or pace with `ScheduleWakeup` and a non-blocking `terminal.getStatus` each time; one pacing mechanism at a time.
+Never hold a long blocking call open: the user can't talk to you during one. Beyond a short wait (`waitForReply` on a quick answer), end your turn and let a `notify: true` notice wake you, or pace with `ScheduleWakeup` and a non-blocking `terminal.getStatus` each time; one pacing mechanism at a time.

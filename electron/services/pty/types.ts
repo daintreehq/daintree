@@ -136,6 +136,11 @@ export interface TerminalPublicState {
    * a completion verdict — see `TerminalHandback`.
    */
   lastHandback?: TerminalHandback;
+  /**
+   * `lastHandback` was observed from output before any state change carried
+   * it, so the next settle publishes it to the renderer.
+   */
+  lastHandbackUnpublished?: boolean;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */

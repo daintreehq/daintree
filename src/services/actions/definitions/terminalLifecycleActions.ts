@@ -606,7 +606,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.rename",
     title: "Rename terminal",
     description:
-      "Set a terminal tab's title, or clear it to the automatic default. Name the terminal and the title: an automated caller cannot see focus or answer the dialog an omitted title opens. A title the user set by hand wins; renaming it is accepted and ignored.",
+      "Set a terminal tab's title, or clear it to the default. Pass the terminal and the title: an omitted title opens a dialog an automated caller cannot answer. Returns the title now shown; `applied` is false when a title the user set by hand kept its place.",
     category: "terminal",
     kind: "command",
     danger: "safe",
