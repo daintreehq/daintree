@@ -306,17 +306,25 @@ export function buildExitArgs(target: string, controlPath: string): string[] {
 }
 
 /**
- * ControlMasters this process has used, by control path. ControlPersist keeps
- * a master across reconnects while the app runs; on quit each one is told to
- * exit so no ssh outlives the app.
+ * ControlMasters this process has used, by target and control path: the
+ * shared `cm-%C` template is one string for every host, while ssh expands it
+ * into a socket per host. ControlPersist keeps a master across reconnects
+ * while the app runs; on quit each one is told to exit so no ssh outlives the
+ * app.
  */
 const usedMasters = new Map<string, (timeoutMs: number) => Promise<void>>();
 
+function masterKey(target: string, controlPath: string): string {
+  return `${target}\0${controlPath}`;
+}
+
 export function noteSshMaster(
+  target: string,
   controlPath: string,
   close: (timeoutMs: number) => Promise<void>
 ): void {
-  if (!usedMasters.has(controlPath)) usedMasters.set(controlPath, close);
+  const key = masterKey(target, controlPath);
+  if (!usedMasters.has(key)) usedMasters.set(key, close);
 }
 
 /** `ssh -O exit` for every master this process used, in parallel, each bounded by `timeoutMs`. */
@@ -340,7 +348,7 @@ export async function closeSshMaster(
   } catch {
     return;
   }
-  usedMasters.delete(controlPath);
+  usedMasters.delete(masterKey(target, controlPath));
   await run(sshExecutable(), buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
   if (!controlPath.includes("%")) await fs.rm(controlPath, { force: true }).catch(() => {});
 }
@@ -426,7 +434,7 @@ export class SshTransport implements LinkTransport {
 
     // Recorded before the probe: ssh may leave a master behind even when the
     // probe itself fails or is cancelled.
-    noteSshMaster(controlPath, (timeoutMs) => this.exitMaster(controlPath, timeoutMs));
+    noteSshMaster(target, controlPath, (timeoutMs) => this.exitMaster(controlPath, timeoutMs));
     const probe = await this.run(buildProbeArgs(target, controlPath, persist), signal);
     const remote = parseProbeOutput(probe.stdout);
     if (!remote) {

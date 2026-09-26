@@ -84,7 +84,7 @@ export function createSshCommandChannel(params: {
   const ssh = params.sshPath ?? sshExecutable();
   // Any command here may start the host's master; it goes when the app quits.
   const noteMaster = () =>
-    noteSshMaster(controlPath, async (timeoutMs) => {
+    noteSshMaster(target, controlPath, async (timeoutMs) => {
       await run(ssh, buildExitArgs(target, controlPath), { timeoutMs });
     });
   const exec = (script: string, options?: CommandOptions) => {
