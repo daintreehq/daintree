@@ -211,7 +211,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
             Scratchpad
           </label>
           <p id={hintId} className="text-xs text-text-secondary">
-            Temporary notes, deleted with this terminal
+            Deleted with this terminal
           </p>
         </div>
         <Tooltip>
