@@ -126,7 +126,7 @@ test("applies a receipt", () => {
 `,
 };
 
-const FACTS_QUERY = `I need you to ask Claude, Anti-Gravity, OpenCode, Grok and Codex each to give you one interesting fact. You don't have to explore the codebase. Just ask each one to give you one interesting fact off the top of its head, not related to the codebase. Specifically say that.
+const FACTS_QUERY = `I need you to ask Claude, Anti-Gravity, Grok and Codex each to give you one interesting fact. You don't have to explore the codebase. Just ask each one to give you one interesting fact off the top of its head, not related to the codebase. Specifically say that.
 
 Next you need to:
 
@@ -137,7 +137,7 @@ Next you need to:
 
 Encourage each agent to respond quite quickly and give something that is completely unique that it doesn't think that any of the other agents will give. And have each agent also choose a runner-up and use those runner-ups if you ever need to do a tiebreaker.`;
 
-const FACT_WORKERS = ["claude", "antigravity", "opencode", "grok", "codex"];
+const FACT_WORKERS = ["claude", "antigravity", "grok", "codex"];
 
 const SCENARIOS: Scenario[] = [
   {
@@ -239,6 +239,10 @@ interface ToolCall {
 }
 
 interface TurnMetrics {
+  /** Calls that reached an MCP server, however the CLI wrapped them. */
+  mcpCalls: number;
+  /** Tool-surface lookups (ALL_TOOLS, getSchema, ToolSearch), which reach nothing. */
+  lookups: number;
   seconds: number;
   turns: number;
   notices: number;
@@ -307,8 +311,8 @@ function readCodexTranscript(
   sessionDir: string,
   since: number,
   outFile: string
-): Omit<TurnMetrics, "seconds" | "launched"> {
-  const metrics: Omit<TurnMetrics, "seconds" | "launched"> = {
+): Omit<TurnMetrics, "seconds" | "launched" | "mcpCalls" | "lookups"> {
+  const metrics: Omit<TurnMetrics, "seconds" | "launched" | "mcpCalls" | "lookups"> = {
     turns: 0,
     notices: 0,
     toolCalls: [],
@@ -406,8 +410,8 @@ function readClaudeTranscript(
   sessionDir: string,
   since: number,
   outFile: string
-): Omit<TurnMetrics, "seconds" | "launched"> {
-  const metrics: Omit<TurnMetrics, "seconds" | "launched"> = {
+): Omit<TurnMetrics, "seconds" | "launched" | "mcpCalls" | "lookups"> {
+  const metrics: Omit<TurnMetrics, "seconds" | "launched" | "mcpCalls" | "lookups"> = {
     turns: 0,
     notices: 0,
     toolCalls: [],
@@ -745,8 +749,20 @@ for (const scenario of SCENARIOS) {
         ASSISTANT_AGENT === "claude"
           ? readClaudeTranscript(sessionDir, scenarioStarted, transcriptFile)
           : readCodexTranscript(sessionDir, scenarioStarted, transcriptFile);
+      // Codex wraps MCP calls in `exec` scripts, several to a script; Claude
+      // names each one `mcp__…`.
+      const mcpCalls = transcript.toolCalls.reduce(
+        (n, c) =>
+          n + (c.name.startsWith("mcp__") ? 1 : (c.input.match(/tools\.mcp__\w+\(/g) ?? []).length),
+        0
+      );
+      const lookups = transcript.toolCalls.filter((c) =>
+        /ALL_TOOLS|actions_getSchema|ToolSearch/.test(`${c.name} ${c.input}`)
+      ).length;
       const metrics: TurnMetrics = {
         ...transcript,
+        mcpCalls,
+        lookups,
         seconds,
         launched: workers.map((t) => (t.launchAgentId ?? t.detectedAgentId)!),
       };
@@ -757,6 +773,8 @@ for (const scenario of SCENARIOS) {
         turns: metrics.turns,
         notices: metrics.notices,
         toolCallCount: metrics.toolCalls.length,
+        mcpCalls: metrics.mcpCalls,
+        lookups: metrics.lookups,
         runbookQueries: metrics.runbookQueries,
         launched: metrics.launched,
         inputTokens: metrics.inputTokens,

@@ -29,7 +29,7 @@ import {
   type TerminalNotifyWhenIdleResult,
 } from "../../../shared/types/terminalNotify.js";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
-import { evaluateWakeGate } from "../../../shared/utils/terminalWakeGate.js";
+import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 
 /**
  * The caller's own pane, resolved from its credential and never from anything
@@ -1195,8 +1195,20 @@ export class TerminalNotifyService {
     }
     const change = event.change;
     if (notice.since === undefined || change.timestamp < notice.since) return;
-    if (change.lastHandback !== undefined && handbackMatches(notice, change.lastHandback)) {
-      notice.handbackSeen = true;
+    const handbackNow =
+      change.lastHandback !== undefined && handbackMatches(notice, change.lastHandback);
+    if (handbackNow) notice.handbackSeen = true;
+    // The agent printed the marker this prompt asked for: its reply is
+    // finished, so the notice goes now rather than after the settle window.
+    if (handbackNow && change.state !== "working") {
+      clearSettling(notice);
+      this.fire(owner, notice, {
+        kind: "state",
+        state: change.state,
+        ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
+        handback: true,
+      });
+      return;
     }
     // The agent left its terminal, from whatever state: a CLI quit from its
     // own dialog never worked, so waiting for a settle out of `working` would
@@ -1453,7 +1465,9 @@ export class TerminalNotifyService {
       return;
     }
 
-    const verdict = evaluateWakeGate(info);
+    // A CLI that queues mid-turn input takes the notice now, so the pane
+    // hears as soon as the target stops instead of after its own turn.
+    const verdict = evaluateWakeGate(info, wakeGateOptionsFor(info.detectedAgentId));
     if (verdict.kind === "hold") {
       this.setDelivery(owner, { status: "held", reason: verdict.reason });
       return;

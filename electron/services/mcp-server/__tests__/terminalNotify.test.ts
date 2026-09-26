@@ -575,6 +575,55 @@ describe("TerminalNotifyService", () => {
     });
   });
 
+  describe("prompt delivery", () => {
+    it("types into a working pane whose CLI queues mid-turn input, without waiting for its turn", async () => {
+      const h = setup();
+      h.client.terminals.set(OWN, { ...working(), lastStateChange: Date.now() - 30_000 });
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+
+      h.settle("t-a");
+      await flushNotice();
+
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0]).toMatchObject({ id: OWN, guard: "settled-prompt" });
+    });
+
+    it("still holds a working pane whose CLI is not known to queue input", async () => {
+      const h = setup();
+      h.client.terminals.set(OWN, {
+        ...working(),
+        detectedAgentId: "gemini",
+        lastStateChange: Date.now() - 30_000,
+      });
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+
+      h.settle("t-a");
+      await flushNotice();
+
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("fires as soon as the handback it asked for is seen, without the settle window", async () => {
+      const h = setup();
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      pending.complete({ submissionToken: "tok-1" });
+      await vi.advanceTimersByTimeAsync(100);
+
+      h.settle("t-a", {
+        lastHandback: {
+          message: "done",
+          observedAt: Date.now(),
+          submissionToken: "tok-1",
+          truncated: false,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+
+      expect(h.client.submitted[0].text).toContain("t-a stopped working");
+      expect(h.client.submitted[0].text).toContain("handback seen");
+    });
+  });
+
   describe("superseded notices", () => {
     it("drops a fired, undelivered notice when the pane prompts that terminal again", async () => {
       const h = setup();
