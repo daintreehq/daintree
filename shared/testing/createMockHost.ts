@@ -14,12 +14,12 @@ import {
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { validateRenderPdfOptions } from "../utils/pluginPdfOptions.js";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { join as joinPath } from "node:path";
-import { openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
+import { databaseError, openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
 import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
@@ -1006,20 +1006,32 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       );
     }
     // Readonly locates an existing file and creates nothing, as the host does.
-    if (
-      readonly &&
-      (mockDatabaseDir === null || !existsSync(path.join(mockDatabaseDir, `${id}.db`)))
-    ) {
-      throw Object.assign(new Error(`DB_NOT_FOUND: database "${id}" does not exist yet`), {
-        code: "DB_NOT_FOUND",
-      });
-    }
+    const notFound = () => databaseError("DB_NOT_FOUND", `database "${id}" does not exist yet`);
+    if (readonly && mockDatabaseDir === null) throw notFound();
     mockDatabaseDir ??= mkdtempSync(path.join(tmpdir(), "daintree-mock-db-"));
-    mkdirSync(mockDatabaseDir, { recursive: true });
+    if (!readonly) mkdirSync(mockDatabaseDir, { recursive: true });
+    // Canonical, as the host's is: a directory swapped for a link after the
+    // handle opened resolves elsewhere, and the handle then refuses to reopen.
+    let realDir: string;
+    try {
+      realDir = realpathSync(mockDatabaseDir);
+    } catch (error) {
+      if (readonly && (error as NodeJS.ErrnoException).code === "ENOENT") throw notFound();
+      throw error;
+    }
+    const target = path.join(realDir, `${id}.db`);
+    const leaf = lstatSync(target, { throwIfNoEntry: false });
+    if (leaf?.isSymbolicLink()) {
+      throw databaseError("TARGET_IS_SYMLINK", `database "${id}" file is a symlink`);
+    }
+    if (leaf && !leaf.isFile()) {
+      throw databaseError("TARGET_UNAVAILABLE", `database "${id}" is not a regular file`);
+    }
+    if (!leaf && readonly) throw notFound();
     return Object.freeze({
       id,
       location: "local" as const,
-      path: path.join(mockDatabaseDir, `${id}.db`),
+      path: target,
       projectRelativePath: null,
       journalMode: options.databases?.journalMode ?? "delete",
     });
@@ -1033,6 +1045,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       open: async (id, openOptions) =>
         openPluginDatabase(await resolveMockDatabase(id, openOptions?.readonly === true), {
           ...openOptions,
+          revalidate: () => resolveMockDatabase(id, openOptions?.readonly === true),
           // The mock has no fs gate; it approves any absolute destination.
           prepareBackup: async (destPath) => {
             if (!path.isAbsolute(destPath)) {

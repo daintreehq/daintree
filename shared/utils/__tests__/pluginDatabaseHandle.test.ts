@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { openPluginDatabase } from "../pluginDatabaseHandle.js";
+import { fileAccessAuthorizer, openPluginDatabase } from "../pluginDatabaseHandle.js";
 import type { PluginDatabase, PluginDatabaseLocation } from "../../types/plugin.js";
 
 // A second connection standing in for an agent's `sqlite3` session: a separate
@@ -52,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const handle of handles.splice(0)) await handle.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -415,5 +416,322 @@ describe("openPluginDatabase", () => {
     expect(Object.getPrototypeOf(row)).toBe(Object.prototype);
     await db.close();
     await expect(db.query("SELECT 1")).rejects.toMatchObject({ code: "DB_CLOSED" });
+  });
+
+  it("does not let a line comment's /* hide a second statement", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)"] });
+    await expect(db.query("SELECT 1; -- /*\nDELETE FROM t; -- */")).rejects.toMatchObject({
+      code: "DB_MULTIPLE_STATEMENTS",
+    });
+    expect(await db.query("SELECT x FROM t /* a ; inside */ ; -- ; trailing")).toEqual([{ x: 1 }]);
+  });
+
+  it("announces DDL as self, through run and through a transaction", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+    const events: string[] = [];
+    db.onDidChange((event) => events.push(event.origin));
+    await db.run("CREATE VIEW v AS SELECT x FROM t");
+    await waitFor(() => events.length === 1);
+    await db.transaction(async (tx) => {
+      await tx.run("CREATE INDEX t_x ON t (x)");
+    });
+    await waitFor(() => events.length === 2);
+    expect(events).toEqual(["self", "self"]);
+  });
+
+  it("re-applies definitions after a migration committed without them, as a crash would leave it", async () => {
+    const definitions =
+      "CREATE TRIGGER IF NOT EXISTS no_negatives BEFORE INSERT ON t WHEN NEW.x < 0 BEGIN SELECT RAISE(ABORT, 'x must be >= 0'); END";
+    const migrations = ["CREATE TABLE t (x INTEGER)"];
+    await (await open({ migrations, definitions })).close();
+    // Migration 2 committed by a process that stopped before re-applying the
+    // definitions: the trigger is gone, the recorded hash is untouched.
+    const crashed = new DatabaseSync(location.path);
+    crashed.exec(
+      "BEGIN; DROP TABLE t; CREATE TABLE t (x INTEGER, memo TEXT); PRAGMA user_version = 2; COMMIT"
+    );
+    crashed.close();
+    const db = await open({
+      migrations: [...migrations, "DROP TABLE t; CREATE TABLE t (x INTEGER, memo TEXT)"],
+      definitions,
+    });
+    await expect(db.run("INSERT INTO t (x) VALUES (-1)")).rejects.toThrow(/x must be >= 0/);
+  });
+
+  it("follows a file replaced while a readonly open is under way", async () => {
+    await (
+      await open({ migrations: ["CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)"] })
+    ).close();
+    const replacement = path.join(dir, "replacement.db");
+    const other = new DatabaseSync(replacement);
+    other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (2)");
+    other.close();
+    // Swapped in after the connection opened the original but before the
+    // handle recorded which file it has.
+    const realStat = fs.statSync;
+    let reads = 0;
+    vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+      if (file === location.path && ++reads === 2) fs.renameSync(replacement, location.path);
+      return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
+    }) as typeof fs.statSync);
+    const db = await open({ readonly: true });
+    vi.restoreAllMocks();
+    expect(await db.query("SELECT x FROM t")).toEqual([{ x: 2 }]);
+  });
+
+  it("refuses to open a file that keeps being replaced rather than track the wrong one", async () => {
+    await (await open({ migrations: ["CREATE TABLE t (x INTEGER)"] })).close();
+    const realStat = fs.statSync;
+    let swaps = 0;
+    let reads = 0;
+    vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+      // The second identity read of each attempt, right after the open.
+      if (file === location.path && ++reads % 3 === 2) {
+        const next = path.join(dir, `swap-${++swaps}.db`);
+        fs.copyFileSync(location.path, next);
+        fs.renameSync(next, location.path);
+      }
+      return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
+    }) as typeof fs.statSync);
+    await expect(open({ migrations: ["CREATE TABLE t (x INTEGER)"] })).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+    });
+    expect(swaps).toBe(3);
+  });
+
+  it("does not trust the file it created until it has reopened it as an existing file", async () => {
+    const replacement = path.join(dir, "replacement.db");
+    const other = new DatabaseSync(replacement);
+    other.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (2); PRAGMA user_version = 1");
+    other.close();
+    // The path is empty; SQLite creates a file, and it is replaced before
+    // the handle reads which file it has.
+    const realStat = fs.statSync;
+    let reads = 0;
+    vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+      if (file === location.path && ++reads === 2) fs.renameSync(replacement, location.path);
+      return (realStat as (...args: unknown[]) => fs.Stats)(file, ...rest);
+    }) as typeof fs.statSync);
+    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+    vi.restoreAllMocks();
+    expect(await db.query("SELECT x FROM t")).toEqual([{ x: 2 }]);
+  });
+
+  it("runs the migrations it checked, not what the caller's array holds later", async () => {
+    const outsideFile = path.join(dir, "mutated-outside.db");
+    const migrations = ["CREATE TABLE t (x INTEGER)"];
+    const db = await open({ migrations });
+    migrations.push(`ATTACH '${outsideFile}' AS o`);
+    // An older copy swapped in makes the handle reopen and migrate again.
+    const older = path.join(dir, "older.db");
+    new DatabaseSync(older).close();
+    fs.renameSync(older, location.path);
+    expect(await db.query("SELECT count(*) AS n FROM t")).toEqual([{ n: 0 }]);
+    expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 1 });
+    expect(fs.existsSync(outsideFile)).toBe(false);
+  });
+});
+
+describe("openPluginDatabase file containment", () => {
+  const BOM = String.fromCharCode(0xfeff);
+  const outside = () => path.join(dir, "outside", "copy.db");
+  beforeEach(() => fs.mkdirSync(path.join(dir, "outside")));
+
+  it("refuses VACUUM INTO from a readonly handle", async () => {
+    await (await open({ migrations: ["CREATE TABLE t (x INTEGER)"] })).close();
+    const db = await open({ readonly: true });
+    await expect(db.query(`VACUUM INTO '${outside()}'`)).rejects.toMatchObject({
+      code: "DB_STATEMENT_NOT_ALLOWED",
+    });
+    await expect(db.get(`vacuum main into ?`, [outside()])).rejects.toMatchObject({
+      code: "DB_STATEMENT_NOT_ALLOWED",
+    });
+    await expect(db.query(`${BOM}VACUUM INTO '${outside()}'`)).rejects.toMatchObject({
+      code: "DB_STATEMENT_NOT_ALLOWED",
+    });
+    expect(fs.existsSync(outside())).toBe(false);
+  });
+
+  it("refuses ATTACH and DETACH however they are written", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+    const attempts = [
+      `ATTACH '${outside()}' AS o`,
+      `/* note */ attach database '${outside()}' as o`,
+      `SELECT 1; -- line\nATTACH '${outside()}' AS o`,
+      `EXPLAIN ATTACH '${outside()}' AS o`,
+      // SQLite reads `$a(');` as one Tcl-style parameter, so the ATTACH after
+      // it is a real statement even though a naive scan sees it inside a string.
+      `SELECT $a(');ATTACH/**/'${outside()}'/**/AS/**/o;--'`,
+      // SQLite reads a byte-order mark that starts a token as whitespace.
+      `SELECT 1;${BOM}ATTACH '${outside()}' AS o`,
+      "DETACH o",
+    ];
+    for (const sql of attempts) {
+      await expect(db.exec(sql), sql).rejects.toMatchObject({ code: "DB_STATEMENT_NOT_ALLOWED" });
+    }
+    await expect(db.run(`ATTACH '${outside()}' AS o`)).rejects.toMatchObject({
+      code: "DB_STATEMENT_NOT_ALLOWED",
+    });
+    expect(fs.existsSync(outside())).toBe(false);
+  });
+
+  it("refuses file access in migrations and definitions before opening anything", async () => {
+    await expect(
+      open({ migrations: ["CREATE TABLE t (x)", `VACUUM INTO '${outside()}'`] })
+    ).rejects.toMatchObject({ code: "DB_STATEMENT_NOT_ALLOWED" });
+    await expect(open({ definitions: `ATTACH '${outside()}' AS o` })).rejects.toMatchObject({
+      code: "DB_STATEMENT_NOT_ALLOWED",
+    });
+    expect(fs.existsSync(location.path)).toBe(false);
+    expect(fs.existsSync(outside())).toBe(false);
+  });
+
+  it("refuses directory pragmas and load_extension, and allows the words in data", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (note TEXT)"] });
+    for (const name of [
+      "temp_store_directory",
+      "'temp_store_directory'",
+      'main."TEMP_STORE_DIRECTORY"',
+    ]) {
+      await expect(
+        db.exec(`PRAGMA ${name} = '${path.join(dir, "outside")}'`),
+        name
+      ).rejects.toMatchObject({ code: "DB_STATEMENT_NOT_ALLOWED" });
+    }
+    await expect(db.query(`SELECT load_extension('x')`)).rejects.toMatchObject({
+      code: "DB_STATEMENT_NOT_ALLOWED",
+    });
+    await db.run("INSERT INTO t VALUES ('please attach the receipt; then VACUUM INTO nothing')");
+    expect(await db.query(`SELECT note AS "attach" FROM t`)).toHaveLength(1);
+    await db.exec("VACUUM");
+  });
+
+  const { setAuthorizer } = DatabaseSync.prototype as { setAuthorizer?: unknown };
+  it.skipIf(typeof setAuthorizer !== "function")(
+    "installs an authorizer that refuses file access however the SQL is spelled",
+    () => {
+      const { constants } = process.getBuiltinModule("node:sqlite") as unknown as {
+        constants: Record<string, number>;
+      };
+      const raw = new DatabaseSync(location.path) as InstanceType<typeof DatabaseSync> & {
+        setAuthorizer(cb: unknown): void;
+      };
+      try {
+        raw.setAuthorizer(fileAccessAuthorizer(constants));
+        raw.exec("CREATE TABLE t (x)");
+        raw.exec("VACUUM");
+        expect(() => raw.exec(`VACUUM INTO '${outside()}'`)).toThrow(/authoriz/);
+        expect(() => raw.exec(`ATTACH '${outside()}' AS o`)).toThrow(/authoriz/);
+        expect(fs.existsSync(outside())).toBe(false);
+      } finally {
+        raw.close();
+      }
+    }
+  );
+
+  it.skipIf(typeof setAuthorizer !== "function")(
+    "installs the authorizer on a handle's connection before any statement runs",
+    async () => {
+      const calls: string[] = [];
+      let installed: ((action: number, arg1: string | null) => number) | null = null;
+      const proto = DatabaseSync.prototype as unknown as {
+        setAuthorizer(cb: typeof installed): void;
+        exec(sql: string): void;
+      };
+      const realSet = proto.setAuthorizer;
+      const realExec = proto.exec;
+      vi.spyOn(proto, "setAuthorizer").mockImplementation(function (this: unknown, cb) {
+        calls.push("setAuthorizer");
+        installed = cb;
+        return realSet.call(this, cb);
+      });
+      vi.spyOn(proto, "exec").mockImplementation(function (this: unknown, sql: string) {
+        calls.push("exec");
+        return realExec.call(this, sql);
+      });
+      await (await open({ migrations: ["CREATE TABLE t (x)"] })).close();
+      expect(calls[0]).toBe("setAuthorizer");
+      const { constants } = process.getBuiltinModule("node:sqlite") as unknown as {
+        constants: Record<string, number>;
+      };
+      expect(installed!(constants.SQLITE_ATTACH!, outside())).toBe(constants.SQLITE_DENY);
+    }
+  );
+});
+
+describe("openPluginDatabase backup destinations", () => {
+  const approveAny = { prepareBackup: async (destPath: string) => destPath };
+
+  it("refuses the database's own journal names as a destination", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x)"], ...approveAny });
+    for (const suffix of ["-journal", "-wal", "-shm"]) {
+      await expect(db.backup(`${location.path}${suffix}`)).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+    }
+    await expect(db.backup(path.join(dir, "LEDGER.db-WAL"))).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(fs.readdirSync(dir)).toEqual(["ledger.db"]);
+  });
+
+  it("refuses another database's live WAL as a destination", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x)"], ...approveAny });
+    const other = path.join(dir, "other.db");
+    const writer = new DatabaseSync(other);
+    try {
+      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
+      writer.exec("CREATE TABLE notes (s TEXT); INSERT INTO notes VALUES ('uncheckpointed')");
+      const wal = fs.readFileSync(`${other}-wal`);
+      await expect(db.backup(`${other}-wal`)).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(fs.readFileSync(`${other}-wal`).equals(wal)).toBe(true);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("checks the destination again after the snapshot, before replacing anything", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x)"], ...approveAny });
+    // Canonical, as the host approves it.
+    const dest = path.join(fs.realpathSync(dir), "copy.db");
+    const sqlite = process.getBuiltinModule("node:sqlite") as unknown as {
+      backup: (source: unknown, target: string) => Promise<number>;
+    };
+    const realBackup = sqlite.backup;
+    vi.spyOn(sqlite, "backup").mockImplementation(async (source, target) => {
+      const pages = await realBackup(source, target);
+      // Another process starts a WAL database at the destination meanwhile.
+      fs.writeFileSync(dest, "");
+      fs.writeFileSync(`${dest}-wal`, "live log");
+      return pages;
+    });
+    await expect(db.backup(dest)).rejects.toMatchObject({ code: "DESTINATION_HAS_JOURNAL" });
+    expect(fs.readFileSync(dest, "utf8")).toBe("");
+  });
+
+  it("refuses a destination whose live WAL SQLite would replay into the copy", async () => {
+    const db = await open({
+      migrations: ["CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)"],
+      ...approveAny,
+    });
+    const dest = path.join(dir, "other.db");
+    const other = new DatabaseSync(dest);
+    try {
+      other.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
+      other.exec("CREATE TABLE notes (s TEXT); INSERT INTO notes VALUES ('keep me')");
+      expect(fs.statSync(`${dest}-wal`).size).toBeGreaterThan(0);
+      await expect(db.backup(dest)).rejects.toMatchObject({ code: "DESTINATION_HAS_JOURNAL" });
+      expect(other.prepare("SELECT s FROM notes").all()).toEqual([{ s: "keep me" }]);
+    } finally {
+      other.close();
+    }
+    expect(fs.readdirSync(dir).filter((name) => name.startsWith(".daintree-backup-"))).toEqual([]);
+  });
+
+  it("refuses a hard link to the database", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x)"], ...approveAny });
+    const alias = path.join(dir, "alias.db");
+    fs.linkSync(location.path, alias);
+    await expect(db.backup(alias)).rejects.toMatchObject({ code: "VALIDATION" });
   });
 });
