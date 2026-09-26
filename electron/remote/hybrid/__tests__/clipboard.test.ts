@@ -16,11 +16,15 @@ function fakeImage(empty: boolean) {
   } as unknown as Electron.NativeImage;
 }
 
-function call(split: HybridSplit, local = vi.fn(async () => ["/Users/me/a.png"])) {
+function call(
+  split: HybridSplit,
+  local = vi.fn(async () => ["/Users/me/a.png"]),
+  args: unknown[] = []
+) {
   return split({
     hostId: "studio-01",
     webContentsId: 7,
-    args: [],
+    args,
     local,
     remote: vi.fn(async () => {
       throw new Error("the host leg must not run");
@@ -40,7 +44,27 @@ describe("clipboard splits for a remote window", () => {
       filePath: "/tmp/daintree-inbox/clipboard/clipboard-1.png",
       thumbnailDataUrl: `data:image/png;base64,${Buffer.from("thumb").toString("base64")}`,
     });
-    expect(uploadClipboardImage).toHaveBeenCalledWith(7, "studio-01", expect.any(Uint8Array));
+    expect(uploadClipboardImage).toHaveBeenCalledWith(
+      7,
+      "studio-01",
+      expect.any(Uint8Array),
+      undefined
+    );
+  });
+
+  it("uploads under the window's operation id, so the window can follow and cancel it", async () => {
+    const uploadClipboardImage = vi.fn(async () => "/tmp/daintree-inbox/clipboard/clipboard-2.png");
+    const splits = createClipboardSplits({
+      readImage: () => fakeImage(false),
+      uploader: () => ({ uploadClipboardImage, grantLocalSources: vi.fn() }),
+    });
+    await call(splits[CHANNELS.CLIPBOARD_SAVE_IMAGE]!, undefined, [{ opId: "op-paste-1" }]);
+    expect(uploadClipboardImage).toHaveBeenCalledWith(
+      7,
+      "studio-01",
+      expect.any(Uint8Array),
+      "op-paste-1"
+    );
   });
 
   it("reports an empty clipboard without uploading anything", async () => {

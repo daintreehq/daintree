@@ -49,6 +49,15 @@ export interface UploadResult {
   replaceToken?: string;
 }
 
+/**
+ * `clipboard:save-image` in a window attached to a remote host: the operation
+ * the image's upload runs under, so its progress events carry that id and
+ * `fileTransfer.cancel` stops it. A local save ignores it.
+ */
+export interface ClipboardSaveImageOptions {
+  opId?: OperationId;
+}
+
 /** A local file as the upload paths see it, before anything is sent. */
 export interface LocalFileStat {
   size: number;

@@ -168,6 +168,51 @@ describe("uploading local files", () => {
     expect(client.cancel("op-slow", 7)).toBe(false);
   });
 
+  it("runs a pasted image under the window's operation id: progress follows it and cancel stops it", async () => {
+    const { client, upload, events } = setup();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    await expect(client.uploadClipboardImage(7, "studio-01", png, "op-paste")).resolves.toBe(
+      "/tmp/daintree-inbox/files/x/clipboard.png"
+    );
+    expect(upload.mock.calls[0]![2]).toMatchObject({
+      opId: "op-paste",
+      destination: { kind: "inbox", bucket: "clipboard" },
+    });
+    expect(events).toEqual([
+      { type: "progress", opId: "op-paste", transferredBytes: 4, totalBytes: 4 },
+    ]);
+    expect(client.cancel("op-paste", 7)).toBe(false);
+  });
+
+  it("starts an upload cancelled when its view's cancel overtook it", async () => {
+    const { client, upload } = setup();
+    expect(client.cancel("op-early", 7)).toBe(false);
+    await expect(
+      client.uploadBytes(7, {
+        hostId: "studio-01",
+        bytes: new Uint8Array([1]),
+        name: "a.bin",
+        mimeType: null,
+        destination: inbox,
+        opId: "op-early",
+      })
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(upload).not.toHaveBeenCalled();
+
+    // Another view's cancel for the id never stops this view's upload.
+    expect(client.cancel("op-other", 8)).toBe(false);
+    await expect(
+      client.uploadBytes(7, {
+        hostId: "studio-01",
+        bytes: new Uint8Array([1]),
+        name: "b.bin",
+        mimeType: null,
+        destination: inbox,
+        opId: "op-other",
+      })
+    ).resolves.toMatchObject({ hostPath: "/tmp/daintree-inbox/files/x/b.bin" });
+  });
+
   it("validates the destination", async () => {
     const { client } = setup();
     await expect(

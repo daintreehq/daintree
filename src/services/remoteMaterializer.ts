@@ -59,7 +59,10 @@ export interface RemoteMaterializerDeps {
     cancel(payload: { opId: string }): Promise<void>;
     onEvent(callback: (event: FileTransferEvent) => void): () => void;
   };
-  saveClipboardImage(): Promise<{ filePath: string; thumbnailDataUrl: string }>;
+  /** Captures this machine's clipboard image and uploads it under `opId`. */
+  saveClipboardImage(options: {
+    opId: string;
+  }): Promise<{ filePath: string; thumbnailDataUrl: string }>;
   confirmLargeUpload(request: { name: string; bytes: number; hostLabel: string }): Promise<boolean>;
   confirmReplace(request: { name: string; folder: string; hostLabel: string }): Promise<boolean>;
   reportFailure(failure: { title: string; message: string }): void;
@@ -120,11 +123,15 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
         : { kind: "worktree", directory: options.destination.directory, replaceToken }
       : { kind: "inbox", bucket: "files" };
 
-  /** Run one upload under an operation id: progress follows it, and the signal cancels it. */
-  const upload = async (
+  /**
+   * Run one upload under an operation id: progress follows it, and the signal
+   * cancels it. Once cancelled it never answers with a path, even if the
+   * host finished first, so nothing is inserted.
+   */
+  const upload = async <T>(
     options: MaterializeOptions | undefined,
-    start: (opId: string) => Promise<UploadResult>
-  ): Promise<UploadResult> => {
+    start: (opId: string) => Promise<T>
+  ): Promise<T> => {
     const { signal, onProgress } = options ?? {};
     if (signal?.aborted) throw cancelled();
     const opId = deps.mintOperationId();
@@ -139,7 +146,9 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     const onAbort = () => void deps.fileTransfer.cancel({ opId }).catch(() => {});
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      return await start(opId);
+      const result = await start(opId);
+      if (signal?.aborted) throw cancelled();
+      return result;
     } catch (error) {
       if (signal?.aborted) throw cancelled();
       throw error;
@@ -263,7 +272,9 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
       case "local-bytes":
         return materializeBytes(source, options);
       case "clipboard-image": {
-        const { filePath, thumbnailDataUrl } = await deps.saveClipboardImage();
+        const { filePath, thumbnailDataUrl } = await upload(options, (opId) =>
+          deps.saveClipboardImage({ opId })
+        );
         return {
           hostPath: filePath,
           displayName: basename(filePath),
@@ -311,7 +322,7 @@ export function createViewRemoteMaterializer(hostId: HostId): MaterializeFn {
     hostLabel: () => getHostPlatformInfo().hostName ?? hostId,
     localLabel: isMac() ? "This Mac" : "this computer",
     fileTransfer: window.electron.fileTransfer,
-    saveClipboardImage: () => window.electron.clipboard.saveImage(),
+    saveClipboardImage: (options) => window.electron.clipboard.saveImage(options),
     confirmLargeUpload: (request) => askUploadQuestion({ kind: "large", ...request }),
     confirmReplace: (request) => askUploadQuestion({ kind: "replace", ...request }),
     reportFailure: ({ title, message }) => {
