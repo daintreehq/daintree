@@ -135,7 +135,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `file.openPanel` | Open file panel | safe | `path`, `rootPath?`, `viewMode?` |
 | `file.read` | Read file | safe | `path`, `rootPath?` |
 | `file.showItemInFolder` | Reveal in file manager | safe | `path`, `allowOutsideRoots?` |
-| `file.view` | View file | safe | `path`, `col?`, `line?`, `rootPath?`, `viewMode?`, `worktreeId?` |
+| `file.view` | View file | safe | `path`, `col?`, `confineToRoot?`, `line?`, `rootPath?`, `viewMode?`, `worktreeId?` |
 | `files.search` | Search files | safe | `query`, `cwd?`, `limit?` |
 
 ## forge

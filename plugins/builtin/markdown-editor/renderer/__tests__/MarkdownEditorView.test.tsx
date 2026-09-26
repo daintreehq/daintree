@@ -286,7 +286,7 @@ describe("MarkdownEditorView (#12323)", () => {
     });
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.view",
-      { path: "/repo/docs/spec.md", rootPath: "/repo" },
+      { path: "/repo/docs/spec.md", rootPath: "/repo", confineToRoot: true },
       { source: "user" }
     );
     expect(cm.state.doc.toString()).toBe("[spec](./spec.md)\ndraft");

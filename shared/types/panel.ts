@@ -807,6 +807,14 @@ export interface FilePanelData extends BasePanelData {
    * restored panel opens at the top rather than at a stale position.
    */
   initialLine?: number;
+  /**
+   * An explicit containment root the opener pinned for untrusted input, such
+   * as a link clicked in rendered Markdown. When set, it replaces the inferred
+   * worktree/project/parent-directory root, so every read of this file is
+   * realpath-contained to it. Open-time only, like `initialLine`: absent from
+   * `serializeFile`, and dropped when the panel moves to another file.
+   */
+  fileContainmentRoot?: string;
 }
 
 /**

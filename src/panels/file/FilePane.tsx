@@ -446,13 +446,18 @@ export function FilePane({
   // The worktree that physically contains the file is a root too: a file in a
   // linked worktree outside the project directory is governed by that
   // worktree, not by its parent directory (#12323).
+  // A root the opener pinned wins outright. The parent-directory fallback is
+  // the file's own directory, so a link through a directory symlink would
+  // otherwise be contained by the symlink's target and read anyway.
+  const containmentRoot = panel?.fileContainmentRoot;
   const effectiveRootPath = useMemo(() => {
+    if (containmentRoot) return containmentRoot;
     if (!filePath) return worktreePath || projectPath;
     return (
       [worktreePath, diffWorktreePath, projectPath].find((root) => isUnderRoot(filePath, root)) ??
       parentDirectory(filePath)
     );
-  }, [filePath, worktreePath, diffWorktreePath, projectPath]);
+  }, [containmentRoot, filePath, worktreePath, diffWorktreePath, projectPath]);
   // Whether that root is a project or worktree, as opposed to the parent-
   // directory fallback for a file no project owns. Edit is only offered inside
   // a root the host actually governs (#12323).

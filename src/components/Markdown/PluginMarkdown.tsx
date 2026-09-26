@@ -63,6 +63,8 @@ export default function PluginMarkdown({
       rootPath={paths.rootPath}
       className={typeof className === "string" ? className : undefined}
       fontSize={isRenderableFontSize(fontSize) ? fontSize : undefined}
+      // One block among the view's own content, and possibly one of several.
+      selectAllScope="self"
     />
   );
 }

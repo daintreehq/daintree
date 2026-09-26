@@ -334,6 +334,8 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
   fileViewMode?: FileViewMode;
   /** 1-based line to scroll to on first render. Open-time hint; never persisted. */
   initialLine?: number;
+  /** Explicit containment root for every read of the file; see `FilePanelData`. Never persisted. */
+  fileContainmentRoot?: string;
 }
 
 /**
