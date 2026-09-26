@@ -777,6 +777,27 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   );
   const isMockDataDirPath = (target: string): boolean =>
     toSlashes(target).startsWith(`${mockDataDir}/`);
+  // A path is a file or a directory, never both. The host refuses a regular
+  // file standing where a directory chain it grows must go: TARGET_EXISTS at
+  // the directory it was asked for (or the data dir it bootstraps), and the
+  // lookup's own ENOTDIR for anything beneath a file.
+  const refuseFileInChain = (dir: string): void => {
+    const blocked = dirChain(dir).find((candidate) => fsFiles.has(candidate));
+    if (blocked === undefined) return;
+    const atTarget = blocked === trimDir(dir) || toSlashes(blocked) === mockDataDir;
+    throw fsWriteError(
+      atTarget ? "TARGET_EXISTS" : "ENOTDIR",
+      `mock fs: "${blocked}" is a file, not a directory`
+    );
+  };
+  // Outside the data dir nothing is grown, and a file among the ancestors
+  // fails the host's own lookup of the leaf.
+  const refuseFileAncestor = (target: string): void => {
+    const blocked = dirChain(parentOf(target)).find((candidate) => fsFiles.has(candidate));
+    if (blocked !== undefined) {
+      throw fsWriteError("ENOTDIR", `mock fs: "${blocked}" is a file, not a directory`);
+    }
+  };
 
   // Resolve the declared scope for a key from the opt-in `manifestSettings`,
   // mirroring PluginSettingsManager.getDeclaredScope. Returns undefined when no
@@ -1681,35 +1702,26 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (typeof dirPath !== "string" || dirPath.length === 0) {
           throw new Error(`Plugin "${pluginId}" fs.mkdir: path must be a non-empty string`);
         }
-        const chain = dirChain(dirPath);
-        const target = chain[chain.length - 1];
-        if (target !== undefined && fsFiles.has(target)) {
-          throw fsWriteError(
-            "TARGET_EXISTS",
-            `mock fs: "${dirPath}" exists and is not a directory`
-          );
-        }
-        const blocked = chain.find((dir) => fsFiles.has(dir));
-        if (blocked !== undefined) {
-          throw new Error(`ENOTDIR: mock fs: "${blocked}" is a file, not a directory`);
-        }
+        refuseFileInChain(dirPath);
         // Recursive, like the host: every missing ancestor is created too.
-        for (const dir of chain) fsDirs.add(dir);
+        for (const dir of dirChain(dirPath)) fsDirs.add(dir);
         fsMkdirCalls.push(dirPath);
       },
       async appendFile(filePath, contents) {
         if (typeof contents !== "string") {
           throw new Error(`Plugin "${pluginId}" fs.appendFile: contents must be a string`);
         }
-        if (!fsFiles.has(filePath) && mockDirExists(filePath)) {
-          throw new Error(`EISDIR: mock fs: "${filePath}" is a directory`);
-        }
         const parent = parentOf(filePath);
         if (!mockDirExists(parent)) {
           if (!isMockDataDirPath(filePath)) {
+            refuseFileAncestor(filePath);
             throw new Error(`ENOENT: mock fs: parent directory "${parent}" does not exist`);
           }
+          refuseFileInChain(parent);
           for (const dir of dirChain(parent)) fsDirs.add(dir);
+        }
+        if (!fsFiles.has(filePath) && mockDirExists(filePath)) {
+          throw fsWriteError("TARGET_UNAVAILABLE", `mock fs: "${filePath}" is not a regular file`);
         }
         fsFiles.set(filePath, (fsFiles.get(filePath) ?? "") + contents);
         fsAppendCalls.push({ path: filePath, contents });
@@ -1719,6 +1731,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         // plugin's conflict path to be exercised: `expectedRevision` compares
         // against the stored text's revision, `null` means create-new.
         const existing = fsFiles.get(filePath);
+        if (isMockDataDirPath(filePath)) refuseFileInChain(parentOf(filePath));
+        else refuseFileAncestor(filePath);
+        if (existing === undefined && mockDirExists(filePath)) {
+          // Create-new sees any entry as taken; every other write fails on
+          // the directory itself.
+          if (options?.expectedRevision === null) {
+            throw fsWriteError("TARGET_EXISTS", `mock fs: "${filePath}" already exists`);
+          }
+          throw new Error(`EISDIR: mock fs: "${filePath}" is a directory`);
+        }
         if (options !== undefined) {
           const expected = options.expectedRevision;
           if (expected === null && existing !== undefined) {

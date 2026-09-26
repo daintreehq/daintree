@@ -1448,7 +1448,7 @@ describe("createMockHost production-parity validation (#10617)", () => {
       ]);
       await host.fs.writeFile("/repo/taken", "x");
       await expect(host.fs.mkdir("/repo/taken")).rejects.toMatchObject({ code: "TARGET_EXISTS" });
-      await expect(host.fs.mkdir("/repo/taken/inner")).rejects.toThrow(/ENOTDIR/);
+      await expect(host.fs.mkdir("/repo/taken/inner")).rejects.toMatchObject({ code: "ENOTDIR" });
     });
 
     it("creates every missing ancestor on mkdir, like the host", async () => {
@@ -1462,7 +1462,9 @@ describe("createMockHost production-parity validation (#10617)", () => {
     it("refuses an append to a directory or under a missing parent", async () => {
       const host = createMockHost();
       await host.fs.mkdir("/repo/logs");
-      await expect(host.fs.appendFile("/repo/logs", "x")).rejects.toThrow(/EISDIR/);
+      await expect(host.fs.appendFile("/repo/logs", "x")).rejects.toMatchObject({
+        code: "TARGET_UNAVAILABLE",
+      });
       await expect(host.fs.appendFile("/repo/missing/log.jsonl", "x")).rejects.toThrow(/ENOENT/);
       expect(host.fsAppendCalls).toEqual([]);
     });
@@ -1495,6 +1497,47 @@ describe("createMockHost production-parity validation (#10617)", () => {
       await expect(
         host.fs.appendFile("/repo/.daintree/plugin-data/acme.habits/2026/log.jsonl", "x")
       ).rejects.toThrow(/ENOENT/);
+    });
+
+    it("never lets one path be both a file and a directory", async () => {
+      const dataDir = "/home/me/.daintree/plugin-data/acme.habits";
+      const host = createMockHost({ pluginId: "acme.habits", pluginDataDir: dataDir });
+      await host.fs.writeFile(`${dataDir}/notes`, "file");
+
+      // Growing parents stops at a file, with the code the host gives.
+      await expect(host.fs.appendFile(`${dataDir}/notes/log.jsonl`, "x")).rejects.toMatchObject({
+        code: "TARGET_EXISTS",
+      });
+      await expect(
+        host.fs.appendFile(`${dataDir}/notes/2026/log.jsonl`, "x")
+      ).rejects.toMatchObject({ code: "ENOTDIR" });
+      await expect(host.fs.writeFile(`${dataDir}/notes/a.md`, "x")).rejects.toMatchObject({
+        code: "TARGET_EXISTS",
+      });
+      expect((await host.fs.stat(`${dataDir}/notes`)).isFile).toBe(true);
+      expect(await host.fs.readFile(`${dataDir}/notes`)).toBe("file");
+
+      // Outside the data dir the lookup fails on the file ancestor.
+      await host.fs.writeFile("/repo/readme", "file");
+      await expect(host.fs.appendFile("/repo/readme/log.jsonl", "x")).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+      await expect(host.fs.writeFile("/repo/readme/a.md", "x")).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+
+      // A directory is never overwritten by a file.
+      await host.fs.mkdir("/repo/cards");
+      await expect(
+        host.fs.writeFile("/repo/cards", "x", { expectedRevision: null })
+      ).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+      await expect(host.fs.writeFile("/repo/cards", "x")).rejects.toThrow(/EISDIR/);
+      expect((await host.fs.stat("/repo/cards")).isDirectory).toBe(true);
+      expect(host.fsWriteCalls.map((call) => call.path)).toEqual([
+        `${dataDir}/notes`,
+        "/repo/readme",
+      ]);
+      expect(host.fsAppendCalls).toEqual([]);
     });
 
     it("defaults the data dir to the host's location under the home directory", async () => {
