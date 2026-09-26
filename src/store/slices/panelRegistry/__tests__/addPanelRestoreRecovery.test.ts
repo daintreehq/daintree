@@ -212,6 +212,20 @@ describe("addPanel — recovery holds (#12434)", () => {
     });
   });
 
+  it("keeps notes written while the pane was held when it launches in place (#12835)", async () => {
+    await holdPane("held-1");
+    await drainMicrotasks();
+    usePanelStore.getState().showScratchpad("held-1");
+    usePanelStore.getState().setScratchpadContent("held-1", "resume the auth work");
+
+    await expect(launchOver("held-1")).resolves.toBe("held-1");
+    await drainMicrotasks();
+
+    const panel = ptyPanel("held-1");
+    expect(panel?.restoreRecovery).toBeUndefined();
+    expect(panel?.scratchpad).toEqual({ content: "resume the auth work", collapsed: false });
+  });
+
   it("drops a launch for a held pane that was closed while it waited", async () => {
     await holdPane("held-1");
     const pending = launchOver("held-1");

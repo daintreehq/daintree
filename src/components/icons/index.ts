@@ -52,6 +52,7 @@ export {
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
+  NotebookPen, // a terminal's Scratchpad — throwaway notes kept beside that one pane
   OctagonAlert, // a pane's CPU or memory in its red band — beside the neutral reading, so the number keeps its contrast and the band survives forced colors
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   PanelTop, // the app toolbar — the strip along the top of the window

@@ -55,6 +55,7 @@ import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
 import { sanitizeConversationCwd, sanitizeRestoreRecovery } from "@/utils/restoreRecovery";
+import { sanitizeScratchpad } from "@/lib/terminalScratchpad";
 
 /**
  * Args for building addPanel options from hydration data.
@@ -194,6 +195,8 @@ export interface SavedTerminalData {
   /** Untrusted on-disk values (#12434) — sanitized in `restoreRecovery.ts`. */
   conversationCwd?: unknown;
   restoreRecovery?: unknown;
+  /** Untrusted on-disk value (#12835) — sanitized via `sanitizeScratchpad`. */
+  scratchpad?: unknown;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
   agentFlavorId?: string;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -417,6 +420,7 @@ export function buildArgsForBackendTerminal(
     extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
+    scratchpad: sanitizeScratchpad(saved.scratchpad),
   };
 }
 
@@ -498,6 +502,7 @@ export function buildArgsForReconnectedFallback(
     extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
+    scratchpad: sanitizeScratchpad(saved.scratchpad),
   };
 }
 
@@ -935,6 +940,7 @@ export function buildArgsForRespawn(
     pluginId: saved.pluginId,
     restore: true,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
+    scratchpad: sanitizeScratchpad(saved.scratchpad),
   };
 }
 
