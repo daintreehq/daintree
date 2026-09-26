@@ -98,10 +98,6 @@ export function McpServerSettingsTab() {
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [auditEnabled, setAuditEnabled] = useState(true);
-  const [paneWakeEnabled, setPaneWakeEnabled] = useState(false);
-  // Until main has answered, "off" would be a guess rather than the setting.
-  const [paneWakeLoaded, setPaneWakeLoaded] = useState(false);
-  const [paneWakeLoadFailed, setPaneWakeLoadFailed] = useState(false);
   const [auditMaxRecords, setAuditMaxRecords] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS);
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
   const [auditLoading, setAuditLoading] = useState(true);
@@ -117,7 +113,6 @@ export function McpServerSettingsTab() {
   const [clearError, setClearError] = useState<string | null>(null);
   const [bearersFailed, setBearersFailed] = useState(false);
   const [auditToggleError, setAuditToggleError] = useState<string | null>(null);
-  const [paneWakeError, setPaneWakeError] = useState<string | null>(null);
   const [configCopyError, setConfigCopyError] = useState<string | null>(null);
   const [keyCopyError, setKeyCopyError] = useState<string | null>(null);
   // Set by a deliberate clear, so the empty log says so instead of reading as
@@ -500,36 +495,6 @@ export function McpServerSettingsTab() {
     }
   };
 
-  // Loaded apart from the status batch so a failure here costs only this
-  // toggle, which stays at its safe default of off.
-  useEffect(() => {
-    let cancelled = false;
-    window.electron.mcpServer
-      .getPaneWakeEnabled()
-      .then((enabled) => {
-        if (cancelled) return;
-        setPaneWakeEnabled(enabled);
-        setPaneWakeLoaded(true);
-      })
-      .catch((err) => {
-        if (!cancelled) setPaneWakeLoadFailed(true);
-        logError("Failed to load MCP pane wake setting", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handlePaneWakeToggle = async () => {
-    try {
-      setPaneWakeError(null);
-      setPaneWakeEnabled(await window.electron.mcpServer.setPaneWakeEnabled(!paneWakeEnabled));
-    } catch (err) {
-      setPaneWakeError(formatErrorMessage(err, "Failed to update pane wakes"));
-      logError("Failed to toggle MCP pane wakes", err);
-    }
-  };
-
   const handleAuditEnabledToggle = async () => {
     try {
       setAuditToggleError(null);
@@ -817,23 +782,6 @@ export function McpServerSettingsTab() {
             )}
           </div>
         )}
-
-        {status.enabled && (
-          <SettingsSwitchCard
-            id="mcp-server-pane-wakes"
-            title="Wake agents from terminal watches"
-            subtitle={
-              paneWakeLoadFailed
-                ? "Couldn't read this setting. Reopen settings to try again."
-                : "An agent supervising other terminals can ask to hear when they change instead of polling. Daintree types one line into that agent's prompt once it's idle — never into an approval, a question, or an error, and never over your typing. A pane that may be woken shows a radar chip; use it to stop the watches."
-            }
-            isEnabled={paneWakeEnabled}
-            onChange={handlePaneWakeToggle}
-            ariaLabel="Wake agents from terminal watches"
-            disabled={!paneWakeLoaded}
-          />
-        )}
-        {status.enabled && paneWakeError && <InlineErrorRow>{paneWakeError}</InlineErrorRow>}
       </SettingsGroup>
 
       <p className="sr-only" role="status">

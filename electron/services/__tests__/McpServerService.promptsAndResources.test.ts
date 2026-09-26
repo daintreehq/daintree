@@ -180,7 +180,7 @@ vi.mock("../persistence/auditRingStore.js", () => ({
   },
 }));
 
-const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "core" | "full">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
@@ -863,13 +863,14 @@ describe("McpServerService", () => {
     // `git.getProjectPulse` left the external tier, taking the issues and pulse
     // resources with them. That is the intended consequence, not collateral —
     // an external agent reads issues with `gh` and the working tree with `git`.
-    // The in-app assistant keeps both, so the behavioural tests below run under a
-    // workbench token; the external contraction gets its own test at the end.
-    const WORKBENCH_TOKEN = "token-wb-resources";
-    const workbenchHeaders = { Authorization: `Bearer ${WORKBENCH_TOKEN}` };
+    // In-app, both backing actions are in the `full` tool set and not in `core`,
+    // so the behavioural tests below run under a full token; the core and
+    // external contractions get their own tests.
+    const FULL_TOKEN = "token-full-resources";
+    const fullHeaders = { Authorization: `Bearer ${FULL_TOKEN}` };
 
     beforeEach(() => {
-      paneTokenTiers.set(WORKBENCH_TOKEN, "workbench");
+      paneTokenTiers.set(FULL_TOKEN, "full");
     });
 
     it("advertises the resources capability with subscribe enabled", async () => {
@@ -910,7 +911,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
+      const { client, transport } = await connectClient(service.currentPort!, fullHeaders);
       transports.push(transport);
 
       const result = await client.listResources();
@@ -946,7 +947,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
+      const { client, transport } = await connectClient(service.currentPort!, fullHeaders);
       transports.push(transport);
 
       const uris = (await client.listResources()).resources.map((r) => r.uri);
@@ -967,7 +968,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
+      const { client, transport } = await connectClient(service.currentPort!, fullHeaders);
       transports.push(transport);
 
       const result = await client.listResources();
@@ -985,7 +986,7 @@ describe("McpServerService", () => {
     it("listResourceTemplates returns the four template patterns", async () => {
       const { window } = createMockWindow({ getManifest: manifestForResources });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
+      const { client, transport } = await connectClient(service.currentPort!, fullHeaders);
       transports.push(transport);
 
       const result = await client.listResourceTemplates();
@@ -1051,6 +1052,56 @@ describe("McpServerService", () => {
       }
     });
 
+    // The in-app half: the backing actions are `full`-only, so a core session
+    // is handed neither resource and is refused a read of either before the
+    // renderer is touched — the same boundary as external above.
+    it("core tier keeps terminal/agent resources but loses issues and pulse", async () => {
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
+        if (payload.actionId === "worktree.list") {
+          return { ok: true, result: [{ id: "wt-1", branch: "feature/foo" }] };
+        }
+        if (payload.actionId === "terminal.list") {
+          return {
+            ok: true,
+            result: [{ id: "term-1", title: "agent: claude", agentId: "agent-claude-1" }],
+          };
+        }
+        return { ok: true, result: [] };
+      });
+      const { window } = createMockWindow({
+        getManifest: manifestForResources,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      paneTokenTiers.set("token-core-resources", "core");
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-core-resources",
+      });
+      transports.push(transport);
+
+      const uris = (await client.listResources()).resources.map((r) => r.uri);
+      expect(uris).toContain("daintree://terminal/term-1/scrollback");
+      expect(uris).toContain("daintree://agent/agent-claude-1/state");
+      expect(uris).not.toContain("daintree://project/current/issues");
+      expect(uris).not.toContain("daintree://worktree/wt-1/pulse");
+
+      const patterns = (await client.listResourceTemplates()).resourceTemplates.map(
+        (t) => t.uriTemplate
+      );
+      expect(patterns).toContain("daintree://terminal/{id}/scrollback");
+      expect(patterns).not.toContain("daintree://worktree/{id}/pulse");
+
+      await expect(
+        client.readResource({ uri: "daintree://project/current/issues" })
+      ).rejects.toThrow(/not permitted/i);
+      await expect(client.readResource({ uri: "daintree://worktree/wt-1/pulse" })).rejects.toThrow(
+        /not permitted/i
+      );
+      for (const actionId of ["forge.listIssues", "git.getProjectPulse"]) {
+        expect(dispatchMock).not.toHaveBeenCalledWith(expect.objectContaining({ actionId }));
+      }
+    });
+
     it("readResource for project issues dispatches forge.listIssues", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
         if (payload.actionId === "forge.listIssues") {
@@ -1063,7 +1114,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
+      const { client, transport } = await connectClient(service.currentPort!, fullHeaders);
       transports.push(transport);
 
       const result = await client.readResource({ uri: "daintree://project/current/issues" });
@@ -1089,7 +1140,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
+      const { client, transport } = await connectClient(service.currentPort!, fullHeaders);
       transports.push(transport);
 
       await client.readResource({ uri: "daintree://worktree/wt-42/pulse" });
@@ -1335,7 +1386,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
+      const { client, transport } = await connectClient(service.currentPort!, fullHeaders);
       transports.push(transport);
 
       const result = await client.listResources();
@@ -1395,7 +1446,7 @@ describe("McpServerService", () => {
       expect(JSON.parse(content.text)).toEqual(output);
     });
 
-    it("workbench tier sees resources and is permitted to read them", async () => {
+    it("full tier sees resources and is permitted to read them", async () => {
       const dispatchMock = vi.fn((_payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
         result: [],
@@ -1407,7 +1458,7 @@ describe("McpServerService", () => {
       await service.start(window);
 
       const token = `pane-token-${Math.random().toString(36).slice(2)}`;
-      paneTokenTiers.set(token, "workbench");
+      paneTokenTiers.set(token, "full");
       const client = new Client({ name: "mcp-pane-client", version: "1.0.0" });
       const headers = { Authorization: `Bearer ${token}` };
       const transport = new SSEClientTransport(

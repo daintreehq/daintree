@@ -36,6 +36,9 @@ import {
   LAUNCHABLE_AGENT_IDS,
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
+import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
+import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
+import { AwaitedReplySchema, WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
   hasSystemPromptOverride,
@@ -78,7 +81,7 @@ const SessionListLimitSchema = z
   .max(SESSION_LIST_MAX_LIMIT)
   .default(SESSION_LIST_DEFAULT_LIMIT)
   .describe(
-    `Max records to return, newest-first (default: ${SESSION_LIST_DEFAULT_LIMIT}, max: ${SESSION_LIST_MAX_LIMIT}).`
+    `Max records, newest first (default ${SESSION_LIST_DEFAULT_LIMIT}, max ${SESSION_LIST_MAX_LIMIT}).`
   );
 
 // Paired with the limit so a bounded page isn't a one-way door. Bookmarks are
@@ -90,7 +93,7 @@ const SessionListOffsetSchema = z
   .int()
   .min(0)
   .default(0)
-  .describe("Records to skip before the page, for reaching past the limit (default: 0).");
+  .describe("Records to skip, for paging (default 0).");
 
 const BookmarkListArgsSchema = z
   .object({
@@ -107,7 +110,7 @@ const AgentListPresetsArgsSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Which project's repository presets to include. Defaults to the project this call is dispatched in. Naming one that is not the loaded project returns the other layers and reports the result as incomplete rather than answering for the wrong project."
+      "Project whose repository presets to include (default: this call's). Another project returns only the other layers, marked incomplete."
     ),
 });
 
@@ -120,7 +123,7 @@ const ResumeSessionArgsSchema = withWorktreeLocation({
     .string()
     .min(1)
     .describe(
-      "Exact id of the session to relaunch, copied from a session-history or bookmark listing. Never a title or a prefix."
+      "Exact session id from a session-history or bookmark listing; never a title or prefix."
     ),
 });
 
@@ -129,12 +132,12 @@ const SessionHistoryListArgsSchema = z
     // `.min(1)`: an empty string would fall through the bridge's `if
     // (!worktreeId)` guard to an unfiltered listing — a surprising result for a
     // caller that passed a (blank) id expecting a scoped one.
-    worktreeId: z.string().min(1).optional().describe("Restrict the listing to one worktree id."),
+    worktreeId: z.string().min(1).optional().describe("Only this worktree."),
     projectId: z
       .string()
       .min(1)
       .optional()
-      .describe("Restrict the listing to one project id; combines with `worktreeId`."),
+      .describe("Only this project; combines with `worktreeId`."),
     limit: SessionListLimitSchema,
     offset: SessionListOffsetSchema,
   })
@@ -326,11 +329,33 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   /** Launch ids the launcher always turns into a panel, never an agent. */
   const HANDBACK_PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
 
+  // Manifest metadata only: main runs each agent through `agent.launch` under
+  // the same gate, notice and audit as a single call (see `sessionServer`).
+  actions.set("agent.launchMany", () => ({
+    id: "agent.launchMany",
+    title: "Launch several agents",
+    description:
+      "Launch several agents with one shared prompt in one call, each a single launch in its own terminal with its own notice. Results come back in order.",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["several", "many", "batch", "fleet"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentLaunchManyArgsSchema,
+    run: async () => {
+      throw new Error(
+        "agent.launchMany must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
   actions.set("agent.launch", () => ({
     id: "agent.launch",
     title: "Launch agent",
     description:
-      "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready; poll its state or a terminal status snapshot for that. A missing CLI opens a setup diagnostic panel instead. Keep concurrent launches modest.",
+      "Start an AI agent in a new terminal and report where it landed. Success means the panel exists and its process is starting, not that the agent is ready; read its status for that. A missing CLI opens a setup diagnostic panel instead. Keep concurrent launches modest.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -343,102 +368,94 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .string()
         .optional()
         .describe(
-          "Absolute directory to start the agent process in. This is the launch directory, not a worktree selector — name the worktree separately. Defaults to the resolved worktree root."
+          "Absolute launch directory, not a worktree selector. Defaults to the worktree root."
         ),
       worktreeId: z
         .string()
         .optional()
-        .describe(
-          "Identifies the worktree to launch in, using an id from the worktree-listing capability. Defaults to the active worktree."
-        ),
+        .describe("Worktree id from the worktree listing. Defaults to the active worktree."),
       prompt: z
         .string()
         .optional()
-        .describe(
-          "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input."
-        ),
+        .describe("First turn, submitted once the agent starts. Omit to leave it waiting."),
       handback: z
         .boolean()
         .optional()
         .describe(
-          "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt` and an agent."
+          "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`."
         ),
+      // Acted on in main, which sets up the notice; `run()` only refuses it for
+      // a launch with no agent to watch.
+      notify: z.boolean().optional().describe(NOTIFY_ARG_DESCRIPTION),
+      replyLines: NotifyReplyLinesSchema,
+      waitForReply: WaitForReplySchema,
+      waitSeconds: WaitSecondsSchema,
       systemPrompt: z
         .string()
         .max(SYSTEM_PROMPT_MAX_LENGTH)
         .optional()
         .describe(
-          "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it."
+          "Appended to the agent's system prompt, at most 2000 characters, kept on resume. Claude and Codex only; others refuse it."
         ),
       interactive: z
         .boolean()
         .optional()
-        .describe(
-          "Whether the agent runs as a conversation the user can continue, rather than a single non-interactive pass."
-        ),
+        .describe("Run as a conversation the user can continue, not one non-interactive pass."),
       model: z
         .string()
         .optional()
         .describe(
-          "Overrides the model the agent CLI would otherwise pick. Accepted values are the agent's own model names, so an unrecognised one fails when the CLI starts rather than here."
+          "Model name in the agent CLI's own terms; an unknown one fails when the CLI starts."
         ),
       presetId: z
         .string()
         .nullable()
         .optional()
         .describe(
-          "Applies one of the user's saved launch presets for this agent. Pass an explicit null to ignore the configured default preset rather than inherit it."
+          "One of the user's saved launch presets. Explicit null ignores the default preset."
         ),
       activateDockOnCreate: z
         .boolean()
         .optional()
-        .describe(
-          "Whether to open the sidebar dock when the agent is placed there, which changes what the user sees."
-        ),
+        .describe("Open the sidebar dock when placing the agent there."),
       env: z
         .record(z.string(), z.string())
         .optional()
         .describe(
-          "Extra environment variables for the agent process, merged over the inherited environment. These reach a real subprocess, so never put credentials here that the user has not already agreed to expose."
+          "Extra env vars merged over the inherited environment. They reach a real process: never add credentials the user has not exposed."
         ),
       excludeFromPersistence: z
         .boolean()
         .optional()
         .describe(
-          "Keeps the terminal out of the saved session, so it does not return after a restart. Listings, status snapshots, agent-state reads and bulk close or kill all skip it, so the caller cannot find or poll it later. Use for throwaway work."
+          "Hide the terminal from the saved session, listings, status reads and bulk close or kill, so it can't be polled later. For throwaway work."
         ),
       removeOnExit: z
         .boolean()
         .optional()
-        .describe(
-          "Closes the panel automatically once the agent process ends, discarding its output. Leave off when the output still needs reading."
-        ),
+        .describe("Close the panel when the agent exits, discarding its output."),
       agentLaunchFlags: z
         .array(z.string())
         .optional()
-        .describe(
-          "Extra command-line flags passed through to the agent CLI verbatim. Unrecognised flags fail when the CLI starts, not here."
-        ),
+        .describe("Extra CLI flags passed verbatim; bad ones fail when the CLI starts."),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
       focusPolicy: AddPanelFocusPolicySchema.optional(),
       requestedId: z
         .string()
         .optional()
-        .describe(
-          "Asks for a specific panel id when the terminal is created, so a caller can correlate the launch it requested with the terminal it got."
-        ),
+        .describe("Panel id to create the terminal with, to correlate the launch."),
       force: z
         .boolean()
         .optional()
         .describe(
-          "Skips the check that the agent's CLI can run, so an unlaunchable CLI is started and fails rather than opening a setup diagnostic. Leave off unless that check is known to be wrong."
+          "Skip the CLI launchability check, so an unlaunchable CLI starts and fails instead of opening a setup diagnostic. Leave off."
         ),
       name: z
         .string()
         .max(200)
         .optional()
         .describe(
-          'Always provide a short, task-descriptive name for the terminal tab, at most 200 characters (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
+          "Always pass a short tab title ('Claude: auth refactor') so parallel agents are told apart. Blank uses the default."
         ),
     }),
     // Top-level object, never `.nullable()`: `buildToolOutputSchema` (tierAuth)
@@ -457,6 +474,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       worktreePath: z.string().nullable(),
       branch: z.string().nullable(),
       cwd: z.string().nullable(),
+      // Filled in by main when the call waits for the reply.
+      reply: AwaitedReplySchema.nullable(),
     }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
@@ -467,6 +486,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         worktreeId,
         prompt,
         handback,
+        notify,
         systemPrompt,
         interactive,
         model,
@@ -488,6 +508,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         worktreeId?: string;
         prompt?: string;
         handback?: boolean;
+        notify?: boolean;
         systemPrompt?: string;
         interactive?: boolean;
         model?: string;
@@ -546,6 +567,16 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           "handback needs an agent to answer it, and this id is not a registered agent: a plain shell or panel never prints the marker. Launch a registered agent, or launch without handback."
         );
       }
+      // `notify` is acted on in main, which cannot see this registry; refusing
+      // here is what cancels the notice it set up for a launch.
+      if (
+        notify === true &&
+        (HANDBACK_PANEL_LAUNCH_IDS.has(agentId) || !isRegisteredAgent(agentId))
+      ) {
+        throw new UnactionableTargetError(
+          "notify waits for an agent to stop working, and this id is not a registered agent: a plain shell or panel never reports working or idle. Launch a registered agent, or launch without notify."
+        );
+      }
       const handbackCode = handback === true ? mintHandbackCode() : undefined;
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
@@ -587,6 +618,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           worktreePath: null,
           branch: null,
           cwd: null,
+          reply: null,
         };
       }
       return {
@@ -600,6 +632,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         worktreePath: result.worktreePath,
         branch: result.branch,
         cwd: result.cwd,
+        reply: null,
       };
     },
   }));
@@ -937,7 +970,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.list",
     title: "List resumable sessions",
     description:
-      "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them: it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope resolves. Old sessions are pruned by retention, so absence does not prove one never existed.",
+      "List closed agent sessions that can be relaunched, from the on-disk journal: which sessions exist, no transcript text. Needs a worktree or project scope and fails when none resolves. Old sessions are pruned, so absence proves nothing.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -1013,7 +1046,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.resume",
     title: "Resume agent session",
     description:
-      "Relaunch one closed agent session by its exact id and hand back the pane carrying it. Resume is directory-coupled: it relaunches in the worktree the session was recorded in, so the worktree you name scopes the lookup and one recorded elsewhere is refused. Calling twice brings the live pane forward rather than a second agent on one transcript. It opens off-screen unless that worktree is active.",
+      "Relaunch one closed agent session by exact id and return its pane. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A repeat call brings the live pane forward, not a second agent. Opens off-screen unless that worktree is active.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -1407,7 +1440,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listAvailable",
     title: "List available agents",
     description:
-      "List every registered agent, built-in, user-defined and plugin-contributed, from the authoritative registry, including ones not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
+      "List every registered agent (built-in, user-defined, plugin) from the authoritative registry, launchable or not. Use before launching, and read each entry's launchability rather than assuming it. Launchability appears once each CLI's live probe finishes; the result says while that is incomplete.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -1558,7 +1591,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listPresets",
     title: "List agent presets",
     description:
-      "List the launch presets for one agent, merged across user settings, repository preset files and CCR discovery in the precedence the launcher applies, so every id returned is one a launch will accept. Identity only: no environment values or flags. While the completeness flag is false a source is still loading.",
+      "List one agent's launch presets, merged across user settings, repository preset files and CCR discovery as the launcher does, so every id is launchable. Identity only: no env or flags. A false completeness flag means a source is still loading.",
     category: "agent",
     kind: "query",
     danger: "safe",

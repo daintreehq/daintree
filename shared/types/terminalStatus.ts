@@ -40,11 +40,11 @@ export type TerminalStatusUnavailableField =
  * wait output schemas so the three copies cannot drift apart.
  */
 export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
-  "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.";
+  "Epoch ms the screen last changed, ignoring spinner and timer redraws. Absent if unobserved. Not a hang verdict.";
 
 /** Model-facing description of `lastTypedInputAt`. */
 export const LAST_TYPED_INPUT_AT_DESCRIPTION =
-  "Epoch ms of the last raw input Daintree recorded for the PTY (keys, paste, broadcast; not submit-lane writes). Before `lastTransitionAt` = none since. Not proof of delivery or authorship.";
+  "Epoch ms of the last raw PTY input (keys, paste, broadcast; not sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {

@@ -35,7 +35,7 @@ export function registerTerminalSpawnActions(
     id: "terminal.new",
     title: "New terminal",
     description:
-      "Open a new terminal, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Defaults to the active worktree, and can instead open at a chosen directory and run something there immediately. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
+      "Open a new terminal shell, ready for commands; it uses resources until closed. Defaults to the active worktree, or opens at a chosen directory and runs a command there. To start an AI CLI, launch an agent instead.",
     category: "terminal",
     kind: "command",
     // Stays statically safe: a plain "New Terminal" must not be gated. An
@@ -54,15 +54,13 @@ export function registerTerminalSpawnActions(
           .string()
           .min(1)
           .optional()
-          .describe(
-            "Absolute directory to open the terminal in. Defaults to the active worktree's root. Supplying this requires a confirmation."
-          ),
+          .describe("Absolute directory (default: active worktree root). Requires a confirmation."),
         command: z
           .string()
           .min(1)
           .optional()
           .describe(
-            "Shell command to run in the new terminal immediately, instead of leaving it at a prompt. Supplying this requires a confirmation."
+            "Shell command to run at once instead of leaving a prompt. Requires a confirmation."
           ),
       })
       .optional(),
@@ -286,11 +284,10 @@ export function registerTerminalSpawnActions(
     id: "terminal.moveToWorktree",
     title: "Move to worktree",
     description:
-      "Move a terminal panel to a different worktree. The process is never restarted: a live " +
-      "agent keeps running in the directory it launched from, and its pane offers to tell it " +
-      "to continue there. A panel sharing a tab group travels with the rest of that group, " +
-      "so this can relocate more than the panel named. The move is reversible. Name the " +
-      "target: an automated caller cannot see what the user focused.",
+      "Move a terminal panel to another worktree, reversibly. The process is never restarted: a " +
+      "live agent keeps running in its launch directory, and its pane offers to tell it to " +
+      "continue there. Panels in the same tab group move too. Name the target; an automated " +
+      "caller cannot see focus.",
     category: "terminal",
     kind: "command",
     // Relabelling a panel is reversible — drag it back — and nothing here

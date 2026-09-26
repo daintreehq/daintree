@@ -17,6 +17,7 @@ import { usePanelStore } from "@/store";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ActionContext } from "@shared/types/actions";
+import type { HelpAssistantTier } from "@shared/types";
 import {
   buildResumeCommand,
   buildResumeLatestCommand,
@@ -73,7 +74,7 @@ export interface TierMismatchState {
   sessionId: string;
   toolId: string;
   tier: string;
-  targetTier: "workbench" | "action" | "system" | null;
+  targetTier: HelpAssistantTier | null;
   /**
    * Captured at event time so "Always allow" persists to the project the
    * banner originated from, not whichever project is current at click time —

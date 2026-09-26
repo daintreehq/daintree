@@ -74,7 +74,9 @@ const CATALOG_URL = "https://models.dev/api.json";
 const TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 8000;
 const CODEX_TIMEOUT_MS = 5000;
-const MAX_CODEX_BUFFER = 256 * 1024;
+// `codex debug models --bundled` carries each model's full base instructions;
+// by Codex 0.15x it was ~600 KB and still growing, past the old 256 KB cap.
+const MAX_CODEX_BUFFER = 4 * 1024 * 1024;
 
 /**
  * Resolves agent model lists and context windows at runtime against the

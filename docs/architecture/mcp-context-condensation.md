@@ -8,7 +8,7 @@ This is the Daintree-side half of a standard shared with the assistant CLI. The 
 
 The tool region is the largest single part of an MCP request, it is re-sent on every round including tool-continuation rounds where nothing the user typed changed, and clients cap what they will accept — Cursor silently truncates past its cap, Copilot hard-errors at 128 tools. #11585 already cut the external surface from 100 tools to the high twenties for exactly this reason. That cut attacked tool _count_; this standard attacks _bytes per tool_, which is the axis left over.
 
-The two surfaces differ by an order of magnitude: a third-party client sees only the external roster ([`shared/config/mcpExternalTierAllowlist.ts`](../../shared/config/mcpExternalTierAllowlist.ts)), while the in-app assistant's cumulative `system` tier is several times larger. Take the current byte figures from the ratchets below rather than from prose, which drifts the moment a tool lands.
+The surfaces differ in size: a third-party client sees only the external roster ([`shared/config/mcpExternalTierAllowlist.ts`](../../shared/config/mcpExternalTierAllowlist.ts)), the in-app assistant defaults to the `core` tool set, and its `full` set is a few times larger. Take the current byte figures from the ratchets below rather than from prose, which drifts the moment a tool lands.
 
 ## The idempotency contract
 

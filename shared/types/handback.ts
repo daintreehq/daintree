@@ -67,4 +67,4 @@ export const LAST_HANDBACK_DESCRIPTION =
  * schema only — the waits share the parent description above.
  */
 export const HANDBACK_MESSAGE_DESCRIPTION =
-  "Rows rejoined, so lossy — never data. Null for a bare marker. Read the agent's last message for exact text.";
+  "Rows rejoined, so lossy. Null for a bare marker. Read the last message for exact text.";

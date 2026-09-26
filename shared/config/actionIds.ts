@@ -12,16 +12,15 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.getStatus",
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
+  "terminal.sendCommandMany",
+  "terminal.closeMany",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.readLastMessageOwned",
   "terminal.resumeSessions",
 
-  // -- terminalWatchActions --
-  "terminal.registerWatch",
-  "terminal.listWatches",
-  "terminal.getWatchEvents",
-  "terminal.cancelWatch",
+  // -- terminalNotifyActions --
+  "terminal.notifyWhenIdle",
 
   // -- terminalMetaActions --
   "terminal.setClientMetadata",
@@ -364,6 +363,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- agentActions --
   "agent.launch",
+  "agent.launchMany",
   "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",
@@ -440,6 +440,8 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.bulkCommand",
   "terminal.interrupt",
   "terminal.interruptOwned",
+  "terminal.sendKeys",
+  "terminal.sendKeysOwned",
   "terminal.stashInput",
   "terminal.popStash",
 
@@ -593,11 +595,13 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "fleet.retryFailures",
   "terminal.interrupt",
   "terminal.interruptOwned",
+  "terminal.sendKeys",
+  "terminal.sendKeysOwned",
+  "terminal.sendCommandMany",
+  "terminal.closeMany",
+  "agent.launchMany",
   "terminal.readLastMessageOwned",
-  // Main-process only, keyed on the caller's MCP credential (#12491): a plugin
-  // dispatch has no pane to watch from.
-  "terminal.registerWatch",
-  "terminal.listWatches",
-  "terminal.getWatchEvents",
-  "terminal.cancelWatch",
+  // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
+  // has no pane to notify.
+  "terminal.notifyWhenIdle",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

@@ -302,8 +302,8 @@ export function HelpPanelBanners({
               <p className="font-medium text-text-primary">Tool not permitted</p>
               <p className="mt-0.5 text-text-secondary">
                 {tierMismatch.targetTier
-                  ? `${tierMismatch.toolId} needs ${tierMismatch.targetTier} tier access.`
-                  : `${tierMismatch.toolId} isn't available at any project tier.`}
+                  ? `${tierMismatch.toolId} needs the ${tierMismatch.targetTier} tool set.`
+                  : `${tierMismatch.toolId} isn't in either tool set.`}
               </p>
               {tierMismatch.targetTier && (
                 <p className="mt-1 text-text-secondary">

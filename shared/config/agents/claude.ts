@@ -113,6 +113,9 @@ export const config: AgentConfig = {
     // Prints "esc to interrupt" in its own working footer — the same hint the
     // primary patterns below match on.
     interrupt: "double-escape",
+    // A message submitted mid-turn shows as queued and is read at the next
+    // step, so a terminal notice need not wait for this pane to settle.
+    queuesInputWhileWorking: true,
     // Not reliably carried by `--resume`, so it rides the persisted launch
     // flags and is re-passed on every relaunch.
     appendSystemPrompt: { flag: "--append-system-prompt" },

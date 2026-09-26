@@ -26,13 +26,15 @@ function deferred<T>(): Deferred<T> {
 
 const DISCONNECTED: HelpSessionLiveStatus = {
   connected: false,
-  tier: "workbench",
+  tier: "core",
   activeGrants: [],
 };
 
+// A different tier from the disconnected default, so a pull that only flipped
+// `connected` would not pass for one that surfaced the live tier.
 const CONNECTED: HelpSessionLiveStatus = {
   connected: true,
-  tier: "action",
+  tier: "full",
   activeGrants: [],
 };
 
@@ -119,8 +121,8 @@ describe("useHelpSessionLiveStatus", () => {
     });
     const withGrant: HelpSessionLiveStatus = {
       connected: true,
-      tier: "action",
-      activeGrants: [{ toolId: "git.push", expiresAt: 1_700_000_000_000, ttlMs: 900_000 }],
+      tier: "core",
+      activeGrants: [{ toolId: "project.runCheck", expiresAt: 1_700_000_000_000, ttlMs: 900_000 }],
     };
     await act(async () => {
       pulls[1]!.resolve(withGrant);
@@ -128,7 +130,7 @@ describe("useHelpSessionLiveStatus", () => {
 
     // Not just that a second pull fired — the hook must surface its result.
     await waitFor(() => expect(result.current.activeGrants).toHaveLength(1));
-    expect(result.current.activeGrants[0]?.toolId).toBe("git.push");
+    expect(result.current.activeGrants[0]?.toolId).toBe("project.runCheck");
   });
 
   it("falls back to disconnected defaults and logs when the pull rejects", async () => {

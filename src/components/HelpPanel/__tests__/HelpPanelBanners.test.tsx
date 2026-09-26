@@ -499,8 +499,8 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
   const tierMismatch = {
     sessionId: "sess-1",
     toolId: "terminal.new",
-    tier: "workbench",
-    targetTier: "action" as const,
+    tier: "core",
+    targetTier: "full" as const,
     projectId: "proj-1",
   };
 
@@ -534,7 +534,7 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
       <HelpPanelBanners {...baseProps()} tierMismatch={tierMismatch} />
     );
     const text = getByTestId("help-tier-mismatch-banner").textContent ?? "";
-    expect(text).toContain("terminal.new needs action tier access.");
+    expect(text).toContain("terminal.new needs the full tool set.");
     // The grant is reusable on a 15-minute sliding window under a 30-minute
     // ceiling — stating only the ceiling would overstate an idle grant's life.
     expect(text).toContain("repeat calls for 15 minutes after the last one, 30 at most");
@@ -588,10 +588,10 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
   });
 
-  // `targetTier: null` means no tier permits the tool at all, so neither
-  // affordance can help — an unknown id, never an action-tier tool like
+  // `targetTier: null` means neither tool set permits the tool, so neither
+  // affordance can help — an unknown id, never a full-set tool like
   // `terminal.new`.
-  it("withholds the actions and the window copy when no tier would permit the tool", () => {
+  it("withholds the actions and the window copy when no tool set would permit the tool", () => {
     const { getByTestId, queryByText } = render(
       <HelpPanelBanners
         {...baseProps()}
@@ -599,7 +599,7 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
       />
     );
     const banner = getByTestId("help-tier-mismatch-banner");
-    expect(banner.textContent).toContain("unknown.tool isn't available at any project tier.");
+    expect(banner.textContent).toContain("unknown.tool isn't in either tool set.");
     // Nothing to grant, so the details paragraph must not render at all —
     // asserting on its semantic openings rather than one duration phrase, so a
     // reworded body can't leak back into this branch unnoticed.

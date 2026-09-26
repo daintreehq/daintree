@@ -382,7 +382,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
     helpAssistant: {
       docSearch: true,
       daintreeControl: false,
-      tier: "workbench",
+      tier: "core",
       bypassPermissions: false,
       auditRetention: 30,
     },

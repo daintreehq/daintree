@@ -1,7 +1,11 @@
 import { stat } from "fs/promises";
 import type { TerminalInfo } from "./types.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
-import { evaluateWakeGate, type WakeGateSnapshot } from "../../../shared/utils/terminalWakeGate.js";
+import {
+  evaluateWakeGate,
+  wakeGateOptionsFor,
+  type WakeGateSnapshot,
+} from "../../../shared/utils/terminalWakeGate.js";
 import type { AnalysisBackend } from "./analysis/AnalysisBackend.js";
 import { IdentityWatcher, normalizeShellCommandText } from "./IdentityWatcher.js";
 import { WriteQueue, type SubmitExecutionContext } from "./WriteQueue.js";
@@ -344,7 +348,10 @@ export class TerminalInputController {
       guard === "settled-prompt"
         ? () =>
             !this.isInputLocked &&
-            evaluateWakeGate(wakeGateSnapshot(this.host.terminalInfo)).kind === "ready"
+            evaluateWakeGate(
+              wakeGateSnapshot(this.host.terminalInfo),
+              wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
+            ).kind === "ready"
         : undefined;
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
   }
@@ -505,8 +512,8 @@ export class TerminalInputController {
     ) {
       return;
     }
-    // Its requester took it back — the user stopped the watches, or turned
-    // pane wakes off — while the body waited for its Enter.
+    // Its requester took it back — the user stopped the pane's notices, or
+    // turned the MCP server off — while the body waited for its Enter.
     if (ctx?.isWithdrawn?.() === true) {
       return;
     }

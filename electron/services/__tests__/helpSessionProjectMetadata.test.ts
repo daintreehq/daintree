@@ -15,7 +15,7 @@ function build(facts: HelpSessionProjectFacts, overrides: { projectPath?: string
   return buildProjectMetadataAddendum({
     projectId: "proj-1",
     projectPath: overrides.projectPath ?? "/work/example",
-    tier: "action",
+    tier: "core",
     daintreeControl: true,
     facts,
   });
@@ -76,7 +76,7 @@ describe("buildProjectMetadataAddendum", () => {
     expect(text).toContain("  - `/work/example` — branch `main` (main worktree)");
     // No branch line from git is reported as such, not guessed at.
     expect(text).toContain("  - `/work/example-detached` — no branch reported");
-    expect(text).toContain("- Assistant tier setting: `action`");
+    expect(text).toContain("- Assistant tool set setting: `core`");
     expect(text).toContain("- Daintree MCP tools setting: `enabled`");
   });
 
@@ -84,12 +84,12 @@ describe("buildProjectMetadataAddendum", () => {
     const text = buildProjectMetadataAddendum({
       projectId: "proj-1",
       projectPath: "/work/example",
-      tier: "workbench",
+      tier: "full",
       daintreeControl: false,
       facts: {},
     });
     expect(text).toContain("- Daintree MCP tools setting: `disabled`");
-    expect(text).toContain("`workbench`");
+    expect(text).toContain("- Assistant tool set setting: `full`");
     expect(text).not.toContain("worktrees");
   });
 
@@ -139,7 +139,7 @@ describe("buildProjectMetadataAddendum", () => {
     const worstCase = buildProjectMetadataAddendum({
       projectId: long("id"),
       projectPath: long("/p"),
-      tier: "system",
+      tier: "full",
       daintreeControl: true,
       facts: {
         name: long("n"),

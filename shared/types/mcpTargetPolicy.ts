@@ -91,10 +91,9 @@ export interface McpTargetPolicy {
    * Whether a dispatch right now would block on a human confirmation dialog.
    * Live, unlike {@link danger}: a native automation grant pre-authorizes the
    * dispatch, so a `confirm` target can report `false` here until that grant is
-   * spent or expires. An agent pane at the `system` tier, or holding a
-   * session approval for the tool, reports `false` for the same reason
-   * (#12692); a target it would have to ask for reports `true`, whatever its
-   * declared danger.
+   * spent or expires. An agent pane holding a session approval for the tool
+   * reports `false` for the same reason (#12692); a target it would have to
+   * ask for reports `true`, whatever its declared danger.
    */
   requiresConfirmation: boolean;
   /**
@@ -133,7 +132,7 @@ export interface McpTargetPolicy {
   preferredTool: string | null;
 }
 
-const TIER_VALUES = ["workbench", "action", "system", "external"] as const;
+const TIER_VALUES = ["core", "full", "external"] as const;
 
 /**
  * The policy half of the `actions.getSchema` result.

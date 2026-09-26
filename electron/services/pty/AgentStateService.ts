@@ -361,7 +361,13 @@ export class AgentStateService {
           }
         : {}),
       ...(newCheckResult ? { lastCheckResult: newCheckResult } : {}),
-      ...(handbackHit ? { lastHandback: handbackHit.handback } : {}),
+      // An early observation retired its code, so the settle finds nothing to
+      // detect; it still owes the renderer the marker it saw.
+      ...(handbackHit
+        ? { lastHandback: handbackHit.handback }
+        : terminal.lastHandbackUnpublished && newState !== "working" && terminal.lastHandback
+          ? { lastHandback: terminal.lastHandback }
+          : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
@@ -407,12 +413,14 @@ export class AgentStateService {
     // exit settle has had its look.
     if (event.type === "respawn") {
       terminal.lastHandback = undefined;
+      terminal.lastHandbackUnpublished = false;
       terminal.handbackTracker?.clear();
     } else {
       if (handbackHit) {
         terminal.lastHandback = handbackHit.handback;
         terminal.handbackTracker?.retire(handbackHit.code);
       }
+      if (newState !== "working") terminal.lastHandbackUnpublished = false;
       if (event.type === "exit" || event.type === "kill") {
         terminal.handbackTracker?.clear();
       }

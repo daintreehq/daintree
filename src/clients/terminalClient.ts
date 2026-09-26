@@ -13,7 +13,7 @@ import type {
   SpawnResult,
   SerializedTerminalSnapshot,
 } from "@shared/types";
-import type { PaneWatchState } from "@shared/types/terminalWatch";
+import type { PaneNotifyState } from "@shared/types/terminalNotify";
 import type {
   HostMemoryPauseSnapshot,
   PtyHostToRendererMessage,
@@ -923,12 +923,12 @@ export const terminalClient = {
     window.electron.terminal.onSubmitStatus(callback),
 
   /**
-   * Listen for a pane's terminal-watch state (#12491): whether an agent in it
-   * holds watches that may wake it, and where its next wake stands. Sent only
-   * to the owning project's views. Callers filter by `terminalId`.
+   * Listen for a pane's pending terminal notices: whether an agent in it is
+   * waiting to hear about other terminals, and where its next line stands.
+   * Sent only to the owning project's views. Callers filter by `terminalId`.
    */
-  onWatchState: (callback: (data: PaneWatchState) => void): (() => void) =>
-    window.electron.terminal.onWatchState(callback),
+  onNotifyState: (callback: (data: PaneNotifyState) => void): (() => void) =>
+    window.electron.terminal.onNotifyState(callback),
 
   /**
    * Listen for terminal reliability metrics (pause-start/end, suspend,

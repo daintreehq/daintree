@@ -117,7 +117,7 @@ vi.mock("../../../utils.js", () => ({
 }));
 
 const { mockValidateToken, mockMarkTerminalForToken } = vi.hoisted(() => ({
-  mockValidateToken: vi.fn<(token: string) => "workbench" | "action" | "system" | false>(),
+  mockValidateToken: vi.fn<(token: string) => "core" | "full" | false>(),
   mockMarkTerminalForToken: vi.fn(() => true),
 }));
 
@@ -310,19 +310,19 @@ describe("terminal spawn handler - plugin MCP endpoints for Claude launches", ()
   });
 
   it("adds the plugin entry alongside the Daintree entry when the tier is on", async () => {
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "workbench" });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
     setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
 
-    await spawn({ id: "term-wb" });
+    await spawn({ id: "term-core" });
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     const token = spawnArgs.env?.DAINTREE_MCP_TOKEN as string;
-    expect(mcpPaneConfigService.getTierForToken(token)).toBe("workbench");
+    expect(mcpPaneConfigService.getTierForToken(token)).toBe("core");
     const servers = await readServers(configPathFromCommand(spawnArgs.command));
     expect(servers.daintree.headers.Authorization).toBe(`Bearer ${token}`);
     expect(Object.keys(servers)).toHaveLength(2);
     expect(spawnArgs.command.match(/--mcp-config/g)).toHaveLength(1);
-    expect(pluginMcpGrantRegistry.listForTerminal("term-wb")).toHaveLength(1);
+    expect(pluginMcpGrantRegistry.listForTerminal("term-core")).toHaveLength(1);
   });
 
   it("mints nothing for an endpoint the user has not enabled, and never loads PluginService", async () => {
@@ -445,7 +445,7 @@ describe("terminal spawn handler - plugin MCP endpoints for Claude launches", ()
 
   it("mints nothing for a Claude help-session launch", async () => {
     setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
 
     await spawn({ id: "term-help", env: { DAINTREE_MCP_TOKEN: "help-token" } });
 

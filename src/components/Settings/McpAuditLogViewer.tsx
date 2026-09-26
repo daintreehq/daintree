@@ -17,6 +17,7 @@ import {
   type AuditTimeRange,
 } from "./auditLogParts";
 import {
+  type HelpAssistantTier,
   type McpAuditRecord,
   type McpAuditResult,
   type McpGrantRecord,
@@ -44,11 +45,18 @@ const RESULT_FILTER_OPTIONS: { value: AuditResultFilter; label: string }[] = [
   { value: "rate_limited", label: "Rate limited" },
 ];
 
-const TIER_HINT_LABEL: Record<"workbench" | "action" | "system", string> = {
-  workbench: "workbench",
-  action: "action",
-  system: "system",
+const TIER_HINT_LABEL: Record<HelpAssistantTier, string> = {
+  core: "Core",
+  full: "Full",
 };
+
+// Records written before the core/full split carry the old ladder names. They
+// describe a tier that no longer exists, so they read as history rather than
+// being guessed onto the new pair.
+function tierHintText(tier: string): string {
+  const label = TIER_HINT_LABEL[tier as HelpAssistantTier];
+  return label ? `Needs the ${label} tool set` : `Needed the former ${tier} tier`;
+}
 
 const RESULT_LABEL: Record<McpAuditResult, string> = {
   success: "Success",
@@ -328,9 +336,7 @@ function DispatchRow({
           {args}
         </div>
         {record.result === "unauthorized" && record.tierHint && (
-          <div className="mt-0.5 text-text-secondary">
-            Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow
-          </div>
+          <div className="mt-0.5 text-text-secondary">{tierHintText(record.tierHint)}</div>
         )}
         {record.result === "unauthorized" && record.tierHint === null && (
           <div className="mt-0.5 text-text-secondary">Not permitted at any tier</div>

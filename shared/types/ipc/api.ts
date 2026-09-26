@@ -372,9 +372,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Submit-lane status for one terminal (#11875). Fires only for submits that
      *  cross the slow/stalled threshold or fail. */
     onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
-    /** A pane's terminal watches changed (#12491). Callers filter by `terminalId`. */
-    onWatchState(
-      callback: (data: import("../terminalWatch.js").PaneWatchState) => void
+    /** A pane's pending terminal notices changed. Callers filter by `terminalId`. */
+    onNotifyState(
+      callback: (data: import("../terminalNotify.js").PaneNotifyState) => void
     ): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**
@@ -2022,7 +2022,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         sessionId: string;
         toolId: string;
         tier: string;
-        targetTier: "workbench" | "action" | "system" | null;
+        targetTier: HelpAssistantTier | null;
       }) => void
     ): () => void;
     /**
@@ -2544,8 +2544,14 @@ export interface HelpAssistantSettings {
   /** Allow the help assistant to call Daintree control tools via the local MCP. Defaults to true. */
   daintreeControl: boolean;
   /**
-   * MCP capability tier the help assistant runs at — controls which Daintree
-   * actions the assistant can call. Defaults to `"action"`.
+   * Wire the runbook-search MCP server and require the assistant to load the
+   * runbook for a task before acting. Only takes effect while `daintreeControl`
+   * is on. Defaults to true.
+   */
+  runbookSearch: boolean;
+  /**
+   * MCP tool set the help assistant runs with — controls which Daintree
+   * actions the assistant can call. Defaults to `"core"`.
    */
   tier: HelpAssistantTier;
   /**

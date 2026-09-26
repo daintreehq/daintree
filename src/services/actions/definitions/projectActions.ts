@@ -890,7 +890,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.detectRunners",
     title: "Detect runners",
     description:
-      "Detect the runnable commands a project defines, by inspecting its manifest files. Use this to discover the right command to run rather than guessing one. It returns every script it finds, publish and deploy included, and for some frameworks synthesizes conventional commands that are declared nowhere — check what a command actually does before running it.",
+      "Detect the runnable commands a project defines from its manifest files, instead of guessing. Returns every script, publish and deploy included, and synthesizes conventional ones for some frameworks; check what a command does before running it.",
     category: "project",
     kind: "query",
     danger: "safe",

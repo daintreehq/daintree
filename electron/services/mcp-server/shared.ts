@@ -24,11 +24,11 @@ import {
   WAIT_UNTIL_IDLE_DESCRIPTION,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import {
-  ACTION_TIER_ADDONS as ACTION_TIER_ADDONS_LIST,
   ACTIONS_LIST_TOOL,
+  CORE_TIER_TOOLS as CORE_TIER_TOOLS_LIST,
+  FULL_TIER_ADDONS as FULL_TIER_ADDONS_LIST,
   RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
-  SYSTEM_TIER_ADDONS as SYSTEM_TIER_ADDONS_LIST,
-  WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
+  toNonRendererOwnedTools,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
 import { MCP_WORKSPACE_ID_HEADER as MCP_WORKSPACE_ID_HEADER_CANONICAL } from "../../../shared/config/mcpClientConfigs.js";
@@ -131,14 +131,14 @@ export type PaneWorkspaceBindingResolver = (token: string) => PaneWorkspaceBindi
 export type PaneOwnershipPrincipalResolver = (token: string) => string | null;
 /**
  * Resolver consulted at MCP handshake for the terminal a per-pane bearer was
- * minted for (#12491): the pane a terminal watch may wake. Null for every
+ * minted for: the pane its terminal notices are typed into. Null for every
  * other bearer.
  */
 export type PaneTerminalResolver = (token: string) => string | null;
 /**
- * The terminal a help session is bound to (#12491), read when a watch tool is
- * called rather than at handshake: the binding lands when the PTY spawns and
- * goes when it is displaced.
+ * The terminal a help session is bound to, read when a notice is asked for
+ * rather than at handshake: the binding lands when the PTY spawns and goes
+ * when it is displaced.
  */
 export type HelpSessionTerminalResolver = (helpSessionId: string) => string | null;
 /**
@@ -552,16 +552,17 @@ export function withResolvedWorkspace<T extends CallToolResult>(
   };
 }
 
-export type McpTier = "workbench" | "action" | "system" | "external";
+export type McpTier = "core" | "full" | "external";
 
-// Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts`
-// so the renderer's blast-radius preview can read them without an IPC
-// round-trip. The arrays remain the single source of truth; this module
-// just lifts them into Sets for O(1) membership checks at dispatch time.
-// `terminal.waitUntilIdle` is included in `ACTION_TIER_ADDONS_LIST`.
-const WORKBENCH_TOOLS: ReadonlySet<string> = new Set(WORKBENCH_TIER_TOOLS_LIST);
-const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set(ACTION_TIER_ADDONS_LIST);
-const SYSTEM_TIER_ADDONS: ReadonlySet<string> = new Set(SYSTEM_TIER_ADDONS_LIST);
+// Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts` so the
+// renderer's blast-radius preview can read them without an IPC round-trip. The
+// arrays remain the single source of truth; this module just lifts them into
+// Sets for O(1) membership checks at dispatch time.
+const CORE_TOOLS: ReadonlySet<string> = new Set(CORE_TIER_TOOLS_LIST);
+const FULL_TOOLS: ReadonlySet<string> = new Set([
+  ...CORE_TIER_TOOLS_LIST,
+  ...FULL_TIER_ADDONS_LIST,
+]);
 
 export function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
   const out = new Set<string>();
@@ -572,15 +573,19 @@ export function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
 }
 
 // The external tier surface lives in `shared/config/mcpExternalTierAllowlist.ts`
-// alongside the three help-assistant tier lists, so all four are curated in one
-// place and the renderer can budget-test the surface without an IPC round-trip.
-// See that file for the selection rule and why the size is a hard constraint.
+// alongside the in-app tool sets, so all of them are curated in one place and
+// the renderer can budget-test the surface without an IPC round-trip. See that
+// file for the selection rule and why the size is a hard constraint.
 const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_EXTERNAL_TIER_TOOLS);
 
+/**
+ * The surfaces as Daintree's own assistant sees them — `help` and
+ * `assistant-pane` sessions. Every other session is admitted against
+ * {@link NON_RENDERER_OWNED_TIER_ALLOWLISTS}.
+ */
 export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
-  workbench: WORKBENCH_TOOLS,
-  action: unionSet(WORKBENCH_TOOLS, ACTION_TIER_ADDONS),
-  system: unionSet(WORKBENCH_TOOLS, ACTION_TIER_ADDONS, SYSTEM_TIER_ADDONS),
+  core: CORE_TOOLS,
+  full: FULL_TOOLS,
   external: MCP_TOOL_ALLOWLIST,
 };
 
@@ -589,28 +594,21 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS: ReadonlySet<string> = new Set(
   RENDERER_OWNED_ORIGIN_ONLY_TOOLS
 );
 
-function withoutSet(set: ReadonlySet<string>, removed: ReadonlySet<string>): ReadonlySet<string> {
-  const out = new Set<string>();
-  for (const value of set) {
-    if (!removed.has(value)) out.add(value);
-  }
-  return out;
-}
-
 /**
- * The same four surfaces as {@link TIER_ALLOWLISTS}, admitted against by every
+ * The same three surfaces as {@link TIER_ALLOWLISTS}, admitted against by every
  * session whose origin is not renderer-owned — an agent pane's bearer at a
- * ladder tier, or an api-key client (#12407).
+ * ladder tier, or an api-key client (#12407). Each unscoped panel or worktree
+ * tool is swapped for its owned twin and the reserved tools are removed; see
+ * `toNonRendererOwnedTools`.
  *
- * `external` is filtered too even though its allowlist is curated without these
- * ids: the subtraction is what keeps a future edit to that list from quietly
- * handing unscoped terminal input back to a third-party client.
+ * `external` is projected too even though its allowlist is curated without the
+ * unscoped ids: the projection is what keeps a future edit to that list from
+ * quietly handing unscoped terminal input back to a third-party client.
  */
 export const NON_RENDERER_OWNED_TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
-  workbench: withoutSet(TIER_ALLOWLISTS.workbench, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
-  action: withoutSet(TIER_ALLOWLISTS.action, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
-  system: withoutSet(TIER_ALLOWLISTS.system, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
-  external: withoutSet(TIER_ALLOWLISTS.external, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+  core: new Set(toNonRendererOwnedTools([...CORE_TOOLS])),
+  full: new Set(toNonRendererOwnedTools([...FULL_TOOLS])),
+  external: new Set(toNonRendererOwnedTools([...MCP_TOOL_ALLOWLIST])),
 };
 
 export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
@@ -685,20 +683,30 @@ export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
  * absent from the listing, and an absolute claim here would contradict the
  * grant flow the tier-mismatch banner exists to drive.
  *
- * The shell sentence is scoped to external clients deliberately. In-app tiers
- * withhold writes on purpose (git/file mutations arrive only at `system`), so
- * an unscoped "use your shell when a tool is missing" would read to an
- * `action`-tier model as licence to route around its own authorization floor.
+ * The shell sentence is scoped to external clients deliberately. The in-app
+ * `core` set withholds most of `full` on purpose, so an unscoped "use your
+ * shell when a tool is missing" would read to a `core` model as licence to
+ * route around its own authorization floor.
  */
 export const MCP_SERVER_INSTRUCTIONS = [
-  "Daintree orchestrates IDE-owned worktrees, recipes, and agent terminals — use it for that coordination. External clients should use their own shell and tooling for repository, file, git, and forge work omitted from `tools/list`; that is not licence to route around an in-app tier.",
+  "Daintree drives IDE-owned worktrees, recipes and agent terminals. Use your own shell for repository, file, git and forge work; that is not licence to route around an in-app tier.",
 
-  "`tools/list` is the advertised baseline; do not invent tool names. When its schemas are too large to reason over, use `actions.search` for a compact ranked shortlist of what this session is already authorized to call, then `actions.getSchema` for one action's manifest entry and whatever schemas it publishes. Neither widens access: discovery reports the surface, it does not extend it.",
+  "Call only listed tools. `actions.search` finds one by intent and `actions.getSchema` gives its arguments; neither widens access.",
 
-  'Resolve the target worktree and terminal ids before scoped actions. A terminal submission returns once the text is queued, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
+  "Resolve worktree and terminal ids before scoped actions. A send returns once queued, not when the work is done. From an agent pane or the assistant, pass `notify: true` and end your turn: Daintree types the result into your prompt. Otherwise wait with `terminal.waitUntilIdle`, never a polling loop, and read `idleReason` before an irreversible step.",
 
-  "Authorization is tiered: in-app `workbench`, `action`, and `system` widen access; `external` is a separate allowlist. A call outside the authorized surface returns `TIER_NOT_PERMITTED`, or from an agent pane asks the user first; `USER_REJECTED` means they declined. Honor `retriable`: retry a `false` only once arguments, context, or authorization change.",
+  "In-app sessions run the `core` or `full` tool set; `external` is its own allowlist. A call outside yours returns `TIER_NOT_PERMITTED`, or from an agent pane asks the user; `USER_REJECTED` means they declined. Retry a `retriable: false` only after something changes.",
 ].join("\n\n");
+
+/**
+ * The `instructions` for Daintree's own assistant sessions — the sidebar help
+ * assistant and the assistant pane. Each ships its own prompt that carries the
+ * rules above in fuller form, and Codex in code mode repeats a server's
+ * instructions inside every one of its tool descriptions, so the long text
+ * cost those sessions ~1 KB per tool each time the model looked a tool up.
+ */
+export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
+  "Daintree's control surface for its own assistant; your instruction file has the rules. `actions.search` finds a tool by intent.";
 
 /**
  * Creation-tool allowlist for per-session idempotency dedup. LLMs replay
@@ -725,14 +733,12 @@ export const MCP_SERVER_INSTRUCTIONS = [
  * exactly this).
  *
  * An entry that *does* have an inverse is kept only when the replay it
- * absorbs outweighs the suppression it risks, on one of two grounds.
- * `forge.approvePR`/`forge.requestChanges` POST a genuinely new record each
- * call, so a replay leaves a visible second artifact — unlike assignment,
- * which leaves none, so that trade lands the other way. `worktree.delete`,
- * `forge.createPR` and `forge.mergePR` create nothing on a replay; they are
- * here to return the original success instead of the error a redundant
- * redispatch would raise, which is a different justification from the
- * duplicate-artifact one and should not be confused with it.
+ * absorbs outweighs the suppression it risks. `worktree.delete` creates
+ * nothing on a replay; it is here to return the original success instead of
+ * the error a redundant redispatch would raise, which is a different
+ * justification from the duplicate-artifact one and should not be confused
+ * with it. The forge writes that used to sit here left MCP with the core/full
+ * split, so no replay of them can arrive.
  *
  * `git.commit` and `git.push` are the tempting case that still fails (c), so
  * #11534 dropped them. Neither takes an argument a legitimate repeat varies:
@@ -751,9 +757,8 @@ export const MCP_SERVER_INSTRUCTIONS = [
  */
 const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // Panel/agent spawns — a replay leaves an orphaned terminal or a second
-  // agent. `agent.terminal` spawns exactly like `terminal.new` (#11534).
+  // agent (#11534).
   "terminal.new",
-  "agent.terminal",
   "agent.launch",
   "recipe.run",
 
@@ -777,22 +782,6 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // deletion of a genuinely different worktree and report success for it. The
   // replay it would have absorbed is only a confusing `RESOURCE_NOT_OWNED` on a
   // redundant call, which is a worse error message but an honest one (#11909).
-
-  // Forge writes worth absorbing a replay for. `createIssue`,
-  // `addIssueComment`, `commentOnPR`, `approvePR` and `requestChanges` each
-  // POST a new record every call — a duplicate issue, a duplicate comment
-  // (lesson #7554), or a second review entry, since both verdicts POST to
-  // `/pulls/{n}/reviews` (#11534). `createPR` and `mergePR` create nothing on
-  // a replay (GitHub 422s a duplicate PR; merge is a PUT) — they are here to
-  // replay the original success rather than surface that error to a caller
-  // that is only retrying.
-  "forge.createPR",
-  "forge.mergePR",
-  "forge.commentOnPR",
-  "forge.createIssue",
-  "forge.addIssueComment",
-  "forge.approvePR",
-  "forge.requestChanges",
 ] as const satisfies readonly BuiltInActionId[];
 
 export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set(MCP_DEDUP_ALLOWLIST_ENTRIES);
@@ -814,22 +803,25 @@ export const MCP_DEDUP_TTL_MS = 120_000;
 export const MCP_DEDUP_MAX_ENTRIES_PER_SESSION = 256;
 
 /**
- * Compute the minimum non-external tier that permits the given tool. Used to
- * tell the renderer how to elevate the session in response to a
- * TIER_NOT_PERMITTED denial. Both banner affordances target this tier rather
- * than blanket-elevating to `system`: "Set project default" elevates to it,
- * and "Allow this tool" mints a grant for the one tool that needed it without
- * elevating the tier at all. Returns `null` when no non-external tier permits
- * the tool — an unknown id, or a deliberately non-grantable one.
+ * Compute the minimum non-external tier that permits the given tool, on the
+ * surface the caller's origin is admitted against. Used to tell the renderer
+ * how to elevate the session in response to a TIER_NOT_PERMITTED denial:
+ * "Set project default" elevates to it, and "Allow this tool" mints a grant
+ * for the one tool that needed it without elevating the tier at all. Returns
+ * `null` when no in-app tier permits the tool — an unknown id, one that is off
+ * MCP entirely, or one this origin never reaches.
  *
  * The `external` tier is intentionally excluded because it's a peer of the
- * help-session tiers (api-key sessions only) and is never the right target
- * for renderer-driven elevation.
+ * in-app tiers (api-key sessions only) and is never the right target for
+ * renderer-driven elevation.
  */
-export function minimumPermittingTier(toolId: string): "workbench" | "action" | "system" | null {
-  if (TIER_ALLOWLISTS.workbench.has(toolId)) return "workbench";
-  if (TIER_ALLOWLISTS.action.has(toolId)) return "action";
-  if (TIER_ALLOWLISTS.system.has(toolId)) return "system";
+export function minimumPermittingTier(
+  toolId: string,
+  rendererOwnedOrigin = true
+): HelpAssistantTier | null {
+  const allowlists = rendererOwnedOrigin ? TIER_ALLOWLISTS : NON_RENDERER_OWNED_TIER_ALLOWLISTS;
+  if (allowlists.core.has(toolId)) return "core";
+  if (allowlists.full.has(toolId)) return "full";
   return null;
 }
 
@@ -983,13 +975,9 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
 
       lines.push("");
       lines.push("Please:");
-      // Tier-agnostic on purpose: `git.getStagingStatus` is a workbench/system
-      // tool, so naming it unconditionally would tell an external session to
-      // call something it will be refused for (#11585). Same shape as the
-      // `start_issue` prompt's "GitHub tools or `gh`" phrasing.
-      lines.push(
-        "1. Read the current git status (`git.getStagingStatus` if available, otherwise `git status`) to see what changed."
-      );
+      // No Daintree tool reads the index over MCP, so this names the shell
+      // command rather than a tool a session would be refused for (#11585).
+      lines.push("1. Read the current git status (`git status`) to see what changed.");
       lines.push(
         "2. Identify the root cause (error message, missing prerequisite, infinite loop, etc.)."
       );
@@ -1085,13 +1073,13 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "",
         "**Single terminals pace the same way.** Don't hold a blocking `terminal.waitUntilIdle` open to wait out a task — while the call is in flight the user can't talk to you, so an interactive session looks frozen until they cancel it (the server caps interactive waits at 60s for this reason). Kick off the task, then `ScheduleWakeup` → non-blocking check (`terminal.getStatus` or `waitUntilIdle({ timeoutMs: 0 })`) → repeat. A short bounded `waitUntilIdle` long-poll is fine when completion is expected within the minute; on `timedOut: true`, fall back to wakeup pacing instead of re-blocking back-to-back.",
         "",
-        "**Queues pace with one owner.** When you work through N jobs at most K at a time, one mechanism wakes the loop — `ScheduleWakeup`, or a pane watch where one is available — never a second timer, background sleep or polling script stacked on it, which only produces duplicate checks.",
-        "- A pane watch covers a fixed set of terminals and stops after its wake budget: if available, after each refill cancel it (`terminal.cancelWatch`) and register one over the current running ids (`terminal.registerWatch`), and if it stops, re-register or switch to `ScheduleWakeup` — still one mechanism at a time.",
+        "**Queues pace with one owner.** When you work through N jobs at most K at a time, one mechanism wakes the loop — `ScheduleWakeup`, or Daintree notices where your pane has them — never a second timer, background sleep or polling script stacked on it, which only produces duplicate checks.",
+        "- A notice fires once: launch or prompt each job with `notify: true` (or `terminal.notifyWhenIdle` if available, for one already working) and end your turn, and when that agent stops Daintree types a notice into your prompt quoting its last screen lines. Re-arm with every new prompt; if your pane cannot take notices, use `ScheduleWakeup` — still one mechanism at a time.",
         "- Launch each job only once its worktree has finished setup (`worktree.waitUntilReady` if available at your tier), then `agent.launch` with the full prompt.",
         "- Waiting alone is not done, only a cue to inspect: refill a slot only once its job reached the milestone the user named, its PR is confirmed and its final report is read. A job waiting on an approval or question is blocked and keeps its slot. `prNumber` in `worktree.list` is a cached hint and null does not prove there is no PR, so confirm with the forge (`forge.getPR` or `forge.listPRs` if available) rather than scraping the agent's screen.",
         "- Text on a finished agent's input line may be its CLI's suggested next prompt, not the user's: never submit or act on it.",
         "",
-        '**Fleet broadcast runs are supervised.** When the user fans a prompt out with the in-app fleet broadcast, `fleet.getRunStatus` returns the supervised run in one call: per-target submission outcome (`sent` / `failed` with `permanent`-vs-`transient` classification / `skipped` on cancel), a live `agentState` snapshot, `settled` flags, and aggregate counts. Use it to answer "how is the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus` — but keep using `terminal.getStatus` (with `includeOutput`) as ground truth before acting on any single terminal. `fleet.getRunStatus` never dispatches anything, and there is deliberately no MCP tool that broadcasts to the whole fleet: to orchestrate your own fan-out, send one `terminal.sendCommandOwned` per terminal you launched or the user handed you, and watch with batched `terminal.getStatus` / a bounded `terminal.waitUntilIdleBatch`.',
+        '**Fleet broadcast runs are supervised.** When the user fans a prompt out with the in-app fleet broadcast, `fleet.getRunStatus` (in the `full` tool set) returns the supervised run in one call: per-target submission outcome (`sent` / `failed` with `permanent`-vs-`transient` classification / `skipped` on cancel), a live `agentState` snapshot, `settled` flags, and aggregate counts. Use it to answer "how is the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus` — but keep using `terminal.getStatus` (with `includeOutput`) as ground truth before acting on any single terminal. `fleet.getRunStatus` never dispatches anything, and there is deliberately no MCP tool that broadcasts to the whole fleet: to orchestrate your own fan-out, send one `terminal.sendCommandOwned` (or `terminal.sendCommand` if available) per terminal you launched or the user handed you, and watch with batched `terminal.getStatus` / a bounded `terminal.waitUntilIdleBatch`.',
       ].join("\n");
     },
   },

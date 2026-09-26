@@ -208,10 +208,11 @@ export interface OnboardingState {
 }
 
 /**
- * Tier classifications for the help-panel agent session. Maps to the
- * action danger boundaries from the help-assistant settings (#6517).
+ * The Daintree MCP tool set a help-panel session or agent pane is served:
+ * `core` is the orchestration surface, `full` adds the rest. Nothing outside
+ * `full` is reachable over MCP at all.
  */
-export type HelpAssistantTier = "workbench" | "action" | "system";
+export type HelpAssistantTier = "core" | "full";
 
 /** Serializable toast payload sent from main process to renderer via IPC. */
 export interface MainProcessToastPayload {
@@ -1432,8 +1433,8 @@ export interface IpcEventMap {
   // Every terminal currently handed to an orchestrating pane (#12490). The
   // whole list on each change: it is small and rarely changes.
   "terminal:adoptions-changed": import("./mcpServer.js").TerminalAdoptionEntry[];
-  // A pane's terminal watches changed (#12491); project-scoped send.
-  "terminal:watch-state": import("../terminalWatch.js").PaneWatchState;
+  // A pane's pending terminal notices changed; project-scoped send.
+  "terminal:notify-state": import("../terminalNotify.js").PaneNotifyState;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
@@ -1646,7 +1647,7 @@ export interface IpcEventMap {
     sessionId: string;
     toolId: string;
     tier: string;
-    targetTier: "workbench" | "action" | "system" | null;
+    targetTier: HelpAssistantTier | null;
   };
 
   /**
@@ -2264,7 +2265,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:submit-status"
   // Terminals handed to an orchestrating pane (global broadcast)
   | "terminal:adoptions-changed"
-  | "terminal:watch-state"
+  | "terminal:notify-state"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)

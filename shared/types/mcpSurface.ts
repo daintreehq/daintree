@@ -34,8 +34,8 @@ export interface McpSurfaceTool {
   /**
    * The lowest tier on the CALLER'S OWN ladder that permits this tool. Always
    * `external` for an external caller, since that allowlist is flat. For an
-   * in-app caller this is the minimum of workbench/action/system, so a `system`
-   * session can see which of its tools would survive a demotion.
+   * in-app caller this is the minimum of core/full, so a `full` session can
+   * see which of its tools would survive a demotion.
    */
   tier: McpSurfaceTier;
   kind: ActionKind;
@@ -89,7 +89,7 @@ export interface McpSurfaceManifest {
   tools: McpSurfaceTool[];
 }
 
-const TIER_VALUES = ["workbench", "action", "system", "external"] as const;
+const TIER_VALUES = ["core", "full", "external"] as const;
 
 /**
  * Published as the `mcp.surface` tool's `outputSchema`. A plain top-level
@@ -102,13 +102,13 @@ export const McpSurfaceResultSchema = z.object({
     .number()
     .int()
     .positive()
-    .describe("Shape version of this payload, bumped when its fields change meaning"),
+    .describe("Payload shape version, bumped when a field changes meaning"),
   appVersion: z.string().describe("The running Daintree build"),
   tier: z.enum(TIER_VALUES).describe("The authorization tier this call was admitted at"),
   hash: z
     .string()
     .regex(/^[0-9a-f]{64}$/)
-    .describe("Hex SHA-256 of the surface; compare it later to detect drift without diffing"),
+    .describe("Hex SHA-256 of the surface, for drift checks"),
   tools: z
     .array(
       z.object({
@@ -120,7 +120,7 @@ export const McpSurfaceResultSchema = z.object({
         readOnlyHint: z.boolean().describe("The tool does not modify state, so a retry is safe"),
         idempotentHint: z
           .boolean()
-          .describe("Repeating the call with the same arguments has no additional effect"),
+          .describe("Repeating with the same arguments has no further effect"),
         deprecated: z
           .object({
             reason: z.string(),
@@ -133,5 +133,5 @@ export const McpSurfaceResultSchema = z.object({
     // Not "every tool this session can call": a per-tool approval can widen
     // dispatch beyond this list for a few minutes without ever appearing in
     // `tools/list`, and this reports the listing.
-    .describe("Every tool `tools/list` advertises to this session, sorted by id"),
+    .describe("Every tool `tools/list` advertises here, sorted by id"),
 });

@@ -141,7 +141,7 @@ export function buildProjectMetadataAddendum(input: ProjectMetadataInput): strin
 
   // Settings, not session state: lanes launched earlier keep whatever wiring
   // they were provisioned with, and this block is shared by all of them.
-  lines.push(`- Assistant tier setting: \`${input.tier}\``);
+  lines.push(`- Assistant tool set setting: \`${input.tier}\``);
   lines.push(`- Daintree MCP tools setting: \`${input.daintreeControl ? "enabled" : "disabled"}\``);
   lines.push("");
   return lines.join("\n");

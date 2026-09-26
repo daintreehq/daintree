@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib/animationUtils";
 import { ArrowLeftRight, DaintreeIcon, FolderGit2 } from "@/components/icons";
-import { TerminalWatchChip } from "@/components/Terminal/TerminalWatchChip";
+import { TerminalNotifyChip } from "@/components/Terminal/TerminalNotifyChip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AgentConfig } from "@/config/agents";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
@@ -145,7 +145,7 @@ function StatusItem({
 
 /**
  * Bottom info bar — a single status row (#9763). Left: what happened (tool-call
- * activity, the last turn's outcome, terminal watches). Right: where the
+ * activity, the last turn's outcome, pending terminal notices). Right: where the
  * assistant's calls land and which agent is making them.
  *
  * One line in every state, at every panel width. The binding truncates first;
@@ -206,9 +206,9 @@ export function HelpPanelFooter({
       >
         <McpActivityStrip sessionId={sessionId} activity={activity} compact={density >= 3} />
         <TurnOutcomePip outcome={outcomeAlert} onDismiss={onDismissOutcome} />
-        {/* This lane's terminal watches (#12491): self-gating, and where the
-            user stops Daintree from waking the assistant. */}
-        {terminalId && <TerminalWatchChip terminalId={terminalId} />}
+        {/* This lane's pending terminal notices: self-gating, and where the
+            user stops Daintree from typing into the assistant. */}
+        {terminalId && <TerminalNotifyChip terminalId={terminalId} />}
         <span aria-hidden className="flex-1 min-w-2" />
         {binding !== null &&
           // A diverged worktree is recoverable in one click — switch focus back

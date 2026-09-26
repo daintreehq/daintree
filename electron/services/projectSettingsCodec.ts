@@ -24,6 +24,7 @@ import type {
   ResourceEnvironment,
   SnapshotFleetSavedScope,
 } from "../../shared/types/project.js";
+import { normalizeDaintreeMcpTier } from "../../shared/types/project.js";
 import type { CommandOverride } from "../../shared/types/commands.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { normalizeProviderId } from "../../shared/utils/forgeProviderIds.js";
@@ -51,7 +52,6 @@ const ALLOWED_NOTIFICATION_SOUNDS = [
 
 const VALID_PREDICATE_SCOPES = new Set(["current", "all"]);
 const VALID_PREDICATE_STATES = new Set(["all", "working", "waiting", "finished"]);
-const VALID_MCP_TIERS = new Set<DaintreeMcpTier>(["off", "workbench", "action", "system"]);
 
 function decodeTerminalSettings(raw: unknown): ProjectTerminalSettings | undefined {
   if (!raw || typeof raw !== "object") return undefined;
@@ -286,9 +286,9 @@ function decodeResourceEnvironments(raw: unknown): Record<string, ResourceEnviro
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+// A tier written before the core/full split is read onto the new pair.
 function decodeMcpTier(raw: unknown): DaintreeMcpTier | undefined {
-  if (typeof raw !== "string") return undefined;
-  return VALID_MCP_TIERS.has(raw as DaintreeMcpTier) ? (raw as DaintreeMcpTier) : undefined;
+  return normalizeDaintreeMcpTier(raw) ?? undefined;
 }
 
 function decodeBranchPrefixMode(raw: unknown): "none" | "username" | "custom" | undefined {
@@ -350,7 +350,7 @@ function decodeDevServerLoadTimeout(raw: unknown): number | undefined {
 /**
  * Apply legacy-field migrations to produce a canonical settings shape:
  *   - `resourceEnvironment` (singular) → `resourceEnvironments` (plural)
- *   - `exposeDaintreeMcpToAgents: true` → `daintreeMcpTier: "workbench"`
+ *   - `exposeDaintreeMcpToAgents: true` → `daintreeMcpTier: "core"`
  *
  * Idempotent: when the canonical fields are already present, the legacy
  * fields are ignored. Both legacy fields are kept on the returned object so
@@ -375,7 +375,7 @@ function migrateLegacyFields(raw: Record<string, unknown>): Record<string, unkno
 
   // exposeDaintreeMcpToAgents → daintreeMcpTier
   if (!migrated.daintreeMcpTier && migrated.exposeDaintreeMcpToAgents === true) {
-    migrated.daintreeMcpTier = "workbench";
+    migrated.daintreeMcpTier = "core";
   }
 
   return migrated;
@@ -580,7 +580,7 @@ export const ProjectSettingsSaveSchema = z
     resourceEnvironments: z.record(z.string(), z.unknown()).optional(),
     activeResourceEnvironment: z.string().optional(),
     defaultWorktreeMode: z.string().optional(),
-    daintreeMcpTier: z.enum(["off", "workbench", "action", "system"]).optional(),
+    daintreeMcpTier: z.enum(["off", "core", "full"]).optional(),
     exposeDaintreeMcpToAgents: z.boolean().optional(),
     browserAllowedHosts: z.array(z.string()).optional(),
     agentInstructions: z.unknown().optional(),

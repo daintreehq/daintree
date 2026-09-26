@@ -786,16 +786,15 @@ export interface ProjectSettings {
   /** Hostnames the user approved for the browser panel beyond the implicit local/private allow-list */
   browserAllowedHosts?: string[];
   /**
-   * Tier of Daintree MCP access exposed to agents launched in this project's worktrees.
+   * Daintree MCP tool set exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
-   * - `workbench`: read-only introspection (worktree/files/terminal output, project state, history)
-   * - `action`: workbench + in-app orchestration (create worktrees from recipes, open terminals and send input to the ones the agent's own session opened, confirm-gated worktree cleanup)
-   * - `system`: action + worktree creation at an explicit root, terminal arm/disarm, git stage/fetch/commit/push, clipboard and CopyTree-to-disk writes, forge reads and writes
+   * - `core`: orchestration — create worktrees, launch agents, prompt, read, wait on, move and close the terminals the agent's own session opened
+   * - `full`: core + recipes, workflows, project checks, forge and git reads, context tools, and diagnostics
    */
   daintreeMcpTier?: DaintreeMcpTier;
   /**
    * @deprecated Use `daintreeMcpTier` instead. Kept for one-cycle migration of existing project files.
-   * `true` migrates to `workbench` on read; `false`/undefined migrates to `off`.
+   * `true` migrates to `core` on read; `false`/undefined migrates to `off`.
    */
   exposeDaintreeMcpToAgents?: boolean;
 }
@@ -1023,17 +1022,38 @@ export function pickAgentVisibleProjectSettings(
   return visible as AgentVisibleProjectSettings;
 }
 
-/** Tier of Daintree MCP access exposed to agents in a project. */
-export type DaintreeMcpTier = "off" | "workbench" | "action" | "system";
+/** Daintree MCP tool set exposed to agents in a project. */
+export type DaintreeMcpTier = "off" | "core" | "full";
 
-/** Resolve the legacy boolean field into the new tier enum. */
+/**
+ * Map a stored tier onto the current enum. The pre-split ladder values are
+ * read in place — `workbench` and `action` become `core`, `system` becomes
+ * `full` — so a project file written by an older build keeps working without a
+ * rewrite. Anything unrecognised is `null`.
+ */
+export function normalizeDaintreeMcpTier(value: unknown): DaintreeMcpTier | null {
+  switch (value) {
+    case "off":
+    case "core":
+    case "full":
+      return value;
+    case "workbench":
+    case "action":
+      return "core";
+    case "system":
+      return "full";
+    default:
+      return null;
+  }
+}
+
+/** Resolve the stored tier, or the legacy boolean field, into the current enum. */
 export function resolveDaintreeMcpTier(settings: {
-  daintreeMcpTier?: DaintreeMcpTier;
+  daintreeMcpTier?: unknown;
   exposeDaintreeMcpToAgents?: boolean;
 }): DaintreeMcpTier {
-  const tier = settings.daintreeMcpTier;
-  if (tier === "workbench" || tier === "action" || tier === "system") return tier;
-  if (tier === "off") return "off";
-  if (settings.exposeDaintreeMcpToAgents === true) return "workbench";
+  const tier = normalizeDaintreeMcpTier(settings.daintreeMcpTier);
+  if (tier !== null) return tier;
+  if (settings.exposeDaintreeMcpToAgents === true) return "core";
   return "off";
 }
