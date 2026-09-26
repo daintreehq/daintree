@@ -1757,8 +1757,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * `valid` is `true`.
      */
     setCredential(providerId: string, credentials: Record<string, string>): Promise<AuthValidation>;
-    /** Report whether credentials are stored for the given forge provider id. */
-    getCredentialStatus(providerId: string): Promise<{ hasCredential: boolean }>;
+    /**
+     * Report whether credentials are stored for the given forge provider id.
+     * `fingerprint` is a one-way identity of the stored record, present only
+     * when one is stored; it changes whenever the credential is replaced.
+     */
+    getCredentialStatus(
+      providerId: string
+    ): Promise<{ hasCredential: boolean; fingerprint?: string }>;
     /** Clear stored credentials for the given forge provider id. */
     clearCredential(providerId: string): Promise<void>;
     /**

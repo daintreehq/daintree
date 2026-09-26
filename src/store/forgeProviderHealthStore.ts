@@ -24,14 +24,11 @@ export interface ForgeProviderHealth {
   rateLimitResetAt: number | null;
   rateLimitMultiplier: number;
   tokenUnhealthy: boolean;
-  // User dismissed the token-health banner for the current unhealthy episode.
-  // Reset on every health transition so a fresh expiry re-surfaces the banner.
-  tokenBannerDismissed: boolean;
   // Last provider-reported token-health snapshot (carries `reauthUrl` for
-  // banner surfaces). Cleared when the token recovers without a fresh state.
+  // the forge pill's token callout). Cleared when the token recovers without a fresh state.
   tokenHealth: ForgeTokenHealthState | null;
   // Registration metadata resolved from the forge registry at push time so
-  // store-driven surfaces (banner, priority slot) can render a display name
+  // store-driven surfaces can render a display name
   // and gate on the owning plugin's enable state without an IPC round-trip.
   providerName: string | null;
   pluginId: string | null;
@@ -45,7 +42,6 @@ export const DEFAULT_PROVIDER_HEALTH: ForgeProviderHealth = Object.freeze({
   rateLimitResetAt: null,
   rateLimitMultiplier: 1,
   tokenUnhealthy: false,
-  tokenBannerDismissed: false,
   tokenHealth: null,
   providerName: null,
   pluginId: null,
@@ -70,7 +66,6 @@ interface ForgeProviderHealthStore {
   applyRateLimit: (providerId: string, state: ForgeRateLimitState) => void;
   setTokenUnhealthy: (providerId: string, value: boolean, state?: ForgeTokenHealthState) => void;
   setProviderMeta: (providerId: string, meta: ForgeProviderMeta) => void;
-  dismissTokenBanner: (providerId: string) => void;
   removeProvider: (providerId: string) => void;
 }
 
@@ -116,10 +111,6 @@ export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set
   setTokenUnhealthy: (providerId, value, state) =>
     set((s) => {
       const prev = s.providers[providerId] ?? DEFAULT_PROVIDER_HEALTH;
-      // Clear the dismissed flag on a real transition only. Repeated identical
-      // "still unhealthy" pushes must not un-dismiss a banner the user closed,
-      // but a fresh expiry (healthy → unhealthy) or recovery resets it.
-      const tokenBannerDismissed = value && prev.tokenUnhealthy ? prev.tokenBannerDismissed : false;
       // Keep the last snapshot while unhealthy (a bare boolean push must not
       // drop a previously observed reauthUrl); clear it on recovery unless the
       // recovery push carries its own fresh state.
@@ -127,7 +118,6 @@ export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set
       return {
         providers: mergeProvider(s, providerId, {
           tokenUnhealthy: value,
-          tokenBannerDismissed,
           tokenHealth,
         }),
       };
@@ -138,10 +128,6 @@ export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set
         providerName: meta.providerName,
         pluginId: meta.pluginId,
       }),
-    })),
-  dismissTokenBanner: (providerId) =>
-    set((s) => ({
-      providers: mergeProvider(s, providerId, { tokenBannerDismissed: true }),
     })),
   // Drop a provider's slice entirely. Without this the `providers` Record only
   // ever grew (every `mergeProvider` adds, nothing removes), so a plugin that

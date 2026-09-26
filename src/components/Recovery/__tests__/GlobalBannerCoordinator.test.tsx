@@ -352,39 +352,23 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
   });
 
-  it("suppresses forge-token and cloud-sync while the watchdog is disabled", () => {
+  it("suppresses cloud-sync while the watchdog is disabled", () => {
     usePanelStore.setState({ watchdogStatus: "disabled" });
-    setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
     render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
-    expect(screen.queryByText("GitHub token expired")).toBeNull();
     expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
-  it("renders the GitHub token banner when only the token is unhealthy", () => {
+  it("claims no global banner for an unhealthy forge token", () => {
+    // An expired token points at the forge pill instead (#12831).
     setForgeTokenUnhealthy(true);
 
-    render(<GlobalBannerCoordinator />);
+    const { container } = render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("GitHub token expired")).toBeTruthy();
-  });
-
-  it("releases the slot to the next banner once the forge warning is dismissed", () => {
-    // The slot is claimed by the same predicate that renders: a dismissed
-    // token must not hold an empty band over cloud-sync.
-    setForgeTokenUnhealthy(true);
-    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
-
-    render(<GlobalBannerCoordinator />);
-    expect(screen.getByText("GitHub token expired")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss GitHub token warning" }));
-
-    expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.getByText("Project in a cloud folder")).toBeTruthy();
+    expect(container.firstChild).toBeNull();
   });
 
   it("lets a dismissed watchdog warning yield the slot, and shows it again on the next disable", () => {
@@ -419,37 +403,33 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
   });
 
-  it("prefers the GitHub token banner over cloud sync when both are active", () => {
+  it("leaves the slot to cloud sync when a forge token is also unhealthy", () => {
     setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("GitHub token expired")).toBeTruthy();
-    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
+    expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
+    expect(screen.queryByText("GitHub token expired")).toBeNull();
   });
 
-  it("suppresses forge-token and cloud-sync while restore is active", () => {
+  it("suppresses cloud-sync while restore is active", () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
-    setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
     render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
-    expect(screen.queryByText("GitHub token expired")).toBeNull();
     expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("suppresses every lower-priority banner when the host has crashed", () => {
     usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
-    setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
     render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Terminal service crashed")).toBeTruthy();
-    expect(screen.queryByText("GitHub token expired")).toBeNull();
     expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
@@ -721,17 +701,6 @@ describe("GlobalBannerCoordinator — missing prerequisite slot (#11763)", () =>
     expect(screen.getByText(/Session recovered after unexpected exit/)).toBeTruthy();
   });
 
-  it("wins the slot over an expired forge token", () => {
-    // A stale token breaks one panel's data; a missing Git breaks every git
-    // operation in the app.
-    setForgeTokenUnhealthy(true);
-    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
-
-    render(<GlobalBannerCoordinator />);
-
-    expect(screen.getByText("Git is missing")).toBeTruthy();
-  });
-
   it("wins the slot over the Rosetta warning", () => {
     useRosettaBannerStore.setState({ visible: true });
     useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
@@ -743,15 +712,15 @@ describe("GlobalBannerCoordinator — missing prerequisite slot (#11763)", () =>
   });
 
   it("yields the slot to the next banner once dismissed for the session", () => {
-    setForgeTokenUnhealthy(true);
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
     useMissingPrerequisiteStore.setState({ missing: [missingGit()], dismissed: true });
 
     render(<GlobalBannerCoordinator />);
 
     expect(screen.queryByText("Git is missing")).toBeNull();
     // Asserting the promotion, not just the disappearance — the slot must go to
-    // forge-token rather than the coordinator rendering nothing.
-    expect(screen.getByText("GitHub token expired")).toBeTruthy();
+    // cloud-sync rather than the coordinator rendering nothing.
+    expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
   });
 
   it("stands down while a surface already showing prerequisites is mounted", () => {

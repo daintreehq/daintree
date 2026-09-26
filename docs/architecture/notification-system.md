@@ -156,14 +156,12 @@ restore-confirmation restoreVisible                       (session-recovered, au
   ↓
 missing-prerequisite prerequisiteVisible                  (a fatal tool — Git, Node — isn't installed)
   ↓
-forge-token          tokenUnhealthy                       (expired creds; forge data broken now)
-  ↓
 cloud-sync           cloudSyncService !== null            (environmental warning)
   ↓
 rosetta              rosettaVisible                       (x64 build translated on Apple Silicon)
 ```
 
-Rationale for the order lives inline in `useGlobalBannerPriority.ts`: watchdog sits below host-crash (a live host failure outranks a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one); `restore-confirmation` stays above everything below it because its auto-dismiss timer only runs while mounted, so it must keep that window; `missing-prerequisite` (#11763) sits below the recovery block — a downed backend is the more urgent read, and the banner self-clears because it re-checks on window focus — but above `forge-token` on blast radius, since an expired token breaks one panel's data while a missing Git breaks every git operation in the app; `forge-token` outranks `cloud-sync` because an expired token is an active failure while cloud-sync is a persistent environmental condition; `rosetta` sits last because nothing in the app can change it — any more actionable banner deserves the slot first.
+Rationale for the order lives inline in `useGlobalBannerPriority.ts`: watchdog sits below host-crash (a live host failure outranks a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one); `restore-confirmation` stays above everything below it because its auto-dismiss timer only runs while mounted, so it must keep that window; `missing-prerequisite` (#11763) sits below the recovery block — a downed backend is the more urgent read, and the banner self-clears because it re-checks on window focus; an expired forge token is not a global banner at all: it points at the forge pill (`ForgeTokenCallout`, #12831); `rosetta` sits last because nothing in the app can change it — any more actionable banner deserves the slot first.
 
 **Suppressed banners unmount — they are not CSS-hidden.** The coordinator returns exactly one component; the losers are removed from the tree. This is deliberate: mount-driven effects (most notably `RestoreConfirmationBanner`'s auto-dismiss timer) must not run while the banner is invisible. A CSS-hide would leave those timers ticking behind a higher-priority banner.
 

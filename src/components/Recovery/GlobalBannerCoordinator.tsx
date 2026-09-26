@@ -4,7 +4,6 @@ import { HostMemoryStallBanner } from "./HostMemoryStallBanner";
 import { SafeModeBanner } from "./SafeModeBanner";
 import { RestoreConfirmationBanner } from "./RestoreConfirmationBanner";
 import { MissingPrerequisiteBanner } from "./MissingPrerequisiteBanner";
-import { ForgeTokenBanner } from "./ForgeTokenBanner";
 import { CloudSyncBanner } from "./CloudSyncBanner";
 import { RosettaBanner } from "./RosettaBanner";
 import { useEffect, useState } from "react";
@@ -37,8 +36,6 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
       return <RestoreConfirmationBanner />;
     case "missing-prerequisite":
       return <MissingPrerequisiteBanner />;
-    case "forge-token":
-      return <ForgeTokenBanner />;
     case "plugin-document":
       return <PluginDocumentWarning />;
     case "cloud-sync":
@@ -53,9 +50,8 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
 // Renders the single highest-priority active global banner at the top of the
 // app. Suppressed banners are unmounted (not CSS-hidden) so any mount-driven
 // effects — most notably RestoreConfirmationBanner's auto-dismiss timer — only
-// run while the banner is actually visible to the user. Folding the forge
-// token and cloud-sync warnings into this slot means at most one global banner
-// ever shows; the priority order lives in useGlobalBannerPriority.
+// run while the banner is actually visible to the user. Folding the
+// cloud-sync warning into this slot means at most one global banner ever shows; the priority order lives in useGlobalBannerPriority.
 //
 // Every banner here is pinned to the very top of the window, where it would
 // otherwise render under the OS window controls (macOS traffic lights, Windows
@@ -68,8 +64,7 @@ export function GlobalBannerCoordinator() {
   // The native Windows caption strip is painted above all web content, so main
   // has to be told which banner colour sits under it. The severity comes from
   // the mounted banner rather than the slot: a slot can be claimed by a banner
-  // that renders nothing (HostCrashBanner during its Doherty gate,
-  // ForgeTokenBanner resolving to null), and tinting for an absent banner would
+  // that renders nothing (HostCrashBanner during its Doherty gate), and tinting for an absent banner would
   // recreate the mismatch this fixes.
   //
   // Holding it in state rather than reporting straight from the banner also

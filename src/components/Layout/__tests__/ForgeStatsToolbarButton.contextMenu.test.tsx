@@ -27,10 +27,12 @@ const providerState = vi.hoisted((): { entry: ForgeProviderEntry | null } => ({ 
 const statsState = vi.hoisted(
   (): {
     isTokenError: boolean;
+    error: string | null;
     rateLimitResetAt: number | null;
     rateLimitKind: "primary" | "secondary" | null;
   } => ({
     isTokenError: false,
+    error: null,
     rateLimitResetAt: null,
     rateLimitKind: null,
   })
@@ -50,7 +52,7 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
   useRepositoryStats: () => ({
     stats: { issueCount: 3, prCount: 2, commitCount: 5 },
     loading: false,
-    error: null,
+    error: statsState.error,
     isTokenError: statsState.isTokenError,
     refresh: refreshStatsMock,
     isStale: false,
@@ -135,6 +137,7 @@ beforeEach(() => {
   getRepoUrlMock.mockResolvedValue("https://github.com/acme/proj");
   providerState.entry = GITHUB;
   statsState.isTokenError = false;
+  statsState.error = null;
   statsState.rateLimitResetAt = null;
   statsState.rateLimitKind = null;
   worktrees.set("wt-1", { id: "wt-1", path: "/test/proj/wt", branch: "feature/x" });
@@ -259,6 +262,43 @@ describe("ForgeStatsToolbarButton context menus", () => {
     const menu = await openMenu(screen.getByTestId("forge-stat-pill-issues"));
 
     expect(itemLabels(menu)).toEqual(["View all issues on GitHub", ...CHROME_MENU]);
+  });
+
+  it("asks to reconnect an expired token and points the callout at the issues pill", async () => {
+    Object.defineProperty(window, "electron", {
+      writable: true,
+      configurable: true,
+      value: {
+        forge: {
+          getCredentialStatus: vi
+            .fn()
+            .mockResolvedValue({ hasCredential: true, fingerprint: "fp" }),
+        },
+      },
+    });
+    statsState.isTokenError = true;
+    statsState.error = "Invalid GitHub token. Please update in Settings.";
+    await renderStats();
+    await act(async () => {});
+
+    const pill = screen.getByTestId("forge-stat-pill-issues");
+    expect(pill.getAttribute("aria-label")).toBe("Reconnect GitHub to see issues");
+    expect(screen.getByTestId("forge-stat-pill-prs").getAttribute("aria-label")).toBe(
+      "Reconnect GitHub to see pull requests"
+    );
+    const callout = screen.getByTestId("forge-token-callout");
+    expect(pill.getAttribute("aria-describedby")).toBe(callout.id);
+  });
+
+  it("keeps the configure wording and no callout for a token never set", async () => {
+    statsState.isTokenError = true;
+    statsState.error = "GitHub token not configured. Set it in Settings.";
+    await renderStats();
+
+    expect(screen.getByTestId("forge-stat-pill-issues").getAttribute("aria-label")).toBe(
+      "Configure GitHub token to see issues"
+    );
+    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
   });
 
   it("opens no second menu from a right-click inside an open pill menu", async () => {

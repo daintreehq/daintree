@@ -1,7 +1,6 @@
 import { usePanelStore } from "@/store/panelStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
-import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
@@ -56,17 +55,6 @@ const NODE_OUTDATED: PrerequisiteCheckResult = {
   minVersion: "22.0.0",
   installUrl: "https://nodejs.org/en/download",
 };
-
-function seedForgeToken(withReauth: boolean) {
-  const store = useForgeProviderHealthStore.getState();
-  store.setProviderMeta("github", { providerName: "GitHub", pluginId: null });
-  store.setTokenUnhealthy("github", true, {
-    status: "unhealthy",
-    tokenVersion: 1,
-    checkedAt: Date.now(),
-    reauthUrl: withReauth ? "https://github.com/settings/tokens" : undefined,
-  });
-}
 
 /** A plugin package that fails to import is the smallest real diagnostic the runtime emits. */
 function seedPluginDocument() {
@@ -209,16 +197,6 @@ export const BANNER_FIXTURES = {
       });
     },
   },
-  "forge-token": {
-    slot: "forge-token",
-    what: "expired credentials with a reauthorization link — the two-action case",
-    seed: () => seedForgeToken(true),
-  },
-  "forge-token-single": {
-    slot: "forge-token",
-    what: "expired credentials, no reauth URL — one action",
-    seed: () => seedForgeToken(false),
-  },
   "plugin-document": {
     slot: "plugin-document",
     what: "plugin registrations stuck until the window reloads",
@@ -242,7 +220,7 @@ export const BANNER_FIXTURES = {
 
 export type BannerFixtureName = keyof typeof BANNER_FIXTURES;
 
-/** The ten slots, in coordinator priority order, one canonical fixture each. */
+/** The nine slots, in coordinator priority order, one canonical fixture each. */
 export const SHEET_ROWS: readonly BannerFixtureName[] = [
   "host-crash",
   "watchdog-disabled",
@@ -250,7 +228,6 @@ export const SHEET_ROWS: readonly BannerFixtureName[] = [
   "safe-mode",
   "restore-confirmation",
   "missing-prerequisite",
-  "forge-token",
   "plugin-document",
   "cloud-sync",
   "rosetta",

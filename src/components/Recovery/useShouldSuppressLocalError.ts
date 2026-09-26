@@ -11,7 +11,7 @@ import { useGlobalBannerPriority, type GlobalBannerSlot } from "./useGlobalBanne
  *    path runs through the backend (spawn, reconnect, restart). Suppressed only
  *    while a *recovery* global cause is active (see `SLOT_IS_RECOVERY`), because
  *    the user can't act on it until the backend is healthy again. Advisory
- *    causes (`forge-token`, `cloud-sync`) leave the backend connected, so the
+ *    causes (`cloud-sync`, `rosetta`) leave the backend connected, so the
  *    banner stays visible and actionable.
  *  - `parse-error` — the banner describes a file-format or replay failure
  *    that's independent of host connectivity (e.g. corrupt saved scrollback).
@@ -48,7 +48,6 @@ const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
   // Advisory: the backend is connected and a pane's own spawn/reconnect errors
   // stay actionable — a missing Git doesn't make them un-fixable.
   "missing-prerequisite": false,
-  "forge-token": false,
   "plugin-document": false,
   "cloud-sync": false,
   rosetta: false,
@@ -77,7 +76,7 @@ function isSuppressedByGlobalCause(cause: GlobalBannerSlot, category: LocalError
  *  view), and turns false only after `LOCAL_ERROR_SETTLE_MS` of sustained
  *  no-cause — this absorbs `backendStatus` flicker between `"recovering"` and
  *  `"connected"`. The settle tail applies only when no cause is active
- *  (`cause === null`); when an advisory cause (`forge-token`, `cloud-sync`)
+ *  (`cause === null`); when an advisory cause (`cloud-sync`, `rosetta`)
  *  takes over the slot the backend is already connected, so un-suppression is
  *  immediate — the tail must not hide a now-actionable pane error (#10038).
  *  Performance mode bypasses the settle window (mirrors raw state instantly via
