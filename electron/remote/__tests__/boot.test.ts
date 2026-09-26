@@ -256,6 +256,7 @@ vi.mock("../../ipc/utils.js", () => ({
 }));
 vi.mock("../../services/DriveLeaseService.js", () => ({
   getDriveLeaseService: () => m.lease,
+  createDriveLeaseGate: () => () => null,
 }));
 vi.mock("../../services/mcp-server/driveTarget.js", () => ({
   setMcpDriveTargetResolver: vi.fn((resolver: (projectId: string) => unknown) => {
