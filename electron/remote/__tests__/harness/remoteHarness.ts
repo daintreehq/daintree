@@ -92,10 +92,26 @@ function senderEvent(id: number) {
   };
 }
 
-export async function startRemoteHarness(): Promise<RemoteHarness> {
+export interface RemoteHarnessOptions {
+  /** Parent of the run's directory; the OS temp dir unless given (ssh socket paths need a short one). */
+  rootDir?: string;
+  /** Where Host mode listens; under the run's directory unless given. */
+  hostLocation?: HostSocketLocation;
+  /**
+   * How the Shell reaches the host, given the client's own directory (the one
+   * the port forwards take their ControlMaster from). A direct socket to the
+   * host's discovery file unless given; `dropLink`/`restoreLink` need that one.
+   */
+  createTransport?: (clientDir: string) => LinkTransport;
+  sshTarget?: string;
+}
+
+export async function startRemoteHarness(
+  options: RemoteHarnessOptions = {}
+): Promise<RemoteHarness> {
   const teardowns: Array<() => unknown> = [];
   try {
-    return await buildHarness(teardowns);
+    return await buildHarness(teardowns, options);
   } catch (error) {
     // A failed start must not leave its socket, env or services behind for the next test.
     for (const teardown of teardowns.splice(0).reverse()) {
@@ -109,7 +125,10 @@ export async function startRemoteHarness(): Promise<RemoteHarness> {
   }
 }
 
-async function buildHarness(teardowns: Array<() => unknown>): Promise<RemoteHarness> {
+async function buildHarness(
+  teardowns: Array<() => unknown>,
+  options: RemoteHarnessOptions
+): Promise<RemoteHarness> {
   resetIpcMain();
   _resetIpcGuardForTesting();
   _resetEndpointRegistryForTesting();
@@ -122,7 +141,9 @@ async function buildHarness(teardowns: Array<() => unknown>): Promise<RemoteHarn
   enforceIpcSenderValidation();
 
   // Real paths throughout: host containment compares canonical paths.
-  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "drh-")));
+  const dir = await fs.realpath(
+    await fs.mkdtemp(path.join(options.rootDir ?? os.tmpdir(), "drh-"))
+  );
   teardowns.push(() => fs.rm(dir, { recursive: true, force: true }));
   resetHarnessState(path.join(dir, "shell"));
   await fs.mkdir(harnessState.userDataDir, { recursive: true });
@@ -172,14 +193,14 @@ async function buildHarness(teardowns: Array<() => unknown>): Promise<RemoteHarn
 
   // The Shell reaches the host over a direct socket; closing it (and
   // refusing to redial) stands in for the network going away.
-  const location: HostSocketLocation = hostSocketLocation({
-    platform: "darwin",
-    userDataDir: path.join(dir, "host"),
-  });
+  const location: HostSocketLocation =
+    options.hostLocation ??
+    hostSocketLocation({ platform: "darwin", userDataDir: path.join(dir, "host") });
   const sockets: net.Socket[] = [];
   let allowConnect = true;
   const direct = createDirectTransport({ discoveryPath: location.discoveryPath });
-  const transport: LinkTransport = {
+  const clientDir = path.join(harnessState.userDataDir, "rh");
+  const transport: LinkTransport = options.createTransport?.(clientDir) ?? {
     async open(signal) {
       if (!allowConnect) throw new Error("host unreachable");
       const connection = await direct.open(signal);
@@ -196,7 +217,10 @@ async function buildHarness(teardowns: Array<() => unknown>): Promise<RemoteHarn
   });
   const booted = harnessState.client;
   if (!booted) throw new Error("boot did not start the Remote Hosts client");
-  const added = booted.client.add({ name: HOST_ID, sshTarget: "studio.example" });
+  const added = booted.client.add({
+    name: HOST_ID,
+    sshTarget: options.sshTarget ?? "studio.example",
+  });
   if (added.id !== HOST_ID) throw new Error(`unexpected host id ${added.id}`);
 
   const manager = booted.manager;
