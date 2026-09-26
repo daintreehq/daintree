@@ -362,6 +362,17 @@ describe("projects across hosts (integration harness)", () => {
       ).rejects.toMatchObject({
         code: "PERMISSION",
       });
+      // Opening the project again doesn't earn a second one.
+      await session.call(ProjectLinkMethod.OPEN, {
+        projectId: target.id,
+        path: target.path,
+        remoteUrls: [],
+        branch: null,
+        branchRemoteUrl: null,
+      });
+      await expect(
+        session.call(ProjectLinkMethod.START_PLACE_WORKTREE, { ...again, opId: nextOpId() })
+      ).rejects.toMatchObject({ code: "PERMISSION" });
       const elsewhere = { opId: nextOpId(), projectId: untouched.id, worktree };
       await expect(
         session.call(ProjectLinkMethod.START_PLACE_WORKTREE, elsewhere)
