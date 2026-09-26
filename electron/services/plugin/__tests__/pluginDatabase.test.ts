@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolvePluginDatabaseLocation } from "../pluginDatabase.js";
@@ -8,8 +9,8 @@ let tmp: string;
 let projectRoot: string;
 let dataDir: string;
 
-beforeEach(() => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-db-resolve-")));
+beforeEach(async () => {
+  tmp = await fsp.realpath(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-db-resolve-")));
   projectRoot = path.join(tmp, "project");
   dataDir = path.join(tmp, "data", "project__p1__acme.ledger");
   fs.mkdirSync(projectRoot, { recursive: true });
@@ -48,7 +49,7 @@ describe("resolvePluginDatabaseLocation", () => {
 
   it("puts a local database in the plugin data dir", async () => {
     const location = await resolve({ id: "cache", location: "local", journalMode: "delete" });
-    expect(location.path).toBe(path.join(fs.realpathSync(dataDir), "databases/cache.db"));
+    expect(location.path).toBe(path.join(await fsp.realpath(dataDir), "databases/cache.db"));
     expect(location.projectRelativePath).toBeNull();
   });
 

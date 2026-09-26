@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -58,7 +59,9 @@ describe("WorkspaceService worktree cleanup keeps stranded submodule commits (#1
   }
 
   beforeEach(async () => {
-    tmp = mkdtempSync(path.join(realpathSync(os.tmpdir()), "worktree-prune-sweep-"));
+    tmp = await fs.realpath(
+      mkdtempSync(path.join(realpathSync(os.tmpdir()), "worktree-prune-sweep-"))
+    );
     const lib = path.join(tmp, "lib");
     git(tmp, "init", "-q", "-b", "main", lib);
     git(lib, "commit", "-q", "--allow-empty", "-m", "library");

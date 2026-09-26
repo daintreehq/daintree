@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,8 +115,8 @@ function sessionFor(partition: string) {
   return ses;
 }
 
-beforeEach(() => {
-  baseDir = realpathSync(mkdtempSync(join(tmpdir(), "plugin-pdf-")));
+beforeEach(async () => {
+  baseDir = await fs.realpath(mkdtempSync(join(tmpdir(), "plugin-pdf-")));
   electronMock.windows.length = 0;
   electronMock.sessions.clear();
   electronMock.state.loadURL = () => Promise.resolve();
