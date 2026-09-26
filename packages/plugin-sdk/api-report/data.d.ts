@@ -55,7 +55,8 @@ declare function stringifyFrontmatter(data: Record<string, unknown>, body: strin
  * a collection, a multi-line string or an explicitly tagged scalar rewrites
  * that entry's lines in the library's default style, keeping its anchor. A
  * top-level flow mapping (`{ a: 1 }`) cannot be edited in place, so a
- * non-empty patch re-serialises it as a whole.
+ * non-empty patch re-serialises it as a whole, under the same tag and anchor
+ * rules.
  *
  * Throws {@link FrontmatterError} when the existing frontmatter is invalid,
  * when a patched value carries a tag beyond the core types (`!!binary`,
