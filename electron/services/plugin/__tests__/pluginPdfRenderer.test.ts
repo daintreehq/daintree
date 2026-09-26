@@ -18,6 +18,7 @@ const electronMock = vi.hoisted(() => {
   const state = {
     loadURL: (_url: string): Promise<void> => Promise.resolve(),
     printToPDF: (_options: unknown): Promise<Buffer> => Promise.resolve(Buffer.from("%PDF-1.7")),
+    clearStorageData: (_partition: string): Promise<void> => Promise.resolve(),
   };
   function makeSession(partition: string) {
     const listeners = new Map<string, Listener>();
@@ -31,7 +32,7 @@ const electronMock = vi.hoisted(() => {
       },
       setPermissionRequestHandler: vi.fn<(handler: PermissionHandler) => void>(),
       setPermissionCheckHandler: vi.fn(),
-      clearStorageData: vi.fn(async () => {}),
+      clearStorageData: vi.fn(() => state.clearStorageData(partition)),
       clearCache: vi.fn(async () => {}),
       on: vi.fn((event: string, fn: Listener) => listeners.set(event, fn)),
       removeListener: vi.fn((event: string) => listeners.delete(event)),
@@ -97,7 +98,10 @@ vi.mock("electron", () => electronMock.module);
 import {
   _resetPdfRendererForTests,
   createDocumentRequestFilter,
+  MAX_OUTSTANDING_RENDERS,
+  prepareSnapshotHtml,
   renderHtmlToPdf,
+  reserveRender,
   validateRenderPdfOptions,
 } from "../pluginPdfRenderer.js";
 
@@ -115,6 +119,7 @@ beforeEach(() => {
   electronMock.sessions.clear();
   electronMock.state.loadURL = () => Promise.resolve();
   electronMock.state.printToPDF = () => Promise.resolve(Buffer.from("%PDF-1.7"));
+  electronMock.state.clearStorageData = () => Promise.resolve();
   _resetPdfRendererForTests();
 });
 
@@ -219,6 +224,25 @@ describe("createDocumentRequestFilter", () => {
     expect(await allow(url)).toBe(false);
   });
 
+  it.each([
+    "file://attacker/share/x.png",
+    "file://attacker.example.com/c$/x.png",
+    "file:////attacker/share/x.png",
+    "file://///attacker/share/x.png",
+    "file:///%5C%5Cattacker/share/x.png",
+  ])("refuses the network path %s without touching the filesystem", async (url) => {
+    // On Windows each of these can reach an SMB server, and resolving one is
+    // enough to send the user's credentials; the check must precede any I/O.
+    const realpath = vi.fn(async (p: string) => p);
+    const size = vi.fn(async () => 1);
+    const allow = createDocumentRequestFilter(
+      { mainFile: "/doc/page.html", resourceRoot: "/" },
+      { realpath, size }
+    );
+    expect(await allow(url)).toBe(false);
+    expect(realpath).not.toHaveBeenCalled();
+  });
+
   it("cancels a file outside the root, including through a symlink and a traversal", async () => {
     const { root, main } = await setup();
     await fs.symlink(join(baseDir, "secret.txt"), join(root, "assets", "link.txt"));
@@ -241,17 +265,95 @@ describe("createDocumentRequestFilter", () => {
     expect(await allow(pathToFileURL(join(root, "assets", "logo.png")).href)).toBe(false);
     expect(await allow("data:text/plain,ok")).toBe(true);
   });
+
+  it("stops admitting subresources once their cumulative size passes the budget", async () => {
+    const { root, main } = await setup();
+    await fs.writeFile(join(root, "assets", "big.bin"), Buffer.alloc(6));
+    const allow = createDocumentRequestFilter({
+      mainFile: main,
+      resourceRoot: root,
+      maxResourceBytes: 10,
+    });
+    const logo = pathToFileURL(join(root, "assets", "logo.png")).href; // 3 bytes
+    const big = pathToFileURL(join(root, "assets", "big.bin")).href; // 6 bytes
+    expect(await allow(big)).toBe(true);
+    expect(await allow(logo)).toBe(true);
+    expect(await allow(logo)).toBe(false);
+    // The page itself is never charged against the budget.
+    expect(await allow(pathToFileURL(main).href)).toBe(true);
+  });
+});
+
+describe("prepareSnapshotHtml", () => {
+  it("puts the preamble after the doctype, before anything else", () => {
+    const out = prepareSnapshotHtml(
+      "<!DOCTYPE html><html><head></head><body>x</body></html>",
+      null
+    );
+    expect(out).toMatch(
+      /^<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;|^<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'/
+    );
+    expect(out).toContain(`<meta http-equiv="x-dns-prefetch-control" content="off">`);
+    expect(out).not.toContain("<base");
+    expect(out.endsWith("<html><head></head><body>x</body></html>")).toBe(true);
+  });
+
+  it("keeps a doctype behind a BOM or a leading comment first, so standards mode survives", () => {
+    for (const lead of ["﻿", "<!-- generated -->\n"]) {
+      const out = prepareSnapshotHtml(`${lead}<!doctype html><p>x</p>`, null);
+      expect(out.startsWith(`${lead}<!doctype html><meta charset="utf-8">`)).toBe(true);
+    }
+  });
+
+  it("prepends the preamble when there is no doctype, and adds the base URL", () => {
+    const out = prepareSnapshotHtml("<p>x</p>", "file:///docs/invoices/");
+    expect(out.startsWith(`<meta charset="utf-8">`)).toBe(true);
+    expect(out).toContain(`<base href="file:///docs/invoices/">`);
+    expect(out.indexOf("<base")).toBeLessThan(out.indexOf("<p>x</p>"));
+  });
+
+  it("strips resource hints the request filter cannot see and keeps stylesheets", () => {
+    const html = [
+      `<link rel="stylesheet" href="a.css">`,
+      `<link rel="alternate stylesheet" href="b.css">`,
+      `<link rel="dns-prefetch" href="//evil.example">`,
+      `<LINK REL=preconnect href="https://evil.example">`,
+      `<link href="x>y" rel='prefetch' >`,
+      `<link/rel=prerender href="https://evil.example/p">`,
+      `<link rel="preload stylesheet" href="https://evil.example/c.css">`,
+    ].join("");
+    const out = prepareSnapshotHtml(html, null);
+    expect(out).toContain(`<link rel="stylesheet" href="a.css">`);
+    expect(out).toContain(`<link rel="alternate stylesheet" href="b.css">`);
+    expect(out).not.toMatch(/evil|prefetch"|preconnect|prerender|x>y/i);
+  });
+});
+
+describe("reserveRender", () => {
+  it("caps outstanding renders per plugin and in total with RENDER_BUSY", () => {
+    const a1 = reserveRender("a");
+    const a2 = reserveRender("a");
+    expect(() => reserveRender("a")).toThrow(/^RENDER_BUSY: plugin "a"/);
+    a1.release();
+    a1.release(); // idempotent: a double release must not free a second slot
+    const a3 = reserveRender("a");
+    expect(() => reserveRender("a")).toThrow(/^RENDER_BUSY/);
+
+    const others = Array.from({ length: MAX_OUTSTANDING_RENDERS - 2 }, (_v, i) =>
+      reserveRender(`p${Math.floor(i / 2)}`)
+    );
+    expect(() => reserveRender("fresh")).toThrow(/^RENDER_BUSY: too many renders/);
+    for (const r of [a2, a3, ...others]) r.release();
+    expect(() => reserveRender("fresh").release()).not.toThrow();
+  });
 });
 
 describe("renderHtmlToPdf", () => {
   const print = { pageSize: "A4" as const, printBackground: true };
+  const base = { html: "<p/>", baseUrl: null, resourceRoot: null, print };
 
-  it("renders inline html in a hidden, locked-down window and tears it all down", async () => {
-    const pdf = await renderHtmlToPdf({
-      source: { kind: "html", html: "<h1>Invoice</h1>" },
-      resourceRoot: null,
-      print,
-    });
+  it("renders a private snapshot in a hidden, locked-down window and tears it all down", async () => {
+    const pdf = await renderHtmlToPdf({ ...base, html: "<h1>Invoice</h1>" });
     expect(pdf.toString()).toBe("%PDF-1.7");
 
     expect(electronMock.windows).toHaveLength(1);
@@ -270,7 +372,7 @@ describe("renderHtmlToPdf", () => {
 
     // The page was loaded from a private temp file that no longer exists.
     const loaded = win.webContents.loadURL.mock.calls[0][0] as string;
-    expect(loaded).toMatch(/^file:.*document\.html$/);
+    expect(loaded).toMatch(/^file:.*daintree-pdf-.*document\.html$/);
     await expect(fs.stat(new URL(loaded))).rejects.toThrow();
 
     expect(win.webContents.printToPDF).toHaveBeenCalledWith(print);
@@ -289,55 +391,59 @@ describe("renderHtmlToPdf", () => {
     expect(permission).toHaveBeenCalledWith(false);
   });
 
-  it("routes every request through the containment filter while the window is live", async () => {
+  it("loads the snapshot, never the source path, and filters every request", async () => {
     const root = join(baseDir, "root");
     await fs.mkdir(root);
-    const page = join(root, "page.html");
-    await fs.writeFile(page, "<p/>");
     const decisions: Array<[string, boolean]> = [];
+    let snapshot = "";
     electronMock.state.loadURL = async (url) => {
+      snapshot = await fs.readFile(new URL(url), "utf-8");
       const ses = sessionFor(electronMock.windows[0].options.webPreferences.partition);
-      for (const target of [url, "https://example.com/pixel.gif"]) {
+      for (const target of [url, "https://example.com/pixel.gif", "file://evil/share/x.png"]) {
         const cancel = await new Promise<boolean>((resolve) =>
           ses.beforeRequest?.({ url: target }, (r: { cancel: boolean }) => resolve(r.cancel))
         );
-        decisions.push([target, !cancel]);
+        decisions.push([target.startsWith("file:///") ? "page" : target, !cancel]);
       }
     };
-    await renderHtmlToPdf({ source: { kind: "file", file: page }, resourceRoot: root, print });
+    await renderHtmlToPdf({
+      ...base,
+      html: "<!doctype html><img src=logo.png>",
+      baseUrl: pathToFileURL(root + "/").href,
+      resourceRoot: root,
+    });
+    expect(snapshot).toContain(`<base href="${pathToFileURL(root + "/").href}">`);
+    expect(snapshot).toContain("<img src=logo.png>");
     expect(decisions).toEqual([
-      [pathToFileURL(page).href, true],
+      ["page", true],
       ["https://example.com/pixel.gif", false],
+      ["file://evil/share/x.png", false],
     ]);
   });
 
   it("rejects with RENDER_FAILED and still destroys the window when the page fails to load", async () => {
     electronMock.state.loadURL = () => Promise.reject(new Error("ERR_FILE_NOT_FOUND"));
-    await expect(
-      renderHtmlToPdf({ source: { kind: "html", html: "<p/>" }, resourceRoot: null, print })
-    ).rejects.toThrow(/^RENDER_FAILED: .*ERR_FILE_NOT_FOUND/);
+    await expect(renderHtmlToPdf(base)).rejects.toThrow(/^RENDER_FAILED: .*ERR_FILE_NOT_FOUND/);
     expect(electronMock.windows[0].destroyed).toBe(true);
   });
 
   it("rejects with RENDER_TIMEOUT and destroys the window when printing hangs", async () => {
     electronMock.state.printToPDF = () => new Promise<Buffer>(() => {});
-    await expect(
-      renderHtmlToPdf({
-        source: { kind: "html", html: "<p/>" },
-        resourceRoot: null,
-        print,
-        timeoutMs: 20,
-      })
-    ).rejects.toThrow(/^RENDER_TIMEOUT:/);
+    await expect(renderHtmlToPdf({ ...base, timeoutMs: 20 })).rejects.toThrow(/^RENDER_TIMEOUT:/);
+    expect(electronMock.windows[0].destroyed).toBe(true);
+  });
+
+  it("rejects an oversized PDF with PAYLOAD_TOO_LARGE", async () => {
+    const huge = { byteLength: 50 * 1024 * 1024 + 1 } as unknown as Buffer;
+    electronMock.state.printToPDF = () => Promise.resolve(huge);
+    await expect(renderHtmlToPdf(base)).rejects.toThrow(/^PAYLOAD_TOO_LARGE:/);
     expect(electronMock.windows[0].destroyed).toBe(true);
   });
 
   it("runs at most two renders at once and hands a freed partition to the next", async () => {
     const pending: Array<(b: Buffer) => void> = [];
     electronMock.state.printToPDF = () => new Promise<Buffer>((resolve) => pending.push(resolve));
-    const run = () =>
-      renderHtmlToPdf({ source: { kind: "html", html: "<p/>" }, resourceRoot: null, print });
-    const renders = [run(), run(), run()];
+    const renders = [renderHtmlToPdf(base), renderHtmlToPdf(base), renderHtmlToPdf(base)];
     await vi.waitFor(() => expect(pending).toHaveLength(2));
     expect(electronMock.windows).toHaveLength(2);
     const [first, second] = electronMock.windows.map((w) => w.options.webPreferences.partition);
@@ -350,5 +456,62 @@ describe("renderHtmlToPdf", () => {
     pending[2](Buffer.from("%PDF-c"));
     await Promise.all(renders);
     expect(electronMock.windows.every((w) => w.destroyed)).toBe(true);
+  });
+
+  it("counts the queue wait against the timeout and never opens a window for a job that expired queued", async () => {
+    const pending: Array<(b: Buffer) => void> = [];
+    electronMock.state.printToPDF = () => new Promise<Buffer>((resolve) => pending.push(resolve));
+    const busy = [renderHtmlToPdf(base), renderHtmlToPdf(base)];
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    await expect(renderHtmlToPdf({ ...base, timeoutMs: 20 })).rejects.toThrow(/^RENDER_TIMEOUT:/);
+    expect(electronMock.windows).toHaveLength(2);
+    // The expired waiter left the queue: freeing a slot serves the next job.
+    pending[0](Buffer.from("%PDF-a"));
+    pending[1](Buffer.from("%PDF-b"));
+    await Promise.all(busy);
+    electronMock.state.printToPDF = () => Promise.resolve(Buffer.from("%PDF-1.7"));
+    await expect(renderHtmlToPdf(base)).resolves.toBeDefined();
+  });
+
+  it("cancels queued and running renders when the caller's signal aborts", async () => {
+    electronMock.state.printToPDF = () => new Promise<Buffer>(() => {});
+    const unload = new AbortController();
+    const running = [
+      renderHtmlToPdf({ ...base, signal: unload.signal }),
+      renderHtmlToPdf({ ...base, signal: unload.signal }),
+    ];
+    await vi.waitFor(() => expect(electronMock.windows).toHaveLength(2));
+    const queued = renderHtmlToPdf({ ...base, signal: unload.signal });
+    unload.abort();
+    const settled = await Promise.allSettled([...running, queued]);
+    for (const result of settled) {
+      expect(result).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({ code: "RENDER_CANCELLED" }),
+      });
+    }
+    expect(electronMock.windows).toHaveLength(2);
+    expect(electronMock.windows.every((w) => w.destroyed)).toBe(true);
+  });
+
+  it("retires a partition whose wipe fails or hangs instead of reusing it", async () => {
+    const first = await (async () => {
+      electronMock.state.clearStorageData = () => Promise.reject(new Error("wipe failed"));
+      await renderHtmlToPdf(base);
+      return electronMock.windows[0].options.webPreferences.partition;
+    })();
+    electronMock.state.clearStorageData = (partition) =>
+      partition === "daintree-plugin-documents-1" ? new Promise<void>(() => {}) : Promise.resolve();
+    // Both original partitions are now either retired or hung; a hung wipe is
+    // bounded, so the call still returns.
+    await renderHtmlToPdf({ ...base, cleanupTimeoutMs: 20 });
+    await renderHtmlToPdf({ ...base, cleanupTimeoutMs: 20 });
+    await renderHtmlToPdf({ ...base, cleanupTimeoutMs: 20 });
+    const used = electronMock.windows.map((w) => w.options.webPreferences.partition);
+    expect(used[0]).toBe(first);
+    expect(used.slice(1)).not.toContain(first);
+    // After its wipe hung, partition 1 was never handed out again.
+    const hungAt = used.indexOf("daintree-plugin-documents-1");
+    expect(used.slice(hungAt + 1)).not.toContain("daintree-plugin-documents-1");
   });
 });

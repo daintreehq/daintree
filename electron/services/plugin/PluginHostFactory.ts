@@ -9,10 +9,12 @@ import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
+import { pathToFileURL } from "node:url";
 import {
+  MAX_HTML_BYTES,
   renderHtmlToPdf,
+  reserveRender,
   validateRenderPdfOptions,
-  type RenderPdfRequest,
 } from "./pluginPdfRenderer.js";
 
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
@@ -3114,9 +3116,11 @@ function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSy
  * recheck and symlink-leaf refusal inside the per-path critical section, an
  * atomic replace, and an audit record — so a PDF can land nowhere a text write
  * could not. An `htmlPath` source is read-contained and read-gated like
- * `fs.readFile`. The render itself lives in `pluginPdfRenderer.ts`.
+ * `fs.readFile`, and rendered from a bounded snapshot rather than the path.
+ * The render itself lives in `pluginPdfRenderer.ts`.
  *
- * Stateless — the render window is torn down inside every call.
+ * The render window is torn down inside every call; a call still queued or
+ * rendering when the plugin unloads is cancelled.
  */
 function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginDocumentsApi {
   const requireLoaded = (): void => {
@@ -3156,6 +3160,55 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
     return leafStat;
   };
 
+  const htmlMoved = () =>
+    fsTargetError(
+      "TARGET_UNAVAILABLE",
+      `Plugin "${pluginId}" documents.renderPdf: htmlPath moved while the render was waiting`
+    );
+  const tooLarge = () =>
+    new Error(
+      `PAYLOAD_TOO_LARGE: plugin "${pluginId}" documents.renderPdf: htmlPath exceeds the ${MAX_HTML_BYTES} byte limit`
+    );
+  // The page is rendered from a snapshot taken here, after the consent prompt,
+  // never from the path: containment is proven again and the bytes come
+  // through the same verified, non-following read `fs.readFile` uses, so a
+  // file swapped for a symlink while the call waited cannot be what renders.
+  const readHtmlSnapshot = async (htmlPath: string, expected: string): Promise<string> => {
+    const recheck = await containToDeclaredRoots(deps, pluginId, htmlPath).catch(
+      (error: unknown) => {
+        if (error instanceof PluginPathNotAllowedError) throw htmlMoved();
+        throw error;
+      }
+    );
+    if (recheck.resolved !== expected) throw htmlMoved();
+    requireLoaded();
+    requireCapForClass("read", recheck.rootClass, "htmlPath");
+    const bytes = await withVerifiedReadHandle(
+      pluginId,
+      "renderPdf",
+      expected,
+      fs.constants.O_NONBLOCK ?? 0,
+      async (handle, opened) => {
+        if (!opened.isFile()) {
+          throw new Error(
+            `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: htmlPath is not a file: ${expected}`
+          );
+        }
+        // limit + 1 so an oversized file is recognised without holding more of it.
+        const buffer = Buffer.allocUnsafe(MAX_HTML_BYTES + 1);
+        let filled = 0;
+        while (filled < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
+        if (filled > MAX_HTML_BYTES) throw tooLarge();
+        return buffer.subarray(0, filled);
+      }
+    );
+    return bytes.toString("utf-8");
+  };
+
   return {
     renderPdf: async (rawOptions): Promise<PluginRenderPdfResult> => {
       requireLoaded();
@@ -3171,89 +3224,131 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
         ? "fs:project-write"
         : "fs:user-data-write";
       const { source, outputPath, print } = validateRenderPdfOptions(pluginId, rawOptions);
-
-      // The data dir is materialised lazily, as `fs.writeFile` does, so a first
-      // export into a plugin's own namespace does not fail containment.
-      const dataDir = deps.pluginDataDir(pluginId);
-      if (deps.isPathUnder(dataDir, path.normalize(outputPath))) {
-        requireCapForClass("write", "user-data", "the output");
-        await fs.mkdir(dataDir, { recursive: true });
-      }
-      requireLoaded();
-      const output = await containToDeclaredRoots(deps, pluginId, outputPath);
-      requireLoaded();
-      requireCapForClass("write", output.rootClass, "the output");
-      const parent = await fs.stat(path.dirname(output.resolved)).catch(() => null);
-      if (!parent?.isDirectory()) {
-        throw new Error(
-          `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: the output's parent directory does not exist: ${path.dirname(output.resolved)}`
-        );
-      }
-
-      let renderSource: RenderPdfRequest["source"];
-      let resourceRoot: string | null = null;
-      if (source.kind === "path") {
-        const input = await containToDeclaredRoots(deps, pluginId, source.htmlPath);
-        requireLoaded();
-        requireCapForClass("read", input.rootClass, "htmlPath");
-        const inputStat = await fs.stat(input.resolved).catch(() => null);
-        if (!inputStat?.isFile()) {
+      // Held from here to the end, so queued calls — and the HTML each one
+      // carries — stay bounded while they wait on consent or a render slot.
+      const reservation = reserveRender(pluginId);
+      const cancel = new AbortController();
+      const untrack = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => cancel.abort());
+      try {
+        // A first export into the plugin's own namespace may find the data dir
+        // missing. It is created only once consent is given, so until then the
+        // output is checked against what exists: its parent must be the data
+        // dir itself, which is host-owned and needs no containment proof.
+        const dataDir = deps.pluginDataDir(pluginId);
+        const normalizedOutput = path.normalize(outputPath);
+        const inDataDir = deps.isPathUnder(dataDir, normalizedOutput);
+        if (inDataDir) requireCapForClass("write", "user-data", "the output");
+        const dataDirMissing =
+          inDataDir && (await fs.stat(dataDir).catch(() => null))?.isDirectory() !== true;
+        if (dataDirMissing && path.dirname(normalizedOutput) !== path.normalize(dataDir)) {
           throw new Error(
-            `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: htmlPath is not a file: ${input.resolved}`
+            `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: the output's parent directory does not exist: ${path.dirname(normalizedOutput)}`
           );
         }
-        renderSource = { kind: "file", file: input.resolved };
-        resourceRoot = await fs.realpath(input.root);
-      } else {
-        renderSource = { kind: "html", html: source.html };
-        // Inline HTML may still reference absolute file: URLs, but only inside
-        // a root the plugin could read for itself.
-        const readCap = output.rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
-        if (caps.has(readCap)) resourceRoot = await fs.realpath(output.root);
-      }
 
-      // Checked again once the render is done; this early pass only spares a
-      // render whose write is already certain to be refused.
-      await refuseSymlinkLeaf(outputPath);
-      await ensureCapabilityConsent(deps, pluginId, writeCap);
-      requireLoaded();
-      const pdf = await renderHtmlToPdf({ source: renderSource, resourceRoot, print });
-      requireLoaded();
-
-      const revision = await runExclusive(output.resolved, async () => {
-        requireLoaded();
-        // The consent prompt, the render and the queue wait can each take long
-        // enough for the path to change, so containment is proven again here,
-        // exactly as `fs.writeFile` does.
-        const recheck = await containToDeclaredRoots(deps, pluginId, outputPath).catch(
-          (error: unknown) => {
-            if (error instanceof PluginPathNotAllowedError) throw moved();
-            throw error;
+        const containOutput = async () => {
+          const contained = await containToDeclaredRoots(deps, pluginId, outputPath);
+          requireLoaded();
+          requireCapForClass("write", contained.rootClass, "the output");
+          const parent = await fs.stat(path.dirname(contained.resolved)).catch(() => null);
+          if (!parent?.isDirectory()) {
+            throw new Error(
+              `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: the output's parent directory does not exist: ${path.dirname(contained.resolved)}`
+            );
           }
-        );
-        if (recheck.resolved !== output.resolved) throw moved();
-        const leafStat = await refuseSymlinkLeaf(outputPath);
-        const mode = leafStat ? leafStat.mode & 0o777 : undefined;
+          return contained;
+        };
+        let output = dataDirMissing ? null : await containOutput();
+
+        let input: { htmlPath: string; resolved: string; root: string } | null = null;
+        if (source.kind === "path") {
+          const contained = await containToDeclaredRoots(deps, pluginId, source.htmlPath);
+          requireLoaded();
+          requireCapForClass("read", contained.rootClass, "htmlPath");
+          const inputStat = await fs.stat(contained.resolved).catch(() => null);
+          if (!inputStat?.isFile()) {
+            throw new Error(
+              `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: htmlPath is not a file: ${contained.resolved}`
+            );
+          }
+          if (inputStat.size > MAX_HTML_BYTES) throw tooLarge();
+          input = { htmlPath: source.htmlPath, resolved: contained.resolved, root: contained.root };
+        }
+
+        // Checked again once the render is done; this early pass only spares a
+        // render whose write is already certain to be refused.
+        if (output) await refuseSymlinkLeaf(outputPath);
+        await ensureCapabilityConsent(deps, pluginId, writeCap);
         requireLoaded();
-        await resilientAtomicWriteFile(
-          output.resolved,
-          pdf,
-          undefined,
-          mode === undefined ? undefined : { mode }
-        );
-        return sha256Hex(pdf);
-      });
-      deps.safeAppendAudit({
-        pluginId,
-        actionId: `documents.renderPdf:${output.resolved}`,
-        recordType: "ipc-invoke",
-        channel: "plugin:fs-write",
-        result: "success",
-        errorMessage: "",
-        argsHash: deps.safeArgsHash([{ path: output.resolved, bytes: pdf.byteLength }]),
-        durationMs: 0,
-      });
-      return { path: output.resolved, bytes: pdf.byteLength, revision };
+        if (!output) {
+          await fs.mkdir(dataDir, { recursive: true });
+          output = await containOutput();
+        }
+        const contained = output;
+
+        let html: string;
+        let baseUrl: string | null = null;
+        let resourceRoot: string | null = null;
+        if (input) {
+          html = await readHtmlSnapshot(input.htmlPath, input.resolved);
+          baseUrl = pathToFileURL(path.dirname(input.resolved) + path.sep).href;
+          resourceRoot = await fs.realpath(input.root);
+        } else {
+          html = source.kind === "html" ? source.html : "";
+          // Inline HTML may still reference absolute file: URLs, but only inside
+          // a root the plugin could read for itself.
+          const readCap =
+            contained.rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
+          if (caps.has(readCap)) resourceRoot = await fs.realpath(contained.root);
+        }
+        requireLoaded();
+        const pdf = await renderHtmlToPdf({
+          html,
+          baseUrl,
+          resourceRoot,
+          print,
+          signal: cancel.signal,
+        });
+        requireLoaded();
+
+        const revision = await runExclusive(contained.resolved, async () => {
+          requireLoaded();
+          // The consent prompt, the render and the queue wait can each take long
+          // enough for the path to change, so containment is proven again here,
+          // exactly as `fs.writeFile` does.
+          const recheck = await containToDeclaredRoots(deps, pluginId, outputPath).catch(
+            (error: unknown) => {
+              if (error instanceof PluginPathNotAllowedError) throw moved();
+              throw error;
+            }
+          );
+          if (recheck.resolved !== contained.resolved) throw moved();
+          const leafStat = await refuseSymlinkLeaf(outputPath);
+          const mode = leafStat ? leafStat.mode & 0o777 : undefined;
+          requireLoaded();
+          await resilientAtomicWriteFile(
+            contained.resolved,
+            pdf,
+            undefined,
+            mode === undefined ? undefined : { mode }
+          );
+          return sha256Hex(pdf);
+        });
+        deps.safeAppendAudit({
+          pluginId,
+          actionId: `documents.renderPdf:${contained.resolved}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:fs-write",
+          result: "success",
+          errorMessage: "",
+          argsHash: deps.safeArgsHash([{ path: contained.resolved, bytes: pdf.byteLength }]),
+          durationMs: 0,
+        });
+        return { path: contained.resolved, bytes: pdf.byteLength, revision };
+      } finally {
+        reservation.release();
+        untrack();
+      }
     },
   };
 }

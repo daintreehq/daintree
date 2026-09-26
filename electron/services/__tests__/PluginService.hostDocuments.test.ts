@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 vi.mock("electron", () => ({
   app: {
@@ -115,10 +116,12 @@ describe("host.documents.renderPdf", () => {
     });
     expect(await fs.readFile(outputPath)).toEqual(PDF_BYTES);
     expect(renderMock.render).toHaveBeenCalledWith({
-      source: { kind: "html", html: "<h1>Invoice</h1>" },
+      html: "<h1>Invoice</h1>",
+      baseUrl: null,
       // No project read capability, so inline HTML may load no local files.
       resourceRoot: null,
       print: { pageSize: "A4", printBackground: true, preferCSSPageSize: false },
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -156,10 +159,11 @@ describe("host.documents.renderPdf", () => {
     expect(renderMock.render.mock.calls[0][0].resourceRoot).toBe(allowed);
   });
 
-  it("renders an htmlPath source from its contained path, scoped to its root", async () => {
+  it("renders a snapshot of htmlPath, based at its directory and scoped to its root", async () => {
     const host = registerPlugin(["fs:project-read", "fs:project-write"]);
-    const htmlPath = join(allowed, "invoice.html");
-    await fs.writeFile(htmlPath, "<p/>");
+    await fs.mkdir(join(allowed, "inv"));
+    const htmlPath = join(allowed, "inv", "invoice.html");
+    await fs.writeFile(htmlPath, "<h1>Caf\u00e9</h1>");
     await host.documents.renderPdf({
       htmlPath,
       outputPath: join(allowed, "invoice.pdf"),
@@ -168,8 +172,10 @@ describe("host.documents.renderPdf", () => {
       margins: { top: 0.5 },
     });
     expect(renderMock.render).toHaveBeenCalledWith({
-      source: { kind: "file", file: htmlPath },
+      html: "<h1>Caf\u00e9</h1>",
+      baseUrl: pathToFileURL(join(allowed, "inv") + "/").href,
       resourceRoot: allowed,
+      signal: expect.any(AbortSignal),
       print: {
         pageSize: "Letter",
         printBackground: true,
@@ -317,5 +323,97 @@ describe("host.documents.renderPdf", () => {
       /^RENDER_TIMEOUT:/
     );
     await expect(fs.stat(outputPath)).rejects.toThrow();
+  });
+
+  it.each([
+    ["an outside file", () => join(baseDir, "secret.html")],
+    ["another in-scope file", () => join(allowed, "other.html")],
+  ])(
+    "never renders an htmlPath swapped for a symlink to %s while consent was pending",
+    async (_label, target) => {
+      const host = registerPlugin(["fs:project-read", "fs:project-write"]);
+      const htmlPath = join(allowed, "invoice.html");
+      await fs.writeFile(htmlPath, "<p>invoice</p>");
+      await fs.writeFile(join(baseDir, "secret.html"), "<p>secret</p>");
+      await fs.writeFile(join(allowed, "other.html"), "<p>other</p>");
+      getPluginCapabilityConsentService().setConsentBridge(async () => {
+        await fs.rm(htmlPath);
+        await fs.symlink(target(), htmlPath);
+        return "approved-once";
+      });
+      await expect(
+        host.documents.renderPdf({ htmlPath, outputPath: join(allowed, "invoice.pdf") })
+      ).rejects.toThrow(/^TARGET_UNAVAILABLE:/);
+      expect(renderMock.render).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses an htmlPath over the HTML size cap before rendering", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"]);
+    const htmlPath = join(allowed, "huge.html");
+    await fs.writeFile(htmlPath, Buffer.alloc(5 * 1024 * 1024 + 1, 0x61));
+    await expect(
+      host.documents.renderPdf({ htmlPath, outputPath: join(allowed, "huge.pdf") })
+    ).rejects.toThrow(/^PAYLOAD_TOO_LARGE:/);
+    expect(renderMock.render).not.toHaveBeenCalled();
+  });
+
+  it("refuses a third concurrent render from one plugin with RENDER_BUSY", async () => {
+    const host = registerPlugin(["fs:project-write"]);
+    const finish: Array<() => void> = [];
+    renderMock.render.mockImplementation(
+      () => new Promise<Buffer>((resolve) => finish.push(() => resolve(PDF_BYTES)))
+    );
+    const call = (name: string) =>
+      host.documents.renderPdf({ html: "<p/>", outputPath: join(allowed, name) });
+    const first = call("1.pdf");
+    const second = call("2.pdf");
+    await expect(call("3.pdf")).rejects.toThrow(/^RENDER_BUSY:/);
+    await vi.waitFor(() => expect(finish).toHaveLength(2));
+    for (const done of finish) done();
+    await Promise.all([first, second]);
+    // Slots are released once a call settles, whatever the outcome.
+    renderMock.render.mockResolvedValue(PDF_BYTES);
+    await expect(call("4.pdf")).resolves.toMatchObject({ path: join(allowed, "4.pdf") });
+  });
+
+  it("cancels an in-flight render when the plugin unloads", async () => {
+    const host = registerPlugin(["fs:project-write"]);
+    let signal: AbortSignal | undefined;
+    renderMock.render.mockImplementation(
+      (request: { signal: AbortSignal }) =>
+        new Promise<Buffer>((_resolve, reject) => {
+          signal = request.signal;
+          signal.addEventListener("abort", () => reject(new Error("RENDER_CANCELLED: x")));
+        })
+    );
+    const outputPath = join(allowed, "gone.pdf");
+    const pending = host.documents.renderPdf({ html: "<p/>", outputPath });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    svc.unloadPlugin("acme.docs");
+    expect(signal?.aborted).toBe(true);
+    await expect(pending).rejects.toThrow(/^RENDER_CANCELLED:/);
+    await expect(fs.stat(outputPath)).rejects.toThrow();
+  });
+
+  it("does not create the data dir before consent, or ever when consent is denied", async () => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => {
+      await expect(fs.stat(dataDir())).rejects.toThrow();
+      return "rejected";
+    });
+    const host = registerPlugin(["fs:user-data-write"], []);
+    await expect(
+      host.documents.renderPdf({ html: "<p/>", outputPath: join(dataDir(), "q.pdf") })
+    ).rejects.toThrow(/PERMISSION_REQUIRED/);
+    await expect(fs.stat(dataDir())).rejects.toThrow();
+  });
+
+  it("refuses a nested output in a data dir that does not exist yet, without creating it", async () => {
+    const host = registerPlugin(["fs:user-data-write"], []);
+    await expect(
+      host.documents.renderPdf({ html: "<p/>", outputPath: join(dataDir(), "sub", "q.pdf") })
+    ).rejects.toThrow(/INVALID_PATH: .*parent directory does not exist/);
+    await expect(fs.stat(dataDir())).rejects.toThrow();
+    expect(renderMock.render).not.toHaveBeenCalled();
   });
 });
