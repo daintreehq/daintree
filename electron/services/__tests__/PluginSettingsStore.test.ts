@@ -263,6 +263,28 @@ describe("PluginSettingsStore after the file changes underneath it", () => {
     });
   });
 
+  it("doesn't lend its values the identity of a file replaced right after its own write", async () => {
+    const { store, filePath } = storeAt("acme.plugin.json");
+    await store.set("channel", "blog");
+
+    const realStat = fs.stat.bind(fs);
+    let calls = 0;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      // First stat: the pre-write freshness check. Second: the post-write one —
+      // a checkout lands just before it.
+      if (++calls === 2) await fs.writeFile(filePath, JSON.stringify({ channel: "x" }));
+      return realStat(...(args as Parameters<typeof fs.stat>));
+    });
+    try {
+      await store.set("reviewer", "sam");
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await store.get("channel")).toBe("x");
+    expect(await store.get("reviewer")).toBeUndefined();
+  });
+
   it("sees the file deleted and recreated", async () => {
     const { store, filePath } = storeAt("acme.plugin.json");
     await store.set("channel", "blog");

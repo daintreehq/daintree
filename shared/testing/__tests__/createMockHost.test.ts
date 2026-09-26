@@ -1638,6 +1638,23 @@ describe("createMockHost settings.open and settings.missingRequired", () => {
   });
 });
 
+describe("createMockHost required secrets", () => {
+  it("counts a stored secret as set whatever its value, as the host does without decrypting", async () => {
+    const host = createMockHost({
+      manifestSettings: [
+        { id: "token", type: "secret", required: true },
+        { id: "legacy", secret: true, required: true },
+        { id: "name", type: "string", required: true },
+      ],
+    });
+    await host.settings.set("token", "");
+    await host.settings.set("legacy", "");
+    await host.settings.set("name", "");
+
+    expect(await host.settings.missingRequired()).toEqual(["name"]);
+  });
+});
+
 describe("createMockHost settings follow the declarations", () => {
   it("writes and subscribes in the declared scope, and reads the declared default while unset", async () => {
     const host = createMockHost({

@@ -333,17 +333,23 @@ export class PluginSettingsStore {
     // from JSON.stringify and lose it on the next reload.
     const obj: Record<string, unknown> = Object.create(null);
     for (const [k, v] of cache) obj[k] = v;
+    const text = JSON.stringify(obj, null, 2);
     this.persisting = true;
     try {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      await resilientAtomicWriteFile(this.filePath, JSON.stringify(obj, null, 2), "utf-8", {
+      await resilientAtomicWriteFile(this.filePath, text, "utf-8", {
         mode: SETTINGS_FILE_MODE,
       });
-      // What was just written is now the snapshot. A read still in flight
-      // began before this write landed, so it may not install its result.
+      // What was just written is now the snapshot — if the file is still what
+      // was written. Something replacing it between the rename and the stat
+      // would otherwise lend its identity to our values; read back after the
+      // stat, and on any doubt drop the snapshot so the next access reads the
+      // file. A read still in flight began before this write, so it may not
+      // install its result either way.
       const signature = await this.fileSignature();
+      const onDisk = await fs.readFile(this.filePath, "utf-8").catch(() => null);
       this.loading = null;
-      this.snapshot = { map: cache, signature };
+      this.snapshot = onDisk === text ? { map: cache, signature } : null;
     } finally {
       this.persisting = false;
     }

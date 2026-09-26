@@ -882,7 +882,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return (options.manifestSettings ?? [])
         .filter((def) => def.required === true)
         .filter((def) => {
-          const value = settingsStore[(def.scope ?? "user") as PluginSettingsScope].get(def.id);
+          const store = settingsStore[(def.scope ?? "user") as PluginSettingsScope];
+          // As the real host: a secret is set once anything is stored — it is
+          // never decrypted to look — while other values must be non-empty.
+          if (def.type === "secret" || def.secret === true) return !store.has(def.id);
+          const value = store.get(def.id);
           return value === undefined || value === null || value === "";
         })
         .map((def) => def.id);
