@@ -30,6 +30,13 @@ import {
 } from "./constants.js";
 import { shouldPlayUiFeedbackSound } from "../../../utils/uiFeedbackSound.js";
 import { WORKTREE_PORT_REDELIVER_METHOD, type ClientEndpoint } from "../../endpoint.js";
+import { AppError } from "../../../utils/errorTypes.js";
+import {
+  getOperationRegistry,
+  normalizeOperationId,
+  untrackedOperationHandle,
+  type OperationHandle,
+} from "../../../services/operations/index.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
@@ -207,6 +214,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
   };
 
   const handleWorktreeCreate = async (
+    ctx: IpcContext,
     payload: z.output<typeof WorktreeCreatePayloadSchema>
   ): Promise<WorktreeCreateResult> => {
     // Semantic guard: rootPath flows into createHardenedGit at the service
@@ -224,12 +232,40 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(branchValidation.error ?? "Invalid branch name");
     }
     const createKey = getWorktreeCreateRequestKey(payload);
+    if (payload.opId === undefined) {
+      return createCoalesced(payload, createKey, untrackedOperationHandle());
+    }
+    const opId = normalizeOperationId(payload.opId);
+    if (opId === null) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
+    }
+    // Only a caller that names its operation (a remote view) is recorded: a
+    // retry after a lost answer lands on the same record, and a status query
+    // by id answers what became of it. An unnamed create runs as it always has.
+    return getOperationRegistry().run(
+      {
+        opId,
+        kind: "worktree-create",
+        projectId: ctx.projectId,
+        dedupKey: `worktree-create:${createKey}`,
+        fingerprint: createKey,
+      },
+      (op) => createCoalesced(payload, createKey, op)
+    );
+  };
+
+  const createCoalesced = (
+    payload: z.output<typeof WorktreeCreatePayloadSchema>,
+    createKey: string,
+    op: OperationHandle
+  ): Promise<WorktreeCreateResult> => {
     const existingCreate = inFlightWorktreeCreateRequests.get(createKey);
     if (existingCreate) {
       return existingCreate;
     }
 
     const createPromise = (async (): Promise<WorktreeCreateResult> => {
+      op.progress({ fraction: null, stage: "queued", message: "Waiting to start" });
       await waitForBurstRateLimitSlot(
         WORKTREE_RATE_LIMIT_KEY,
         WORKTREE_RATE_LIMIT_INTERVAL_MS,
@@ -238,6 +274,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       if (!deps.worktreeService) {
         throw new Error("Workspace client not initialized");
       }
+      op.progress({ fraction: null, stage: "creating", message: "Creating the worktree" });
       const created = await deps.worktreeService.createWorktree(payload.rootPath, payload.options);
       const { worktreeId } = created;
       try {
@@ -426,7 +463,8 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       create: opValidated(
         CHANNELS.WORKTREE_CREATE,
         WorktreeCreatePayloadSchema,
-        handleWorktreeCreate
+        handleWorktreeCreate,
+        { withContext: true }
       ),
       restartService: op(CHANNELS.WORKTREE_RESTART_SERVICE, handleWorktreeRestartService, {
         withContext: true,
