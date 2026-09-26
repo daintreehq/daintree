@@ -937,9 +937,7 @@ function ProjectListItem({
             </ContextMenuItem>
           </>
         )}
-        {!project.isMissing && (
-          <OpenOnHostSubmenu projectId={project.id} projectName={project.name} />
-        )}
+        {!project.isMissing && <OpenOnHostSubmenu projectId={project.id} />}
       </ContextMenuContent>
     </ContextMenu>
   );

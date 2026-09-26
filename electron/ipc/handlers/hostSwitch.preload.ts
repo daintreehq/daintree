@@ -7,6 +7,10 @@ export const HOST_SWITCH_METHOD_CHANNELS = {
   execute: "host-switch:execute",
   status: "host-switch:status",
   cancel: "host-switch:cancel",
+  locate: "host-switch:locate",
+  suggestCloneDestination: "host-switch:suggest-clone-destination",
+  listDirectory: "host-switch:list-directory",
+  pickerRoots: "host-switch:picker-roots",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HOST_SWITCH_METHOD_CHANNELS;

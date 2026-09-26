@@ -26,9 +26,35 @@ const switchArgsSchema = z
   })
   .optional();
 
+const branchSchema = z.string().min(1).max(512);
+
 const openOnHostArgsSchema = z.object({
   hostId: hostIdSchema,
   projectId: z.string().min(1).max(512).describe("The project to open, as this window knows it."),
+  newWindow: z
+    .boolean()
+    .optional()
+    .describe("Open the project on the host in a new window instead of this one."),
+  worktree: z
+    .object({
+      newBranch: branchSchema,
+      baseBranch: branchSchema,
+      fromRemote: z.boolean(),
+      useExistingBranch: z.boolean(),
+      relativePath: z
+        .string()
+        .min(1)
+        .max(1024)
+        .nullable()
+        .describe(
+          "Where the worktree goes, relative to the project folder; null for the host's pattern."
+        ),
+      recipeId: z.string().min(1).max(256).nullable(),
+    })
+    .optional()
+    .describe(
+      "Create this worktree on the host once the project is there, instead of handing over the current branch."
+    ),
 });
 
 /** Listed (palette, MCP) only once a host other than this machine exists; dispatch still works. */
@@ -134,7 +160,7 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     id: "project.openOnHost",
     title: "Open project on host…",
     description:
-      "Open this window's project on another host through git: open the host's own copy, or clone it there as the host, then offer a worktree for the current branch. Opens a dialog; every push or clone is confirmed there.",
+      "Open this window's project on another host through git: the host's own copy is found by the repository's remote URLs (never by name), or cloned there as the host; then a worktree is offered for the current branch, or the given worktree is created. Opens a dialog; every push, clone and worktree is confirmed there.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -155,18 +181,21 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
       }
       const worktreePath =
         ctx.projectId === parsed.projectId ? (ctx.activeWorktreePath ?? null) : null;
-      const shown = requestHostSwitch({
+      const requestId = requestHostSwitch({
         toHostId: parsed.hostId,
         projectId: parsed.projectId,
         worktreePath,
+        newWindow: parsed.newWindow ?? false,
+        worktree: parsed.worktree ?? null,
       });
-      if (!shown) {
+      if (requestId === null) {
         throw new ClientAppError(
           "UNSUPPORTED",
           "No view can show the host switch dialog",
           "Couldn't open the host switch dialog in this window."
         );
       }
+      return { requestId };
     },
   }));
 }

@@ -286,7 +286,6 @@ describe("opening a project the host already has", () => {
 
   it("adopts an unregistered clone only when it is the same repository", async () => {
     const host = createTestHost(root, "studio-i");
-    // Adoption is limited to what the host's own scan finds: its projects folder.
     const clone = path.join(root, "studio-i-home", "Projects", "daintree");
     git(root, ["clone", "-q", URL, clone]);
     const opened = await host.service.open({
@@ -298,18 +297,6 @@ describe("opening a project the host already has", () => {
     });
     expect(host.projects.map((p) => p.path)).toEqual([clone]);
     expect(opened.projectPath).toBe(clone);
-
-    const outside = path.join(root, "studio-i-outside");
-    git(root, ["clone", "-q", URL, outside]);
-    await expect(
-      host.service.open({
-        projectId: null,
-        path: outside,
-        remoteUrls: [URL],
-        branch: null,
-        branchRemoteUrl: null,
-      })
-    ).rejects.toMatchObject({ code: "VALIDATION" });
 
     const unrelated = makeRepo(
       path.join(root, "studio-i-home", "Projects"),
@@ -325,6 +312,60 @@ describe("opening a project the host already has", () => {
         branchRemoteUrl: null,
       })
     ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(host.projects).toHaveLength(1);
+  });
+
+  it("adopts a picked clone outside its scan once it has checked the folder itself", async () => {
+    const host = createTestHost(root, "studio-p");
+    // Nowhere the bounded scan looks: only a person with the picker finds it.
+    const outside = path.join(root, "studio-p-elsewhere", "deep", "down", "daintree");
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    git(root, ["clone", "-q", URL, outside]);
+    await expect(host.service.scan({ remoteUrls: [URL] })).resolves.toEqual([]);
+    const opened = await host.service.open({
+      projectId: null,
+      path: outside,
+      remoteUrls: [URL],
+      branch: null,
+      branchRemoteUrl: null,
+    });
+    expect(opened.projectPath).toBe(outside);
+    expect(host.projects.map((p) => p.path)).toEqual([outside]);
+  });
+
+  it("refuses a picked folder that isn't the top of its own clone", async () => {
+    const host = createTestHost(root, "studio-r");
+    const clone = path.join(root, "studio-r-elsewhere", "daintree");
+    fs.mkdirSync(path.dirname(clone), { recursive: true });
+    git(root, ["clone", "-q", URL, clone]);
+    const subfolder = path.join(clone, "sub");
+    fs.mkdirSync(subfolder);
+    const linked = path.join(root, "studio-r-elsewhere", "linked");
+    git(clone, ["worktree", "add", "-q", "-b", "linked-branch", linked]);
+    const symlink = path.join(root, "studio-r-elsewhere", "alias");
+    fs.symlinkSync(clone, symlink);
+    const open = (folder: string) =>
+      host.service.open({
+        projectId: null,
+        path: folder,
+        remoteUrls: [URL],
+        branch: null,
+        branchRemoteUrl: null,
+      });
+    for (const folder of [subfolder, linked, symlink, path.join(root, "studio-r-missing")]) {
+      await expect(open(folder)).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    // A clone with no remote named to match is never adopted.
+    await expect(
+      host.service.open({
+        projectId: null,
+        path: clone,
+        remoteUrls: [],
+        branch: null,
+        branchRemoteUrl: null,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(host.projects).toEqual([]);
   });
 });
 
@@ -564,5 +605,136 @@ describe("a push that doesn't finish", () => {
       reason: "timeout",
       message: "git push took too long and was stopped.",
     });
+  });
+});
+
+describe("placing a worktree asked for on another host", () => {
+  function hostWithClone(name: string) {
+    const host = createTestHost(root, name);
+    const clone = path.join(root, `${name}-home`, "Projects", "daintree");
+    git(root, ["clone", "-q", URL, clone]);
+    return { host, clone, project: host.addProject(clone) };
+  }
+
+  const placed = {
+    newBranch: "feature/placed",
+    baseBranch: "main",
+    fromRemote: false,
+    useExistingBranch: false,
+    relativePath: "../daintree-worktrees/feature-placed",
+    recipeId: "inrepo-setup",
+  };
+
+  it("creates the exact branch at the carried path, keeps the outcome and leaves the recipe for the first view", async () => {
+    const { host, clone, project } = hostWithClone("place-a");
+    const opId = nextOpId();
+    const outcome = await host.service.placeWorktree({
+      opId,
+      projectId: project.id,
+      worktree: placed,
+    });
+    const expected = path.join(
+      root,
+      "place-a-home",
+      "Projects",
+      "daintree-worktrees",
+      "feature-placed"
+    );
+    expect(outcome).toMatchObject({
+      ok: true,
+      projectId: project.id,
+      worktreePath: expected,
+      setupRecipeId: "inrepo-setup",
+      branchNote: null,
+    });
+    expect(host.createWorktree).toHaveBeenCalledWith(clone, {
+      baseBranch: "main",
+      newBranch: "feature/placed",
+      path: expected,
+      fromRemote: false,
+      useExistingBranch: false,
+      collisionPolicy: "error",
+    });
+    expect(git(expected, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/placed");
+    expect(host.focusWorktree).toHaveBeenCalledWith(project.id, expected);
+    // The outcome is retained by opId for a Shell whose link dropped.
+    expect(host.service.operationStatus(opId)).toMatchObject({
+      status: "succeeded",
+      result: { worktreePath: expected },
+    });
+    expect(host.service.takePendingSetup(project.id)).toEqual({
+      projectId: project.id,
+      recipeId: "inrepo-setup",
+      worktreePath: expected,
+    });
+
+    // Asking again for the same branch finds that worktree rather than suffixing a new one.
+    const again = await host.service.placeWorktree({
+      opId: nextOpId(),
+      projectId: project.id,
+      worktree: { ...placed, recipeId: null },
+    });
+    expect(again).toMatchObject({ ok: true, worktreePath: expected });
+    expect(host.createWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a recipe the host's copy lacks won't run, and refuses an occupied or escaping path", async () => {
+    const { host, clone, project } = hostWithClone("place-b");
+    const noRecipe = await host.service.placeWorktree({
+      opId: nextOpId(),
+      projectId: project.id,
+      worktree: { ...placed, newBranch: "feature/b1", relativePath: null, recipeId: "local-only" },
+    });
+    expect(noRecipe).toMatchObject({ ok: true, setupRecipeId: null });
+    expect((noRecipe as { branchNote: string | null }).branchNote).toMatch(/won't run/);
+
+    const occupied = path.join(root, "place-b-home", "Projects", "taken");
+    fs.mkdirSync(occupied, { recursive: true });
+    fs.writeFileSync(path.join(occupied, "x"), "x");
+    const opId = nextOpId();
+    await expect(
+      host.service.placeWorktree({
+        opId,
+        projectId: project.id,
+        worktree: { ...placed, newBranch: "feature/b2", relativePath: "../taken", recipeId: null },
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(host.service.operationStatus(opId)).toMatchObject({ status: "failed" });
+
+    await expect(
+      host.service.placeWorktree({
+        opId: nextOpId(),
+        projectId: project.id,
+        worktree: {
+          ...placed,
+          newBranch: "feature/b3",
+          relativePath: ".git/hooks",
+          recipeId: null,
+        },
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(() =>
+      host.service.placeWorktree({
+        opId: nextOpId(),
+        projectId: project.id,
+        worktree: { ...placed, relativePath: `${clone}/abs` },
+      })
+    ).toThrow(/relative/);
+  });
+});
+
+describe("identify", () => {
+  it("reports the project's remotes without credentials, offline", async () => {
+    const host = createTestHost(root, "ident");
+    const repo = makeRepo(
+      root,
+      "ident-repo",
+      "https://user:secret@example.test/daintreehq/daintree.git"
+    );
+    const project = host.addProject(repo);
+    const identity = await host.service.identify({ projectId: project.id });
+    expect(identity.committedProjectId).toBeNull();
+    expect(identity.remotes).toHaveLength(1);
+    expect(identity.remotes[0]!.url).not.toContain("secret");
   });
 });

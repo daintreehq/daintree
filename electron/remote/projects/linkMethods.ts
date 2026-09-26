@@ -6,12 +6,15 @@ import type {
   DestinationCheck,
   HostCloneEnvironment,
   HostProjectOpened,
+  PlaceWorktreePayload,
+  ProjectIdentity,
   ProjectMatchCandidate,
   PushBranchOutcome,
   PushBranchPayload,
   SourceProjectDescription,
 } from "../../../shared/types/ipc/projectMatch.js";
 import type { OperationOutcome } from "../../../shared/types/remoteHosts.js";
+import type { HostDirectoryListing, HostPickerRoots } from "../../../shared/types/ipc/hostFiles.js";
 
 /**
  * Session CALL methods a Shell uses to move a project between its hosts.
@@ -40,6 +43,15 @@ export const ProjectLinkMethod = {
   /** The host mints a token its transfer sink accepts one bundle for. */
   BUNDLE_EXPECT: "projects.bundle-expect",
   BUNDLE_DISCARD: "projects.bundle-discard",
+  /** A project's remotes and committed id, for another host to match it by. */
+  IDENTIFY: "projects.identify",
+  /** Registered projects only (no disk scan): cheap enough for a menu to ask. */
+  FIND: "projects.find",
+  /** Starts creating a placed worktree and answers at once; followed by opId like a clone. */
+  START_PLACE_WORKTREE: "projects.start-place-worktree",
+  /** The host's own folder listing, for Daintree's picker browsing it from another host's window. */
+  LIST_DIRECTORY: "projects.list-directory",
+  PICKER_ROOTS: "projects.picker-roots",
 } as const;
 
 /**
@@ -116,6 +128,20 @@ export const CheckOutSchema = z.object({
   branchRemoteUrl: z.string().max(4096).nullable(),
 });
 export const BundleCreateSchema = z.object({ projectId });
+export const IdentifySchema = z.object({ projectId });
+export const StartPlaceWorktreeSchema: z.ZodType<PlaceWorktreePayload> = z.object({
+  opId,
+  projectId,
+  worktree: z.object({
+    newBranch: branchName,
+    baseBranch: branchName,
+    fromRemote: z.boolean(),
+    useExistingBranch: z.boolean(),
+    relativePath: z.string().min(1).max(1024).nullable(),
+    recipeId: z.string().min(1).max(256).nullable(),
+  }),
+});
+export const ListDirectorySchema = z.object({ path: hostPath, showHidden: z.boolean().optional() });
 export const BundleSendSchema = z.object({ token, sinkToken: token });
 export const BundleTokenSchema = z.object({ token });
 
@@ -242,3 +268,30 @@ export const OperationOutcomeSchema: z.ZodType<OperationOutcome> = z.union([
 
 export const BundleCreatedSchema = z.object({ token, size: z.number().int().min(0) });
 export const BundleExpectedSchema = z.object({ token });
+
+export const IdentitySchema: z.ZodType<ProjectIdentity> = z.object({
+  remotes,
+  committedProjectId: projectId.nullable(),
+});
+
+export const ListingSchema: z.ZodType<HostDirectoryListing> = z.object({
+  path: hostPath,
+  parent: hostPath.nullable(),
+  entries: z
+    .array(
+      z.object({
+        name: text(4096),
+        kind: z.enum(["file", "directory", "symlink", "other"]),
+        size: z.number().nullable(),
+        mtimeMs: z.number().nullable(),
+      })
+    )
+    .max(5000),
+  truncated: z.boolean(),
+});
+
+export const PickerRootsSchema: z.ZodType<HostPickerRoots> = z.object({
+  home: hostPath,
+  projectsDir: hostPath.nullable(),
+  roots: z.array(z.object({ label: text(256), path: hostPath })).max(64),
+});

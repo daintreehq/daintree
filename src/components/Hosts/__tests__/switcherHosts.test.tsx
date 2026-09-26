@@ -75,6 +75,14 @@ const PROJECTS: Record<string, HostProjectRef[]> = {
 };
 
 const list = vi.fn<() => Promise<HostListEntry[]>>();
+const locate = vi.fn<
+  (payload: { fromHostId: string; projectId: string; toHostIds: string[] }) => Promise<
+    Array<{
+      hostId: string;
+      projects: Array<{ projectId: string; name: string; path: string }> | null;
+    }>
+  >
+>();
 const switchWindowHost = vi.fn(() => Promise.resolve());
 const loader = vi.fn((hostId: string) => Promise.resolve(PROJECTS[hostId] ?? []));
 
@@ -87,10 +95,14 @@ beforeEach(() => {
   switchWindowHost.mockClear();
   loader.mockClear();
   list.mockReset();
+  locate.mockReset();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
-    value: { remoteHosts: { list, switchWindowHost, onEvent: () => () => {} } },
+    value: {
+      remoteHosts: { list, switchWindowHost, onEvent: () => () => {} },
+      hostSwitch: { locate },
+    },
   });
 });
 
@@ -187,7 +199,7 @@ function RowMenu({ projectName }: { projectName: string }) {
         <div data-testid="row">{projectName}</div>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <OpenOnHostSubmenu projectId="local-web" projectName={projectName} />
+        <OpenOnHostSubmenu projectId="local-web" />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -200,39 +212,65 @@ describe("Open on… submenu", () => {
     fireEvent.contextMenu(screen.getByTestId("row"));
     await settle();
     expect(screen.queryByText("Open on…")).toBeNull();
+    expect(locate).not.toHaveBeenCalled();
   });
 
-  it("marks hosts that list the project and offers clone on the rest", async () => {
+  it("marks hosts by repository identity, never by a shared name", async () => {
     list.mockResolvedValue([host("studio-01"), host("studio-02")]);
     setHostProjectsLoader(loader);
+    // studio-02 lists a project called "web", but it is another repository;
+    // studio-01 has this one under another name.
+    locate.mockResolvedValue([
+      {
+        hostId: "studio-01",
+        projects: [{ projectId: "s1-site", name: "site", path: "/home/greg/site" }],
+      },
+      { hostId: "studio-02", projects: [] },
+    ]);
     render(<RowMenu projectName="web" />);
     fireEvent.contextMenu(screen.getByTestId("row"));
     fireEvent.click(await screen.findByText("Open on…"));
-    await settle();
 
-    const has = await screen.findByRole("menuitem", {
-      name: "studio-02, has a project named web",
+    const has = await screen.findByRole("menuitem", { name: "studio-01, has this repository" });
+    expect(screen.getByRole("menuitem", { name: "studio-02, clone" })).toBeTruthy();
+    expect(locate).toHaveBeenCalledWith({
+      fromHostId: "local",
+      projectId: "local-web",
+      toHostIds: ["studio-01", "studio-02"],
     });
-    expect(screen.getByRole("menuitem", { name: "studio-01, clone" })).toBeTruthy();
 
-    fireEvent.click(has);
-    await waitFor(() =>
-      expect(switchWindowHost).toHaveBeenCalledWith({
-        hostId: "studio-02",
-        newWindow: false,
-        projectId: "s2-web",
-      })
-    );
-
-    fireEvent.contextMenu(screen.getByTestId("row"));
-    fireEvent.click(await screen.findByText("Open on…"));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "studio-01, clone" }));
+    // Even a host that has it goes through the switch dialog: fresh branch check, worktree choice.
+    fireEvent.click(has, { metaKey: true });
     await waitFor(() =>
       expect(dispatch).toHaveBeenCalledWith(
         "project.openOnHost",
-        { hostId: "studio-01", projectId: "local-web" },
+        { hostId: "studio-01", projectId: "local-web", newWindow: true },
         { source: "context-menu" }
       )
     );
+    expect(switchWindowHost).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(screen.getByTestId("row"));
+    fireEvent.click(await screen.findByText("Open on…"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "studio-02, clone" }));
+    await waitFor(() =>
+      expect(dispatch).toHaveBeenLastCalledWith(
+        "project.openOnHost",
+        { hostId: "studio-02", projectId: "local-web", newWindow: false },
+        { source: "context-menu" }
+      )
+    );
+    expect(switchWindowHost).not.toHaveBeenCalled();
+  });
+
+  it("claims nothing about a host it couldn't ask", async () => {
+    list.mockResolvedValue([host("studio-01")]);
+    locate.mockResolvedValue([{ hostId: "studio-01", projects: null }]);
+    render(<RowMenu projectName="web" />);
+    fireEvent.contextMenu(screen.getByTestId("row"));
+    fireEvent.click(await screen.findByText("Open on…"));
+    const item = await screen.findByRole("menuitem", { name: "studio-01" });
+    await waitFor(() => expect(item.getAttribute("data-presence")).toBe("unknown"));
+    expect(item.textContent).not.toContain("clone");
   });
 });

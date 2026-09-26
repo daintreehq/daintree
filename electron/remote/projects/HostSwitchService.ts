@@ -1,13 +1,19 @@
 import type {
+  HostProjectPresence,
   HostSwitchCheckDestinationPayload,
   HostSwitchExecutePayload,
   HostSwitchExecuteResult,
+  HostSwitchListDirectoryPayload,
+  HostSwitchLocatePayload,
   HostSwitchOpPayload,
+  HostSwitchPickerRootsPayload,
   HostSwitchPlan,
   HostSwitchPlanPayload,
   HostSwitchPreparation,
   HostSwitchStatus,
+  HostSwitchSuggestClonePayload,
 } from "../../../shared/types/ipc/hostSwitch.js";
+import type { HostDirectoryListing, HostPickerRoots } from "../../../shared/types/ipc/hostFiles.js";
 import type {
   CloneAndOpenOutcome,
   DestinationCheck,
@@ -23,6 +29,8 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
+  isSupportedCloneUrl,
+  repositoryNameFromRemote,
   stripGitRemoteCredentials,
   stripRemoteListCredentials,
 } from "../../../shared/utils/gitRemoteUrl.js";
@@ -59,6 +67,8 @@ const DEFAULT_RECONNECT_TIMEOUT_MS = 120_000;
 const TRACK_RETENTION_MS = 10 * 60_000;
 const MAX_TRACKED = 100;
 const MAX_UNKNOWN_POLLS = 5;
+/** A menu asks about the hosts it lists; more than this is not a menu. */
+const MAX_LOCATE_HOSTS = 32;
 
 interface Tracked {
   /** The request itself, so a reused opId can't be answered with another request's result. */
@@ -222,6 +232,67 @@ export class HostSwitchService {
       .then(withoutGrant);
   }
 
+  /**
+   * Which of `toHostIds` already have the window's project, by repository
+   * identity: registered projects there sharing a remote with it. A shared
+   * name or a committed id alone never counts. Only registered projects are
+   * read (no disk scan), so a menu can ask each time it opens.
+   */
+  async locate(ctx: IpcContext, payload: HostSwitchLocatePayload): Promise<HostProjectPresence[]> {
+    const from = this.source(ctx, payload?.fromHostId);
+    if (!Array.isArray(payload.toHostIds)) throw invalid("toHostIds is required");
+    const targets = [...new Set(payload.toHostIds)]
+      .filter((id): id is HostId => typeof id === "string" && id !== from.hostId)
+      .slice(0, MAX_LOCATE_HOSTS);
+    const identity = await from.identify({ projectId: payload.projectId });
+    const remoteUrls = stripRemoteListCredentials(identity.remotes).map((remote) => remote.url);
+    return Promise.all(
+      targets.map(async (hostId): Promise<HostProjectPresence> => {
+        if (remoteUrls.length === 0) return { hostId, projects: [] };
+        try {
+          const found = await this.gateway(hostId).find({
+            remoteUrls,
+            committedProjectId: identity.committedProjectId,
+          });
+          return {
+            hostId,
+            projects: found
+              .filter((c) => c.matchedBy === "remote-url" && c.projectId !== null)
+              .map((c) => ({ projectId: c.projectId!, name: c.name, path: c.path })),
+          };
+        } catch {
+          return { hostId, projects: null };
+        }
+      })
+    );
+  }
+
+  /** Where a clone of `url` would go on the host, checked there. */
+  async suggestCloneDestination(payload: HostSwitchSuggestClonePayload): Promise<DestinationCheck> {
+    if (typeof payload?.toHostId !== "string") throw invalid("toHostId is required");
+    const url = requireCloneUrl(payload.url);
+    const repoName = repositoryNameFromRemote(url);
+    if (!repoName) throw invalid("That URL doesn't name a repository");
+    return this.gateway(payload.toHostId)
+      .suggestDestination({ homeRelativePath: null, repoName, remoteUrls: [url] })
+      .then(withoutGrant);
+  }
+
+  /** A folder on the host, for Daintree's picker browsing a host other than the window's. */
+  listDirectory(payload: HostSwitchListDirectoryPayload): Promise<HostDirectoryListing> {
+    if (typeof payload?.toHostId !== "string") throw invalid("toHostId is required");
+    if (typeof payload.path !== "string") throw invalid("path is required");
+    return this.gateway(payload.toHostId).listDirectory({
+      path: payload.path,
+      showHidden: payload.showHidden === true,
+    });
+  }
+
+  pickerRoots(payload: HostSwitchPickerRootsPayload): Promise<HostPickerRoots> {
+    if (typeof payload?.toHostId !== "string") throw invalid("toHostId is required");
+    return this.gateway(payload.toHostId).pickerRoots();
+  }
+
   execute(ctx: IpcContext, payload: HostSwitchExecutePayload): Promise<HostSwitchExecuteResult> {
     const opId = requireOpId(payload?.opId);
     const fingerprint = JSON.stringify({ from: this.options.hostOfSender(ctx), payload });
@@ -261,6 +332,17 @@ export class HostSwitchService {
             })
           );
         };
+        break;
+      }
+      case "clone-url": {
+        const to = this.gateway(payload.toHostId);
+        const url = requireCloneUrl(payload.url);
+        run = (track) => this.cloneUrl(to, opId, url, payload, track);
+        break;
+      }
+      case "create-worktree": {
+        const to = this.gateway(payload.toHostId);
+        run = (track) => this.placeWorktree(to, opId, payload, track);
         break;
       }
       case "checkout": {
@@ -423,14 +505,15 @@ export class HostSwitchService {
       stopIfCancelled();
 
       this.stage(track, "cloning", "Cloning", 0);
-      await this.startCloneResiliently(to, opId, track, {
+      const start = {
         opId,
         source,
         destination: payload.destination,
         branch: payload.branch as HostBranchTarget | null,
         options: payload.options as HostCloneOptions,
         setupRecipeId: payload.setupRecipeId,
-      });
+      };
+      await this.startResiliently(to, opId, track, () => to.startClone(start), "clone");
       unclaimedTargetBundle = null;
     } finally {
       if (unclaimedTargetBundle) await to.discardBundle(unclaimedTargetBundle).catch(() => {});
@@ -453,19 +536,20 @@ export class HostSwitchService {
   }
 
   /**
-   * Start the target's clone. When the link drops before the answer, the
-   * host may or may not have it: wait for the link, ask by opId, and only
-   * resend (the host dedups by opId) when it has no record.
+   * Start an operation on the target. When the link drops before the answer,
+   * the host may or may not have it: wait for the link, ask by opId, and
+   * only resend (the host dedups by opId) when it has no record.
    */
-  private async startCloneResiliently(
+  private async startResiliently(
     to: HostGateway,
     opId: string,
     track: Tracked,
-    payload: Parameters<HostGateway["startClone"]>[0]
+    start: () => Promise<void>,
+    what: string
   ): Promise<void> {
     for (let attempt = 0; ; attempt++) {
       try {
-        await to.startClone(payload);
+        await start();
         return;
       } catch (error) {
         if (to.kind !== "remote" || !isLinkDrop(error) || attempt >= 2) throw error;
@@ -478,8 +562,8 @@ export class HostSwitchService {
       if (!back) {
         throw new AppError({
           code: "OUTCOME_UNKNOWN",
-          message: `Lost the link to ${to.hostId} while starting the clone`,
-          userMessage: "The host dropped off as the clone started. Check it once it's back.",
+          message: `Lost the link to ${to.hostId} while starting the ${what}`,
+          userMessage: `The host dropped off as the ${what} started. Check it once it's back.`,
         });
       }
       const status = await to.operationStatus(opId).catch(() => null);
@@ -487,8 +571,104 @@ export class HostSwitchService {
     }
   }
 
+  /** Clone a repository by URL onto `to`: Add project… on a host, with no source project. */
+  private async cloneUrl(
+    to: HostGateway,
+    opId: string,
+    url: string,
+    payload: Extract<HostSwitchExecutePayload, { kind: "clone-url" }>,
+    track: Tracked
+  ): Promise<HostSwitchExecuteResult> {
+    let cancelled = false;
+    let started = false;
+    track.cancel = async () => {
+      cancelled = true;
+      return started ? to.cancelOperation(opId) : true;
+    };
+    this.stage(track, "cloning", "Cloning", 0);
+    await this.startResiliently(
+      to,
+      opId,
+      track,
+      () =>
+        to.startClone({
+          opId,
+          source: { kind: "remote", url },
+          destination: payload.destination,
+          branch: null,
+          options: payload.options as HostCloneOptions,
+          setupRecipeId: null,
+        }),
+      "clone"
+    );
+    started = true;
+    if (cancelled) await to.cancelOperation(opId).catch(() => false);
+    const outcome = await this.follow(to, opId, track);
+    if (!outcome.ok) {
+      return {
+        kind: "git-failed",
+        step: "clone",
+        hostId: to.hostId,
+        reason: outcome.reason,
+        message: outcome.message,
+      };
+    }
+    const { ok: _ok, ...result } = outcome;
+    return opened(to.hostId, result);
+  }
+
   /**
-   * Follow the target's clone operation by id until it settles. A dropped
+   * Create the new-worktree dialog's worktree on `to`, in a project it has:
+   * open it there first (which is also what lets this Shell change it, on a
+   * host where it has no view yet), then follow the host's operation by id.
+   */
+  private async placeWorktree(
+    to: HostGateway,
+    opId: string,
+    payload: Extract<HostSwitchExecutePayload, { kind: "create-worktree" }>,
+    track: Tracked
+  ): Promise<HostSwitchExecuteResult> {
+    let started = false;
+    track.cancel = async () => (started ? to.cancelOperation(opId) : false);
+    this.stage(track, "opening", "Opening the project");
+    await to.open({
+      projectId: payload.projectId,
+      // Read only for an unregistered folder; a registered project is found by id.
+      path: "/",
+      remoteUrls: [],
+      branch: null,
+      branchRemoteUrl: null,
+    });
+    this.stage(track, "worktree", "Creating the worktree");
+    await this.startResiliently(
+      to,
+      opId,
+      track,
+      () =>
+        to.startPlaceWorktree({
+          opId,
+          projectId: payload.projectId,
+          worktree: payload.worktree,
+        }),
+      "worktree"
+    );
+    started = true;
+    const outcome = await this.follow(to, opId, track);
+    if (!outcome.ok) {
+      return {
+        kind: "git-failed",
+        step: "worktree",
+        hostId: to.hostId,
+        reason: outcome.reason,
+        message: outcome.message,
+      };
+    }
+    const { ok: _ok, ...result } = outcome;
+    return opened(to.hostId, result);
+  }
+
+  /**
+   * Follow the target's operation (a clone, or a placed worktree) by id until it settles. A dropped
    * link doesn't end it — the host keeps working and keeps the outcome — so
    * wait for the host to come back and ask again.
    */
@@ -533,7 +713,7 @@ export class HostSwitchService {
           if (!parsed.success) {
             throw new AppError({
               code: "INTERNAL",
-              message: "The host sent an invalid clone result",
+              message: "The host sent an invalid result",
             });
           }
           return parsed.data;
@@ -628,6 +808,14 @@ export class HostSwitchService {
       release();
     }
   }
+}
+
+function requireCloneUrl(value: unknown): string {
+  if (typeof value !== "string" || value.length > 4096)
+    throw invalid("A repository URL is required");
+  const url = stripGitRemoteCredentials(value.trim());
+  if (!isSupportedCloneUrl(url)) throw invalid("Only HTTP(S) and SSH remotes can be cloned");
+  return url;
 }
 
 function stripOptional(url: string | null | undefined): string | null {

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
+import type { PlacedWorktree } from "@shared/types/ipc/projectMatch";
+import { onHostSwitchSettled } from "@/components/HostSwitch/hostSwitchRequests";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -19,10 +21,19 @@ import { buildHostMenuRows, clientPlatform, type HostMenuRow } from "../hostMode
 import { startHostMetricsFeed } from "./hostMetricsFeed";
 import { isLive, rankPlacement, type PlacementChoice } from "./overviewModel";
 
+/** The new-worktree form as the dialog validated it; `path` is this host's absolute path. */
+export interface PlacementDraft extends Omit<PlacedWorktree, "relativePath"> {
+  path: string;
+}
+
 interface WorktreePlacementRowProps {
   /** This window's project, which moves to another host through git. */
   projectId: string | null;
-  /** Close the new-worktree dialog once the chosen host's switch dialog has opened. */
+  /** The project folder on this window's host, which the worktree path is taken relative to. */
+  rootPath: string;
+  /** The form, validated; null when it isn't valid (the dialog then shows why). */
+  getDraft: () => PlacementDraft | null;
+  /** Close the new-worktree dialog once the worktree exists on the chosen host. */
   onLeave: () => void;
   /** True while another host than the window's is chosen: nothing is created here then. */
   onElsewhereChange?: (elsewhere: boolean) => void;
@@ -42,15 +53,45 @@ export function suggestPlacement(
   );
 }
 
+function toPosix(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/**
+ * The worktree's path relative to the project folder, which carries to
+ * another host's copy of the project (a sibling `-worktrees` folder stays a
+ * sibling). Null when there is no path, or it isn't under the project's
+ * parent: then the host puts it where its own pattern says.
+ */
+export function placedRelativePath(rootPath: string, worktreePath: string): string | null {
+  const root = toPosix(rootPath);
+  const target = toPosix(worktreePath);
+  if (!root.startsWith("/") || !target.startsWith("/")) return null;
+  const parent = root.slice(0, root.lastIndexOf("/"));
+  if (target === root || !target.startsWith(`${parent}/`)) return null;
+  if (target.startsWith(`${root}/`)) return target.slice(root.length + 1);
+  return `../${target.slice(parent.length + 1)}`;
+}
+
+/** The draft as the other host takes it. */
+export function toPlacedWorktree(draft: PlacementDraft, rootPath: string): PlacedWorktree {
+  const { path, ...rest } = draft;
+  return { ...rest, relativePath: placedRelativePath(rootPath, path) };
+}
+
 /**
  * Where the new worktree goes. The window's host is preselected, so nothing
  * changes unless the user picks another; the least-loaded host is always
- * named beside it. Picking another host hands the project over through the
- * open-on-host flow rather than creating anything here. Shown only once a
- * host other than this machine exists.
+ * named beside it. Picking another host creates the worktree there instead:
+ * the project goes through the open-on-host flow (matched or cloned there),
+ * and the dialog on that host creates this form's branch, path and recipe.
+ * This dialog stays open until that has happened. Shown only once a host
+ * other than this machine exists.
  */
 export function WorktreePlacementRow({
   projectId,
+  rootPath,
+  getDraft,
   onLeave,
   onElsewhereChange,
 }: WorktreePlacementRowProps) {
@@ -78,20 +119,31 @@ export function WorktreePlacementRow({
   const best = ranked[0] ?? null;
   const chosenRow = rows.find((row) => row.hostId === chosen) ?? rows[0]!;
 
-  // The dialog stays open until the host's switch dialog is up: closing first
-  // would leave a failed handoff with neither dialog nor explanation.
+  // The dialog stays open until the worktree exists on the host: closing
+  // first would leave a failed or abandoned handoff with nothing to retry from.
   const continueOnHost = async () => {
     if (!projectId || handoff.status === "pending") return;
+    const draft = getDraft();
+    if (!draft) return;
     const target = chosenRow;
     setHandoff({ status: "pending" });
     const result = await actionService.dispatch(
       "project.openOnHost",
-      { hostId: target.hostId, projectId },
+      { hostId: target.hostId, projectId, worktree: toPlacedWorktree(draft, rootPath) },
       { source: "user" }
     );
+    const requestId = result.ok
+      ? (result.result as { requestId?: unknown } | undefined)?.requestId
+      : undefined;
+    if (result.ok && typeof requestId === "number") {
+      onHostSwitchSettled(requestId, (settlement) => {
+        setHandoff({ status: "idle" });
+        if (settlement === "completed") onLeave();
+      });
+      return;
+    }
     if (result.ok) {
       setHandoff({ status: "idle" });
-      onLeave();
       return;
     }
     logWarn("[Hosts] Handing the project to another host failed", { error: result.error });
@@ -165,7 +217,9 @@ export function WorktreePlacementRow({
             disabled={!projectId || handoff.status === "pending"}
             data-testid="worktree-placement-continue"
           >
-            Continue on {chosenRow.name}…
+            {handoff.status === "pending"
+              ? `Creating on ${chosenRow.name}…`
+              : `Create on ${chosenRow.name}…`}
           </Button>
         )}
       </div>
