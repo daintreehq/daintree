@@ -263,6 +263,42 @@ describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy host error fields", () => {
+  it("rebuilds a rejected host call with the fields the host attached", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.writeFile("/p/a.json", "{}", { expectedRevision: "old" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.writeFile");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "REVISION_MISMATCH: the file changed",
+      errorFields: { code: "REVISION_MISMATCH", currentRevision: "abc123" },
+    });
+    const error = await promise.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: "REVISION_MISMATCH: the file changed",
+      code: "REVISION_MISMATCH",
+      currentRevision: "abc123",
+    });
+  });
+
+  it("never lets a field overwrite the message", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.stat("/p/a.json");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.stat");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "real message",
+      errorFields: { message: "spoofed", code: "ENOENT" },
+    });
+    await expect(promise).rejects.toMatchObject({ message: "real message", code: "ENOENT" });
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

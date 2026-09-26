@@ -64,6 +64,7 @@ import type { PanelReloadResult } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import { errorWithFields } from "./pluginHostErrorFields.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type {
   PluginHostCallMethod,
@@ -185,7 +186,7 @@ export class PluginDevWorkerHostProxy {
         this.pendingCalls.delete(msg.requestId);
         pending.cleanup?.();
         if (msg.ok) pending.resolve(msg.result);
-        else pending.reject(new Error(msg.error));
+        else pending.reject(errorWithFields(msg.error, msg.errorFields));
         return true;
       }
       case "invoke":

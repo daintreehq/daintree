@@ -160,7 +160,19 @@ export type PluginHostToWorkerMessage =
   | { type: "dispose" }
   /** Reply to a worker `host-call`. */
   | { type: "host-result"; requestId: string; ok: true; result: unknown }
-  | { type: "host-result"; requestId: string; ok: false; error: string }
+  | {
+      type: "host-result";
+      requestId: string;
+      ok: false;
+      error: string;
+      /**
+       * The host error's own primitive fields (`code`, `currentRevision`, …).
+       * An `Error` loses everything but its message crossing the port, and a
+       * caller branching on `err.code` — a `REVISION_MISMATCH` retry — needs
+       * the same object in the worker that it would get in process.
+       */
+      errorFields?: Record<string, string | number | boolean>;
+    }
   /**
    * Invoke a worker-held callback (action or IPC handler) and await its result
    * via a matching `invoke-result` from the worker.

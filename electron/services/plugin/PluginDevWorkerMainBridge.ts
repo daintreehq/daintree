@@ -71,6 +71,7 @@ import type {
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import { serializableErrorFields } from "./pluginHostErrorFields.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
@@ -736,11 +737,13 @@ export class PluginDevWorkerMainBridge {
       this.workerHost.send({ type: "host-result", requestId: msg.requestId, ok: true, result });
     } catch (err) {
       if (this.disposed || generation !== this.reloadGeneration) return;
+      const errorFields = serializableErrorFields(err);
       this.workerHost.send({
         type: "host-result",
         requestId: msg.requestId,
         ok: false,
         error: formatErrorMessage(err, "host call failed"),
+        ...(errorFields && { errorFields }),
       });
     } finally {
       // Only if this controller is still the one registered: a worker that

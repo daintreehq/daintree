@@ -208,6 +208,31 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({ ok: true, result: [{ id: "w1" }] });
   });
 
+  it("carries a host error's primitive fields to the worker, not just its message", async () => {
+    const { host, workerHost } = makeBridge();
+    host.getWorktrees.mockRejectedValueOnce(
+      Object.assign(new Error("REVISION_MISMATCH: the file changed"), {
+        code: "REVISION_MISMATCH",
+        currentRevision: "abc123",
+        nested: { dropped: true },
+      })
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-err",
+      method: "getWorktrees",
+      params: undefined,
+    });
+    await flush();
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-err");
+    expect(result).toMatchObject({
+      ok: false,
+      error: "REVISION_MISMATCH: the file changed",
+      errorFields: { code: "REVISION_MISMATCH", currentRevision: "abc123" },
+    });
+    expect(result.errorFields).not.toHaveProperty("nested");
+  });
+
   it("relays reloadPanel with only the panel id and returns the acknowledgment (#12610)", async () => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", {
