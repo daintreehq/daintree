@@ -15,6 +15,10 @@ import {
 } from "@shared/utils/layoutMerge";
 import { logError } from "@/utils/logger";
 import { getWorktreeGitDirById } from "@/store/storeAccessors";
+import { sendHostOwnedWrite, supersedeDeferredHostOwnedWrite } from "./hostOwnedWrites";
+
+const terminalsWriteKey = (projectId: string) => `project-terminals:${projectId}`;
+const tabGroupsWriteKey = (projectId: string) => `project-tab-groups:${projectId}`;
 
 type ProjectClientType = typeof projectClient;
 
@@ -304,13 +308,24 @@ export class PanelPersistence {
             TERMINAL_TRACKED_FIELDS
           );
           try {
-            await this.client.setTerminals(
-              projectId,
-              transformed,
-              changedIds,
-              removedIds,
-              fieldEdits
+            const outcome = await sendHostOwnedWrite(
+              terminalsWriteKey(projectId),
+              () =>
+                this.client.setTerminals(
+                  projectId,
+                  transformed,
+                  changedIds,
+                  removedIds,
+                  fieldEdits
+                ),
+              () => this.replayTerminals(projectId, transformed)
             );
+            if (outcome !== "sent") {
+              // Not acknowledged: the baseline stays, so the replay (or the
+              // next save) diffs against what the host last took.
+              this.clearQueuedTerminalsIfMatches(projectId, transformed);
+              return;
+            }
             if (collectPerf) {
               const now = typeof performance !== "undefined" ? performance.now() : Date.now();
               markRendererPerformance("persistence_terminals_save", {
@@ -374,7 +389,15 @@ export class PanelPersistence {
             deepEqualIgnoringUndefined
           );
           try {
-            await this.client.setTabGroups(projectId, tabGroups, changedIds, removedIds);
+            const outcome = await sendHostOwnedWrite(
+              tabGroupsWriteKey(projectId),
+              () => this.client.setTabGroups(projectId, tabGroups, changedIds, removedIds),
+              () => this.replayTabGroups(projectId, tabGroups)
+            );
+            if (outcome !== "sent") {
+              this.clearQueuedTabGroupsIfMatches(projectId, tabGroups);
+              return;
+            }
             if (collectPerf) {
               const now = typeof performance !== "undefined" ? performance.now() : Date.now();
               markRendererPerformance("persistence_tab_groups_save", {
@@ -419,6 +442,22 @@ export class PanelPersistence {
     }
   }
 
+  /**
+   * A held save going out again, through the same debounce and baseline as any
+   * other. A newer save still waiting on the debounce wins over the held one.
+   */
+  private replayTerminals(projectId: string, transformed: PanelSnapshot[]): void {
+    const latest = this.queuedTerminalsByProject.get(projectId) ?? transformed;
+    this.queuedTerminalsByProject.set(projectId, latest);
+    this.debouncedSave(projectId, latest);
+  }
+
+  private replayTabGroups(projectId: string, tabGroups: TabGroup[]): void {
+    const latest = this.queuedTabGroupsByProject.get(projectId) ?? tabGroups;
+    this.queuedTabGroupsByProject.set(projectId, latest);
+    this.debouncedSaveTabGroups(projectId, latest);
+  }
+
   private clearQueuedTabGroupsIfMatches(projectId: string, tabGroups: TabGroup[]): void {
     if (snapshotsEqual(this.queuedTabGroupsByProject.get(projectId), tabGroups)) {
       this.queuedTabGroupsByProject.delete(projectId);
@@ -447,6 +486,9 @@ export class PanelPersistence {
     if (snapshotsEqual(this.queuedTerminalsByProject.get(resolvedProjectId), transformed)) {
       return;
     }
+    // Whether this goes out or the host already has it, a layout held from
+    // before (or still in flight) is older and must not replay over it.
+    supersedeDeferredHostOwnedWrite(terminalsWriteKey(resolvedProjectId));
     if (
       !this.queuedTerminalsByProject.has(resolvedProjectId) &&
       snapshotsEqual(this.persistedTerminalsByProject.get(resolvedProjectId), transformed)
@@ -470,6 +512,7 @@ export class PanelPersistence {
     if (snapshotsEqual(this.queuedTabGroupsByProject.get(resolvedProjectId), groupArray)) {
       return;
     }
+    supersedeDeferredHostOwnedWrite(tabGroupsWriteKey(resolvedProjectId));
     if (
       !this.queuedTabGroupsByProject.has(resolvedProjectId) &&
       snapshotsEqual(this.persistedTabGroupsByProject.get(resolvedProjectId), groupArray)

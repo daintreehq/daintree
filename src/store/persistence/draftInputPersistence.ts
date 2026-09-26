@@ -2,6 +2,7 @@ import { projectClient } from "@/clients";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { computeRecordDelta, type IdArrayDelta } from "@shared/utils/layoutMerge";
 import { logError } from "@/utils/logger";
+import { sendHostOwnedWrite } from "./hostOwnedWrites";
 
 /**
  * Renderer-owned persistence for terminal draft inputs (#11352).
@@ -111,7 +112,19 @@ class DraftInputPersistence {
           return;
         }
         try {
-          await projectClient.setDraftInputs(projectId, snapshot, changedIds, removedIds);
+          const sent = snapshot;
+          const outcome = await sendHostOwnedWrite(
+            `project-drafts:${projectId}`,
+            () => projectClient.setDraftInputs(projectId, sent, changedIds, removedIds),
+            // Re-read at replay: whatever the view holds then is the latest.
+            () =>
+              this.flushProject(
+                projectId,
+                useTerminalInputStore.getState().getProjectDraftInputs(projectId)
+              )
+          );
+          // Not acknowledged: the baseline stays for the replay to diff against.
+          if (outcome !== "sent") return;
           // The store merged exactly this delta, so apply it to the baseline as
           // it stands now: a rebase made while the write was in flight keeps
           // the keys this write didn't touch.
