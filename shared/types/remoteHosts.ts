@@ -182,6 +182,27 @@ export interface HostMetricsSummary {
   driver: DriveLeaseHolder | null;
   /** Installed agent CLIs and their versions, as the Host's detection reports them. */
   agentClis: Array<{ agentId: string; version: string | null }>;
+  /**
+   * The Host's forge providers and what its own settings and providers report
+   * about signing in. Absent from a host that doesn't report it; null when the
+   * read failed.
+   */
+  forges?: HostForgeObservation[] | null;
+}
+
+/**
+ * One forge provider on a host: whether a credential is saved there, and the
+ * account its provider last said that credential signs in as. Credentials
+ * never leave the host; only these observations do.
+ */
+export interface HostForgeObservation {
+  /** Namespaced provider id, e.g. `github.github`. */
+  providerId: string;
+  /** Display name, e.g. "GitHub". */
+  name: string;
+  hasCredential: boolean;
+  /** Null when the provider hasn't reported an account (no credential, or not asked yet). */
+  account: string | null;
 }
 
 /** Operation ids let a client resolve a mutation whose link dropped mid-flight. */
