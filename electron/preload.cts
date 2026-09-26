@@ -1202,8 +1202,16 @@ function buildElectronApi(): ElectronAPI {
       setActive: (worktreeId: string) =>
         _unwrappingInvoke(CHANNELS.WORKTREE_SET_ACTIVE, { worktreeId }),
 
-      create: (options: CreateWorktreeOptions, rootPath: string): Promise<WorktreeCreateResult> =>
-        _unwrappingInvoke(CHANNELS.WORKTREE_CREATE, { rootPath, options }),
+      create: (
+        options: CreateWorktreeOptions,
+        rootPath: string,
+        opId?: string
+      ): Promise<WorktreeCreateResult> =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_CREATE, {
+          rootPath,
+          options,
+          ...(opId !== undefined ? { opId } : {}),
+        }),
 
       listBranches: (rootPath: string) =>
         _unwrappingInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),

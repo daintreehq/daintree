@@ -880,6 +880,9 @@ export const WorktreeCreatePayloadSchema = z.object({
     // renderer-side check cannot, because it reserves nothing.
     collisionPolicy: z.enum(["suffix", "error"]).optional(),
   }),
+  // Named by a remote view, so a create whose answer was lost can be looked up
+  // by id instead of being repeated. A local view names none.
+  opId: z.string().min(1).max(128).optional(),
 });
 
 // ============================================================================

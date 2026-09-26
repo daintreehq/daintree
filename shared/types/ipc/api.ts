@@ -277,7 +277,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     create(
       options: CreateWorktreeOptions,
-      rootPath: string
+      rootPath: string,
+      /** Names the create as a host operation; only a remote view passes one. */
+      opId?: string
     ): Promise<import("../worktree.js").WorktreeCreateResult>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;
     fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void>;
