@@ -321,6 +321,44 @@ export const AgentMcpContributionSchema = z
   })
   .strict();
 
+const DATABASE_FILE_EXTENSION = /\.(db|sqlite|sqlite3)$/;
+
+/**
+ * `contributes.databases` manifest entry — a SQLite file the plugin opens
+ * through `host.db`. The declaration is what names the file, discloses it, and
+ * decides where it lives, so the host can resolve and contain the path before
+ * the plugin ever sees it.
+ *
+ * `path` is only meaningful for a `"project"` database: it is relative to the
+ * project root, so the committed data contract an agent reads can name the
+ * same file. A `"local"` database always lives in the plugin's own data
+ * directory. Strict, so a stray `url` or `driver` is refused rather than read
+ * as a backend the host does not have.
+ */
+export const DatabaseContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    description: z.string().min(1).max(400).optional(),
+    location: z.enum(["project", "local"]).default("project"),
+    path: z
+      .string()
+      .min(1)
+      .max(512)
+      .refine(isSafePluginAssetPath, {
+        message:
+          "path must be a relative project path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+      })
+      .refine((value) => !/(^|\/)\.git(\/|$)/i.test(value.replace(/^\.\//, "")), {
+        message: "path must not be inside .git",
+      })
+      .refine((value) => DATABASE_FILE_EXTENSION.test(value), {
+        message: "path must end in .db, .sqlite or .sqlite3",
+      })
+      .optional(),
+    journalMode: z.enum(["delete", "wal"]).default("delete"),
+  })
+  .strict();
+
 /**
  * `contributes.skills` manifest entry (#10892). A skill is a plugin-shipped
  * markdown file surfaced to agents via the built-in MCP server's
@@ -1538,6 +1576,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   recipes: 50,
   agentMcp: AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   tours: 10,
+  databases: 16,
 } as const;
 
 /**
@@ -1977,6 +2016,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(TourContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.tours)
               .default([]),
+            databases: z
+              .array(DatabaseContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.databases)
+              .default([]),
             // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
@@ -2002,6 +2045,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             recipes: [],
             agentMcp: [],
             tours: [],
+            databases: [],
             surfaces: {},
           })
       ),
@@ -2082,6 +2126,39 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
         }
       }
+
+      // A project database is a file in the repository, so it is disclosed
+      // and gated like any other project write — and it needs a project to
+      // resolve against, which an installed plugin does not have.
+      manifest.contributes.databases.forEach((database, index) => {
+        if (database.location === "project") {
+          if (manifest.scope !== "project") {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "databases", index, "location"],
+              message:
+                'a "project" database is available only to a "scope": "project" plugin — an installed plugin is bound to no project to put the file in. Use "location": "local".',
+              params: { errorCode: "database_project_scope_only" },
+            });
+          } else if (!manifest.capabilities.includes("fs:project-write")) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "databases", index, "location"],
+              message:
+                'a "project" database writes into the repository and requires the "fs:project-write" capability to be declared in capabilities.',
+              params: { errorCode: "database_project_write_required" },
+            });
+          }
+        } else if (database.path !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "databases", index, "path"],
+            message:
+              'path applies only to a "project" database; a "local" database always lives in the plugin\'s own data directory.',
+            params: { errorCode: "database_local_path_unsupported" },
+          });
+        }
+      });
 
       // The inverse asymmetry: `contributes.surfaces` is available to project
       // plugins ALONE. An installed plugin taking over a project's empty canvas,
@@ -2380,6 +2457,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("recipes", manifest.contributes.recipes);
       reportDuplicateIds("agentMcp", manifest.contributes.agentMcp);
       reportDuplicateIds("tours", manifest.contributes.tours);
+      reportDuplicateIds("databases", manifest.contributes.databases);
 
       // Cross-reference integrity — a contribution that names another by id must
       // point at one that exists in the same manifest, else the reference dangles

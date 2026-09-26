@@ -263,6 +263,37 @@ describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy host.db", () => {
+  it("resolves the location in main and opens the file in the worker", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "proxy-db-"));
+    try {
+      const { proxy, sent } = makeProxy();
+      const opening = proxy.host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] });
+      const call = sent.find((m) => m.type === "host-call" && m.method === "db.resolve");
+      expect(call.params).toEqual({ id: "ledger" });
+      resolveCall(proxy, sent, "db.resolve", {
+        id: "ledger",
+        location: "local",
+        path: join(dir, "ledger.db"),
+        projectRelativePath: null,
+        journalMode: "delete",
+      });
+      const db = await opening;
+      await db.run("INSERT INTO t VALUES (1)");
+      expect(await db.query("SELECT x FROM t")).toEqual([{ x: 1 }]);
+      // A reload disposes the proxy; the connection must not outlive it.
+      proxy.dispose();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await expect(db.query("SELECT 1")).rejects.toMatchObject({ code: "DB_CLOSED" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("PluginDevWorkerHostProxy host error fields", () => {
   it("rebuilds a rejected host call with the fields the host attached", async () => {
     const { proxy, sent } = makeProxy();

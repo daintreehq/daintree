@@ -842,6 +842,8 @@ export class PluginDevWorkerMainBridge {
         await this.host.storage.delete(p.key, p.scope);
         return undefined;
       }
+      case "db.resolve":
+        return this.host.db.resolve((params as { id: string }).id);
       case "fs.readFile":
         return this.host.fs.readFile((params as FsPathParams).path, { signal });
       case "fs.readFileBytes":

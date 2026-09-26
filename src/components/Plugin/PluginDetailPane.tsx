@@ -35,6 +35,7 @@ import {
   type PluginCapability,
   type PluginInstallSource,
 } from "@shared/types/plugin";
+import { PluginDatabasesSection } from "./PluginDatabasesSection";
 
 /** Provenance source → short badge label (built-in / file / URL / catalog). */
 export const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
@@ -325,6 +326,7 @@ export function PluginDetailPane({
   const commands = plugin.manifest.contributes.commands ?? [];
   const panels = plugin.manifest.contributes.panels ?? [];
   const agents = plugin.manifest.contributes.agents ?? [];
+  const databases = plugin.manifest.contributes.databases ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
   // Read here rather than inside the tab body: the Logs tab is earned by
   // content like every other tab past Overview (#11302), and the pane cannot
@@ -651,6 +653,8 @@ export function PluginDetailPane({
             {panels.length > 0 && <PluginContributedPanels panels={panels} />}
 
             {agents.length > 0 && <PluginContributedAgents agents={agents} />}
+
+            {databases.length > 0 && <PluginDatabasesSection databases={databases} />}
 
             {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
               <PluginContributors authors={plugin.manifest.authors} />

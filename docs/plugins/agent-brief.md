@@ -75,7 +75,7 @@ Sixteen things an agent gets wrong on the first attempt, grouped by how the fail
 **Loads, and does the wrong thing.**
 
 10. **A `registerHandler` callback receives the IPC context first and your payload second: `(ctx, args)`.** `ctx` is `{ projectId, worktreeId, webContentsId, pluginId }`. Read the payload from the first parameter and every argument-taking channel receives that object instead, while the argument-less channels keep working, so the panel looks healthy and the buttons do nothing. This is the single most common bug in a first plugin. `registerAction` handlers are different: they receive `(args)` only.
-11. **Your runtime id is the instance key, not your manifest name.** `host.pluginId` and `PanelViewProps.pluginId` are `project__{projectId}__{manifestId}`. Manifest `actionId`s in `toolbarButtons`, `keybindings` and `contextMenus` are written as `{manifestId}.{id}` and rewritten to the instance namespace at load, so the manifest stays portable. Your panel kind registers as `project:{projectId}/{manifestId}/{kindId}`, and that is the string `panel.openPluginPanel` wants. Until #12211 adds `host.pluginInfo()`, the only way to build it is from `host.pluginId`.
+11. **Your runtime id is the instance key, not your manifest name.** `host.pluginId` and `PanelViewProps.pluginId` are `project__{projectId}__{manifestId}`. Manifest `actionId`s in `toolbarButtons`, `keybindings` and `contextMenus` are written as `{manifestId}.{id}` and rewritten to the instance namespace at load, so the manifest stays portable. Your panel kind registers as `project:{projectId}/{manifestId}/{kindId}`, and that is the string `panel.openPluginPanel` wants — get it from `host.panelKindId("main")` rather than assembling it. `host.pluginInfo` is your identity as data: `{ instanceId, manifestId, origin, projectId, projectRoot }`, where `projectRoot` is the project's main checkout. Never split `host.pluginId` by hand.
 12. **Declaring `shell:exec` puts a confirm dialog on every command** unless the command narrows it with `"requires": []` (or the capabilities it actually uses). An "open the panel" command should never confirm.
 13. **`project`-scope settings are committed to the repository.** They are the right place for team defaults and the wrong place for a machine path such as a Python interpreter. `user` scope is shared across every project. A per-machine scope is tracked in #12213.
 
@@ -211,6 +211,17 @@ export default function Panel({ panelId, pluginId }) {
 Use the `pluginId` prop rather than hardcoding your manifest name — for a project plugin the runtime id is an instance key, not the manifest id.
 
 What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS files. If you need those, add the toolchain — `npm install --save-dev @daintreehq/plugin-sdk @daintreehq/plugin-vite daintree-plugin`, or scaffold with `npx daintree-plugin new --project` — and build with Vite. [dev-loop.md](./dev-loop.md) covers the watcher.
+
+## Storing data agents also edit
+
+Most project plugins are a view over data that agents create — "track this expense", "add this lead", "log a 5k run". Pick the store by how the data is shaped, and in both cases write the data contract down in the plugin's own `AGENTS.md` (paths, schema, invariants, one worked example with values that are _not_ your test prompts) and point to it from the project's root `AGENTS.md` / `CLAUDE.md`. The agent only knows what those files tell it.
+
+- **Files** — Markdown with frontmatter, JSON, JSONL — when each record is a document a person might read or diff: contacts, posts, recipes, a board. Watch the directories with `host.fs.watch`, write back with `host.fs.writeFile(path, text, { expectedRevision })` so a UI edit never clobbers an agent's concurrent one.
+- **SQLite** — when you need queries, totals or history: a ledger, stock movements, time entries. Declare it in `contributes.databases` and open it with `host.db.open(id, { migrations })`; `onDidChange` fires when an agent writes the file with the `sqlite3` CLI, and the host handles containment, journal mode and a file replaced by `git checkout`. Put the rules in the schema (`CHECK`, triggers with `RAISE(ABORT, '…')`), because the CLI skips foreign keys. See [Host API → db](./host-api.md#db--host-managed-sqlite).
+
+**Worktrees split committed data.** Your plugin reads the project's main checkout (`host.pluginInfo.projectRoot`); an agent working in a linked worktree edits that worktree's own copy of every committed file, and the panel never sees it. If agents should always write the live data, say so in `AGENTS.md` and give them the path relative to the main checkout, which every git worktree can find: `"$(git rev-parse --path-format=absolute --git-common-dir)/.."` is the main checkout's root.
+
+When an answer depends on arithmetic — a streak, a monthly total, "due this week" — give agents a script that shares the panel's own calculation (`scripts/<name>-report.mjs`) and name it in `AGENTS.md`. Agents reading raw data eyeball those numbers and get them wrong.
 
 ## Styling: use Tailwind
 

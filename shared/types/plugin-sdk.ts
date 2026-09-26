@@ -126,6 +126,21 @@ export type {
 
 export type { StorageApi, PluginStorageScope } from "./plugin.js";
 
+// ── Databases (host.db) ─────────────────────────────────────────────
+
+export type {
+  PluginDatabaseContribution,
+  PluginDatabaseApi,
+  PluginDatabase,
+  PluginDatabaseStatements,
+  PluginDatabaseLocation,
+  PluginDatabaseLocationKind,
+  PluginDatabaseParams,
+  PluginDatabaseRunResult,
+  PluginDatabaseChangeEvent,
+  PluginDatabaseOpenOptions,
+} from "./plugin.js";
+
 // ── IPC (registerHandler, broadcastToRenderer) — ships in v1 ────────
 
 export type {

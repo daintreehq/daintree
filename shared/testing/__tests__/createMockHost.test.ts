@@ -1286,3 +1286,14 @@ describe("createMockHost production-parity validation (#10617)", () => {
     });
   });
 });
+
+describe("createMockHost host.db", () => {
+  it("backs databases with real SQLite files and honours the declared list", async () => {
+    const host = createMockHost({ databases: { declared: ["ledger"] } });
+    const db = await host.db.open("ledger", { migrations: ["CREATE TABLE t (x INTEGER)"] });
+    await db.run("INSERT INTO t VALUES (?)", [3]);
+    expect(await db.query("SELECT x FROM t")).toEqual([{ x: 3 }]);
+    await db.close();
+    await expect(host.db.open("other")).rejects.toThrow(/DB_NOT_DECLARED/);
+  });
+});

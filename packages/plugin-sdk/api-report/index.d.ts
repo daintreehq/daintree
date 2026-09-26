@@ -2232,6 +2232,20 @@ interface PluginAgentMcpContribution {
     mode: "tools";
 }
 /**
+ * `contributes.databases` entry — a SQLite file the plugin opens through
+ * {@link PluginDatabaseApi}. A `"project"` database lives in the repository
+ * (default `.daintree/data/{manifestId}/{id}.db`, or `path` relative to the
+ * project root) and requires `scope: "project"` plus `fs:project-write`; a
+ * `"local"` one lives in the plugin's per-machine data directory.
+ */
+interface PluginDatabaseContribution {
+    id: string;
+    description?: string;
+    location: PluginDatabaseLocationKind;
+    path?: string;
+    journalMode: "delete" | "wal";
+}
+/**
  * Who a tool call came from, as far as the host can say. Provenance, not
  * identity: the grant was issued for a launch in this terminal and project, but
  * any process that read the credential can present it. `launchAgentIdHint` is
@@ -2705,6 +2719,12 @@ interface PluginManifest {
          * rejects the key outright for any other origin.
          */
         surfaces?: SurfaceContributions;
+        /**
+         * SQLite databases opened through `host.db`. Optional in the type but
+         * always materialized by the manifest schema's `.default([])`, like
+         * `agentMcp`.
+         */
+        databases?: PluginDatabaseContribution[];
     };
 }
 /**
@@ -2914,6 +2934,113 @@ interface StorageApi {
      *   is revoked and the subscription is rejected (the promise rejects).
      */
     onDidChange<T = unknown>(key: string, callback: (value: T | undefined) => void, scope?: PluginStorageScope): Promise<() => void>;
+}
+/**
+ * Where a declared database lives. `"project"` puts the file in
+ * the repository, so agents in the project's terminals can read and write it
+ * with the `sqlite3` CLI and it travels with a clone; `"local"` keeps it in
+ * this machine's per-plugin data directory, out of the repository.
+ */
+type PluginDatabaseLocationKind = "project" | "local";
+/** The resolved location of one declared database. */
+interface PluginDatabaseLocation {
+    /** The `contributes.databases[].id` this resolves. */
+    readonly id: string;
+    readonly location: PluginDatabaseLocationKind;
+    /** Absolute path of the SQLite file. May not exist until first opened. */
+    readonly path: string;
+    /** For a `"project"` database, the path relative to the project root. */
+    readonly projectRelativePath: string | null;
+    readonly journalMode: "delete" | "wal";
+}
+/** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */
+type PluginDatabaseParams = ReadonlyArray<string | number | bigint | null | Uint8Array> | Readonly<Record<string, string | number | bigint | null | Uint8Array>>;
+interface PluginDatabaseRunResult {
+    /** Rows changed by the statement. */
+    changes: number;
+    /** Rowid of the last inserted row, as a number when it fits in 2^53. */
+    lastInsertRowid: number | bigint;
+}
+/**
+ * Why a database's contents may have changed. `"self"` is a commit this
+ * handle made; `"external"` is anything else — an agent's `sqlite3` session,
+ * another process, or the file being replaced (`git checkout`, a restore).
+ */
+interface PluginDatabaseChangeEvent {
+    readonly origin: "self" | "external";
+}
+/** The statement surface shared by a database handle and a transaction. */
+interface PluginDatabaseStatements {
+    /** Every row the statement returns, as plain objects keyed by column name. */
+    query<T = Record<string, unknown>>(sql: string, params?: PluginDatabaseParams): Promise<T[]>;
+    /** The first row, or `undefined`. */
+    get<T = Record<string, unknown>>(sql: string, params?: PluginDatabaseParams): Promise<T | undefined>;
+    /** Execute one statement that returns no rows. */
+    run(sql: string, params?: PluginDatabaseParams): Promise<PluginDatabaseRunResult>;
+    /** Execute one or more statements with no parameters (schema, pragmas). */
+    exec(sql: string): Promise<void>;
+}
+interface PluginDatabaseOpenOptions {
+    /**
+     * Ordered schema migrations. Migration `n` (0-based) runs when the file's
+     * `PRAGMA user_version` is `n`, inside its own `BEGIN IMMEDIATE`
+     * transaction, and bumps `user_version` to `n + 1`. Append new entries;
+     * never edit or reorder shipped ones. A file whose `user_version` is higher
+     * than `migrations.length` was written by a newer copy of the plugin, and
+     * `open` rejects with `DB_SCHEMA_TOO_NEW` rather than guess.
+     */
+    migrations?: readonly string[];
+    /**
+     * SQL re-applied on every open, after `migrations`, in one transaction —
+     * views and triggers, which should change without a numbered migration.
+     * Must be idempotent (`DROP VIEW IF EXISTS v; CREATE VIEW v AS …`). A failure
+     * rolls back and rejects with `DB_DEFINITIONS_FAILED`.
+     */
+    definitions?: string;
+}
+/**
+ * An open plugin database. The host sets the connection policy on open —
+ * foreign keys enforced, a 5 s busy timeout, and the declared journal mode —
+ * and reopens transparently when the file is replaced underneath it, so a
+ * long-lived handle never keeps reading an unlinked inode.
+ *
+ * Calls are serialised per handle: a statement issued while a
+ * {@link transaction} is running waits for it.
+ */
+interface PluginDatabase extends PluginDatabaseStatements {
+    readonly id: string;
+    /** Where the file is. Hand `path` to agents; they can use `sqlite3` on it. */
+    readonly location: PluginDatabaseLocation;
+    /**
+     * Run `fn` inside `BEGIN IMMEDIATE` … `COMMIT`, rolling back if it throws.
+     * Use the `tx` it is handed — calling the outer handle from inside `fn`
+     * waits for the transaction to finish, and so deadlocks.
+     */
+    transaction<T>(fn: (tx: PluginDatabaseStatements) => Promise<T> | T): Promise<T>;
+    /**
+     * Fire after the database changes, including commits by other processes —
+     * the usual case being an agent writing with the `sqlite3` CLI. Coalesced:
+     * a burst of external commits delivers one event. Returns a disposer.
+     */
+    onDidChange(callback: (event: PluginDatabaseChangeEvent) => void): () => void;
+    /** Close the connection and stop change detection. Idempotent. */
+    close(): Promise<void>;
+}
+/**
+ * Host-managed SQLite for plugins (`host.db`). A database is declared in
+ * `contributes.databases` — which is what names the file, discloses it, and
+ * decides where it lives — then opened by id. Queries run in the plugin's own
+ * process over the runtime's built-in `node:sqlite`; only the location is
+ * resolved by the host.
+ */
+interface PluginDatabaseApi {
+    /** Resolve a declared database's location without opening it. */
+    resolve(id: string): Promise<PluginDatabaseLocation>;
+    /**
+     * Open (creating if needed) a declared database, apply `migrations`, and
+     * return a handle. Handles are closed automatically when the plugin unloads.
+     */
+    open(id: string, options?: PluginDatabaseOpenOptions): Promise<PluginDatabase>;
 }
 interface PluginIpcContext {
     projectId: string | null;
@@ -4449,6 +4576,12 @@ interface PluginHostApi extends PluginActivationApi {
      */
     readonly storage: StorageApi;
     /**
+     * Host-managed SQLite databases declared in `contributes.databases`. See
+     * {@link PluginDatabaseApi}. NOT revoke-guarded: open and query from timers
+     * and callbacks. Open handles close when the plugin unloads.
+     */
+    readonly db: PluginDatabaseApi;
+    /**
      * Structured diagnostic logger backed by a bounded per-plugin ring buffer in
      * the main process. Lines are forwarded to the host console (prefixed
      * `[plugin:{pluginId}]`) and retained for the most recent ~500 entries so
@@ -4654,4 +4787,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseChangeEvent, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

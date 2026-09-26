@@ -51,6 +51,7 @@ const HOST_CALL_METHODS = {
   "storage.get": true,
   "storage.set": true,
   "storage.delete": true,
+  "db.resolve": true,
   "fs.readFile": true,
   "fs.readFileBytes": true,
   "fs.writeFile": true,

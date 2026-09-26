@@ -1427,6 +1427,52 @@
             "additionalProperties": false
           }
         },
+        "databases": {
+          "default": [],
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400
+              },
+              "location": {
+                "default": "project",
+                "type": "string",
+                "enum": [
+                  "project",
+                  "local"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "journalMode": {
+                "default": "delete",
+                "type": "string",
+                "enum": [
+                  "delete",
+                  "wal"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        },
         "surfaces": {
           "default": {},
           "type": "object",

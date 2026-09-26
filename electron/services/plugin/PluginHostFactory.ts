@@ -34,6 +34,7 @@ import {
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import { openPluginDatabase, resolvePluginDatabaseLocation } from "./pluginDatabase.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type { AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
@@ -673,6 +674,38 @@ export function createHost(
     scope === "worktree"
       ? { projectRoot: boundScopeRoot, worktreePath: await resolveBoundWorktreeTarget() }
       : { projectRoot: boundScopeRoot };
+
+  const resolveDatabase = async (id: string) => {
+    if (typeof id !== "string" || id.length === 0) {
+      throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
+    }
+    const plugin = deps.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" db: plugin is no longer loaded`);
+    }
+    const declaration = (plugin.manifest.contributes.databases ?? []).find((d) => d.id === id);
+    if (!declaration) {
+      throw new Error(
+        `DB_NOT_DECLARED: plugin "${pluginId}" db: "${id}" is not declared in contributes.databases`
+      );
+    }
+    // A project database is a file in the repository: creating its directory,
+    // the file, and every migration are project writes, so they wait for the
+    // same first-use consent `host.fs.writeFile` does. A local database is
+    // plugin-private state, like `host.storage`, and needs none.
+    if (declaration.location === "project") {
+      await ensureCapabilityConsent(deps, pluginId, "fs:project-write");
+      if (!deps.plugins.has(pluginId)) {
+        throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" db: plugin is no longer loaded`);
+      }
+    }
+    return resolvePluginDatabaseLocation({
+      declaration,
+      manifestId,
+      projectRoot: boundProjectRoot,
+      dataDir: deps.pluginDataDir(pluginId),
+    });
+  };
 
   // The live disposer per `agentMcp` endpoint, so a replaced roster is released
   // rather than kept reachable from the unload cascade for the host's lifetime.
@@ -1741,6 +1774,28 @@ export function createHost(
     // asynchronously, so set/delete re-check liveness after the await — a
     // plugin unloaded mid-resolution silently no-ops rather than writing into
     // a torn-down plugin's file (lessons #9322/#9428/#9533).
+    db: {
+      resolve: (id: string) => resolveDatabase(id),
+      open: async (id, options) => {
+        const location = await resolveDatabase(id);
+        let untrack: (() => void) | null = null;
+        const database = await openPluginDatabase(location, {
+          ...options,
+          revalidate: () => resolveDatabase(id),
+          onClosed: () => untrack?.(),
+        });
+        if (!deps.plugins.has(pluginId)) {
+          await database.close();
+          throw new Error(
+            `PLUGIN_UNLOADED: plugin "${pluginId}" db.open: plugin is no longer loaded`
+          );
+        }
+        untrack = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+          void database.close();
+        });
+        return database;
+      },
+    },
     storage: {
       get: async <T = unknown>(
         key: string,

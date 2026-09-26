@@ -208,6 +208,25 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({ ok: true, result: [{ id: "w1" }] });
   });
 
+  it("relays db.resolve with only the database id", async () => {
+    const { host, workerHost } = makeBridge();
+    (host as unknown as { db: { resolve: ReturnType<typeof vi.fn> } }).db = {
+      resolve: vi.fn(async (id: string) => ({ id, path: "/p/.daintree/data/x/ledger.db" })),
+    } as never;
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-db",
+      method: "db.resolve",
+      params: { id: "ledger", path: "/etc/passwd" },
+    });
+    await flush();
+    expect(
+      (host as unknown as { db: { resolve: ReturnType<typeof vi.fn> } }).db.resolve
+    ).toHaveBeenCalledWith("ledger");
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-db");
+    expect(result).toMatchObject({ ok: true, result: { id: "ledger" } });
+  });
+
   it("carries a host error's primitive fields to the worker, not just its message", async () => {
     const { host, workerHost } = makeBridge();
     host.getWorktrees.mockRejectedValueOnce(

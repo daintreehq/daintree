@@ -635,6 +635,9 @@ export class ProjectPluginController {
         version: d.manifest.version,
         ...(d.manifest.description !== undefined ? { description: d.manifest.description } : {}),
         capabilities: [...(d.manifest.capabilities ?? [])],
+        ...(d.manifest.contributes.databases?.length
+          ? { databases: d.manifest.contributes.databases.map((db) => ({ ...db })) }
+          : {}),
         dirName: d.dirName,
         state,
         muted,

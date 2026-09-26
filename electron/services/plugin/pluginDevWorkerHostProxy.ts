@@ -35,6 +35,8 @@ import type {
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
   PluginSystemWakeEvent,
+  PluginDatabase,
+  PluginDatabaseLocation,
   PluginFsDirEntry,
   PluginFsWriteResult,
   PluginFsStat,
@@ -65,6 +67,7 @@ import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import { errorWithFields } from "./pluginHostErrorFields.js";
+import { openPluginDatabase } from "./pluginDatabase.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type {
   PluginHostCallMethod,
@@ -126,6 +129,8 @@ export class PluginDevWorkerHostProxy {
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
   private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
+  /** Open `host.db` handles, closed on dispose so a reload never leaks a connection. */
+  private readonly databases = new Set<PluginDatabase>();
   /** Bound `agentMcp` rosters, keyed by endpoint id. The map object per roster
    * is its identity: a disposer only unbinds the roster it was handed for. */
   private readonly mcpRosters = new Map<string, Map<string, RegisteredMcpTool>>();
@@ -175,6 +180,8 @@ export class PluginDevWorkerHostProxy {
     for (const controller of this.mcpInvokeAborts.values()) controller.abort();
     this.mcpInvokeAborts.clear();
     this.commandModules.clear();
+    for (const database of this.databases) void database.close();
+    this.databases.clear();
   }
 
   /** Route a message received from main. Returns true if it was consumed. */
@@ -982,6 +989,27 @@ export class PluginDevWorkerHostProxy {
       // missing capability / out-of-scope path, preserving the in-process
       // contract) and opens a subscription whose change events arrive over the
       // subscription-event channel keyed by the same id.
+      // The host resolves and contains the path; the connection is opened
+      // here, in the worker, so queries never cross the port.
+      db: {
+        resolve: (id) => this.call<PluginDatabaseLocation>("db.resolve", { id }),
+        open: async (id, options) => {
+          const location = await this.call<PluginDatabaseLocation>("db.resolve", { id });
+          const database: PluginDatabase = await openPluginDatabase(location, {
+            ...options,
+            revalidate: () => this.call<PluginDatabaseLocation>("db.resolve", { id }),
+            onClosed: () => this.databases.delete(database),
+          });
+          if (this.disposed) {
+            await database.close();
+            throw new Error(
+              `PLUGIN_UNLOADED: plugin "${this.pluginId}" db.open: plugin is no longer loaded`
+            );
+          }
+          this.databases.add(database);
+          return database;
+        },
+      },
       fs: {
         readFile: (filePath, options) =>
           this.call<string>("fs.readFile", { path: filePath }, options?.signal),

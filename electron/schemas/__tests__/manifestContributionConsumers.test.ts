@@ -10,6 +10,7 @@ import {
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
+  DatabaseContributionSchema,
   FileDecorationContributionSchema,
   FileEditorContributionSchema,
   ForgeProviderContributionSchema,
@@ -102,6 +103,10 @@ const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.t
 const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
 const BUILTIN_GUEST_ADAPTERS = "electron/services/sitePreview/builtinGuestAdapters.ts";
 const GUEST_ADAPTER_ASSETS = "electron/services/sitePreview/guestAdapterAssets.ts";
+const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
+const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
+const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
+const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -130,6 +135,7 @@ const SWEPT_SCHEMAS = {
   recipes: RecipeContributionSchema,
   agentMcp: AgentMcpContributionSchema,
   tours: TourContributionSchema,
+  databases: DatabaseContributionSchema,
   surfaces: SurfaceContributionsSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
@@ -168,6 +174,7 @@ const TOP_LEVEL_GROUPS = [
   "recipes",
   "agentMcp",
   "tours",
+  "databases",
   "surfaces",
 ] as const;
 
@@ -214,6 +221,7 @@ type FieldConsumerCoverage = {
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
   agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
+  databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
@@ -842,6 +850,33 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "intentional-metadata",
       consumers: [{ file: PLUGIN_SCHEMA, symbol: "AgentMcpContributionSchema (literal 'tools')" }],
       note: "Only 'tools' is accepted; kept explicit so a later endpoint mode is additive.",
+    },
+  },
+  databases: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_HOST_FACTORY, symbol: "createHost resolveDatabase" }],
+      note: "What host.db.open names; also the default file name under .daintree/data/<manifestId>/.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASES_SECTION, symbol: "PluginDatabasesSection" }],
+      note: "Shown beside the database in the plugin manager's disclosure.",
+    },
+    location: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASE, symbol: "resolvePluginDatabaseLocation" }],
+      note: "Chooses the project root or the plugin's data dir as the containment root.",
+    },
+    path: {
+      mode: "derived-input",
+      consumers: [{ file: PLUGIN_DATABASE, symbol: "resolvePluginDatabaseLocation" }],
+      note: "Resolved against the bound project root and realpath-contained to it.",
+    },
+    journalMode: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASE_HANDLE, symbol: "openPluginDatabase connect" }],
+      note: "Re-applied as PRAGMA journal_mode on every open.",
     },
   },
   recipes: {

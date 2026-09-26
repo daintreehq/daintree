@@ -140,6 +140,8 @@ interface PluginHostApi {
   // Settings (user-facing, schema-declared) + private storage (machine-owned)
   readonly settings: SettingsApi;
   readonly storage: StorageApi;
+  // Host-managed SQLite, declared in contributes.databases
+  readonly db: PluginDatabaseApi;
 
   // Diagnostics
   readonly logger: PluginLogger;
@@ -773,6 +775,66 @@ await host.storage.set("draft", text, "worktree");
 Three scopes — `"user"` (default), `"project"`, `"worktree"` — stored as plaintext JSON at `~/.daintree/plugin-storage/{pluginId}.json`, `<projectRoot>/.daintree/plugin-storage/{pluginId}.json`, or `<worktreePath>/.daintree/plugin-storage/{pluginId}.json` (`chmod 0o600` on POSIX). **No secret encryption — never store credentials here** (use a `type: "secret"` setting for those). The `"project"` / `"worktree"` scopes resolve the active project / worktree at call time: `get` and `delete` are a no-op (returning `undefined` / void) and `set` throws when no project / worktree is active. `set` rejects `undefined` and non-JSON-serializable values. `onDidChange(key, cb, scope?)` fires on in-process writes only and is the one revoke-guarded member — subscribe during `activate()`. The rest of `storage` is NOT revoke-guarded.
 
 **Reads stay fresh across a scope switch.** Storage is read through a per-path cache, but the host keeps it coherent for you. When the active worktree changes, the host invalidates the cache for `"worktree"`-scoped entries, so the next `get` reads the new worktree's file rather than a stale value. `"project"` scope is implicitly fresh — a different project resolves to a different file path, hence a different cache entry — and `"user"` scope is process-global and never evicted. You never have to manage cache invalidation yourself.
+
+## `db` — host-managed SQLite
+
+Structured data for a plugin that is really an application — a ledger, a CRM, a stock list — without reimplementing path containment, connection policy and change detection in every plugin. Declare the database in [`contributes.databases`](./contribution-points.md#databases--shipped), then open it by id:
+
+```ts
+const db = await host.db.open("ledger", {
+  migrations: [
+    `CREATE TABLE tx (
+       id INTEGER PRIMARY KEY,
+       date TEXT NOT NULL,          -- YYYY-MM-DD
+       amount_cents INTEGER NOT NULL,
+       category TEXT NOT NULL,
+       memo TEXT
+     )`,
+    `CREATE INDEX tx_date ON tx (date)`,
+  ],
+});
+
+const rows = await db.query("SELECT * FROM tx WHERE date >= ? ORDER BY date DESC", ["2026-09-01"]);
+await db.run("INSERT INTO tx (date, amount_cents, category) VALUES (:date, :cents, :cat)", {
+  date: "2026-09-26",
+  cents: -4250,
+  cat: "meals",
+});
+
+// Fires for this handle's own commits AND for commits by anything else —
+// typically an agent in the project's terminal running `sqlite3` on the file.
+db.onDidChange(() => void host.postToPanel("ledger-changed", null));
+```
+
+The queries run in your plugin's own process, over the runtime's built-in `node:sqlite`; only the location is resolved by the host. Every method returns a Promise except `onDidChange`, which returns its disposer directly.
+
+| Member | Notes |
+| --- | --- |
+| `resolve(id)` | The declared database's `{ id, location, path, projectRelativePath, journalMode }`, without opening it. Hand `path` (or `projectRelativePath`) to agents. |
+| `open(id, { migrations?, definitions? })` | Creates the file and its directory if needed and returns a handle. Rejects `DB_NOT_DECLARED` for an id not in `contributes.databases`. |
+| `query(sql, params?)` / `get(sql, params?)` | All rows / the first row, as plain objects. `params` is an array for `?` placeholders or an object for `:name`, `$name`, `@name`. |
+| `run(sql, params?)` | One statement that returns no rows; resolves `{ changes, lastInsertRowid }`. |
+| `exec(sql)` | One or more statements with no parameters. |
+| `transaction(fn)` | `BEGIN IMMEDIATE`, `fn(tx)`, `COMMIT` — rolled back if `fn` throws. Use the `tx` you are handed: calling the outer handle inside `fn` waits for the transaction and deadlocks. |
+| `onDidChange(cb)` | `cb({ origin: "self" \| "external" })`, coalesced. Returns a disposer. |
+| `close()` | Idempotent. Open handles are also closed when the plugin unloads or reloads. |
+
+**Open it lazily.** A `"project"` database is a file in the repository, so the first `open` (or `resolve`) raises the same one-time `fs:project-write` consent prompt as a first `host.fs.writeFile`, before the host creates the directory or the file. Do not await it inside `activate()` — a prompt the user has not answered yet would run the activation past its 5-second budget. Open it from the first handler that needs it and keep the promise, dropping it if the open fails so a declined prompt can be asked again: `let ledger; const db = () => (ledger ??= host.db.open("ledger", { migrations }).catch((err) => { ledger = undefined; throw err; }));`. A `"local"` database needs no consent.
+
+**What the host does on open.** Resolves the path — and re-resolves it before reopening a replaced file — against your bound project root (or your data directory for `"local"`), refusing a symlinked ancestor that escapes it and a symlinked file (`PATH_NOT_ALLOWED`, `TARGET_IS_SYMLINK`). Opens the file with foreign keys enforced and a 5-second busy timeout, and applies the declared journal mode. Then runs your migrations: migration `n` runs when `PRAGMA user_version` is `n`, in its own transaction, and bumps the version. Append new migrations; never edit a shipped one. A file whose version is higher than your list was written by a newer copy of the plugin and is refused (`DB_SCHEMA_TOO_NEW`) rather than guessed at. A failed migration is rolled back and rejects `DB_MIGRATION_FAILED`.
+
+**`definitions`** is SQL re-applied on every open, after the migrations and in one transaction — the home for views and triggers, which you want to change freely without a numbered migration or a data wipe. Write it to be idempotent: `DROP VIEW IF EXISTS on_hand; CREATE VIEW on_hand AS …`. A failure rolls back and rejects `DB_DEFINITIONS_FAILED`.
+
+**Change detection.** An agent writing the file with the `sqlite3` CLI is a different process, invisible to your connection's own bookkeeping. While any `onDidChange` listener is attached, the handle watches the file's directory and polls once a second. It compares `PRAGMA data_version`, which advances only when _another_ connection commits, and the file's inode, which changes when the file is replaced by `git checkout`, `git stash` or a restore script. A replaced file is reopened transparently before the next statement, so a long-lived handle never keeps reading an unlinked inode. Your own `run`, `exec` and committed transactions announce themselves as `"self"`.
+
+**Calls are serialised per handle.** A statement issued while a transaction is running waits for it, so a panel refresh can never read half of a multi-row write.
+
+**Agents are first-class writers.** The design assumes an agent edits the same file directly. Two habits make that safe:
+
+- **Put integrity in the schema, not in your code.** The `sqlite3` CLI does not enforce foreign keys unless a session asks for it, and agents never do, so a `REFERENCES` clause only binds your own writes. Use `CHECK` constraints and `BEFORE INSERT` / `BEFORE UPDATE` triggers with `RAISE(ABORT, '<what to do instead>')` — the agent sees the message and corrects itself.
+- **Describe the schema where the agent will read it.** Column comments in the `CREATE TABLE` survive into `sqlite3 <file> .schema`, which is the first thing an agent runs. Point to the file from your plugin's `AGENTS.md` by its `projectRelativePath`.
+
+**What it does not do.** `node:sqlite` returns integers as JavaScript numbers, so a value past 2^53 loses precision; store money as integer cents. There is no remote or synced backend yet: the file is where the declaration says, and a sync folder should receive a copy (an export), never the live file.
 
 ## `showToast`
 

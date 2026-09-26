@@ -25,6 +25,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `settings` | Available — `scope: "project"` values resolve from the bound project root, not the focused one |
 | `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
 | `agentMcp` | Available — every credential for the endpoint is minted per terminal and bound to one project, and a project plugin's endpoint can only be granted to its own project |
+| `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
 | `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
@@ -592,6 +593,44 @@ The entry is strict: an unknown field (a `url`, a `command`) is rejected rather 
 **Enabling it per project.** Declaring the endpoint exposes nothing, for an installed plugin or a project one. Each endpoint is enabled per project, as a user decision that is stored in Daintree's own user store (`projectAgentMcpEnablement`), keyed by the plugin _instance_ so an answer for an installed plugin never reaches a project plugin with the same manifest id, and never in the repository. The user switches it on or off in **Project settings → Plugins → Agent tools**; switching it off revokes every live credential for it at once. Once an endpoint is enabled, each Claude Code launch in that project receives a credential for it. Other agent CLIs are not handed plugin endpoints yet. The Daintree MCP server must be enabled in Settings → MCP server, since the endpoint is served on its listener.
 
 **Available under `scope: "project"`.** Unlike `mcpServers` and `skills`, this surface has a project axis: every credential is minted for one terminal launch in one project, the route re-checks that project's enablement on every request, and a project plugin's endpoint can only be granted to the project that loaded it. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose) for the credential and consent model.
+
+## Databases — _Shipped_
+
+Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--host-managed-sqlite). The declaration is what names the file, discloses it in the plugin manager, and decides where it lives, so the host resolves and contains the path before your code sees it.
+
+```json
+{
+  "scope": "project",
+  "capabilities": ["fs:project-write"],
+  "contributes": {
+    "databases": [
+      {
+        "id": "ledger",
+        "description": "Transactions, categories and budgets.",
+        "path": "data/finance.db"
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Letters, digits, `.`, `_` and `-`, at most 64 characters. What `host.db.open(id)` names. |
+| `description` | no | 1–400 characters. |
+| `location` | no | `"project"` (default) or `"local"`. |
+| `path` | no | `"project"` only. Relative to the project root, ending in `.db`, `.sqlite` or `.sqlite3`, never inside `.git`. Defaults to `.daintree/data/<manifestId>/<id>.db`. |
+| `journalMode` | no | `"delete"` (default) or `"wal"`. |
+
+**`"project"`** puts the file in the repository. That is the location for data agents edit: an agent in the project's terminal can open the same file with the `sqlite3` CLI, the file travels with a clone, and the committed data contract (your plugin's `AGENTS.md`) can name it by its project-relative path. It needs `scope: "project"` (`database_project_scope_only`) and the `fs:project-write` capability (`database_project_write_required`), because it writes into the repository. Whether the file itself is committed is the project's decision; gitignore it to keep the data out of history.
+
+**`"local"`** keeps the file in this machine's per-plugin data directory, out of the repository, and needs no capability — the same footing as `host.storage`. Use it for caches and per-user state that no agent needs to reach. A `path` on a local database is refused (`database_local_path_unsupported`).
+
+**`journalMode`.** The default, `"delete"`, keeps the database one self-contained file between writes, so git, a backup, or a sync folder never sees committed data stranded in a `-wal` sidecar. The host re-applies the declared mode on every open, so an agent that ran `PRAGMA journal_mode=WAL` cannot silently switch it. Choose `"wal"` only for a local, write-heavy database nothing else copies.
+
+At most 16 databases per plugin; entries are strict, so a `url` or `driver` field is refused rather than read as a backend the host does not have.
 
 ## Skills — _Shipped_
 

@@ -134,6 +134,7 @@ Scoped to the owning project, and visible only in its views:
 | `keybindings` | Renderer-level, so they resolve within the focused project |
 | `settings` | `scope: "project"` settings resolve from the bound project root, not from whatever is focused |
 | `surfaces` | Project-scope only — see [Surfaces](#surfaces) |
+| `databases` | SQLite files opened with `host.db`. A `"project"` database resolves against the bound project root, so it is the same file an agent in the project's terminal opens with `sqlite3`; `"local"` stays in this machine's plugin data. See [Databases](./contribution-points.md#databases--shipped) |
 | `agentMcp` | Tools served to agents in this project's terminals only. Every credential is minted for one terminal launch in one project, and a project plugin's endpoint can only be granted to the project that loaded it. Still off until the user turns the endpoint on for the project — trusting the folder does not do it. See [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
@@ -199,6 +200,8 @@ Installed and builtin plugins keep their existing ambient behaviour — they hav
 | `worktree` | `<worktreePath>/.daintree/plugin-storage/<manifestId>.json` |
 
 In-repository files are named by the **manifest id**, never by the instance key: the instance key embeds this machine's project id, and writing that into a tracked filename would commit one developer's local identity into everyone's checkout. The project root already provides the isolation. Files under the user's own directory are keyed by the **instance key**, so two projects shipping the same manifest id keep separate state.
+
+For structured data — anything you query, total or page through — declare a database in `contributes.databases` and open it with [`host.db`](./host-api.md#db--host-managed-sqlite) instead of a JSON blob in `host.storage`. A `"project"` database defaults to `<projectRoot>/.daintree/data/<manifestId>/<id>.db`, named by the manifest id for the same reason as the storage files, and is resolved against the bound project root — the main checkout, even while the user is on a linked worktree.
 
 The project root a bound plugin writes to is the one from its binding, not the focused project. The `"worktree"` storage scope follows the same rule: it resolves your bound project's own current worktree, and fails closed — read `undefined`, write throws — when that project has none, rather than falling back to whichever worktree the app considers active. An installed or builtin plugin, having no project of its own, still resolves the app-global active worktree.
 

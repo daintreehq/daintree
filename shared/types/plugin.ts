@@ -660,6 +660,21 @@ export interface PluginAgentMcpContribution {
   mode: "tools";
 }
 
+/**
+ * `contributes.databases` entry — a SQLite file the plugin opens through
+ * {@link PluginDatabaseApi}. A `"project"` database lives in the repository
+ * (default `.daintree/data/{manifestId}/{id}.db`, or `path` relative to the
+ * project root) and requires `scope: "project"` plus `fs:project-write`; a
+ * `"local"` one lives in the plugin's per-machine data directory.
+ */
+export interface PluginDatabaseContribution {
+  id: string;
+  description?: string;
+  location: PluginDatabaseLocationKind;
+  path?: string;
+  journalMode: "delete" | "wal";
+}
+
 /** Most tools one `agentMcp` endpoint may register. Client tool caps are app-wide, not per server. */
 export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 8;
 /** Most `agentMcp` endpoints one manifest may declare. */
@@ -1224,6 +1239,12 @@ export interface PluginManifest {
      * rejects the key outright for any other origin.
      */
     surfaces?: SurfaceContributions;
+    /**
+     * SQLite databases opened through `host.db`. Optional in the type but
+     * always materialized by the manifest schema's `.default([])`, like
+     * `agentMcp`.
+     */
+    databases?: PluginDatabaseContribution[];
   };
 }
 
@@ -1508,6 +1529,127 @@ export interface StorageApi {
     callback: (value: T | undefined) => void,
     scope?: PluginStorageScope
   ): Promise<() => void>;
+}
+
+/**
+ * Where a declared database lives. `"project"` puts the file in
+ * the repository, so agents in the project's terminals can read and write it
+ * with the `sqlite3` CLI and it travels with a clone; `"local"` keeps it in
+ * this machine's per-plugin data directory, out of the repository.
+ */
+export type PluginDatabaseLocationKind = "project" | "local";
+
+/** The resolved location of one declared database. */
+export interface PluginDatabaseLocation {
+  /** The `contributes.databases[].id` this resolves. */
+  readonly id: string;
+  readonly location: PluginDatabaseLocationKind;
+  /** Absolute path of the SQLite file. May not exist until first opened. */
+  readonly path: string;
+  /** For a `"project"` database, the path relative to the project root. */
+  readonly projectRelativePath: string | null;
+  readonly journalMode: "delete" | "wal";
+}
+
+/** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */
+export type PluginDatabaseParams =
+  | ReadonlyArray<string | number | bigint | null | Uint8Array>
+  | Readonly<Record<string, string | number | bigint | null | Uint8Array>>;
+
+export interface PluginDatabaseRunResult {
+  /** Rows changed by the statement. */
+  changes: number;
+  /** Rowid of the last inserted row, as a number when it fits in 2^53. */
+  lastInsertRowid: number | bigint;
+}
+
+/**
+ * Why a database's contents may have changed. `"self"` is a commit this
+ * handle made; `"external"` is anything else — an agent's `sqlite3` session,
+ * another process, or the file being replaced (`git checkout`, a restore).
+ */
+export interface PluginDatabaseChangeEvent {
+  readonly origin: "self" | "external";
+}
+
+/** The statement surface shared by a database handle and a transaction. */
+export interface PluginDatabaseStatements {
+  /** Every row the statement returns, as plain objects keyed by column name. */
+  query<T = Record<string, unknown>>(sql: string, params?: PluginDatabaseParams): Promise<T[]>;
+  /** The first row, or `undefined`. */
+  get<T = Record<string, unknown>>(
+    sql: string,
+    params?: PluginDatabaseParams
+  ): Promise<T | undefined>;
+  /** Execute one statement that returns no rows. */
+  run(sql: string, params?: PluginDatabaseParams): Promise<PluginDatabaseRunResult>;
+  /** Execute one or more statements with no parameters (schema, pragmas). */
+  exec(sql: string): Promise<void>;
+}
+
+export interface PluginDatabaseOpenOptions {
+  /**
+   * Ordered schema migrations. Migration `n` (0-based) runs when the file's
+   * `PRAGMA user_version` is `n`, inside its own `BEGIN IMMEDIATE`
+   * transaction, and bumps `user_version` to `n + 1`. Append new entries;
+   * never edit or reorder shipped ones. A file whose `user_version` is higher
+   * than `migrations.length` was written by a newer copy of the plugin, and
+   * `open` rejects with `DB_SCHEMA_TOO_NEW` rather than guess.
+   */
+  migrations?: readonly string[];
+  /**
+   * SQL re-applied on every open, after `migrations`, in one transaction —
+   * views and triggers, which should change without a numbered migration.
+   * Must be idempotent (`DROP VIEW IF EXISTS v; CREATE VIEW v AS …`). A failure
+   * rolls back and rejects with `DB_DEFINITIONS_FAILED`.
+   */
+  definitions?: string;
+}
+
+/**
+ * An open plugin database. The host sets the connection policy on open —
+ * foreign keys enforced, a 5 s busy timeout, and the declared journal mode —
+ * and reopens transparently when the file is replaced underneath it, so a
+ * long-lived handle never keeps reading an unlinked inode.
+ *
+ * Calls are serialised per handle: a statement issued while a
+ * {@link transaction} is running waits for it.
+ */
+export interface PluginDatabase extends PluginDatabaseStatements {
+  readonly id: string;
+  /** Where the file is. Hand `path` to agents; they can use `sqlite3` on it. */
+  readonly location: PluginDatabaseLocation;
+  /**
+   * Run `fn` inside `BEGIN IMMEDIATE` … `COMMIT`, rolling back if it throws.
+   * Use the `tx` it is handed — calling the outer handle from inside `fn`
+   * waits for the transaction to finish, and so deadlocks.
+   */
+  transaction<T>(fn: (tx: PluginDatabaseStatements) => Promise<T> | T): Promise<T>;
+  /**
+   * Fire after the database changes, including commits by other processes —
+   * the usual case being an agent writing with the `sqlite3` CLI. Coalesced:
+   * a burst of external commits delivers one event. Returns a disposer.
+   */
+  onDidChange(callback: (event: PluginDatabaseChangeEvent) => void): () => void;
+  /** Close the connection and stop change detection. Idempotent. */
+  close(): Promise<void>;
+}
+
+/**
+ * Host-managed SQLite for plugins (`host.db`). A database is declared in
+ * `contributes.databases` — which is what names the file, discloses it, and
+ * decides where it lives — then opened by id. Queries run in the plugin's own
+ * process over the runtime's built-in `node:sqlite`; only the location is
+ * resolved by the host.
+ */
+export interface PluginDatabaseApi {
+  /** Resolve a declared database's location without opening it. */
+  resolve(id: string): Promise<PluginDatabaseLocation>;
+  /**
+   * Open (creating if needed) a declared database, apply `migrations`, and
+   * return a handle. Handles are closed automatically when the plugin unloads.
+   */
+  open(id: string, options?: PluginDatabaseOpenOptions): Promise<PluginDatabase>;
 }
 
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
@@ -3610,6 +3752,12 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   readonly storage: StorageApi;
   /**
+   * Host-managed SQLite databases declared in `contributes.databases`. See
+   * {@link PluginDatabaseApi}. NOT revoke-guarded: open and query from timers
+   * and callbacks. Open handles close when the plugin unloads.
+   */
+  readonly db: PluginDatabaseApi;
+  /**
    * Structured diagnostic logger backed by a bounded per-plugin ring buffer in
    * the main process. Lines are forwarded to the host console (prefixed
    * `[plugin:{pluginId}]`) and retained for the most recent ~500 entries so
@@ -4081,6 +4229,8 @@ export interface ProjectPluginInfo {
   description?: string;
   /** Declared capabilities, disclosed in the manager. Never a consent gate. */
   capabilities: PluginCapability[];
+  /** Declared `contributes.databases`, disclosed in the manager. */
+  databases?: PluginDatabaseContribution[];
   /** Directory name under `.daintree/plugins/`. Not required to equal `id`. */
   dirName: string;
   state: ProjectPluginState;

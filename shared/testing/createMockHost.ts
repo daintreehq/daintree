@@ -14,6 +14,10 @@ import {
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
 import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
   ActionDispatchResult,
@@ -33,6 +37,7 @@ import type {
   PluginActionContribution,
   PluginChannelSchema,
   PluginConfirmOptions,
+  PluginDatabaseLocation,
   PluginHostApi,
   PluginIdentity,
   PluginInputBoxOptions,
@@ -313,6 +318,18 @@ export interface CreateMockHostOptions {
    * production.
    */
   worktreesResult?: PluginWorktreesResult;
+  /**
+   * `host.db` backing. Every database id resolves to a real SQLite file under
+   * `directory` (a fresh temp directory when omitted), so a plugin's queries,
+   * migrations and change handling run against the same `node:sqlite` the real
+   * host uses. `declared` restricts which ids resolve, the way
+   * `contributes.databases` does in production; omit it to accept any id.
+   */
+  databases?: {
+    directory?: string;
+    declared?: readonly string[];
+    journalMode?: "delete" | "wal";
+  };
   settings?: {
     user?: Record<string, unknown>;
     project?: Record<string, unknown>;
@@ -819,9 +836,36 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     projectRoot: mockProjectRoot,
   });
 
+  let mockDatabaseDir: string | null = options.databases?.directory ?? null;
+  const resolveMockDatabase = async (id: string): Promise<PluginDatabaseLocation> => {
+    if (typeof id !== "string" || id.length === 0) {
+      throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
+    }
+    const declared = options.databases?.declared;
+    if (declared && !declared.includes(id)) {
+      throw new Error(
+        `DB_NOT_DECLARED: plugin "${pluginId}" db: "${id}" is not declared in contributes.databases`
+      );
+    }
+    mockDatabaseDir ??= mkdtempSync(path.join(tmpdir(), "daintree-mock-db-"));
+    mkdirSync(mockDatabaseDir, { recursive: true });
+    return Object.freeze({
+      id,
+      location: "local" as const,
+      path: path.join(mockDatabaseDir, `${id}.db`),
+      projectRelativePath: null,
+      journalMode: options.databases?.journalMode ?? "delete",
+    });
+  };
+
   const host: PluginHostApi & MockHostState = {
     pluginId,
     pluginInfo,
+    db: {
+      resolve: resolveMockDatabase,
+      open: async (id, openOptions) =>
+        openPluginDatabase(await resolveMockDatabase(id), openOptions),
+    },
     panelKindId(bareId: string) {
       if (typeof bareId !== "string" || bareId.length === 0) {
         throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
