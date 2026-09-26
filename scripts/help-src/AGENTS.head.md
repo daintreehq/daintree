@@ -15,4 +15,4 @@ Filesystem and `gh` are read-only for you: outside the scratch folder a note her
 
 ## Calling Tools from `exec`
 
-Call `tools.mcp__daintree__agent_launch(...)` (action ID, dots as underscores), `tools.mcp__daintree_runbooks__search_runbooks(...)`, `tools.mcp__daintree_docs__search(...)`. Don't print `ALL_TOOLS` (huge); print `r.structuredContent ?? r`.
+Call `tools.mcp__daintree__agent_launch(...)` (action ID, dots as underscores), `tools.mcp__daintree_runbooks__search_runbooks(...)`, `tools.mcp__daintree_docs__search(...)`. Print `r.structuredContent ?? r`. The shapes under Common Tasks and in runbook examples are exact: call them without first reading `ALL_TOOLS`, `actions.getSchema` or `actions.getContext`; a wrong argument fails with an error that names the fix.

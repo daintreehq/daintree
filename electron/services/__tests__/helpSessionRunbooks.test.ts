@@ -43,7 +43,14 @@ describe("buildRunbooksAddendum", () => {
     expect(text).toContain("**Before acting on any request to do something, call it**");
     expect(text).toContain("before your first `daintree` call");
     expect(text).toContain('Only chat and "how do I…" questions skip it');
-    expect(text).toContain("A question you answer by checking something");
+    expect(text).toContain("A question about live state");
+  });
+
+  // A live Codex run searched again for a step of its task and for closing its
+  // own agents afterwards, each a wasted round.
+  it("allows one search per task", () => {
+    expect(text).toContain("**One search per task:**");
+    expect(text).toContain("closing its agents included");
   });
 
   // The query shape was measured against the selector: a one-sentence summary
