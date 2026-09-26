@@ -248,6 +248,10 @@ export class McpServerService {
           if (payload.terminalId) listener(payload.terminalId);
         }),
       onTrashed: (listener) => events.on("terminal:trashed", (payload) => listener(payload.id)),
+      onHandbackObserved: (listener) =>
+        events.on("agent:handback-observed", (payload) =>
+          listener(payload.terminalId, payload.handback)
+        ),
       isEnabled: () => this.isEnabled(),
       publish: (projectId, state) =>
         broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {

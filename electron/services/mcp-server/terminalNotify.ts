@@ -104,6 +104,13 @@ export interface TerminalNotifyServiceDeps {
    * waited on.
    */
   onTrashed: (listener: (terminalId: string) => void) => () => void;
+  /**
+   * A pane printed, complete, a handback marker one of its submissions asked
+   * for. Optional so a host without the observation keeps the settle path.
+   */
+  onHandbackObserved?: (
+    listener: (terminalId: string, handback: TerminalHandback) => void
+  ) => () => void;
   /** Whether the MCP server is on. Read on every decision. */
   isEnabled: () => boolean;
   /** Push a pane's chrome state to the views of its project. */
@@ -179,7 +186,9 @@ export type NoticeObservation =
   | { kind: "state"; state: AgentState; waitingReason?: WaitingReason; handback: boolean }
   | { kind: "exit"; exitCode?: number; handback: boolean }
   | { kind: "closed" }
-  | { kind: "not-written"; phase: "failed" | "cancelled" | "unknown" | "unconfirmed" };
+  | { kind: "not-written"; phase: "failed" | "cancelled" | "unknown" | "unconfirmed" }
+  /** The target printed the handback marker its prompt asked for. */
+  | { kind: "handback" };
 
 /** The target's last screen lines, captured when its notice fired. */
 export interface NoticeReply {
@@ -228,6 +237,8 @@ function describeNotice(notice: FiredNotice): string {
       return `${id} exited${obs.exitCode !== undefined ? ` (code ${obs.exitCode})` : ""}${obs.handback ? ", handback seen" : ""}`;
     case "closed":
       return `${id} was closed`;
+    case "handback":
+      return `${id} printed its done marker`;
     case "not-written":
       return `${id} was not confirmed to receive your prompt (${obs.phase})`;
   }
@@ -1102,7 +1113,33 @@ export class TerminalNotifyService {
       this.deps.onStateChanged(guarded((payload) => this.handleStateChanged(payload))),
       this.deps.onKilled(guarded((terminalId) => this.handleExit(terminalId, "closed"))),
       this.deps.onTrashed(guarded((terminalId) => this.handleExit(terminalId, "closed"))),
+      ...(this.deps.onHandbackObserved
+        ? [
+            this.deps.onHandbackObserved(
+              guarded((terminalId, handback) => this.handleHandbackObserved(terminalId, handback))
+            ),
+          ]
+        : []),
     ];
+  }
+
+  /**
+   * A target printed, complete, the handback its prompt asked for: the reply
+   * is finished, so its notice fires now instead of when the state heuristic
+   * next calls the turn over. A notice whose prompt is not yet confirmed
+   * written, or that asked for no handback, is left to the settle path.
+   */
+  private handleHandbackObserved(terminalId: string, handback: TerminalHandback): void {
+    const watchers = this.watchersByTarget.get(terminalId);
+    if (watchers === undefined) return;
+    for (const owner of [...watchers]) {
+      const notice = owner.notices.get(terminalId);
+      if (notice === undefined || notice.since === undefined) continue;
+      if (notice.source === "when-idle" || !handbackMatches(notice, handback)) continue;
+      notice.handbackSeen = true;
+      clearSettling(notice);
+      this.fire(owner, notice, { kind: "handback" });
+    }
   }
 
   private unsubscribe(): void {
@@ -1272,9 +1309,14 @@ export class TerminalNotifyService {
         observation,
       },
     };
-    if (notice.replyLines > 0 && (observation.kind === "state" || observation.kind === "exit")) {
-      entry.quote = { lines: notice.replyLines, endAtHandback: observation.handback };
-      const capture = this.captureReply(entry, notice.replyLines, observation.handback);
+    const quotable =
+      observation.kind === "state" ||
+      observation.kind === "exit" ||
+      observation.kind === "handback";
+    if (notice.replyLines > 0 && quotable) {
+      const endAtHandback = observation.kind === "handback" || observation.handback;
+      entry.quote = { lines: notice.replyLines, endAtHandback };
+      const capture = this.captureReply(entry, notice.replyLines, endAtHandback);
       entry.capture = capture;
       void capture.finally(() => {
         if (entry.capture === capture) entry.capture = undefined;

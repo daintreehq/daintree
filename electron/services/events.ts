@@ -228,6 +228,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A pane's output showed an agent rate-limit banner",
   },
+  "agent:handback-observed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A pane printed the handback marker a submission asked for",
+  },
   "agent:detected": {
     category: "agent",
     requiresContext: false,
@@ -692,6 +698,17 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A pane printed, complete, the handback marker one of its submissions asked
+   * for (#12488), seen as the output arrived rather than at the agent's settle.
+   * `handback.message` is the agent's own untrusted summary.
+   */
+  "agent:handback-observed": {
+    terminalId: string;
+    handback: import("../../shared/types/handback.js").TerminalHandback;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when an agent CLI (or a recognised plain process) is detected
    * running in a terminal. `defaultTitle` lets the renderer sync its default
    * title to the live chrome identity in lockstep with the store update.
@@ -1079,6 +1096,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "agent:state-transition-dropped",
   "agent:all-clear",
   "agent:rate-limit-observed",
+  "agent:handback-observed",
   "agent:detected",
   "agent:exited",
   "agent:output",

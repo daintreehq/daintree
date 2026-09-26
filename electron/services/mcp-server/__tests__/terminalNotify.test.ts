@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import type { TerminalHandback } from "../../../../shared/types/handback.js";
 import {
   NOTIFY_LIMIT_REACHED,
   NOTIFY_NOT_ELIGIBLE,
@@ -114,6 +115,7 @@ function setup(options: { enabled?: boolean } = {}) {
   const stateListeners = new Set<(payload: NotifyStateChange) => void>();
   const killListeners = new Set<(terminalId: string) => void>();
   const trashListeners = new Set<(terminalId: string) => void>();
+  const handbackListeners = new Set<(terminalId: string, handback: TerminalHandback) => void>();
   const published: Array<{ projectId: string; state: PaneNotifyState }> = [];
   let enabled = options.enabled ?? true;
   const service = new TerminalNotifyService({
@@ -129,6 +131,10 @@ function setup(options: { enabled?: boolean } = {}) {
     onTrashed: (listener) => {
       trashListeners.add(listener);
       return () => trashListeners.delete(listener);
+    },
+    onHandbackObserved: (listener) => {
+      handbackListeners.add(listener);
+      return () => handbackListeners.delete(listener);
     },
     isEnabled: () => enabled,
     publish: (projectId, state) => published.push({ projectId, state }),
@@ -162,6 +168,16 @@ function setup(options: { enabled?: boolean } = {}) {
   const trash = (terminalId: string) => {
     for (const listener of [...trashListeners]) listener(terminalId);
   };
+  const handbackObserved = (terminalId: string, submissionToken?: string) => {
+    for (const listener of [...handbackListeners]) {
+      listener(terminalId, {
+        message: "done",
+        observedAt: Date.now(),
+        truncated: false,
+        ...(submissionToken !== undefined ? { submissionToken } : {}),
+      });
+    }
+  };
   return {
     client,
     service,
@@ -171,6 +187,7 @@ function setup(options: { enabled?: boolean } = {}) {
     resume,
     kill,
     trash,
+    handbackObserved,
     setEnabled: (value: boolean) => {
       enabled = value;
     },
@@ -599,6 +616,35 @@ describe("TerminalNotifyService", () => {
 
       h.settle("t-a");
       await flushNotice();
+
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("fires the moment the done marker is printed, while the state heuristic still says working", async () => {
+      const h = setup();
+      h.client.screens.set(
+        "t-a",
+        "Fact: honey never spoils.\nDAINTREE-DONE-abc123: fact END-abc123"
+      );
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      pending.complete({ submissionToken: "tok-1" });
+      await vi.advanceTimersByTimeAsync(100);
+
+      h.handbackObserved("t-a", "tok-1");
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+
+      expect(h.client.submitted[0].text).toContain("t-a printed its done marker");
+      expect(h.client.submitted[0].text).toContain("honey never spoils");
+    });
+
+    it("ignores a done marker that answers a different prompt", async () => {
+      const h = setup();
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      pending.complete({ submissionToken: "tok-1" });
+      await vi.advanceTimersByTimeAsync(100);
+
+      h.handbackObserved("t-a", "tok-old");
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
 
       expect(h.client.submitted).toEqual([]);
     });

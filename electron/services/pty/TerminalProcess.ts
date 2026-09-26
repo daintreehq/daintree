@@ -38,6 +38,7 @@ import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSub
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
+import { findHandback, rawHandbackText } from "./HandbackDetector.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
@@ -2118,6 +2119,40 @@ export class TerminalProcess {
       this.terminalInfo.lastOutputChangeAt = now;
     }
     this.observeRateLimitBanner(lines, now);
+    this.observeHandback(now);
+  }
+
+  /**
+   * Report a handback marker the moment it is complete on screen (#12488),
+   * rather than waiting for the agent-state heuristic to call the turn over:
+   * for some CLIs that settle lags the reply by a minute or more, and the
+   * orchestrator waiting on this marker waits with it. Runs only while a
+   * delivered request is outstanding; the detector rejects the echoed
+   * instruction and a marker still streaming, and a hit retires its code, so
+   * the settle-time check can never report it twice.
+   */
+  private observeHandback(now: number): void {
+    const t = this.terminalInfo;
+    const tracker = t.handbackTracker;
+    if (tracker === undefined || !this.isAgentLive) return;
+    const delivered = tracker.deliveredRequests();
+    if (delivered.length === 0) return;
+    const hit = findHandback(
+      [
+        { read: () => tracker.screenText(), rendered: true },
+        { read: () => rawHandbackText(t.semanticBuffer), rendered: false },
+      ],
+      delivered,
+      now
+    );
+    if (hit === undefined) return;
+    t.lastHandback = hit.handback;
+    tracker.retire(hit.code);
+    events.emit("agent:handback-observed", {
+      terminalId: this.id,
+      handback: hit.handback,
+      timestamp: now,
+    });
   }
 
   /**
