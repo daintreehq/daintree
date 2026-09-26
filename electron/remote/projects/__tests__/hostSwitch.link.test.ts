@@ -31,6 +31,7 @@ import {
 import { acceptClientBundleTransfer } from "../bundleSinks.js";
 import {
   attachProjectsHost,
+  HostPushRecords,
   ProjectHostGrants,
   type ProjectsHostAuthority,
 } from "../hostInstall.js";
@@ -108,10 +109,17 @@ async function rig(): Promise<Rig> {
     holderEndpointId: () => views.holder,
   };
   const grants = new ProjectHostGrants();
+  // Host-wide, as Host mode keeps them: a new link can still ask about a push.
+  const pushRecords = new HostPushRecords();
   const link = async (): Promise<LinkSession> => {
     const pair = await openSessionPair(socketDir);
     sessions.push(pair.host, pair.client);
-    attachProjectsHost(pair.host, studio.service, { sessionId: SESSION, authority, grants });
+    attachProjectsHost(pair.host, studio.service, {
+      sessionId: SESSION,
+      authority,
+      grants,
+      pushRecords,
+    });
     // What the host file client does once wired: accept only bundles this Shell asked for.
     pair.client.transfers.setSinkFactory((begin) => {
       const sink = acceptClientBundleTransfer(begin);
@@ -642,22 +650,131 @@ describe("what the host checks for itself", () => {
     expect(r.service.status({ opId: id }).state).toBe("cancelled");
   });
 
-  it("stops the host's push when the link that asked for it drops", async () => {
+  it("stops the host's push when the link drops, then reports what the remote shows once back", async () => {
     const r = await rig();
     r.from.hostId = STUDIO;
     const project = slowPushProject(r, "authz-drop");
     const started = hostPushStarted(r);
+    r.onReconnect = () => r.relink();
     const id = opId();
     const pushing = r.service.execute(ctx, pushStep(id, project));
     const signal = await started;
     await gitPushRunning(project.marker);
     expect(signal.aborted).toBe(false);
     r.client.close("link dropped");
-    // The Shell can't report or cancel it any more, so the host doesn't carry on unseen.
-    await expect(pushing).rejects.toMatchObject({
-      code: expect.stringMatching(/^(HOST_DISCONNECTED|OUTCOME_UNKNOWN)$/),
-    });
+    // Nobody is left to see it finish, so the host doesn't carry on unseen;
+    // the remote may still have moved, so the Shell looks rather than guesses.
+    const result = await pushing;
     await vi.waitFor(() => expect(signal.aborted).toBe(true));
+    const localSha = git(project.path, ["rev-parse", "main"]);
+    expect(result).toEqual({
+      kind: "push-unconfirmed",
+      hostId: STUDIO,
+      branch: "main",
+      remote: "origin",
+      remoteBranch: "main",
+      observed: { localSha, remoteSha: null, remoteReachable: true },
+    });
+    await expect(
+      r.client.call(ProjectLinkMethod.PUSH_STATUS, { opId: id, projectId: project.id })
+    ).resolves.toEqual({ state: "interrupted" });
     expect(r.service.status({ opId: id }).state).toBe("failed");
+  });
+});
+
+describe("a push whose answer was lost with the link", () => {
+  /** A studio project whose origin already has main, with one new commit to push. */
+  function pushableProject(r: Rig, name: string) {
+    const originBare = makeBare(root, `${name}-origin`);
+    const repo = makeRepo(root, `${name}-src`, originBare);
+    git(repo, ["push", "-q", "-u", "origin", "main"]);
+    const tip = commit(repo, "to push");
+    const project = r.studio.addProject(repo);
+    r.views.bound.add(project.id);
+    return { ...project, bare: originBare, tip };
+  }
+
+  const pushStepFor = (id: string, project: { id: string; path: string }) => ({
+    kind: "push" as const,
+    opId: id,
+    fromHostId: STUDIO,
+    projectId: project.id,
+    worktreePath: project.path,
+    branch: "main",
+    remote: "origin",
+    remoteBranch: "main",
+  });
+
+  it("takes the host's settled record over a new link instead of pushing again", async () => {
+    const r = await rig();
+    r.from.hostId = STUDIO;
+    const project = pushableProject(r, "lost-reply");
+    const original = r.studio.service.pushBranch.bind(r.studio.service);
+    const push = vi
+      .spyOn(r.studio.service, "pushBranch")
+      .mockImplementation(async (payload, signal, timeout) => {
+        const outcome = await original(payload, signal, timeout);
+        // The push landed; the answer never makes it back.
+        r.client.close("link dropped");
+        return outcome;
+      });
+    r.onReconnect = () => r.relink();
+    const id = opId();
+
+    await expect(r.service.execute(ctx, pushStepFor(id, project))).resolves.toEqual({
+      kind: "pushed",
+    });
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(r.reconnects).toBe(1);
+    expect(git(project.bare, ["rev-parse", "main"])).toBe(project.tip);
+    await expect(
+      r.client.call(ProjectLinkMethod.PUSH_STATUS, { opId: id, projectId: project.id })
+    ).resolves.toEqual({ state: "settled", outcome: { ok: true } });
+    // Another project can't read it.
+    await expect(
+      r.client.call(ProjectLinkMethod.PUSH_STATUS, { opId: id, projectId: "other" })
+    ).resolves.toEqual({ state: "unknown" });
+  });
+
+  it("sees the branch on the remote when the host has no settled record, and says it was pushed", async () => {
+    const r = await rig();
+    r.from.hostId = STUDIO;
+    const project = pushableProject(r, "interrupted-landed");
+    const original = r.studio.service.pushBranch.bind(r.studio.service);
+    vi.spyOn(r.studio.service, "pushBranch").mockImplementation(
+      async (payload, signal, timeout) => {
+        await original(payload, signal, timeout);
+        // The ref moved, then the link went before git could report it: the
+        // host stops the push as its link closes, which is what git reports.
+        r.client.close("link dropped");
+        await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+        throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
+      }
+    );
+    r.onReconnect = () => r.relink();
+    const id = opId();
+
+    await expect(r.service.execute(ctx, pushStepFor(id, project))).resolves.toEqual({
+      kind: "pushed",
+    });
+    await expect(
+      r.client.call(ProjectLinkMethod.PUSH_STATUS, { opId: id, projectId: project.id })
+    ).resolves.toEqual({ state: "interrupted" });
+  });
+
+  it("observes where the branch and its remote branch stand without pushing", async () => {
+    const r = await rig();
+    const project = pushableProject(r, "observe");
+    const remoteSha = git(project.bare, ["rev-parse", "main"]);
+    await expect(
+      r.client.call(ProjectLinkMethod.PUSH_OBSERVE, {
+        projectId: project.id,
+        worktreePath: project.path,
+        branch: "main",
+        remote: "origin",
+        remoteBranch: "main",
+      })
+    ).resolves.toEqual({ localSha: project.tip, remoteSha, remoteReachable: true });
+    expect(git(project.bare, ["rev-parse", "main"])).toBe(remoteSha);
   });
 });

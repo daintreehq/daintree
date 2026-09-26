@@ -9,8 +9,10 @@ import type {
   PlaceWorktreePayload,
   ProjectIdentity,
   ProjectMatchCandidate,
+  HostPushStatus,
   PushBranchOutcome,
   PushBranchPayload,
+  PushObservation,
   SourceProjectDescription,
 } from "../../../shared/types/ipc/projectMatch.js";
 import type { OperationOutcome } from "../../../shared/types/remoteHosts.js";
@@ -27,6 +29,10 @@ export const ProjectLinkMethod = {
   PUSH_BRANCH: "projects.push-branch",
   /** Kill the push this session started under that opId. */
   PUSH_CANCEL: "projects.push-cancel",
+  /** The host's retained record of a push by opId, for a Shell whose answer was lost. */
+  PUSH_STATUS: "projects.push-status",
+  /** Where the branch and its remote branch stand now, read on the host; pushes nothing. */
+  PUSH_OBSERVE: "projects.push-observe",
   ENVIRONMENT: "projects.environment",
   MATCH: "projects.match",
   CHECK_DESTINATION: "projects.check-destination",
@@ -87,6 +93,8 @@ export const PushBranchSchema = z.object({
   remoteBranch: branchName,
   opId: opId.optional(),
 });
+export const PushStatusQuerySchema = z.object({ opId, projectId });
+export const PushObserveSchema = PushBranchSchema.omit({ opId: true });
 export const EmptySchema = z.union([z.null(), z.undefined(), z.object({}).strict()]);
 export const MatchSchema = z.object({ remoteUrls, committedProjectId: projectId.nullable() });
 export const CheckDestinationSchema = z.object({
@@ -196,6 +204,18 @@ export const PushOutcomeSchema: z.ZodType<PushBranchOutcome> = z.union([
   z.object({ ok: z.literal(true) }),
   z.object({ ok: z.literal(false), reason: text(128), message: text(16384) }),
 ]);
+
+export const PushStatusSchema: z.ZodType<HostPushStatus> = z.union([
+  z.object({ state: z.enum(["running", "cancelled", "interrupted", "unknown"]) }),
+  z.object({ state: z.literal("settled"), outcome: PushOutcomeSchema }),
+]);
+
+const sha = z.string().regex(/^[0-9a-f]{40,64}$/i);
+export const PushObservationSchema: z.ZodType<PushObservation> = z.object({
+  localSha: sha.nullable(),
+  remoteSha: sha.nullable(),
+  remoteReachable: z.boolean(),
+});
 
 export const EnvironmentSchema: z.ZodType<HostCloneEnvironment> = z.object({
   homeDir: hostPath,

@@ -10,6 +10,7 @@ import {
   type ProjectAcrossHostsService,
 } from "../../services/projectAcrossHosts/index.js";
 import { AppError } from "../../utils/errorTypes.js";
+import type { HostPushStatus, PushBranchOutcome } from "../../../shared/types/ipc/projectMatch.js";
 import { hostBundleSinkFor } from "./bundleSinks.js";
 import {
   BUNDLE_SINK_PREFIX,
@@ -27,6 +28,8 @@ import {
   OpenSchema,
   ProjectLinkMethod,
   PushBranchSchema,
+  PushObserveSchema,
+  PushStatusQuerySchema,
   StartCloneSchema,
   StartPlaceWorktreeSchema,
   SuggestDestinationSchema,
@@ -184,6 +187,80 @@ function trim(map: Map<string, unknown>): void {
   }
 }
 
+const PUSH_RETENTION_MS = 10 * 60_000;
+const MAX_PUSH_RECORDS = 200;
+
+interface PushRecord {
+  projectId: string;
+  /** The session that started it: only that one may cancel it. */
+  sessionKey: object;
+  controller: AbortController;
+  state: HostPushStatus["state"];
+  outcome: PushBranchOutcome | null;
+  settledAt: number | null;
+}
+
+/**
+ * Pushes by the opId the Shell names them with, kept after they settle so a
+ * Shell whose answer was lost with the link can ask what happened. Host-wide
+ * rather than per session: the Shell may come back on a fresh session.
+ */
+export class HostPushRecords {
+  private readonly records = new Map<string, PushRecord>();
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  /** Null when a push with that id is already known: the Shell never reuses one. */
+  begin(opId: string, projectId: string, sessionKey: object): PushRecord | null {
+    this.prune();
+    if (this.records.has(opId)) return null;
+    const record: PushRecord = {
+      projectId,
+      sessionKey,
+      controller: new AbortController(),
+      state: "running",
+      outcome: null,
+      settledAt: null,
+    };
+    this.records.set(opId, record);
+    while (this.records.size > MAX_PUSH_RECORDS) {
+      const oldest = [...this.records].find(([, r]) => r.state !== "running");
+      if (!oldest) break;
+      this.records.delete(oldest[0]);
+    }
+    return record;
+  }
+
+  settle(record: PushRecord, state: HostPushStatus["state"], outcome?: PushBranchOutcome): void {
+    if (record.state !== "running") return;
+    record.state = state;
+    record.outcome = outcome ?? null;
+    record.settledAt = this.now();
+  }
+
+  get(opId: string, sessionKey: object): PushRecord | null {
+    const record = this.records.get(opId);
+    return record && record.sessionKey === sessionKey ? record : null;
+  }
+
+  status(opId: string, projectId: string): HostPushStatus {
+    this.prune();
+    const record = this.records.get(opId);
+    if (!record || record.projectId !== projectId) return { state: "unknown" };
+    if (record.state === "settled" && record.outcome) {
+      return { state: "settled", outcome: record.outcome };
+    }
+    return { state: record.state === "settled" ? "unknown" : record.state };
+  }
+
+  private prune(): void {
+    const cutoff = this.now() - PUSH_RETENTION_MS;
+    for (const [opId, record] of this.records) {
+      if (record.settledAt !== null && record.settledAt < cutoff) this.records.delete(opId);
+    }
+  }
+}
+
 function notAttached(): AppError {
   return new AppError({
     code: "PERMISSION",
@@ -205,6 +282,8 @@ export interface AttachProjectsHostOptions {
   sessionId?: string | null;
   authority?: ProjectsHostAuthority;
   grants?: ProjectHostGrants;
+  /** Shared by every session, so a Shell back on a fresh one can still ask about its push. */
+  pushRecords?: HostPushRecords;
 }
 
 export interface ProjectsHostServer {
@@ -229,16 +308,22 @@ export function attachProjectsHost(
   const sessionId = options.sessionId ?? null;
   const authority = options.authority ?? defaultProjectsHostAuthority;
   const grants = options.grants ?? new ProjectHostGrants();
-  // Pushes by the opId the Shell cancels them by, plus every running push so
-  // the link closing can stop them all.
-  const pushes = new Map<string, AbortController>();
+  const pushRecords = options.pushRecords ?? new HostPushRecords();
+  // Every push this link started, so the link closing can stop them all.
   const running = new Set<AbortController>();
-  // A push lives only as long as the link that asked for it. Once the link
-  // drops, the Shell has already reported the step as not finished and can
-  // neither cancel it nor learn how it ended, so it must not go on unseen.
-  // Killing git mid-push is safe: the remote updates each ref atomically.
+  // Stands for this link when a push is cancelled by opId: only the link that
+  // started a push may stop it.
+  const sessionKey = {};
+  // A push lives only as long as the link that asked for it: nobody is left to
+  // cancel it or see it finish. Killing git mid-push is safe, since the remote
+  // updates each ref atomically, but the ref may already have moved, so the
+  // record says "interrupted" and a Shell that comes back looks at the remote.
+  const interrupted = new WeakSet<AbortController>();
   session.onClose(() => {
-    for (const controller of running) controller.abort();
+    for (const controller of running) {
+      interrupted.add(controller);
+      controller.abort();
+    }
   });
 
   const boundTo = (projectId: string): BoundEndpoint[] =>
@@ -257,28 +342,43 @@ export function attachProjectsHost(
     if (!session.isOpen) {
       throw new AppError({ code: "HOST_DISCONNECTED", message: "The link closed" });
     }
-    const controller = new AbortController();
-    const opId = p.opId;
-    if (opId !== undefined) {
-      if (pushes.has(opId)) {
-        throw new AppError({ code: "VALIDATION", message: "That push is already running" });
-      }
-      pushes.set(opId, controller);
+    const record = p.opId === undefined ? null : pushRecords.begin(p.opId, p.projectId, sessionKey);
+    if (p.opId !== undefined && record === null) {
+      throw new AppError({ code: "VALIDATION", message: "That push is already known" });
     }
+    const controller = record?.controller ?? new AbortController();
     running.add(controller);
     try {
-      return await service.pushBranch(p, controller.signal);
+      const outcome = await service.pushBranch(p, controller.signal);
+      if (record) pushRecords.settle(record, "settled", outcome);
+      return outcome;
+    } catch (error) {
+      if (record) {
+        const code = (error as { code?: unknown } | null)?.code;
+        pushRecords.settle(
+          record,
+          interrupted.has(controller)
+            ? "interrupted"
+            : code === "CANCELLED"
+              ? "cancelled"
+              : "unknown"
+        );
+      }
+      throw error;
     } finally {
       running.delete(controller);
-      if (opId !== undefined && pushes.get(opId) === controller) pushes.delete(opId);
     }
   });
   on(ProjectLinkMethod.PUSH_CANCEL, OpIdSchema, ({ opId }) => {
-    const controller = pushes.get(opId);
-    if (!controller) return false;
-    controller.abort();
+    const record = pushRecords.get(opId, sessionKey);
+    if (!record || record.state !== "running") return false;
+    record.controller.abort();
     return true;
   });
+  on(ProjectLinkMethod.PUSH_STATUS, PushStatusQuerySchema, ({ opId, projectId }) =>
+    pushRecords.status(opId, projectId)
+  );
+  on(ProjectLinkMethod.PUSH_OBSERVE, PushObserveSchema, (p) => service.observePush(p));
   on(ProjectLinkMethod.ENVIRONMENT, EmptySchema, () => service.environment());
   on(ProjectLinkMethod.MATCH, MatchSchema, (p) => service.match(p));
   on(
@@ -394,6 +494,7 @@ export function installProjectsHost(
   service: ProjectAcrossHostsService = getProjectAcrossHostsService()
 ): () => void {
   const grantsBySession = new Map<string, ProjectHostGrants>();
+  const pushRecords = new HostPushRecords();
   const offSession = server.onSession(({ session, sessionId }) => {
     let grants: ProjectHostGrants | undefined;
     if (sessionId !== undefined) {
@@ -403,7 +504,7 @@ export function installProjectsHost(
         grantsBySession.set(sessionId, grants);
       }
     }
-    attachProjectsHost(session, service, { sessionId: sessionId ?? null, grants });
+    attachProjectsHost(session, service, { sessionId: sessionId ?? null, grants, pushRecords });
   });
   const offExpired = server.onSessionExpired?.(({ sessionId }) => {
     grantsBySession.delete(sessionId);

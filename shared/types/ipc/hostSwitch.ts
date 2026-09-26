@@ -146,6 +146,19 @@ export type HostSwitchExecuteResult =
       reason: string;
       message: string;
     }
+  /**
+   * The link to the source dropped mid-push and its host has no settled
+   * outcome, so it was looked at instead: the branch and remote-branch tips
+   * as the source saw them after reconnecting, which did not show the push landed.
+   */
+  | {
+      kind: "push-unconfirmed";
+      hostId: HostId;
+      branch: string;
+      remote: string;
+      remoteBranch: string;
+      observed: import("./projectMatch.js").PushObservation;
+    }
   | ({ kind: "opened"; hostId: HostId } & import("./projectMatch.js").HostProjectOpened);
 
 /** Where a running step is, for the dialog's progress line. */
