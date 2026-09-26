@@ -1598,10 +1598,12 @@ export interface PluginDatabaseOpenOptions {
    */
   migrations?: readonly string[];
   /**
-   * SQL re-applied on every open, after `migrations`, in one transaction —
-   * views and triggers, which should change without a numbered migration.
-   * Must be idempotent (`DROP VIEW IF EXISTS v; CREATE VIEW v AS …`). A failure
-   * rolls back and rejects with `DB_DEFINITIONS_FAILED`.
+   * SQL applied after `migrations`, in one transaction, whenever its text
+   * differs from the last applied — views and triggers, which should change
+   * without a numbered migration. Must be idempotent
+   * (`DROP VIEW IF EXISTS v; CREATE VIEW v AS …`). The applied hash is kept in
+   * a host-owned `_daintree_meta` table. A failure rolls back and rejects with
+   * `DB_DEFINITIONS_FAILED`.
    */
   definitions?: string;
 }

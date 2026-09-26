@@ -107,6 +107,31 @@ describe("openPluginDatabase", () => {
     });
   });
 
+  it("leaves the file untouched when the definitions have not changed", async () => {
+    const options = {
+      migrations: ["CREATE TABLE t (x INTEGER)"],
+      definitions: "DROP VIEW IF EXISTS v; CREATE VIEW v AS SELECT x FROM t",
+    };
+    await (await open(options)).close();
+    const before = fs.readFileSync(location.path);
+    await (await open(options)).close();
+    expect(fs.readFileSync(location.path).equals(before)).toBe(true);
+  });
+
+  it("restores triggers a later migration dropped by recreating their table", async () => {
+    const definitions =
+      "CREATE TRIGGER IF NOT EXISTS no_negatives BEFORE INSERT ON t WHEN NEW.x < 0 BEGIN SELECT RAISE(ABORT, 'x must be >= 0'); END";
+    await (await open({ migrations: ["CREATE TABLE t (x INTEGER)"], definitions })).close();
+    const db = await open({
+      migrations: [
+        "CREATE TABLE t (x INTEGER)",
+        "DROP TABLE t; CREATE TABLE t (x INTEGER, memo TEXT)",
+      ],
+      definitions,
+    });
+    await expect(db.run("INSERT INTO t (x) VALUES (-1)")).rejects.toThrow(/x must be >= 0/);
+  });
+
   it("enforces foreign keys and the declared journal mode", async () => {
     const db = await open({
       migrations: [

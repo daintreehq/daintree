@@ -9,6 +9,7 @@
 // So the handle notices commits it did not make, and a file replaced
 // underneath it (`git checkout`, a restore script).
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -112,6 +113,8 @@ function readIdentity(filePath: string): FileIdentity | null {
 }
 
 const POLL_INTERVAL_MS = 1000;
+/** Host-owned bookkeeping inside a plugin database; created only when `definitions` is used. */
+const META_TABLE = "_daintree_meta";
 const WATCH_SETTLE_MS = 75;
 
 export interface OpenPluginDatabaseOptions extends PluginDatabaseOpenOptions {
@@ -158,7 +161,9 @@ export async function openPluginDatabase(
 
   // The version is read under the write lock, so two processes opening the
   // same file at once cannot both run migration n.
-  const migrate = (connection: SqliteDatabase): void => {
+  /** Returns whether any migration ran. */
+  const migrate = (connection: SqliteDatabase): boolean => {
+    let advanced = false;
     for (;;) {
       connection.exec("BEGIN IMMEDIATE");
       let version: number;
@@ -179,12 +184,13 @@ export async function openPluginDatabase(
       }
       if (version === migrations.length) {
         connection.exec("COMMIT");
-        return;
+        return advanced;
       }
       try {
         connection.exec(migrations[version]!);
         connection.exec(`PRAGMA user_version = ${version + 1}`);
         connection.exec("COMMIT");
+        advanced = true;
       } catch (error) {
         rollbackQuietly(connection);
         throw databaseError(
@@ -195,11 +201,41 @@ export async function openPluginDatabase(
     }
   };
 
-  const applyDefinitions = (connection: SqliteDatabase): void => {
-    if (options.definitions === undefined) return;
+  // Re-applied only when the text changes. Rewriting unchanged views on every
+  // open would modify the file each time a panel opens, so a committed
+  // database would always show as changed in git. The hash lives in a small
+  // host-owned table inside the database, read and written under the lock.
+  const definitionsHash =
+    options.definitions === undefined
+      ? null
+      : createHash("sha256").update(options.definitions).digest("hex");
+  // `force` after a migration ran: recreating a table drops its triggers, so
+  // an unchanged hash no longer proves the definitions are in place.
+  const applyDefinitions = (connection: SqliteDatabase, force: boolean): void => {
+    if (options.definitions === undefined || definitionsHash === null) return;
     connection.exec("BEGIN IMMEDIATE");
     try {
+      const table = connection
+        .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(META_TABLE);
+      const recorded = table
+        ? (connection
+            .prepare(`SELECT value FROM ${META_TABLE} WHERE key = 'definitions_sha256'`)
+            .get() as { value?: string } | undefined)
+        : undefined;
+      if (!force && recorded?.value === definitionsHash) {
+        connection.exec("COMMIT");
+        return;
+      }
       connection.exec(options.definitions);
+      connection.exec(
+        `CREATE TABLE IF NOT EXISTS ${META_TABLE} (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID`
+      );
+      connection
+        .prepare(
+          `INSERT INTO ${META_TABLE} (key, value) VALUES ('definitions_sha256', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+        )
+        .run(definitionsHash);
       connection.exec("COMMIT");
     } catch (error) {
       rollbackQuietly(connection);
@@ -231,8 +267,8 @@ export async function openPluginDatabase(
       // would otherwise leave committed data in a -wal sidecar that a commit
       // of the .db alone silently misses.
       connection.prepare(`PRAGMA journal_mode = ${journalMode}`).get();
-      migrate(connection);
-      applyDefinitions(connection);
+      const migrated = migrate(connection);
+      applyDefinitions(connection, migrated);
       const after = readIdentity(filePath);
       // A file created by this open has no `before`; otherwise the path must
       // still name the file the connection opened, or the recorded identity
