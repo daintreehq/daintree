@@ -357,7 +357,9 @@ describe("useGettingStartedChecklist", () => {
         .mock.calls.filter((c) => c[0] === "daintree:show-getting-started")
         .at(-1);
       expect(showCall).toBeDefined();
-      return showCall![1] as () => void;
+      const listener = showCall![1];
+      const event = new Event("daintree:show-getting-started");
+      return () => (typeof listener === "function" ? listener(event) : listener.handleEvent(event));
     }
 
     it("hides the panel once all items complete, without persisting a dismissal", async () => {
@@ -440,6 +442,48 @@ describe("useGettingStartedChecklist", () => {
       });
 
       expect(result.current.visible).toBe(false);
+    });
+
+    it("a push that completes the checklist hides it even when Help had forced it open", async () => {
+      let pushHandler: ((next: ChecklistStateLike) => void) | null = null;
+      const augmentedMock = Object.assign(onboardingMock, {
+        onChecklistPush: (fn: (next: ChecklistStateLike) => void) => {
+          pushHandler = fn;
+          return () => {};
+        },
+      });
+
+      try {
+        const { result } = renderHook(() => useGettingStartedChecklist(true));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        const handleShow = getShowHandler();
+        await act(async () => {
+          handleShow();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(result.current.visible).toBe(true);
+
+        await act(async () => {
+          pushHandler!({
+            items: {
+              openedProject: true,
+              launchedAgent: true,
+              createdWorktree: true,
+              ranSecondParallelAgent: true,
+            },
+            dismissed: false,
+            celebrationShown: false,
+          });
+        });
+
+        expect(result.current.visible).toBe(false);
+        expect(result.current.checklist?.dismissed).toBe(false);
+      } finally {
+        delete (augmentedMock as Partial<typeof augmentedMock>).onChecklistPush;
+      }
     });
 
     it("onChecklistPush with dismissed:true hides the panel", async () => {

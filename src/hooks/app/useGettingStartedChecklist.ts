@@ -103,7 +103,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     setChecklist(next);
     checklistRef.current = next;
     // Finishing the last item lets the checklist go away, even when Help >
-    // Getting Started had forced it open.
+    // Getting Started had forced it open. Pushes below do the same.
     if (isChecklistComplete(next)) setForceShow(false);
   }, []);
 
@@ -168,6 +168,10 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   useEffect(() => {
     if (!isElectronAvailable() || !window.electron?.onboarding?.onChecklistPush) return;
     return window.electron.onboarding.onChecklistPush((next) => {
+      const before = checklistRef.current;
+      if (before && !isChecklistComplete(before) && isChecklistComplete(next)) {
+        setForceShow(false);
+      }
       setChecklist((prev) => {
         if (!prev) {
           // Sync the ref synchronously so a markItem firing before React
