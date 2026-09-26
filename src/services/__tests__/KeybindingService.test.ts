@@ -170,6 +170,18 @@ describe("KeybindingService", () => {
       expect(service.matchesEvent(event, "Cmd+Alt+.")).toBe(false);
     });
 
+    it("routes the period shortcut to voice dictation by default on macOS and Windows", () => {
+      setPlatform("MacIntel");
+      const mac = new KeybindingService();
+      const cmdPeriod = createKeyboardEvent({ key: ".", code: "Period", metaKey: true });
+      expect(mac.findMatchingAction(cmdPeriod)?.actionId).toBe("voiceInput.toggle");
+
+      setPlatform("Win32");
+      const windows = new KeybindingService();
+      const ctrlPeriod = createKeyboardEvent({ key: ".", code: "Period", ctrlKey: true });
+      expect(windows.findMatchingAction(ctrlPeriod)?.actionId).toBe("voiceInput.toggle");
+    });
+
     it("keeps ⌘. distinct from the ⌘⇧. and ⌘⌥. defaults on macOS", () => {
       setPlatform("MacIntel");
 
