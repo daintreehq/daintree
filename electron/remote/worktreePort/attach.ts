@@ -4,6 +4,9 @@ import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { WorktreePortHost } from "../../services/WorktreePortBroker.js";
 import { getWorkspaceClientRef, getWorktreePortBrokerRef } from "../../window/serviceRefs.js";
+import { resolveLiveWebContents } from "../../window/webContentsRegistry.js";
+import { WORKTREE_PORT_REDELIVER_METHOD } from "../../ipc/endpoint.js";
+import { registerReverseRequestMethod } from "../client/reverseRequests.js";
 import type { LinkSession } from "../link/session.js";
 import type { RemoteStreamEndpoint } from "../terminal/hostAttach.js";
 import { wrapMainPort } from "../terminal/ports.js";
@@ -49,10 +52,14 @@ export function attachWorktreePortBridge(
     };
     const tryOpen = (projectId: string): boolean => {
       const broker = getWorktreePortBrokerRef();
+      if (!broker) return false;
+      // Recorded before the host is looked for, so a Retry that brings the
+      // project's host up can connect this endpoint without its next attempt.
+      broker.expectEndpointPort(handle, (port) => bridge.setPort(wrapMainPort(port)));
       const projectPath = projectStore.getProjectById(projectId)?.path;
       const host = projectPath ? getWorkspaceClientRef()?.getHostForProject(projectPath) : null;
-      if (!broker || !host) return false;
-      return broker.brokerEndpointPort(host, handle, (port) => bridge.setPort(wrapMainPort(port)));
+      if (!host) return false;
+      return broker.connectEndpointPort(host, handle);
     };
     const bridge: WorktreePortHostBridge = new WorktreePortHostBridge({
       endpointId: endpoint.clientEndpointId,
@@ -196,6 +203,38 @@ export function redeliverClientWorktreePort(viewWebContents: WebContents): void 
   const entry = clientRelays.get(viewWebContents.id);
   if (!entry?.relay.isAttached || viewWebContents.isDestroyed()) return;
   getWorktreePortBrokerRef()?.brokerPort(entry.host, viewWebContents, { force: true });
+}
+
+/**
+ * Post a remote view a fresh relayed worktree port because its host asked
+ * (after reloading the view's project), and answer whether the renderer
+ * confirmed it within `timeoutMs`. False when the view has no attached relay
+ * for that host: it gets its port when the relay attaches.
+ */
+export async function redeliverClientWorktreePortForHost(
+  webContentsId: number,
+  hostId: HostId,
+  timeoutMs: number
+): Promise<boolean> {
+  const entry = clientRelays.get(webContentsId);
+  const broker = getWorktreePortBrokerRef();
+  const wc = resolveLiveWebContents(webContentsId);
+  if (!entry || entry.hostId !== hostId || !entry.relay.isAttached || !broker || !wc) return false;
+  if (!broker.brokerPort(entry.host, wc, { force: true })) return false;
+  return broker.waitForConfirmation(webContentsId, timeoutMs);
+}
+
+/** The host waits 10 s for the view's receipt; the Shell answers a little inside that. */
+const REDELIVER_CONFIRM_MS = 8_000;
+
+/**
+ * Shell side: answer a host that reloaded a view's project (worktree Retry)
+ * by posting the view a fresh relayed port. Returns a teardown.
+ */
+export function installWorktreePortRedelivery(): () => void {
+  return registerReverseRequestMethod(WORKTREE_PORT_REDELIVER_METHOD, ({ hostId, webContentsId }) =>
+    redeliverClientWorktreePortForHost(webContentsId, hostId, REDELIVER_CONFIRM_MS)
+  );
 }
 
 /** Refuses every port: a remote view whose relay is not up yet waits for it. */

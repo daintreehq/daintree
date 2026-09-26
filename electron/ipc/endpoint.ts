@@ -66,6 +66,13 @@ export interface ClientEndpoint {
   isClosed(): boolean;
 }
 
+/**
+ * What a host asks a remote view's Shell after reloading the view's project
+ * (worktree Retry): post the view a fresh relayed worktree port, so its ready
+ * handling refetches, and answer whether the renderer confirmed it.
+ */
+export const WORKTREE_PORT_REDELIVER_METHOD = "worktree:redeliver-port";
+
 export function isRemoteEndpointHandle(handle: number): boolean {
   return handle < 0;
 }

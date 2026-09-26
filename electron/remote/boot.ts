@@ -38,6 +38,7 @@ import {
   detachClientWorktreeRelayFor,
   disposeAllClientWorktreeRelays,
   installClientWorktreePortOverride,
+  installWorktreePortRedelivery,
   redeliverClientWorktreePort,
 } from "./worktreePort/attach.js";
 
@@ -188,6 +189,7 @@ function startClient(options: StartRemoteHostsOptions): void {
   );
   // Answered only once a session exists, so registering costs nothing until then.
   teardowns.push(installViewReverseRequests());
+  teardowns.push(installWorktreePortRedelivery());
 }
 
 export async function startRemoteHosts(options: StartRemoteHostsOptions): Promise<void> {

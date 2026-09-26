@@ -129,6 +129,7 @@ const m = vi.hoisted(() => {
     admitHybridHostLegs: vi.fn(() => vi.fn()),
     acceptLocalPushForRemoteView: vi.fn((channel: string) => channel === "shell:ok"),
     uninstallViewRequests: vi.fn(),
+    uninstallWorktreeRedelivery: vi.fn(),
     clientOpenedListeners,
     clientClosedListeners,
     viewHosts,
@@ -238,6 +239,7 @@ vi.mock("../worktreePort/attach.js", () => ({
   detachClientWorktreeRelayFor: m.detachClientWorktreeRelayFor,
   disposeAllClientWorktreeRelays: m.disposeAllClientWorktreeRelays,
   redeliverClientWorktreePort: m.redeliverClientWorktreePort,
+  installWorktreePortRedelivery: vi.fn(() => m.uninstallWorktreeRedelivery),
   installClientWorktreePortOverride: vi.fn((hostForView: unknown) => {
     m.installWorktreeOverride(hostForView);
     return m.uninstallWorktree;
@@ -478,6 +480,8 @@ describe("startRemoteHosts", () => {
     await startRemoteHosts({ hostMode: false });
     await stopRemoteHosts();
     expect(m.uninstallViewRequests).toHaveBeenCalledTimes(1);
+    // A host that reloaded a view's project asks for a fresh worktree port.
+    expect(m.uninstallWorktreeRedelivery).toHaveBeenCalledTimes(1);
   });
 
   it("installs hybrid splits and the remote-view push filter only on first use", async () => {

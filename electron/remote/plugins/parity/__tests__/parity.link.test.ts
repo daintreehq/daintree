@@ -51,6 +51,7 @@ let pack: ReturnType<typeof vi.fn<(dir: string, out: string) => Promise<void>>>;
 let host: HostPluginParity;
 let client: ClientPluginParity;
 let stagingRoot: string;
+const hostLoaded = new Set<string>();
 
 beforeEach(async () => {
   dir = await makeTempDir();
@@ -62,6 +63,7 @@ beforeEach(async () => {
   received = [];
   hostPlugins = {
     getPluginInventory: vi.fn(async () => hostInventory),
+    hasPlugin: (pluginId: string) => hostLoaded.has(pluginId),
     installPluginFromAnotherMachine: vi.fn(
       async (archivePath: string, expect: unknown): Promise<PluginInstallResult> => {
         const bytes = await fs.readFile(archivePath);
@@ -102,6 +104,20 @@ afterEach(async () => {
 });
 
 describe("plugin parity over a link", () => {
+  it("answers whether one plugin is loaded on the host, and not-loaded when it can't ask", async () => {
+    hostLoaded.clear();
+    hostLoaded.add("daintree.dev-preview");
+    await expect(client.isPluginLoadedOnHost(HOST, "daintree.dev-preview")).resolves.toBe(true);
+    await expect(client.isPluginLoadedOnHost(HOST, "acme.md")).resolves.toBe(false);
+    // The inventory is not read for this: it scans plugin folders.
+    expect(hostPlugins.getPluginInventory).not.toHaveBeenCalled();
+    await expect(client.isPluginLoadedOnHost("other-host", "daintree.dev-preview")).resolves.toBe(
+      false
+    );
+    sessions.client.close("test");
+    await expect(client.isPluginLoadedOnHost(HOST, "daintree.dev-preview")).resolves.toBe(false);
+  });
+
   it("compares nothing and copies nothing until asked", async () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(hostPlugins.getPluginInventory).not.toHaveBeenCalled();
