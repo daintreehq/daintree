@@ -289,6 +289,47 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(list).toHaveBeenCalled();
   });
 
+  it("says the reloaded section couldn't load when the inventory never catches up", async () => {
+    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
+    const list = vi.fn(async () => [makePlugin([], "plugin://a/__dtv-3/settings.js")]);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        plugin: { ...pluginApi, list },
+        events: {
+          on: (name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
+            if (name === "plugin:runtime-status-changed") listeners.push(cb);
+            return () => {};
+          },
+        },
+      },
+    });
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([], "plugin://a/__dtv-3/settings.js")}
+        viewScope="user"
+      />
+    );
+    act(() =>
+      listeners.forEach((cb) =>
+        cb({
+          pluginId: "acme.test",
+          status: { pluginId: "acme.test", viewGeneration: 4, worker: null, dev: null },
+        })
+      )
+    );
+    expect(screen.getByText("Reloading…")).toBeTruthy();
+
+    await waitFor(
+      () => expect(screen.getByText(/Couldn't load the reloaded section/)).toBeTruthy(),
+      {
+        timeout: 5000,
+      }
+    );
+    expect(list.mock.calls.length).toBe(5);
+  });
+
   it("renders nothing for a plugin with neither fields nor a view", () => {
     const { container } = render(<PluginSettingsForm plugin={makePlugin([])} viewScope="user" />);
     expect(container.innerHTML).toBe("");

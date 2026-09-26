@@ -149,13 +149,27 @@ export const SNAPSHOT_CSP =
 function keepLinkTag(tag: string): boolean {
   const match = LINK_REL.exec(tag);
   if (!match) return true;
-  const raw = match[1] ?? match[2] ?? match[3] ?? "";
   // The parser decodes character references before Chromium reads `rel`, so
-  // `pre&#99;onnect` is a preconnect. Rather than decode, refuse anything that
-  // is not plain letters and whitespace: a real stylesheet link never needs more.
-  if (!/^[A-Za-z\s]*$/.test(raw)) return false;
-  const tokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
+  // `pre&#99;onnect` is a preconnect: judge the decoded value. Only numeric
+  // references and the two whitespace names can spell a rel token; anything
+  // still carrying `&` after that is refused rather than guessed at.
+  const decoded = decodeRelReferences(match[1] ?? match[2] ?? match[3] ?? "");
+  if (decoded.includes("&")) return false;
+  const tokens = decoded.toLowerCase().split(/\s+/).filter(Boolean);
   return tokens.every((token) => KEPT_REL_TOKENS.has(token));
+}
+
+function decodeRelReferences(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => codePoint(parseInt(hex, 16)))
+    .replace(/&#([0-9]+);?/g, (_, dec: string) => codePoint(parseInt(dec, 10)))
+    .replace(/&Tab;/g, "\t")
+    .replace(/&NewLine;/g, "\n");
+}
+
+function codePoint(n: number): string {
+  // Out-of-range references decode to U+FFFD, which no kept token contains.
+  return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "�";
 }
 
 function escapeAttribute(value: string): string {

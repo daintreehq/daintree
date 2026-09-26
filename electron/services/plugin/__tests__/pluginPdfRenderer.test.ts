@@ -341,6 +341,14 @@ describe("prepareSnapshotHtml", () => {
     expect(out).toContain(`<link rel="stylesheet" href="a.css">`);
   });
 
+  it("keeps a stylesheet whose rel is spelled with character references", () => {
+    const tag = `<link rel="style&#115;heet" href="a.css">`;
+    expect(prepareSnapshotHtml(tag, null)).toContain(tag);
+    expect(prepareSnapshotHtml(`<link rel="x&unknown;" href="b.css">`, null)).not.toContain(
+      "b.css"
+    );
+  });
+
   it("strips resource hints the request filter cannot see and keeps stylesheets", () => {
     const html = [
       `<link rel="stylesheet" href="a.css">`,

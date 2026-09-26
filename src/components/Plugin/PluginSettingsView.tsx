@@ -27,6 +27,9 @@ interface SettingsViewRuntime {
 }
 
 const runtimes = new Map<string, SettingsViewRuntime>();
+/** Inventory re-reads a reloaded section makes before saying it couldn't load. */
+const VIEW_REFRESH_ATTEMPTS = 5;
+const VIEW_REFRESH_RETRY_MS = 400;
 let unsubscribeLifecycle: (() => void) | null = null;
 
 /** The `__dtv-N` generation of a `plugin://` module URL, or `null` for none. */
@@ -165,6 +168,9 @@ export function PluginSettingsView({
   // homes don't re-read on a dev reload. The one this section fetched itself,
   // if the props are behind the live generation.
   const [fetchedPath, setFetchedPath] = useState<string | null>(null);
+  // The inventory can lag the status push by a beat; a few spaced re-reads
+  // cover that, and past them the section says so instead of waiting forever.
+  const [refreshAttempt, setRefreshAttempt] = useState(0);
   const propsPath = plugin.settingsViewPath;
   const latestPath =
     fetchedPath !== null && viewGenerationOf(fetchedPath) === liveGeneration
@@ -175,20 +181,37 @@ export function PluginSettingsView({
     liveGeneration !== null &&
     viewGenerationOf(latestPath) !== liveGeneration;
   const instanceId = plugin.instanceId;
+  const refreshExhausted = refreshAttempt >= VIEW_REFRESH_ATTEMPTS;
   useEffect(() => {
-    if (!stale || !running) return;
+    if (!stale || !running || refreshExhausted) return;
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     window.electron.plugin
       .list()
       .then((list) => {
+        if (cancelled) return;
         const next = list.find((p) => p.instanceId === instanceId)?.settingsViewPath;
-        if (!cancelled && next) setFetchedPath(next);
+        if (next && viewGenerationOf(next) === liveGeneration) {
+          setFetchedPath(next);
+          return;
+        }
+        retry = setTimeout(() => setRefreshAttempt((n) => n + 1), VIEW_REFRESH_RETRY_MS);
       })
-      .catch((err: unknown) => logError(`Failed to refresh ${instanceId}'s settings view`, err));
+      .catch((err: unknown) => {
+        logError(`Failed to refresh ${instanceId}'s settings view`, err);
+        if (!cancelled) setRefreshAttempt(VIEW_REFRESH_ATTEMPTS);
+      });
     return () => {
       cancelled = true;
+      if (retry !== undefined) clearTimeout(retry);
     };
-  }, [stale, running, instanceId, liveGeneration]);
+  }, [stale, running, instanceId, liveGeneration, refreshAttempt, refreshExhausted]);
+  // A new generation starts a fresh round of attempts.
+  const [attemptsFor, setAttemptsFor] = useState(liveGeneration);
+  if (attemptsFor !== liveGeneration) {
+    setAttemptsFor(liveGeneration);
+    setRefreshAttempt(0);
+  }
 
   if (!pluginDeclaresSettingsView(plugin)) return null;
   // Never mount the retired module: until the new URL is in, the section waits.
@@ -196,7 +219,14 @@ export function PluginSettingsView({
   if (running && stale) {
     return (
       <SettingsGroup>
-        <SettingsRow label="More settings" description="Reloading…" />
+        <SettingsRow
+          label="More settings"
+          description={
+            refreshExhausted
+              ? "Couldn't load the reloaded section. Close and reopen Settings to try again."
+              : "Reloading…"
+          }
+        />
       </SettingsGroup>
     );
   }
