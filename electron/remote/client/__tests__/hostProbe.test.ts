@@ -227,6 +227,13 @@ describe("parseHostProbe", () => {
     expect(buildHostProbeScript()).toContain('pgrep -u "$(id -u)" -x $n');
   });
 
+  it("counts only this SSH user's Daintree as running, never another user's", () => {
+    const script = buildHostProbeScript();
+    expect(script).toContain('pgrep -u "$(id -u)" -x Daintree >/dev/null');
+    expect(script).toContain('pgrep -u "$(id -u)" -x daintree >/dev/null');
+    expect(script).not.toMatch(/pgrep -x [Dd]aintree/);
+  });
+
   it("reports no install when nothing is there", () => {
     const probe = parseHostProbe("@@dt:uname Linux x86_64\n@@dt:end");
     expect(probe.install).toBeNull();
