@@ -52,6 +52,11 @@ import {
   _resetTerminalInputGateForTesting,
   getTerminalInputBlock,
 } from "@/services/terminal/inputGate";
+import {
+  _resetHostOwnedWritesForTesting,
+  hasDeferredHostOwnedWrite,
+  sendHostOwnedWrite,
+} from "@/store/persistence/hostOwnedWrites";
 
 const HANDSHAKE = {
   version: "1.0.0",
@@ -150,6 +155,7 @@ async function flush() {
 beforeEach(() => {
   _resetHostConnectionSyncForTesting();
   _resetTerminalInputGateForTesting();
+  _resetHostOwnedWritesForTesting();
   useHostConnectionStore.getState().reset();
   pluginRefresh.mockClear();
   updateAgentState.mockClear();
@@ -442,6 +448,92 @@ describe("lease and reconnect races", () => {
       connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
     });
     await vi.waitFor(() => expect(electron.worktree.refresh).toHaveBeenCalledTimes(1));
+    stop();
+  });
+});
+
+describe("host-owned saves held through a reconnect", () => {
+  it("replays a held save only after the fresh session's rehydrate has finished", async () => {
+    const { emitHost } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "disconnected" },
+    });
+    expect(getTerminalInputBlock()?.kind).toBe("disconnected");
+
+    const send = vi.fn(async () => undefined);
+    const replay = vi.fn();
+    expect(await sendHostOwnedWrite("app-state:activeWorktreeId", send, replay)).toBe("deferred");
+
+    let finishRehydrate!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRehydrate = () => resolve(undefined)))
+    );
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(replay).not.toHaveBeenCalled();
+
+    finishRehydrate();
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(1));
+    expect(send).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("drops a held save when a reconnect's lease read shows someone else took over", async () => {
+    const { electron, emitHost } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connecting", attempt: 1 },
+    });
+    const replay = vi.fn();
+    await sendHostOwnedWrite("app-state:mruList", vi.fn(), replay);
+
+    electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    await vi.waitFor(() => expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere"));
+    await flush();
+    expect(replay).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("app-state:mruList")).toBe(false);
+    stop();
+  });
+
+  it("taking the project over drops what was held, so the authoritative rehydrate isn't overwritten", async () => {
+    const { electron } = installElectron();
+    bindView("studio-01");
+    electron.driveLease.get.mockImplementation(() => new Promise(() => {}));
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(getTerminalInputBlock()?.kind).toBe("lease-unknown");
+    const replay = vi.fn();
+    await sendHostOwnedWrite("app-state:activeWorktreeId", vi.fn(), replay);
+
+    await takeOverDrive("proj-1");
+    await flush();
+    expect(getTerminalInputBlock()).toBeNull();
+    expect(replay).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("app-state:activeWorktreeId")).toBe(false);
     stop();
   });
 });

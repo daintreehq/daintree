@@ -8,6 +8,10 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { resyncHostTerminals } from "@/store/hostTerminalResync";
 import { rehydrateHostProjectState } from "@/store/hostProjectRehydrate";
 import {
+  dropDeferredHostOwnedWrites,
+  setHostOwnedWriteFlushBarrier,
+} from "@/store/persistence/hostOwnedWrites";
+import {
   getDriveLeaseSnapshot,
   getLeaseInputBlock,
   getTerminalInputBlock,
@@ -204,6 +208,9 @@ async function remoteDrivingPossible(): Promise<boolean> {
  */
 export async function takeOverDrive(projectId: string): Promise<void> {
   const view = await window.electron.driveLease.takeOver({ projectId });
+  // The host's state is read back as authoritative below; a save held from
+  // before the takeover must not land on top of it.
+  dropDeferredHostOwnedWrites("this view took the project over");
   leaseGeneration += 1;
   applyLease(view);
   // The previous driver's saved layout is the project's now; this view's was
@@ -251,6 +258,15 @@ function beginSync(): () => void {
 
   // Fetched up front so the first preview this view builds already carries it.
   if (hostId !== null) void primeHostPreviewCapability();
+
+  // Saves held while the link was down go out only after the lease is re-read
+  // and any resync in flight (a fresh session's rehydrate) has finished.
+  disposers.push(
+    setHostOwnedWriteFlushBarrier(async () => {
+      await refreshLease();
+      if (resyncRunning) await resyncRunning;
+    })
+  );
 
   if (window.electron?.driveLease && projectId) {
     disposers.push(
