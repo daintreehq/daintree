@@ -826,7 +826,7 @@ describe("useTerminalFileTransfer hook", () => {
       async (agentId) => {
         renderFileTransferHook({ detectedAgentId: agentId });
 
-        dropFiles([
+        await dropFiles([
           fileAt("notes.md", "/Users/test/notes.md"),
           fileAt("Screen Shot.png", "/Users/test/Screen Shot.png"),
           fileAt("b.jpg", "/Users/test/b.jpg"),
@@ -848,7 +848,7 @@ describe("useTerminalFileTransfer hook", () => {
     it("spaces the pastes rather than writing them in one tick", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
 
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -877,7 +877,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("keeps the @ token for an agent without a verified image protocol", async () => {
       renderFileTransferHook({ detectedAgentId: "gemini" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -890,9 +890,9 @@ describe("useTerminalFileTransfer hook", () => {
     it("keeps the @ token when bracketed-paste mode is off or unknown", async () => {
       instanceState.bracketedPasteMode = false;
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
       instanceState.hasManagedInstance = false;
-      dropFiles([fileAt("b.png", "/Users/test/b.png")]);
+      await dropFiles([fileAt("b.png", "/Users/test/b.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -905,7 +905,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("keeps a remote-share image as a text reference", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "//server/share/a.png")]);
+      await dropFiles([fileAt("a.png", "//server/share/a.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -917,8 +917,8 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("queues a second drop behind images still being paced", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
-      dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -932,8 +932,8 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("waits a gap before a queued image drop's first paste", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
-      dropFiles([fileAt("b.png", "/Users/test/b.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("b.png", "/Users/test/b.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(200);
       });
@@ -951,13 +951,13 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("keeps three queued drops in order across a plain-file drop", async () => {
       renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png")]);
-      dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("b.ts", "/Users/test/b.ts")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(250);
       });
       // a.png has finished pacing; b.ts is still waiting its gap.
-      dropFiles([fileAt("c.png", "/Users/test/c.png")]);
+      await dropFiles([fileAt("c.png", "/Users/test/c.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2000);
       });
@@ -973,7 +973,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("drops the rest of a paced drop once input locks, even if it unlocks again", async () => {
       const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -988,7 +988,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     it("stops pacing once the pane unmounts", async () => {
       const { unmount } = renderFileTransferHook({ detectedAgentId: "claude" });
-      dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
+      await dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -1462,6 +1462,19 @@ describe("useTerminalFileTransfer hook", () => {
       expect(terminalInstanceService.focus).not.toHaveBeenCalled();
     });
 
+    it("writes nothing when the input locks and unlocks again while the drop resolves", async () => {
+      const { release } = holdMaterialize();
+      const { rerender } = renderFileTransferHook({ isInputLocked: false });
+      await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+
+      rerender({ isInputLocked: true });
+      rerender({ isInputLocked: false });
+      await release();
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+    });
+
     it("writes nothing when the pane unmounts while the drop resolves", async () => {
       const { release } = holdMaterialize();
       const onDropSelect = vi.fn();
@@ -1523,6 +1536,20 @@ describe("useTerminalFileTransfer hook", () => {
       expect(vi.mocked(terminalClient.write).mock.calls.map(([, data]) => data)).toEqual([
         `${escapeShellArgOptional("/Users/test/b.ts")} `,
       ]);
+    });
+
+    it("drops a queued drop when a lock comes and goes while it waits its turn", async () => {
+      const resolvePath = holdEachMaterialize();
+      const { rerender } = renderFileTransferHook({ isInputLocked: false });
+      await dropFiles([fileAt("big.bin", "/Users/test/big.bin")]);
+      await dropFiles([fileAt("small.txt", "/Users/test/small.txt")]);
+      await resolvePath("/Users/test/small.txt");
+
+      rerender({ isInputLocked: true });
+      rerender({ isInputLocked: false });
+      await resolvePath("/Users/test/big.bin");
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
     });
 
     it("leaves focus where the user moved it while the drop resolved", async () => {

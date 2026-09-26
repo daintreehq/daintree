@@ -537,6 +537,11 @@ export class TerminalRestoreController {
     serializedState: string | null,
     captureGeometry?: TerminalGeometry
   ): Promise<boolean> {
+    // A reset starts the host's stream over, so a fence from before it would
+    // swallow the output that follows. A snapshot carrying its own offset sets
+    // a fresh one.
+    const managed = this.deps.getInstance(id);
+    if (managed) managed.streamFence = undefined;
     if (serializedState) {
       return this.restoreFetchedState(id, serializedState, captureGeometry);
     }
