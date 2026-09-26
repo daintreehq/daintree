@@ -527,12 +527,14 @@ describe("closing masters when the app quits", () => {
     const spawner: SshSpawner = (args) => {
       const child = new FakeChild();
       if (args.includes("exit")) exits.push(args);
-      if (args.at(-1) === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
-      else child.finish(1, "", "cat: no such file\n");
+      // "down" fails its probe: ssh may still have left a master behind.
+      if (args.at(-1) === PROBE_COMMAND && !args.includes("down"))
+        child.finish(0, "Darwin\n501\n/Users/g\n");
+      else child.finish(255, "", "no\n");
       return child;
     };
     const clientDir = path.join(root, "c");
-    for (const target of ["studio", "bigbox", "studio"]) {
+    for (const target of ["studio", "bigbox", "studio", "down"]) {
       const transport = new SshTransport({ target, clientDir, spawn: spawner });
       await expect(transport.open(new AbortController().signal)).rejects.toBeInstanceOf(
         TransportError
@@ -543,8 +545,9 @@ describe("closing masters when the app quits", () => {
     expect(exits).toEqual([
       ["-o", `ControlPath=${controlPathFor(clientDir, "studio")}`, "-O", "exit", "--", "studio"],
       ["-o", `ControlPath=${controlPathFor(clientDir, "bigbox")}`, "-O", "exit", "--", "bigbox"],
+      ["-o", `ControlPath=${controlPathFor(clientDir, "down")}`, "-O", "exit", "--", "down"],
     ]);
     await closeSshMasters(1_000);
-    expect(exits).toHaveLength(2);
+    expect(exits).toHaveLength(3);
   });
 });
