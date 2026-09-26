@@ -14,8 +14,8 @@ import {
 } from "../shortcutReferenceModel";
 import { parseChord } from "@/lib/kbdShortcut";
 
-function registry(isWindows: boolean): ReferenceBinding[] {
-  return buildDefaultKeybindings(isWindows).map((binding) => ({
+function registry(isWindows: boolean, isLinux = false): ReferenceBinding[] {
+  return buildDefaultKeybindings(isWindows, isLinux).map((binding) => ({
     actionId: binding.actionId,
     scope: binding.scope,
     description: binding.description,
@@ -27,10 +27,13 @@ function registry(isWindows: boolean): ReferenceBinding[] {
 const noOverrides = () => false;
 
 describe("buildShortcutEntries", () => {
-  for (const isWindows of [false, true]) {
-    const bindings = registry(isWindows);
+  for (const [label, isWindows, isLinux] of [
+    ["mac", false, false],
+    ["windows", true, false],
+    ["linux", false, true],
+  ] as const) {
+    const bindings = registry(isWindows, isLinux);
     const entries = buildShortcutEntries(bindings, noOverrides);
-    const label = isWindows ? "windows" : "mac/linux";
 
     it(`puts every action in exactly one row (${label})`, () => {
       const seen = new Map<string, number>();

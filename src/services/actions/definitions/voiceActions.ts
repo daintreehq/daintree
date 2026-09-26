@@ -43,7 +43,8 @@ export function registerVoiceActions(actions: ActionRegistry): void {
   actions.set("voiceInput.toggle", () => ({
     id: "voiceInput.toggle",
     title: "Toggle voice dictation",
-    description: "Start or stop dictation for the focused terminal input",
+    description:
+      "Stop dictation wherever it is recording, whatever has focus; when idle, start it in the focused terminal input (or the locked panel)",
     category: "voice",
     kind: "command",
     danger: "safe",

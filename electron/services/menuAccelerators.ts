@@ -86,7 +86,7 @@ export function comboToAccelerator(combo: string): string | undefined {
 }
 
 function getDefaultKeybindingsForPlatform() {
-  return buildDefaultKeybindings(process.platform === "win32");
+  return buildDefaultKeybindings(process.platform === "win32", process.platform === "linux");
 }
 
 /**
