@@ -37,7 +37,17 @@ export function usePluginPromptBridge(): void {
         });
         return;
       }
-      const value = await enqueueUiPrompt(request);
+      // A picker row that starts an agent closes the picker at once and
+      // answers when the agent is up. Main hears of the acceptance first, so a
+      // cancel from the plugin in between waits for that answer rather than
+      // reporting "cancelled" for an agent the user is starting.
+      const value = await enqueueUiPrompt(request, () => {
+        if (disposed) return;
+        window.electron.pluginBridge.sendUiPromptResponse({
+          promptId: request.promptId,
+          accepted: true,
+        });
+      });
       if (disposed) return;
       window.electron.pluginBridge.sendUiPromptResponse({
         promptId: request.promptId,

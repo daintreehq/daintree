@@ -82,11 +82,14 @@ export type PluginUiPromptResultValue =
   | PluginSendToAgentResult
   | undefined;
 
-/** Renderer → main reply carrying the user's answer (fire-and-forget). */
-export interface PluginUiPromptResponse {
-  promptId: string;
-  result: PluginUiPromptResultValue;
-}
+/**
+ * Renderer → main reply (fire-and-forget): the user's answer, or — for a
+ * send-to-agent picker whose chosen row starts an agent first — word that the
+ * user accepted and the answer will follow once that work settles. From then
+ * on the work is the user's, and a cancel from the caller no longer ends it.
+ */
+export type PluginUiPromptResponse =
+  { promptId: string; result: PluginUiPromptResultValue } | { promptId: string; accepted: true };
 
 /**
  * Main → renderer broadcast telling the renderer to drop pending prompts —

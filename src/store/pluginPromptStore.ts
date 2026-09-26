@@ -34,6 +34,11 @@ export interface PendingUiPrompt {
   params: PluginUiPromptParams;
   /** Resolves the promise returned by {@link enqueueUiPrompt}. */
   resolve: (value: PluginUiPromptResultValue | PromiseLike<PluginUiPromptResultValue>) => void;
+  /**
+   * Told when the user answers with work still to finish — a promise passed to
+   * `resolveCurrent` — so main stops treating the prompt as cancellable.
+   */
+  onAccept?: () => void;
 }
 
 interface PluginPromptState {
@@ -61,6 +66,12 @@ interface PluginPromptActions {
   reset: () => void;
 }
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === "object" && value !== null && typeof Reflect.get(value, "then") === "function"
+  );
+}
+
 function advance(set: (partial: Partial<PluginPromptState>) => void, queue: PendingUiPrompt[]) {
   if (queue.length === 0) {
     set({ current: null, queue: [] });
@@ -86,6 +97,9 @@ export const usePluginPromptStore = create<PluginPromptState & PluginPromptActio
   resolveCurrent: (value) => {
     const { current, queue } = get();
     if (current === null) return;
+    // Before resolving, so main hears of the acceptance ahead of anything the
+    // work itself goes on to report.
+    if (isPromiseLike(value)) current.onAccept?.();
     current.resolve(value);
     advance(set, queue);
   },
@@ -122,10 +136,12 @@ export const usePluginPromptStore = create<PluginPromptState & PluginPromptActio
 /**
  * Push a prompt request into the queue and return a Promise that resolves with
  * the user's answer (or the dismiss value if cancelled/unloaded). The Promise
- * never rejects — callers branch on the value.
+ * never rejects — callers branch on the value. `onAccept` runs if the user
+ * answers with work still to finish; the Promise then settles once it has.
  */
 export function enqueueUiPrompt(
-  request: PluginUiPromptRequest
+  request: PluginUiPromptRequest,
+  onAccept?: () => void
 ): Promise<PluginUiPromptResultValue> {
   return new Promise((resolve) => {
     usePluginPromptStore.getState().enqueue({
@@ -133,6 +149,7 @@ export function enqueueUiPrompt(
       pluginId: request.pluginId,
       params: request.params,
       resolve,
+      ...(onAccept ? { onAccept } : {}),
     });
   });
 }

@@ -644,6 +644,108 @@ describe("PluginUIPromptDispatcher", () => {
       d.dispose();
     });
 
+    const respond = (promptId: string, payload: Record<string, unknown>) =>
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+        { sender: { id: 7 } },
+        { promptId, ...payload }
+      );
+
+    it("reports what an accepted picker's launch did, even when cancelled during setup", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const controller = new AbortController();
+      const promise = d.requestPrompt("p1", PICKER, undefined, controller.signal);
+      const promptId = lastPromptId(wc);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+
+      // The user chose "New agent in new worktree"; the worktree is being set up.
+      respond(promptId, { accepted: true });
+      controller.abort();
+      d.cancelForPlugin("p1");
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      // The picker is gone, so there is nothing to dismiss.
+      expect(
+        wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_CANCEL)
+      ).toHaveLength(0);
+      // And the closed picker no longer holds the plugin's one dialog.
+      const next = d.requestPrompt("p1", CONFIRM);
+      expect(lastPromptId(wc)).not.toBe(promptId);
+
+      const outcome = { status: "refused", reason: "launch-failed", worktreeId: "wt-new" };
+      respond(promptId, { result: outcome });
+      await expect(promise).resolves.toEqual(outcome);
+      d.dispose();
+      await next;
+    });
+
+    it("waits out an acceptance already on its way when the abort lands first", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+        const controller = new AbortController();
+        const promise = d.requestPrompt("p1", PICKER, undefined, controller.signal);
+        const promptId = lastPromptId(wc);
+
+        controller.abort();
+        expect(wc.send).toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, {
+          pluginId: "p1",
+          promptId,
+        });
+        respond(promptId, { accepted: true });
+        // Past the grace that bounds an unanswered cancel: the launch is the user's.
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_ACK_GRACE_MS * 2);
+
+        respond(promptId, { result: { status: "drafted", terminalId: "t-new" } });
+        await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-new" });
+        d.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("settles an aborted picker on the renderer's dismissal, or as cancelled if none comes", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+        const dismissed = new AbortController();
+        const first = d.requestPrompt("p1", PICKER, undefined, dismissed.signal);
+        dismissed.abort();
+        respond(lastPromptId(wc), { result: { status: "cancelled" } });
+        await expect(first).resolves.toEqual({ status: "cancelled" });
+
+        const hung = new AbortController();
+        const second = d.requestPrompt("p1", PICKER, undefined, hung.signal);
+        hung.abort();
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_ACK_GRACE_MS);
+        await expect(second).resolves.toEqual({ status: "cancelled" });
+        d.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("ignores an acceptance for a prompt that is not a picker", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const controller = new AbortController();
+      const promise = d.requestPrompt("p1", CONFIRM, undefined, controller.signal);
+      respond(lastPromptId(wc), { accepted: true });
+      controller.abort();
+      await expect(promise).resolves.toBe(false);
+    });
+
     it("never times out a picker, and sends it no deadline", async () => {
       vi.useFakeTimers();
       try {
