@@ -26,9 +26,22 @@ function cancelValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResul
  * A send-to-agent says so, since "cancelled" would claim the user dismissed a
  * picker they never saw; the other kinds keep their dismiss value.
  */
-function busyValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResultValue {
-  if (kind === "sendToAgent") return { status: "refused", reason: "prompt-open" };
-  return cancelValueFor(kind);
+function busyValueFor(params: PluginUiPromptParams): PluginUiPromptResultValue {
+  if (params.kind === "sendToAgent") {
+    return { status: "refused", reason: promptOpensDialog(params) ? "prompt-open" : "busy" };
+  }
+  return cancelValueFor(params.kind);
+}
+
+/**
+ * What a request that opens no dialog resolves to when the renderer does not
+ * answer in time. A targeted send-to-agent that never came back did not draft
+ * as far as anyone can tell, and the project view that should have answered is
+ * the thing that is missing.
+ */
+function timeoutValueFor(params: PluginUiPromptParams): PluginUiPromptResultValue {
+  if (params.kind === "sendToAgent") return { status: "refused", reason: "project-unavailable" };
+  return cancelValueFor(params.kind);
 }
 
 /**
@@ -36,15 +49,32 @@ function busyValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResultV
  * round-trip with no deadline; without a cap a buggy or adversarial plugin can
  * fire prompts faster than the user dismisses them, stacking unbounded dialogs
  * and leaking a `pending` entry each time. A second request while one is open
- * resolves immediately instead of being sent. Only dialogs count: a targeted
- * send-to-agent answers without one, so it is never capped and never caps.
+ * resolves immediately instead of being sent. Only dialogs count here: a
+ * targeted send-to-agent answers without one and has its own cap below.
  */
 const MAX_PENDING_PROMPTS_PER_PLUGIN = 1;
 
 /**
+ * Targeted send-to-agent requests in flight per plugin. They draft and answer
+ * at once, so a handful covers a plugin handing several cards out together;
+ * anything beyond that is a loop, and is refused as `busy` rather than queued.
+ */
+export const MAX_PENDING_TARGETED_SENDS_PER_PLUGIN = 8;
+
+/**
+ * How long a request that opens no dialog may wait for the renderer. It has no
+ * user in the loop — the renderer answers as soon as it has drafted — so this
+ * only elapses for a view that is frozen, hung or gone. The request carries the
+ * deadline too, so a renderer that wakes after it drops the draft instead of
+ * writing one main has already reported as refused.
+ */
+export const IMMEDIATE_PROMPT_TIMEOUT_MS = 10_000;
+
+/**
  * An imperative UI prompt awaiting its renderer response. Unlike the dispatch
- * bridge there is NO per-request timeout: a user-facing prompt has no deadline
- * racing the dialog (mirrors `pluginConfirmStore`'s no-timeout stance). It
+ * bridge a dialog has NO per-request timeout: a user-facing prompt has no
+ * deadline racing it (mirrors `pluginConfirmStore`'s no-timeout stance). A
+ * request that opens no dialog is the exception and times out. It
  * settles on the renderer response, a renderer `destroyed`, a caller's aborted
  * signal, a per-plugin cancel (unload), or {@link PluginUIPromptDispatcher.dispose}.
  */
@@ -167,16 +197,21 @@ export class PluginUIPromptDispatcher {
       // Enforce the per-plugin cap before sending so a runaway plugin can't stack
       // dialogs or leak `pending` entries. Checked here (not renderer-side) so the
       // guard holds regardless of renderer queue behavior.
+      // Dialogs and immediate requests are counted separately, so neither can
+      // starve the other.
       const opensDialog = promptOpensDialog(params);
-      if (opensDialog) {
-        let activeForPlugin = 0;
-        for (const pending of this.pending.values()) {
-          if (pending.pluginId === pluginId && pending.opensDialog) activeForPlugin += 1;
+      let activeOfKind = 0;
+      for (const pending of this.pending.values()) {
+        if (pending.pluginId === pluginId && pending.opensDialog === opensDialog) {
+          activeOfKind += 1;
         }
-        if (activeForPlugin >= MAX_PENDING_PROMPTS_PER_PLUGIN) {
-          resolve(busyValueFor(params.kind));
-          return;
-        }
+      }
+      const cap = opensDialog
+        ? MAX_PENDING_PROMPTS_PER_PLUGIN
+        : MAX_PENDING_TARGETED_SENDS_PER_PLUGIN;
+      if (activeOfKind >= cap) {
+        resolve(busyValueFor(params));
+        return;
       }
 
       this.ensureResponseListener();
@@ -206,7 +241,21 @@ export class PluginUIPromptDispatcher {
       };
       signal?.addEventListener("abort", onAbort, { once: true });
 
+      // An immediate request has no user in the loop, so an unanswered one is a
+      // stuck renderer — settle it rather than hold the caller and the entry.
+      const expiresAt = opensDialog ? undefined : Date.now() + IMMEDIATE_PROMPT_TIMEOUT_MS;
+      const timer = opensDialog
+        ? undefined
+        : setTimeout(() => {
+            const pending = this.pending.get(promptId);
+            if (!pending) return;
+            pending.cleanup?.();
+            this.pending.delete(promptId);
+            resolve(timeoutValueFor(params));
+          }, IMMEDIATE_PROMPT_TIMEOUT_MS);
+
       const cleanup = () => {
+        if (timer !== undefined) clearTimeout(timer);
         try {
           webContents.removeListener("destroyed", onDestroyed);
         } catch {
@@ -225,7 +274,12 @@ export class PluginUIPromptDispatcher {
       });
 
       try {
-        webContents.send(CHANNELS.PLUGIN_UI_PROMPT_REQUEST, { promptId, pluginId, params });
+        webContents.send(CHANNELS.PLUGIN_UI_PROMPT_REQUEST, {
+          promptId,
+          pluginId,
+          params,
+          ...(expiresAt !== undefined ? { expiresAt } : {}),
+        });
       } catch {
         cleanup();
         this.pending.delete(promptId);

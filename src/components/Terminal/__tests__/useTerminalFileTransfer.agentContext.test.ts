@@ -64,10 +64,14 @@ describe("useTerminalFileTransfer — agent context on the xterm surface", () =>
     return { ...hook, onDropSelect };
   }
 
-  function dispatch(type: string, serialized = "") {
+  function dispatch(
+    type: string,
+    serialized = "",
+    types: string[] = [AGENT_CONTEXT_DRAG_MIME, "text/plain"]
+  ) {
     const event = new Event(type, { bubbles: true, cancelable: true });
     const dataTransfer = {
-      types: [AGENT_CONTEXT_DRAG_MIME, "text/plain"],
+      types,
       dropEffect: "none",
       files: [],
       getData: (format: string) => (format === AGENT_CONTEXT_DRAG_MIME ? serialized : ""),
@@ -124,6 +128,17 @@ describe("useTerminalFileTransfer — agent context on the xterm surface", () =>
     expect(terminalClient.write).not.toHaveBeenCalled();
     expect(onDropSelect).not.toHaveBeenCalled();
     expect(focusPanelInput).not.toHaveBeenCalled();
+  });
+
+  it("refuses a drag that also carries files over a shell, rather than showing a file target", () => {
+    getDraftRefusal.mockReturnValue("not-agent");
+    const { result } = renderTransfer();
+    const mixed = ["Files", AGENT_CONTEXT_DRAG_MIME, "text/plain"];
+    dispatch("dragenter", "", mixed);
+    const { dataTransfer } = dispatch("dragover", "", mixed);
+
+    expect(result.current).toBe(false);
+    expect(dataTransfer.dropEffect).toBe("none");
   });
 
   it("does nothing with a forged payload", () => {

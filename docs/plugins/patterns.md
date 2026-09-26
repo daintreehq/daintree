@@ -227,9 +227,9 @@ const result = await window.electron.plugin.invoke(pluginId, "sendToAgent", {
 if (result.status === "drafted") markCardInProgress(card, result.terminalId);
 ```
 
-`result` is `drafted` (with the pane's id), `cancelled`, or `refused` with a reason the user has already been shown. To offer your own list instead, `host.agents.list()` (`agent:read`) returns the project's agent panes with their worktree and whether each can take a draft; pass the chosen `terminalId` and there is no picker.
+`result` is `drafted` (with the pane's id), `cancelled`, or `refused` with a reason (the user is shown the ones about their agent). To offer your own list instead, `host.agents.list()` (`agent:read`) returns the project's agent panes with their worktree and whether each can take a draft; pass the chosen `terminalId` and there is no picker.
 
-What lands, either way: the card's title (headed by your label or plugin name) and its text in a fenced block, appended below anything the user already typed. Keep `text` to what the agent needs — at most 32,768 characters — and let the agent read the rest from your data through the files or an [agent MCP endpoint](./agent-extensions.md#agent-mcp-endpoints). Never put the instruction in the text: the user writes that.
+What lands, either way: one fenced block holding a heading (your label or plugin name and the card's title) and the card's text, appended after anything the user already typed. Fenced text stays literal: a card that mentions `@diff` does not pull in the user's diff when they submit. Keep `text` to what the agent needs — at most 32,768 characters — and let the agent read the rest from your data through the files or an [agent MCP endpoint](./agent-extensions.md#agent-mcp-endpoints). Never put the instruction in the text: the user writes that.
 
 ## Run a command
 

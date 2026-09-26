@@ -14,8 +14,8 @@ export type SendToAgentRow =
       kind: "new-here";
       id: "new-here";
       agent: HandoffAgentChoice;
-      worktreeId?: string;
-      worktreeName?: string;
+      worktreeId: string;
+      worktreeName: string;
     }
   | { kind: "new-worktree"; id: "new-worktree"; agent: HandoffAgentChoice }
   | { kind: "create-branch"; id: "create-branch"; agent: HandoffAgentChoice };
@@ -79,17 +79,23 @@ export function buildSendToAgentRows(inputs: SendToAgentRowInputs): SendToAgentR
   const rows = orderAgentRows(inputs.panes, preselected);
   if (inputs.agent === null) return rows;
 
-  const hereId =
-    inputs.requestedWorktreeId ?? preselected?.worktree?.id ?? inputs.activeWorktreeId ?? undefined;
-  rows.push({
-    kind: "new-here",
-    id: "new-here",
-    agent: inputs.agent,
-    ...(hereId !== undefined ? { worktreeId: hereId } : {}),
-    ...(hereId !== undefined && inputs.worktreeNames.has(hereId)
-      ? { worktreeName: inputs.worktreeNames.get(hereId) }
-      : {}),
-  });
+  // "Here" has to be one of this project's worktrees: the plugin's worktree id
+  // is taken only if the project knows it, then the preselected agent's, then
+  // the active one. With none of them real there is no "here" to offer.
+  const hereId = [
+    inputs.requestedWorktreeId,
+    preselected?.worktree?.id,
+    inputs.activeWorktreeId ?? undefined,
+  ].find((id): id is string => id !== undefined && inputs.worktreeNames.has(id));
+  if (hereId !== undefined) {
+    rows.push({
+      kind: "new-here",
+      id: "new-here",
+      agent: inputs.agent,
+      worktreeId: hereId,
+      worktreeName: inputs.worktreeNames.get(hereId)!,
+    });
+  }
   rows.push({ kind: "new-worktree", id: "new-worktree", agent: inputs.agent });
   return rows;
 }
@@ -132,6 +138,7 @@ export const ROW_REFUSAL_LABEL = {
   "project-unavailable": "Unavailable",
   "launch-failed": "Unavailable",
   "prompt-open": "Unavailable",
+  busy: "Unavailable",
 } as const satisfies Record<PluginSendToAgentRefusalReason, string>;
 
 /** Whether Enter may act on the row. A pane that would refuse the draft may not. */

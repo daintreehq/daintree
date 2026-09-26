@@ -25,10 +25,19 @@ export function usePluginPromptBridge(): void {
       // A send-to-agent that names its pane is not a dialog: it drafts now and
       // answers, without queueing behind (or blocking) a prompt on screen.
       const { params } = request;
-      const value =
-        params.kind === "sendToAgent" && params.request.terminalId !== undefined
-          ? draftAgentContext(params.request.terminalId, params.request)
-          : await enqueueUiPrompt(request);
+      if (params.kind === "sendToAgent" && params.request.terminalId !== undefined) {
+        // Main has already answered a request past its deadline (a view that
+        // was frozen when it arrived); drafting now would contradict that.
+        if (request.expiresAt !== undefined && Date.now() > request.expiresAt) return;
+        const drafted = draftAgentContext(params.request.terminalId, params.request);
+        if (disposed) return;
+        window.electron.pluginBridge.sendUiPromptResponse({
+          promptId: request.promptId,
+          result: drafted,
+        });
+        return;
+      }
+      const value = await enqueueUiPrompt(request);
       if (disposed) return;
       window.electron.pluginBridge.sendUiPromptResponse({
         promptId: request.promptId,

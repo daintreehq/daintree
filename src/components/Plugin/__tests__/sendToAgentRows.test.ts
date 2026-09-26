@@ -94,6 +94,15 @@ describe("buildSendToAgentRows", () => {
     });
   });
 
+  it("never offers New agent here in a worktree this project doesn't have", () => {
+    const result = rows({ panes: [], requestedWorktreeId: "wt-other", activeWorktreeId: null });
+    expect(ids(result)).toEqual(["new-worktree"]);
+    const fallback = rows({ panes: [], requestedWorktreeId: "wt-other" });
+    expect(fallback.find((row) => row.kind === "new-here")).toMatchObject({
+      worktreeId: "wt-main",
+    });
+  });
+
   it("offers no creation rows when no agent can launch", () => {
     expect(ids(rows({ panes, agent: null }))).toEqual(["main-1", "main-2", "feat-1", "feat-2"]);
   });

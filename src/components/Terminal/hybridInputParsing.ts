@@ -1,5 +1,20 @@
 import type { CompletionTrigger } from "@shared/types";
 import { toWorktreeRelative } from "@shared/utils/path";
+import { fencedCodeRanges } from "@shared/utils/agentContextDrag";
+
+/**
+ * Drop the context tokens that sit inside a fenced code block. Fenced text is
+ * quoted material — most importantly a plugin's handoff block, which is fenced
+ * so a card mentioning `@diff` reaches the agent as written rather than as the
+ * user's diff — so it neither shows a chip nor expands on submit.
+ */
+function outsideFences<T extends { start: number }>(text: string, tokens: T[]): T[] {
+  if (tokens.length === 0 || !(text.includes("```") || text.includes("~~~"))) return tokens;
+  const ranges = fencedCodeRanges(text);
+  return tokens.filter(
+    (token) => !ranges.some(([from, to]) => token.start >= from && token.start < to)
+  );
+}
 
 /**
  * One completion menu is open at a time, keyed by the trigger char that opened
@@ -141,7 +156,7 @@ export function getAllAtDiffTokens(text: string): AtDiffToken[] {
     }
   }
 
-  return tokens;
+  return outsideFences(text, tokens);
 }
 
 // --- @terminal context ---
@@ -188,7 +203,7 @@ export function getAllAtTerminalTokens(text: string): AtTerminalToken[] {
     }
   }
 
-  return tokens;
+  return outsideFences(text, tokens);
 }
 
 // --- @selection context ---
@@ -235,7 +250,7 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
     }
   }
 
-  return tokens;
+  return outsideFences(text, tokens);
 }
 
 // --- @file token ---

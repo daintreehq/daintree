@@ -57,7 +57,10 @@ const PANE: PluginAgentPane = {
   canDraft: true,
 };
 
-function makeHarness(capabilities: string[] = ["agent:input", "agent:read"]) {
+function makeHarness(
+  capabilities: string[] = ["agent:input", "agent:read"],
+  displayName = "Acme Board"
+) {
   const plugin = {
     // Not builtin, so the just-in-time consent gate actually runs.
     isBuiltin: false,
@@ -94,7 +97,7 @@ function makeHarness(capabilities: string[] = ["agent:input", "agent:read"]) {
     fetchWorktreeSnapshotsForProjectResult: vi.fn(),
     recordPluginLog: vi.fn(),
     serializePluginBadges: () => ({}),
-    pluginDisplayName: () => "Acme Board",
+    pluginDisplayName: () => displayName,
     pluginDataDir: () => path.join(path.sep, "tmp", "data"),
     isPathUnder: () => false,
     expandAllowedPathEntries: async () => [],
@@ -141,6 +144,21 @@ describe("host.sendToAgent", () => {
       ["agent:input", "agent:read"],
       PROJECT_A
     );
+  });
+
+  it("holds an unbounded display name to one clean line before it reaches a draft", async () => {
+    const h = makeHarness(undefined, `Acme\r\u001b]0;owned\u0007\u009b Board${"!".repeat(300)}`);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    await host.sendToAgent("x");
+    const [, params] = h.requestPrompt.mock.calls[0]!;
+    const label = (params as { request: { sourceLabel: string } }).request.sourceLabel;
+    expect(label.startsWith("Acme ]0;owned")).toBe(true);
+    expect(label.length).toBeLessThanOrEqual(80);
+    const printable = [...label].every((char) => {
+      const code = char.charCodeAt(0);
+      return code > 0x1f && (code < 0x7f || code > 0x9f);
+    });
+    expect(printable).toBe(true);
   });
 
   it("rejects PERMISSION_REQUIRED without agent:input, before any prompt", async () => {
@@ -202,6 +220,11 @@ describe("host.sendToAgent", () => {
       "a refusal",
       { status: "refused", reason: "input-locked" },
       { status: "refused", reason: "input-locked" },
+    ],
+    [
+      "a refusal naming a created worktree",
+      { status: "refused", reason: "launch-failed", worktreeId: "wt-new", extra: 1 },
+      { status: "refused", reason: "launch-failed", worktreeId: "wt-new" },
     ],
     ["an unknown refusal reason", { status: "refused", reason: "bogus" }, { status: "cancelled" }],
     ["a malformed answer", "drafted", { status: "cancelled" }],

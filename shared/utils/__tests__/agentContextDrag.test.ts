@@ -7,7 +7,9 @@ import {
   appendAgentContextToDraft,
   decodeAgentContextDragPayload,
   encodeAgentContextDragPayload,
+  fencedCodeRanges,
   formatAgentContextBlock,
+  sanitizeAgentContextSourceLabel,
   setAgentContextDragData,
   validateAgentContextPayload,
 } from "../agentContextDrag.js";
@@ -125,36 +127,92 @@ describe("setAgentContextDragData", () => {
 });
 
 describe("formatAgentContextBlock", () => {
-  it("heads the fenced text with label and title", () => {
+  it("puts the heading and the text inside one fence", () => {
     expect(
       formatAgentContextBlock({
         text: "line one\nline two\n\n",
         title: "Card",
         sourceLabel: "Kanban",
       })
-    ).toBe("Kanban: Card\n```\nline one\nline two\n```");
+    ).toBe("```\nKanban: Card\n\nline one\nline two\n```");
   });
 
   it("omits the heading when there is nothing to put in it", () => {
     expect(formatAgentContextBlock({ text: "body" })).toBe("```\nbody\n```");
   });
 
-  it("fences with more backticks than the longest run in the text", () => {
+  it("fences with more backticks than the longest run in the text or heading", () => {
     const block = formatAgentContextBlock({ text: "before\n````\ninner\n````\nafter" });
     expect(block.startsWith("`````\n")).toBe(true);
     expect(block.endsWith("\n`````")).toBe(true);
+    const titled = formatAgentContextBlock({ text: "x", title: "``````" });
+    expect(titled.startsWith("```````\n")).toBe(true);
+  });
+
+  it("sanitises every part, the host-supplied label included", () => {
+    const block = formatAgentContextBlock({
+      text: "safe\u001b]0;pwned\u0007 text\r\nnext",
+      title: "Title\rwith\u009bcontrols",
+      sourceLabel: `Acme\u001b[31m\n${"x".repeat(200)}`,
+    });
+    for (let i = 0; i < block.length; i++) {
+      const code = block.charCodeAt(i);
+      const allowed = code === 0x0a || code === 0x09;
+      expect(allowed || (code > 0x1f && (code < 0x7f || code > 0x9f))).toBe(true);
+    }
+    const heading = block.split("\n")[1]!;
+    expect(heading.startsWith("Acme [31m x")).toBe(true);
+    expect(heading).toContain(": Title with controls");
+    expect(heading.split(": ")[0]!.length).toBeLessThanOrEqual(
+      AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH
+    );
+  });
+});
+
+describe("sanitizeAgentContextSourceLabel", () => {
+  it("bounds a display name to one line of the label limit", () => {
+    expect(sanitizeAgentContextSourceLabel("  Acme\nBoard\u001b ")).toBe("Acme Board");
+    const long = sanitizeAgentContextSourceLabel("n".repeat(500));
+    expect(long.length).toBe(AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
 
 describe("appendAgentContextToDraft", () => {
   it("fills an empty draft and ends on a fresh line", () => {
     expect(appendAgentContextToDraft("", "BLOCK")).toBe("BLOCK\n");
-    expect(appendAgentContextToDraft("  \n", "BLOCK")).toBe("BLOCK\n");
   });
 
-  it("keeps what the user typed and separates the block with a blank line", () => {
-    expect(appendAgentContextToDraft("please look at this\n\n", "BLOCK")).toBe(
-      "please look at this\n\nBLOCK\n"
-    );
+  it.each([
+    ["text with no newline", "look at this", "look at this\n\nBLOCK\n"],
+    ["trailing spaces", "look at this   ", "look at this   \n\nBLOCK\n"],
+    ["one trailing newline", "look at this\n", "look at this\n\nBLOCK\n"],
+    ["a trailing blank line", "look at this\n\n", "look at this\n\nBLOCK\n"],
+    ["several blank lines", "look at this\n\n\n\n", "look at this\n\n\n\nBLOCK\n"],
+    ["whitespace only", "  \n", "  \n\nBLOCK\n"],
+  ])("keeps a draft with %s exactly as typed", (_name, draft, expected) => {
+    const result = appendAgentContextToDraft(draft, "BLOCK");
+    expect(result).toBe(expected);
+    expect(result.startsWith(draft)).toBe(true);
+  });
+});
+
+describe("fencedCodeRanges", () => {
+  it("finds a closed fence, including its fence lines", () => {
+    const text = "before\n```\n@diff\n```\nafter";
+    expect(fencedCodeRanges(text)).toEqual([[7, 20]]);
+  });
+
+  it("closes only on a fence of the same character at least as long", () => {
+    const text = "````\n```\n~~~~\n````\ntail";
+    expect(fencedCodeRanges(text)).toEqual([[0, 18]]);
+  });
+
+  it("runs an unclosed fence to the end", () => {
+    expect(fencedCodeRanges("x\n```js\nstill open")).toEqual([[2, 18]]);
+  });
+
+  it("ignores a backtick line whose info string holds a backtick", () => {
+    expect(fencedCodeRanges("``` a`b\ntext")).toEqual([]);
   });
 });
