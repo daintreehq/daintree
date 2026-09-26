@@ -16,6 +16,7 @@ import {
   getResourceProfileService,
   getWorkspaceClientRef,
 } from "../../window/serviceRefs.js";
+import { createForgeObserver } from "./hostForges.js";
 import type { HostSampleSources, ObservedAgents } from "./sampler.js";
 
 const COMMAND_TIMEOUT_MS = 2_000;
@@ -139,6 +140,7 @@ function currentDriver(): DriveLeaseHolder | null {
 export function createHostSampleSources(now: () => number = Date.now): HostSampleSources {
   let worktrees: { count: number; at: number } | null = null;
   let clis: { list: Array<{ agentId: string; version: string | null }>; at: number } | null = null;
+  const forges = createForgeObserver(now);
   const platform: HostPlatform = process.platform === "darwin" ? "darwin" : "linux";
 
   return {
@@ -187,6 +189,7 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
       clis = { list, at: now() };
       return list;
     },
+    forges,
     now,
   };
 }

@@ -1,5 +1,6 @@
 import type {
   DriveLeaseHolder,
+  HostForgeObservation,
   HostMetricsSummary,
   HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
@@ -46,6 +47,8 @@ export interface HostSampleSources {
   projects(): Promise<{ projectCount: number | null; worktreeCount: number | null }>;
   driver(): DriveLeaseHolder | null;
   agentClis(): Promise<Array<{ agentId: string; version: string | null }>>;
+  /** This host's forge providers and their sign-in state; absent where nothing reports it. */
+  forges?(): Promise<HostForgeObservation[]>;
   now(): number;
 }
 
@@ -75,7 +78,7 @@ export class HostMetricsSampler {
     const cpuPercent = cpuPercentBetween(this.previousCpus, cpus);
     this.previousCpus = cpus;
 
-    const [memory, agents, projects, agentClis] = await Promise.all([
+    const [memory, agents, projects, agentClis, forges] = await Promise.all([
       settle(() => (s.platform === "darwin" ? this.darwinMemory() : this.linuxMemory()), {
         memoryPressure: null,
         memoryUsedBytes: null,
@@ -92,6 +95,11 @@ export class HostMetricsSampler {
         worktreeCount: null,
       }),
       settle(() => s.agentClis(), []),
+      // A failed read is unknown, never "not connected".
+      settle<HostForgeObservation[] | null | undefined>(
+        async () => (s.forges ? await s.forges() : undefined),
+        null
+      ),
     ]);
 
     let driver: DriveLeaseHolder | null;
@@ -112,6 +120,7 @@ export class HostMetricsSampler {
       worktreeCount: projects.worktreeCount,
       driver,
       agentClis,
+      ...(forges !== undefined ? { forges } : {}),
     };
   }
 
