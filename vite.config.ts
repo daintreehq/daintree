@@ -327,6 +327,12 @@ interface HostSourceModule {
   readonly chunkName: string;
   serves(specifier: string): boolean;
   isSourceModule(id: string): boolean;
+  /**
+   * Hold the facade to exactly HOST_FACADE_REQUIRED_EXPORTS rather than a
+   * minimum. For a module written only to be served, any extra export is an
+   * accidental public contract.
+   */
+  readonly exactExports?: boolean;
 }
 
 const HOST_SOURCE_MODULES: readonly HostSourceModule[] = [
@@ -340,6 +346,7 @@ const HOST_SOURCE_MODULES: readonly HostSourceModule[] = [
     chunkName: PLUGIN_UI_CHUNK_NAME,
     serves: (specifier) => specifier === "@daintreehq/plugin-ui",
     isSourceModule: isPluginUiSourceModule,
+    exactExports: true,
   },
 ];
 
@@ -746,6 +753,17 @@ function hostFacadePlugin(): Plugin {
             `"${specifier}" (${chunk.fileName}) is missing: ${missing.join(", ")}. ` +
               `Emitted exports: ${chunk.exports.join(", ") || "(none)"}`
           );
+        }
+        if (sourceModule?.exactExports) {
+          const promised = new Set<string>(HOST_FACADE_REQUIRED_EXPORTS[specifier]);
+          const extra = chunk.exports.filter((n) => !promised.has(n));
+          if (extra.length > 0) {
+            problems.push(
+              `"${specifier}" (${chunk.fileName}) exports ${extra.join(", ")} beyond its ` +
+                "declared contract. Declare them in HOST_FACADE_REQUIRED_EXPORTS and the SDK's " +
+                "plugin-ui.d.ts, or stop exporting them from src/pluginUi."
+            );
+          }
         }
 
         // Every facade must reach its module through the one shared chunk. If a

@@ -147,7 +147,7 @@ A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginE
 
 ## Host UI components
 
-`@daintreehq/plugin-ui` is Daintree's own UI, served to your view through the same import map as React: the host's components running from the host's code, styled with the host's tokens, so they look like the app in every theme without you shipping or styling anything. A zero-build view imports it like `react`; a `@daintreehq/plugin-vite` build leaves it external, because there is no package to bundle — the implementation only exists inside the running app. It loads the first time a view renders one of its components, never at startup.
+`@daintreehq/plugin-ui` is Daintree's own UI, served to your view through the same import map as React: the host's components running from the host's code, styled with the host's tokens, so they look like the app in every theme without you shipping or styling anything. A zero-build view imports it like `react`; a `@daintreehq/plugin-vite` build leaves it external, because there is no package to bundle — the implementation only exists inside the running app. Nothing of it loads at startup: the module itself, a few hundred bytes, loads when your view imports it, and each component's implementation the first time the component renders.
 
 It exports one component today.
 
@@ -161,7 +161,7 @@ It exports one component today.
 | `className` | Classes for the document's root element. |
 | `fontSize` | A rung of the type scale: `2xs` `xs` `sm` `base` `lg` `xl` `2xl` `3xl`. Omitted, the document renders at Daintree's default Markdown size. |
 
-Relative images load from disk over `daintree-file://`, contained to `rootPath`. Relative links open in Daintree's file viewer when they stay inside `rootPath` and do nothing otherwise; `http(s)` and `mailto` links open in the browser. With neither `basePath` nor `rootPath`, the text still renders and relative references resolve nowhere. When a note links to images elsewhere in the project, pass the project root as `rootPath`.
+Relative images load from disk over `daintree-file://`, contained to `rootPath`; one that climbs out of it is not requested at all. Relative links open in Daintree's file viewer when they stay inside `rootPath` and do nothing otherwise, and the viewer holds its read to `rootPath` on the real path, so a symlinked directory cannot carry a link outside it; `http(s)` and `mailto` links open in the browser. With neither `basePath` nor `rootPath`, the text still renders and relative references resolve nowhere. Select All (Cmd/Ctrl+A) selects the block you last clicked or selected in, so several blocks in one view never compete for it. When a note links to images elsewhere in the project, pass the project root as `rootPath`.
 
 ```js
 // dist/panel.js — the worker's "note" handler answers { text, path }, where
@@ -189,7 +189,7 @@ export default function Notes({ pluginId }) {
 }
 ```
 
-The component renders nothing for the instant its code is loading, then the document. For TypeScript, `@daintreehq/plugin-sdk` ships the module's declaration: add `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` to `compilerOptions`, and `MarkdownProps` comes with it.
+The first `Markdown` in a session renders nothing while the async renderer loads, then the document; later ones render at once. For TypeScript, `@daintreehq/plugin-sdk` ships the module's declaration: add `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` to `compilerOptions`, and `MarkdownProps` comes with it.
 
 ## Resources your view owns
 

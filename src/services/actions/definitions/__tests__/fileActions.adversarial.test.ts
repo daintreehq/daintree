@@ -84,6 +84,40 @@ describe("fileActions adversarial", () => {
     expect(result).toEqual({ panelId: "file-panel-1" });
   });
 
+  it("file.view pins rootPath as the viewer's containment root when confineToRoot is set", async () => {
+    const run = setupActions();
+    // A link out of a plugin's notes directory, through `escape -> /etc`. The
+    // viewer's own fallback root is the file's directory, which realpaths to
+    // /etc and would contain the target; the pinned root does not.
+    await run("file.view", {
+      path: "/tmp/plugin/escape/passwd",
+      rootPath: "/tmp/plugin",
+      confineToRoot: true,
+    });
+
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: "/tmp/plugin/escape/passwd",
+        fileContainmentRoot: "/tmp/plugin",
+      })
+    );
+  });
+
+  it("file.view leaves the viewer's root inference alone without confineToRoot", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/a/b.ts", rootPath: "/a" });
+
+    expect(openPanelDialogMock.mock.calls[0]![0]).not.toHaveProperty("fileContainmentRoot");
+  });
+
+  it("file.view refuses confineToRoot without a rootPath to confine to", async () => {
+    const run = setupActions();
+    await expect(run("file.view", { path: "/a/b.ts", confineToRoot: true })).rejects.toThrow(
+      /rootPath/
+    );
+    expect(openPanelDialogMock).not.toHaveBeenCalled();
+  });
+
   it("file.view resolves a repo-relative path against the current project", async () => {
     const run = setupActions();
     await run("file.view", { path: "src/index.ts" });

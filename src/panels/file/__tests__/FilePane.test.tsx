@@ -191,7 +191,7 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // of silently capturing undefined forever.
 type CapturedMarkdownProps = Pick<
   MarkdownViewerProps,
-  "onRendered" | "cacheBust" | "fontSize" | "content"
+  "onRendered" | "cacheBust" | "fontSize" | "content" | "rootPath"
 >;
 const markdownViewerProps = vi.hoisted(() => ({
   current: null as {
@@ -199,6 +199,7 @@ const markdownViewerProps = vi.hoisted(() => ({
     cacheBust?: string;
     fontSize?: string;
     content?: string;
+    rootPath?: string;
   } | null,
 }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
@@ -3847,6 +3848,56 @@ describe("FilePane edit mode (#12323)", () => {
     });
     expect(screen.getByTestId("file-pane-dirty").getAttribute("aria-label")).toBe(
       "Unsaved changes, file changed on disk"
+    );
+  });
+});
+
+// A link from untrusted Markdown pins its document's root. Without that, a file
+// no project owns is contained by its own directory, and a link through a
+// directory symlink (`escape -> /etc`) is contained by the symlink's target.
+describe("FilePane pinned containment root", () => {
+  function renderPane(filePath: string, fileContainmentRoot?: string) {
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath,
+      fileViewMode: "rendered",
+      ...(fileContainmentRoot && { fileContainmentRoot }),
+    };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("reads the file against the pinned root, not the file's own directory", async () => {
+    renderPane("/tmp/plugin/escape/notes.md", "/tmp/plugin");
+    await waitFor(() =>
+      expect(readMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "/tmp/plugin/escape/notes.md", rootPath: "/tmp/plugin" })
+      )
+    );
+    expect(readMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rootPath: "/tmp/plugin/escape" })
+    );
+    // Links inside the opened document stay under the same root.
+    await waitFor(() => expect(markdownViewerProps.current?.rootPath).toBe("/tmp/plugin"));
+  });
+
+  it("keeps inferring the root when nothing was pinned", async () => {
+    renderPane("/tmp/plugin/escape/notes.md");
+    await waitFor(() =>
+      expect(readMock).toHaveBeenCalledWith(
+        expect.objectContaining({ rootPath: "/tmp/plugin/escape" })
+      )
     );
   });
 });

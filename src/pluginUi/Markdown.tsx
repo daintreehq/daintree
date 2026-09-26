@@ -8,6 +8,10 @@ import type { PluginMarkdownProps } from "@shared/types/plugin-sdk-react";
 const PluginMarkdown = lazy(() => import("@/components/Markdown/PluginMarkdown"));
 
 export function Markdown(props: PluginMarkdownProps) {
+  // Nothing, not a loading state: the renderer is a local app:// chunk, well
+  // under the 400ms Doherty gate, and a document-sized block has no shape
+  // worth a skeleton. A deferred indicator would also pull app modules into
+  // this chunk's static graph, which must stay React-only.
   return (
     <Suspense fallback={null}>
       <PluginMarkdown {...props} />
