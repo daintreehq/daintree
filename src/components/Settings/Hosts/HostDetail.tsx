@@ -13,6 +13,7 @@ import { AddHostDialog } from "./AddHostDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { buildLabel, connectionLabel, platformLabel } from "./hostLabels";
+import { describeHostForge } from "@/components/Hosts/hostForges";
 
 interface HostDetailProps {
   entry: HostListEntry;
@@ -56,6 +57,7 @@ export function HostDetail({
     remoteHostsClient.update({ hostId: descriptor.id, sshTarget: value })
   );
   const agentClis = summary?.agentClis ?? [];
+  const forges = summary?.forges;
   const [notifyDraft, setNotifyDraft] = useState<boolean | null>(null);
   const notificationsEnabled = notifyDraft ?? descriptor.notificationsEnabled;
   const toggleNotifications = () => {
@@ -200,10 +202,23 @@ export function HostDetail({
         description="Credentials aren't copied between machines: each host signs in for itself"
       >
         <SettingsGroup>
-          <SettingsRow
-            label="Forge connection"
-            description="Not reported by this host yet. Open a project on it to see its forge status"
-          />
+          {forges === undefined || forges === null ? (
+            <SettingsEmptyRow>
+              {connection.status === "connected"
+                ? `${descriptor.name} hasn't reported its forge connections`
+                : `Connect to ${descriptor.name} to see its forge connections`}
+            </SettingsEmptyRow>
+          ) : forges.length === 0 ? (
+            <SettingsEmptyRow>No forge providers are enabled on {descriptor.name}</SettingsEmptyRow>
+          ) : (
+            forges.map((forge) => (
+              <SettingsRow
+                key={forge.providerId}
+                label={forge.name}
+                description={describeHostForge(forge, descriptor.name)}
+              />
+            ))
+          )}
         </SettingsGroup>
       </SettingsSection>
 

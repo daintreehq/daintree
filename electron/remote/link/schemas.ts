@@ -101,6 +101,18 @@ const HostSummarySchema = z.object({
   worktreeCount: count.nullable(),
   driver: DriveLeaseHolderSchema.nullable(),
   agentClis: z.array(z.object({ agentId: id, version: z.string().max(256).nullable() })).max(256),
+  forges: z
+    .array(
+      z.object({
+        providerId: z.string().min(1).max(256),
+        name: z.string().max(256),
+        hasCredential: z.boolean(),
+        account: z.string().max(256).nullable(),
+      })
+    )
+    .max(64)
+    .nullable()
+    .optional(),
 });
 
 const GoodbyeSchema = z.object({ reason: shortText });

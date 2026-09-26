@@ -25,6 +25,28 @@ function sources(overrides: Partial<HostSampleSources> = {}): HostSampleSources 
 }
 
 describe("HostMetricsSampler", () => {
+  it("carries the host's forge observations, and a failed read as unknown", async () => {
+    const github = {
+      providerId: "daintree.github.github",
+      name: "GitHub",
+      hasCredential: true,
+      account: "greg",
+    };
+    await expect(
+      new HostMetricsSampler(sources({ forges: async () => [github] })).sample()
+    ).resolves.toMatchObject({ forges: [github] });
+    await expect(
+      new HostMetricsSampler(
+        sources({
+          forges: async () => {
+            throw new Error("store unreadable");
+          },
+        })
+      ).sample()
+    ).resolves.toMatchObject({ forges: null });
+    expect(await new HostMetricsSampler(sources()).sample()).not.toHaveProperty("forges");
+  });
+
   it("reports every Linux metric from its source", async () => {
     const files: Record<string, string> = {
       "/proc/pressure/memory": "some avg10=15.00 avg60=1 avg300=1 total=1\n",

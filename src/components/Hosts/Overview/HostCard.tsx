@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
 import { PlatformGlyph } from "../PlatformGlyph";
+import { describeHostForges } from "../hostForges";
 import { describeHostAgentClis, describeHostRowStatus, type HostMenuRow } from "../hostModel";
 import { isNewWindowClick } from "../hostSwitching";
 import { HostSparkline } from "./HostSparkline";
@@ -28,12 +29,23 @@ interface HostCardProps {
   children?: ReactNode;
 }
 
-function Fact({ label, value }: { label: string; value: string | null }) {
+function Fact({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string | null;
+  /** The full wording behind a shortened value. */
+  detail?: string;
+}) {
   if (value === null) return null;
   return (
     <div className="flex min-w-0 gap-2 text-xs">
       <dt className="shrink-0 text-text-secondary">{label}</dt>
-      <dd className="min-w-0 truncate text-text-primary">{value}</dd>
+      <dd className="min-w-0 truncate text-text-primary" title={detail}>
+        {value}
+      </dd>
     </div>
   );
 }
@@ -51,6 +63,7 @@ export function HostCard({ row, history, onSwitch, children }: HostCardProps) {
   const status = describeHostRowStatus(row);
   const version = row.connection?.status === "connected" ? row.connection.handshake.version : null;
   const clis = describeHostAgentClis({ ...row, summary });
+  const forges = describeHostForges(summary, row.name);
   const cpuNow = summary?.cpuPercent ?? null;
   const pressureNow = summary?.memoryPressure ?? null;
 
@@ -120,6 +133,7 @@ export function HostCard({ row, history, onSwitch, children }: HostCardProps) {
         <Fact label="Version" value={version} />
         <Fact label="Link" value={describeRtt(row)} />
         <Fact label="Agent CLIs" value={clis} />
+        <Fact label="Forges" value={forges?.short ?? null} detail={forges?.full} />
       </dl>
 
       {children}
