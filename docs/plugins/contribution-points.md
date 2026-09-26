@@ -180,7 +180,7 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
 
-`terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`
+`terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`, `wallet`, `receipt`, `chart-column`, `chart-line`, `chart-pie`, `calendar`, `clock`, `kanban`, `check-square`, `list-todo`, `users`, `contact`, `handshake`, `briefcase`, `inbox`, `mail`, `image`, `palette`, `book-open`, `bookmark`, `notebook`, `newspaper`, `megaphone`, `target`, `heart-pulse`, `flame`, `dumbbell`, `utensils`, `tag`, `shopping-cart`, `boxes`, `database`, `table`, `layout-grid`, `map`, `star`, `rocket`, `lightbulb`, `flask`
 
 `shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
 
