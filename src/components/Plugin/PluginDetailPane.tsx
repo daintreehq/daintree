@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, ArrowUpCircle, RefreshCw, Trash2 } from "lucide-react";
 import {
   getPluginCategoryMeta,
@@ -9,6 +9,7 @@ import { CapabilityRow } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
+import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { Button } from "@/components/ui/button";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -328,9 +329,9 @@ export function PluginDetailPane({
   const categoryId = resolvePluginCategory(plugin.manifest);
   const categoryLabel = categoryId === "other" ? null : getPluginCategoryMeta(categoryId).label;
   const blocklisted = plugin.blocklisted === true;
-  const hasSettings =
-    (plugin.manifest.contributes.settings?.length ?? 0) > 0 ||
-    plugin.settingsViewPath !== undefined;
+  // From the manifest, not the running instance: a stopped plugin's settings
+  // stay reachable, and its custom section says it needs the plugin enabled.
+  const hasSettings = pluginHasSettings(plugin);
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
   const granted = grantedCapabilities(plugin);
@@ -400,18 +401,30 @@ export function PluginDetailPane({
   }, [currentTab, activeTab]);
 
   // A settings deep link opens the Settings tab. With a key, the form lands on
-  // the row once its value has loaded and reports back itself; without one,
-  // opening the tab is the whole request.
+  // the row once its value has loaded, focuses it and reports back itself;
+  // without one, focus goes to the Settings tab, the heading of what was asked
+  // for — leaving it in the manager's search box would put the keyboard user
+  // back at the top of a list they never asked to browse.
   const requestNonce = settingsRequest?.nonce;
   const requestKey = settingsRequest?.key;
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [keylessFocusNonce, setKeylessFocusNonce] = useState<number | null>(null);
   useEffect(() => {
     if (requestNonce === undefined || !hasSettings) return;
     setActiveTab("settings");
-    if (requestKey === undefined) onSettingsRequestHandled?.(requestNonce);
-  }, [requestNonce, requestKey, hasSettings, onSettingsRequestHandled]);
+    if (requestKey === undefined) setKeylessFocusNonce(requestNonce);
+  }, [requestNonce, requestKey, hasSettings]);
+  useEffect(() => {
+    if (keylessFocusNonce === null || currentTab !== "settings") return;
+    paneRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.focus({ preventScroll: true });
+    setKeylessFocusNonce(null);
+    onSettingsRequestHandled?.(keylessFocusNonce);
+  }, [keylessFocusNonce, currentTab, onSettingsRequestHandled]);
 
   return (
-    <div className="text-text-primary">
+    <div className="text-text-primary" ref={paneRef}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3.5 min-w-0">
           <PluginIconTile manifest={plugin.manifest} size="lg" dimmed={plugin.disabled === true} />

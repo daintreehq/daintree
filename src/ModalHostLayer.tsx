@@ -119,6 +119,8 @@ interface ModalHostLayerProps {
   settingsTab: SettingsTab | undefined;
   settingsSubtab: string | undefined;
   settingsSectionId: string | undefined;
+  /** Bumped by every targeted open, so a repeat of the same target still navigates. */
+  settingsNavNonce: number;
   refreshSettings: () => Promise<void>;
   currentProject: Project | null;
   isShortcutsOpen: boolean;
@@ -214,6 +216,7 @@ export function ModalHostLayer({
   settingsTab,
   settingsSubtab,
   settingsSectionId,
+  settingsNavNonce,
   refreshSettings,
   currentProject,
   isShortcutsOpen,
@@ -667,6 +670,7 @@ export function ModalHostLayer({
               defaultTab={settingsTab}
               defaultSubtab={settingsSubtab}
               defaultSectionId={settingsSectionId}
+              navNonce={settingsNavNonce}
               onSettingsChange={refreshSettings}
               projectId={currentProject?.id ?? null}
             />

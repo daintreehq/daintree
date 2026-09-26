@@ -42,22 +42,44 @@ interface PluginManagerState {
   requestSettings: (request: Omit<PluginSettingsRequest, "nonce">) => void;
   /** Drop the request once its home has applied it. A newer request is kept. */
   consumeSettingsRequest: (nonce: number) => void;
+  /**
+   * What had focus when the manager opened — a panel, a menu's trigger, a
+   * settings control. The manager is a region rather than a modal, so nothing
+   * returns focus for it on close; the view hands it back from here.
+   */
+  returnFocusTarget: HTMLElement | null;
 }
 
 let nextSettingsNonce = 1;
 
-export const usePluginManagerStore = create<PluginManagerState>()((set) => ({
+/** The element to return to when the manager closes, captured as it opens. */
+function captureReturnFocus(wasOpen: boolean, current: HTMLElement | null): HTMLElement | null {
+  if (wasOpen || typeof document === "undefined") return current;
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active !== document.body ? active : null;
+}
+
+export const usePluginManagerStore = create<PluginManagerState>()((set, get) => ({
   isOpen: false,
-  open: () => set({ isOpen: true }),
+  open: () =>
+    set({
+      isOpen: true,
+      returnFocusTarget: captureReturnFocus(get().isOpen, get().returnFocusTarget),
+    }),
   close: () => set({ isOpen: false }),
   settingsRequest: null,
+  returnFocusTarget: null,
   requestSettings: (request) => {
     const settingsRequest = { ...request, nonce: nextSettingsNonce++ };
     // The manager is a full-screen overlay: a project-home request has to take
     // it down, or the settings dialog would open underneath it.
     set(
       request.home === "manager"
-        ? { settingsRequest, isOpen: true }
+        ? {
+            settingsRequest,
+            isOpen: true,
+            returnFocusTarget: captureReturnFocus(get().isOpen, get().returnFocusTarget),
+          }
         : { settingsRequest, isOpen: false }
     );
   },

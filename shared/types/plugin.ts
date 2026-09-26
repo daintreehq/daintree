@@ -1453,6 +1453,17 @@ export interface PluginSettingsUiValues {
 export type PluginSecretStorageTier = "keychain" | "unavailable";
 
 /**
+ * A plugin's declared `required` settings, split by what their stored state
+ * says. `missing` has nothing stored (a declared default never counts);
+ * `unreadable` is stored in a file that couldn't be read, reported apart so one
+ * bad file doesn't hide — or fake — every other answer. Ids only, never values.
+ */
+export interface PluginRequiredSettingsStatus {
+  missing: string[];
+  unreadable: string[];
+}
+
+/**
  * Persistent, plugin-scoped key/value settings exposed on
  * {@link PluginHostApi.settings}. Values are stored as JSON at
  * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
@@ -1537,7 +1548,8 @@ export interface SettingsApi {
    * `key` names a declared setting, scroll to it and highlight it briefly.
    *
    * A bound (project) plugin opens in its own project's window. Resolves once
-   * the request is handed to the renderer; rejects when no window can show it.
+   * the request is handed to the renderer; rejects when no window can show it,
+   * or when the destination is Project settings and no project is open there.
    */
   open(key?: string): Promise<void>;
   /**
@@ -1545,7 +1557,10 @@ export interface SettingsApi {
    * manifest order. A secret counts as set only once a value is stored, and a
    * declared `default` never counts. Project-scoped keys are read against the
    * plugin's project (or the active project for an installed plugin) and are
-   * reported missing when there is none. Empty when nothing is required.
+   * reported missing when there is none. A key whose stored file can't be read
+   * is listed too — the plugin couldn't read it either — without hiding the
+   * others. Secrets are checked for presence without being decrypted. Empty
+   * when nothing is required.
    */
   missingRequired(): Promise<string[]>;
 }

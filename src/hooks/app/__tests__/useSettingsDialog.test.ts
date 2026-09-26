@@ -100,3 +100,18 @@ describe("useSettingsDialog — forge subtab normalization", () => {
     expect(result.current.settingsSubtab).toBe("github");
   });
 });
+
+describe("useSettingsDialog — repeat navigation", () => {
+  it("changes the nav nonce on every targeted open, even to the same tab", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => result.current.handleOpenSettingsTab({ tab: "general" }));
+    const first = result.current.settingsNavNonce;
+    // The same target again (the user has since moved to another tab inside the
+    // dialog): nothing else changes, so only the nonce can tell the dialog.
+    act(() => result.current.handleOpenSettingsTab({ tab: "general" }));
+
+    expect(result.current.settingsTab).toBe("general");
+    expect(result.current.settingsNavNonce).not.toBe(first);
+  });
+});

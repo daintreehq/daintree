@@ -450,11 +450,7 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // workbench floor for the subset invariant — the external surface may not
   // reach past the assistant's. Its 343 B is the whole of the increase, so this
   // stays the measured total rather than an allowance.
-  // 56_657 → 56_821 for `plugin.openSettings` at the workbench floor, off the
-  // external surface. Navigation only; the prose has to say which home a
-  // request lands in and that an undeclared key is ignored rather than refused.
-  // The 164 B is exactly its description.
-  const MAX_COHORT_TOTAL_BYTES = 56_821;
+  const MAX_COHORT_TOTAL_BYTES = 56_657;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

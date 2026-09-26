@@ -3310,16 +3310,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "plugins",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show a plugin's settings where they live: the plugin manager for an installed plugin, Project settings for a project plugin or a project-scoped setting. A declared key is scrolled to and highlighted; an undeclared one is ignored.",
-    "examples": [
-      {
-        "args": {
-          "key": "apiToken",
-          "pluginId": "acme.linear",
-        },
-        "description": "Take the user straight to a plugin's API token field.",
-      },
-    ],
+    "description": "Show a plugin's settings in the one place they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a project-scoped setting. A declared key is requested for landing; an undeclared one is ignored.",
+    "examples": undefined,
     "id": "plugin.openSettings",
     "keywords": undefined,
     "kind": "command",

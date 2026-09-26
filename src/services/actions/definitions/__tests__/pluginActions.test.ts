@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const clientMocks = vi.hoisted(() => ({
   validateManifest: vi.fn(),
@@ -31,6 +31,7 @@ import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfi
 import { ConfirmationStagedError } from "../../confirmationStaged";
 import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useProjectStore } from "@/store/projectStore";
 
 /**
  * These actions ignore the callbacks entirely — they reach main through the
@@ -573,7 +574,7 @@ describe("plugin.openSettings", () => {
     instanceId: string,
     overrides: {
       settings?: Array<{ id: string; scope?: "user" | "project" | "local" }>;
-      settingsViewPath?: string;
+      declaresView?: boolean;
     } = {}
   ) {
     const parts = instanceId.split("__");
@@ -584,9 +585,13 @@ describe("plugin.openSettings", () => {
       projectId: isProject ? parts[1] : null,
       manifest: {
         name: isProject ? parts[2] : instanceId,
-        contributes: { settings: overrides.settings ?? [{ id: "apiKey" }] },
+        contributes: {
+          settings: overrides.settings ?? [{ id: "apiKey" }],
+          views: overrides.declaresView
+            ? [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }]
+            : [],
+        },
       },
-      ...(overrides.settingsViewPath ? { settingsViewPath: overrides.settingsViewPath } : {}),
     };
   }
 
@@ -600,6 +605,14 @@ describe("plugin.openSettings", () => {
 
   beforeEach(() => {
     usePluginManagerStore.setState({ isOpen: false, settingsRequest: null });
+    vi.spyOn(useProjectStore, "getState").mockReturnValue(
+      // Only `currentProject` is read, as the fallback when the context has none.
+      Object.assign(Object.create(null), { currentProject: null })
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("sends an installed plugin's own settings to the plugin manager", async () => {
@@ -610,7 +623,12 @@ describe("plugin.openSettings", () => {
       key: "apiKey",
     });
 
-    expect(result).toEqual({ pluginId: "acme.linear", home: "plugin-manager", key: "apiKey" });
+    // What was requested, not a claim that anything was landed on yet.
+    expect(result).toEqual({
+      pluginId: "acme.linear",
+      home: "plugin-manager",
+      requestedKey: "apiKey",
+    });
     expect(onOpenSettingsTab).not.toHaveBeenCalled();
     const state = usePluginManagerStore.getState();
     expect(state.isOpen).toBe(true);
@@ -631,21 +649,55 @@ describe("plugin.openSettings", () => {
       key: "team",
     });
 
-    expect(result).toMatchObject({ home: "project-settings", key: "team" });
+    expect(result).toMatchObject({ home: "project-settings", requestedKey: "team" });
     expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
     expect(usePluginManagerStore.getState().isOpen).toBe(false);
     expect(usePluginManagerStore.getState().settingsRequest?.home).toBe("project");
   });
 
-  it("sends a project plugin to its project's settings, by manifest id or instance key", async () => {
+  it("refuses a project-scoped destination with no project open, instead of rerouting it", async () => {
+    clientMocks.list.mockResolvedValue([
+      loaded("acme.linear", { settings: [{ id: "apiKey" }, { id: "team", scope: "local" }] }),
+      loaded("acme.projectonly", { settings: [{ id: "team", scope: "project" }] }),
+    ]);
+
+    await expect(openSettings({ pluginId: "acme.linear", key: "team" }, {})).rejects.toThrow(
+      /keeps "team" in Project settings, and no project is open/
+    );
+    // Nothing the manager would show: keyless is refused the same way.
+    await expect(openSettings({ pluginId: "acme.projectonly" }, {})).rejects.toThrow(
+      /no project is open/
+    );
+    expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
+    // Its own settings still open in the manager without a project.
+    const { result } = await openSettings({ pluginId: "acme.linear" }, {});
+    expect(result).toMatchObject({ home: "plugin-manager", requestedKey: null });
+  });
+
+  it("keeps an installed plugin's exact identity when a project plugin shares its id", async () => {
     clientMocks.list.mockResolvedValue([loaded("acme.linear"), loaded(PROJECT_KEY)]);
 
-    for (const pluginId of ["acme.linear", PROJECT_KEY]) {
-      const { result, onOpenSettingsTab } = await openSettings({ pluginId });
-      expect(result).toEqual({ pluginId, home: "project-settings", key: null });
-      expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
-      expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(PROJECT_KEY);
-    }
+    // The id an installed plugin's own host and panels pass is its manifest id.
+    const installed = await openSettings({ pluginId: "acme.linear" });
+    expect(installed.result).toMatchObject({ home: "plugin-manager" });
+    expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe("acme.linear");
+
+    const project = await openSettings({ pluginId: PROJECT_KEY });
+    expect(project.result).toMatchObject({ home: "project-settings" });
+    expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(PROJECT_KEY);
+  });
+
+  it("resolves a manifest id to this project's own plugin when nothing installed has it", async () => {
+    clientMocks.list.mockResolvedValue([loaded(PROJECT_KEY)]);
+
+    const { result, onOpenSettingsTab } = await openSettings({ pluginId: "acme.linear" });
+    expect(result).toEqual({
+      pluginId: "acme.linear",
+      home: "project-settings",
+      requestedKey: null,
+    });
+    expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
+    expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(PROJECT_KEY);
   });
 
   it("never reaches another project's plugin", async () => {
@@ -656,22 +708,25 @@ describe("plugin.openSettings", () => {
     await expect(openSettings({ pluginId: "acme.linear" })).rejects.toThrow(/No plugin/);
   });
 
-  it("opens without a highlight for an undeclared key, and refuses a plugin with no settings", async () => {
+  it("ignores an undeclared key, refuses a plugin with no settings, and reads a view off the manifest", async () => {
     clientMocks.list.mockResolvedValue([
       loaded("acme.linear"),
       loaded("acme.bare", { settings: [] }),
-      loaded("acme.custom", { settings: [], settingsViewPath: "plugin://x/settings.js" }),
+      // Declared but stopped: no module URL, and its settings are still reachable.
+      loaded("acme.custom", { settings: [], declaresView: true }),
     ]);
 
     const { result } = await openSettings({ pluginId: "acme.linear", key: "nope" });
-    expect(result).toMatchObject({ home: "plugin-manager", key: null });
+    expect(result).toMatchObject({ home: "plugin-manager", requestedKey: null });
     await expect(openSettings({ pluginId: "acme.bare" })).rejects.toThrow(/has no settings/);
     const custom = await openSettings({ pluginId: "acme.custom" });
     expect(custom.result).toMatchObject({ home: "plugin-manager" });
   });
 
-  it("is reachable from a plugin's own host.dispatch", () => {
-    expect(definition("plugin.openSettings").denyPluginDispatch).not.toBe(true);
+  it("is reachable from menus and a plugin's own host, and from no agent", () => {
+    const def = definition("plugin.openSettings");
+    expect(def.denyPluginDispatch).not.toBe(true);
     expect(DENY_PLUGIN_DISPATCH_ACTION_IDS).not.toContain("plugin.openSettings");
+    expect(def.mcpVisibility).toBe("hidden");
   });
 });

@@ -2925,7 +2925,8 @@ interface SettingsApi {
      * `key` names a declared setting, scroll to it and highlight it briefly.
      *
      * A bound (project) plugin opens in its own project's window. Resolves once
-     * the request is handed to the renderer; rejects when no window can show it.
+     * the request is handed to the renderer; rejects when no window can show it,
+     * or when the destination is Project settings and no project is open there.
      */
     open(key?: string): Promise<void>;
     /**
@@ -2933,7 +2934,10 @@ interface SettingsApi {
      * manifest order. A secret counts as set only once a value is stored, and a
      * declared `default` never counts. Project-scoped keys are read against the
      * plugin's project (or the active project for an installed plugin) and are
-     * reported missing when there is none. Empty when nothing is required.
+     * reported missing when there is none. A key whose stored file can't be read
+     * is listed too — the plugin couldn't read it either — without hiding the
+     * others. Secrets are checked for presence without being decrypted. Empty
+     * when nothing is required.
      */
     missingRequired(): Promise<string[]>;
 }

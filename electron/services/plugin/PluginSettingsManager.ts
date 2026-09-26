@@ -10,6 +10,7 @@ import { projectStore } from "../ProjectStore.js";
 import { safeStorageCipher, type SecretCipher } from "./secretCipher.js";
 import type {
   PluginManifest,
+  PluginRequiredSettingsStatus,
   PluginSettingsScope,
   PluginSettingsUiValues,
   SettingDefinition,
@@ -351,35 +352,62 @@ export class PluginSettingsManager {
    * key whose scope has no target (a project scope with no project) is missing,
    * since nothing the plugin reads there can be set.
    */
-  private async missingRequired(
+  private async requiredStatus(
     pluginId: string,
     resolveFile: (def: SettingDefinition, scope: PluginSettingsScope) => string | null | undefined
-  ): Promise<string[]> {
+  ): Promise<PluginRequiredSettingsStatus> {
     const required = this.uiSettingDefinitions(pluginId).filter((def) => def.required === true);
-    const missing = await Promise.all(
-      required.map(async (def) => {
-        const filePath = resolveFile(def, def.scope ?? "user");
-        if (!filePath) return true;
-        const stored = await this.getOrCreateSettingsStore(pluginId, filePath).get<unknown>(
-          def.id,
-          { secret: this.isSecretSetting(def) }
-        );
-        return stored === undefined || stored === null || stored === "";
+    // Resolved up front, outside the per-key guard: a path that can't be
+    // resolved at all (a foreign project, a malformed id) is a refused request,
+    // not an unreadable value, and must reach the caller as one.
+    const files = required.map((def) => resolveFile(def, def.scope ?? "user"));
+    const states = await Promise.all(
+      required.map(async (def, index): Promise<"set" | "missing" | "unreadable"> => {
+        const filePath = files[index];
+        if (!filePath) return "missing";
+        const store = this.getOrCreateSettingsStore(pluginId, filePath);
+        try {
+          // Presence only. A secret is never decrypted to answer this — a
+          // keychain that is locked or unavailable must not turn "is it set?"
+          // into a failure, and there is no reason to hold the plaintext.
+          if (this.isSecretSetting(def)) {
+            return (await store.storedSecretTier(def.id)) === undefined ? "missing" : "set";
+          }
+          const stored = await store.get<unknown>(def.id);
+          return stored === undefined || stored === null || stored === "" ? "missing" : "set";
+        } catch {
+          // One unreadable file answers for its own keys only; the rest of the
+          // list stands.
+          return "unreadable";
+        }
       })
     );
-    return required.filter((_, index) => missing[index]).map((def) => def.id);
+    const idsIn = (state: "missing" | "unreadable") =>
+      required.filter((_, index) => states[index] === state).map((def) => def.id);
+    return { missing: idsIn("missing"), unreadable: idsIn("unreadable") };
   }
 
-  /** {@link missingRequired} for the host `settings` API, resolved exactly as its reads are. */
-  missingRequiredForHost(pluginId: string, projectRoot?: string | null): Promise<string[]> {
-    return this.missingRequired(pluginId, (def, scope) =>
+  /**
+   * {@link requiredStatus} for the host `settings` API, resolved exactly as its
+   * reads are. A key the host can't read is reported with the missing ones: the
+   * plugin can't use it either, and gating on the list is the point of it.
+   */
+  async missingRequiredForHost(pluginId: string, projectRoot?: string | null): Promise<string[]> {
+    const status = await this.requiredStatus(pluginId, (def, scope) =>
       this.resolveSettingsFilePathForKey(pluginId, def.id, scope, projectRoot)
     );
+    const unreadable = new Set(status.unreadable);
+    return this.uiSettingDefinitions(pluginId)
+      .filter((def) => status.missing.includes(def.id) || unreadable.has(def.id))
+      .map((def) => def.id);
   }
 
-  /** {@link missingRequired} for a renderer, pinned to its own project like the form's reads. */
-  missingRequiredForUi(pluginId: string, projectId: string | null): Promise<string[]> {
-    return this.missingRequired(pluginId, (def, scope) =>
+  /** {@link requiredStatus} for a renderer, pinned to its own project like the form's reads. */
+  requiredStatusForUi(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<PluginRequiredSettingsStatus> {
+    return this.requiredStatus(pluginId, (def, scope) =>
       this.resolveUiSettingsFilePathForKey(pluginId, def.id, scope, projectId)
     );
   }

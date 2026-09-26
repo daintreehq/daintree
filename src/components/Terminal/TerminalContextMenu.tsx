@@ -129,6 +129,9 @@ const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 // Anything past that is found by searching the picker.
 const MOVE_TO_WORKTREE_SUBMENU_LIMIT = 10;
 
+/** A task turn after the close hook, which is where the menu primitive restores focus. */
+const AFTER_MENU_FOCUS_RESTORE_MS = 0;
+
 /** A menu item's shortcut: the action's live keybinding, or nothing. */
 function ContextMenuKeybinding({ actionId }: { actionId: ActionId }) {
   const combo = useKeybindingDisplay(actionId);
@@ -240,6 +243,12 @@ export function TerminalContextMenu({
   // opens the dialog — the same handoff as the move picker, so the menu's own
   // focus return can't land after the dialog has taken focus.
   const pendingHandOverRef = useRef<HandOverRequest | null>(null);
+  // "Plugin settings…" is spent the same way, after the menu has returned focus
+  // to the pane, so the settings home records the pane as where to return it.
+  const pendingPluginSettingsRef = useRef<{
+    pluginId: string;
+    source: MenuActionSourceValue;
+  } | null>(null);
   const nextHandOverIdRef = useRef(0);
   const handleRequestHandOver = useCallback(
     (orchestratorPaneId: string) => {
@@ -265,6 +274,7 @@ export function TerminalContextMenu({
       if (open) {
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
+        pendingPluginSettingsRef.current = null;
         // Only a PTY can be handed over; the other kinds' menus never ask.
         if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
           refreshOrchestratorCandidates();
@@ -731,11 +741,9 @@ export function TerminalContextMenu({
             registeredTourIds
           ).pluginSettingsId;
           if (!pluginId) break;
-          void actionService.dispatch(
-            GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
-            { pluginId },
-            { source: sourceRef.current }
-          );
+          // Spent by the close hook once focus is back on the pane — see
+          // `pendingPluginSettingsRef`.
+          pendingPluginSettingsRef.current = { pluginId, source: sourceRef.current };
           break;
         }
         case "reload-browser":
@@ -773,6 +781,21 @@ export function TerminalContextMenu({
       if (suppressNextCloseAutoFocusRef.current) {
         suppressNextCloseAutoFocusRef.current = false;
         event.preventDefault();
+      }
+      const pendingSettings = pendingPluginSettingsRef.current;
+      pendingPluginSettingsRef.current = null;
+      if (pendingSettings !== null) {
+        // Restoration is left to run, and the settings home opens after it: the
+        // home then records the pane, not the unmounting item, as where focus
+        // returns when it closes.
+        setTimeout(() => {
+          void actionService.dispatch(
+            GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+            { pluginId: pendingSettings.pluginId },
+            { source: pendingSettings.source }
+          );
+        }, AFTER_MENU_FOCUS_RESTORE_MS);
+        return;
       }
       const pendingHandOver = pendingHandOverRef.current;
       pendingHandOverRef.current = null;

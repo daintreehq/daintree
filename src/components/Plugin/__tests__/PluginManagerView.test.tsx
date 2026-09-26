@@ -2222,3 +2222,63 @@ describe("PluginManagerView design invariants", () => {
   // (e2e/screenshots/plugin-manager-review.spec.ts, "hostile" step) is what
   // actually covers it.
 });
+
+describe("PluginManagerView settings deep link", () => {
+  /** The control a menu or panel handed focus back to before the link fired. */
+  function focusOutsideControl(): HTMLButtonElement {
+    const invoker = document.createElement("button");
+    invoker.textContent = "Invoking panel";
+    document.body.appendChild(invoker);
+    invoker.focus();
+    return invoker;
+  }
+
+  it("lands a key-less link on the plugin's Settings tab, and returns focus on close", async () => {
+    usePluginManagerStore.setState({
+      isOpen: false,
+      settingsRequest: null,
+      returnFocusTarget: null,
+    });
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePluginWithSettings(),
+    ]);
+    const invoker = focusOutsideControl();
+    act(() =>
+      usePluginManagerStore.getState().requestSettings({ pluginId: "acme.demo", home: "manager" })
+    );
+    renderDialog();
+
+    const tab = await screen.findByRole("tab", { name: "Settings" });
+    await waitFor(() => expect(document.activeElement).toBe(tab));
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    // Not left in the search box, and the request is spent.
+    expect(document.activeElement).not.toBe(screen.getByLabelText("Search plugins"));
+    await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
+
+    act(() => usePluginManagerStore.getState().close());
+    await waitFor(() => expect(document.activeElement).toBe(invoker));
+    invoker.remove();
+  });
+
+  it("lands a keyed link on the field itself", async () => {
+    usePluginManagerStore.setState({
+      isOpen: false,
+      settingsRequest: null,
+      returnFocusTarget: null,
+    });
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePluginWithSettings(),
+    ]);
+    Element.prototype.scrollIntoView = vi.fn();
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: "acme.demo", key: "apiKey", home: "manager" })
+    );
+    renderDialog();
+
+    const field = await screen.findByLabelText("API key");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
+  });
+});

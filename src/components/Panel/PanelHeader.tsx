@@ -140,6 +140,12 @@ import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
  */
 const CONTROL_ICON = "[&_svg]:size-3.5";
 
+/**
+ * A task turn after a menu's close hook: the menu primitive restores focus in
+ * that same hook, so work that moves focus elsewhere starts after it lands.
+ */
+const AFTER_MENU_FOCUS_RESTORE_MS = 0;
+
 /** An overflow item's shortcut: the action's live keybinding, or nothing. */
 function OverflowMenuShortcut({ actionId }: { actionId: ActionId }) {
   const combo = useKeybindingDisplay(actionId);
@@ -444,13 +450,13 @@ function PanelHeaderComponent({
   );
   const kindTour = storedKindCapabilities.tour;
   const pluginSettingsId = storedKindCapabilities.pluginSettingsId;
+  // Recorded on select and spent by the menu's close hook, after it has handed
+  // focus back to the trigger: opening the settings home from `onSelect` would
+  // race that restore, and the home (or the dialog that returns focus on its
+  // own close) would capture the dying menu item instead of this panel.
+  const pendingPluginSettingsRef = useRef<string | null>(null);
   const handlePluginSettingsSelect = () => {
-    if (!pluginSettingsId) return;
-    void actionService.dispatch(
-      GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
-      { pluginId: pluginSettingsId },
-      { source: "menu" }
-    );
+    pendingPluginSettingsRef.current = pluginSettingsId;
   };
   const handleTourSelect = () => {
     if (!kindTour) return;
@@ -507,9 +513,24 @@ function PanelHeaderComponent({
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
     pendingMovePickerRef.current = null;
+    pendingPluginSettingsRef.current = null;
   }, []);
   const handleOverflowMenuCloseAutoFocus = useCallback(
     (event: Event) => {
+      const pendingSettingsPluginId = pendingPluginSettingsRef.current;
+      pendingPluginSettingsRef.current = null;
+      if (pendingSettingsPluginId !== null) {
+        // Left to the menu primitive's own restore (ringless for a pointer,
+        // ringed for the keyboard), then opened once focus is back.
+        setTimeout(() => {
+          void actionService.dispatch(
+            GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+            { pluginId: pendingSettingsPluginId },
+            { source: "menu" }
+          );
+        }, AFTER_MENU_FOCUS_RESTORE_MS);
+        return;
+      }
       const pendingPanelId = pendingMovePickerRef.current;
       pendingMovePickerRef.current = null;
       if (pendingPanelId === null || pendingPanelId !== id) return;

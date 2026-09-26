@@ -94,10 +94,10 @@ describe("PluginService settings for launch-disabled plugins", () => {
       ])
     );
 
-    await expect(svc.getMissingRequiredSettingsForUi("acme.demo", null)).resolves.toEqual([
+    expect((await svc.getRequiredSettingsStatusForUi("acme.demo", null)).missing).toEqual([
       "apiKey",
     ]);
     await svc.setSettingValueFromUi("acme.demo", "apiKey", "xyz", "user", null);
-    await expect(svc.getMissingRequiredSettingsForUi("acme.demo", null)).resolves.toEqual([]);
+    expect((await svc.getRequiredSettingsStatusForUi("acme.demo", null)).missing).toEqual([]);
   });
 });

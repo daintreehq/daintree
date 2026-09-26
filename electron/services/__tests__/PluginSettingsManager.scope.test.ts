@@ -596,10 +596,10 @@ describe("PluginSettingsManager required settings", () => {
     ]);
 
     // A declared default never satisfies a required key.
-    await expect(mgr.missingRequiredForUi(PLUGIN_ID, null)).resolves.toEqual(["token", "region"]);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual(["token", "region"]);
 
     await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-live", "user", null);
-    await expect(mgr.missingRequiredForUi(PLUGIN_ID, null)).resolves.toEqual(["region"]);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual(["region"]);
 
     // An emptied field is unset again.
     await mgr.setSettingValueFromUi(PLUGIN_ID, "region", "", "user", null);
@@ -611,17 +611,60 @@ describe("PluginSettingsManager required settings", () => {
     projectStoreMock.getProjectById.mockReturnValue({ path: projectRoot });
     const mgr = managerFor([{ id: "team", type: "string", scope: "project", required: true }]);
 
-    await expect(mgr.missingRequiredForUi(PLUGIN_ID, null)).resolves.toEqual(["team"]);
-    await expect(mgr.missingRequiredForUi(PLUGIN_ID, PROJECT_ID)).resolves.toEqual(["team"]);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual(["team"]);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, PROJECT_ID)).missing).toEqual(["team"]);
 
     await mgr.setSettingValueFromUi(PLUGIN_ID, "team", "core", "project", PROJECT_ID);
-    await expect(mgr.missingRequiredForUi(PLUGIN_ID, PROJECT_ID)).resolves.toEqual([]);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, PROJECT_ID)).missing).toEqual([]);
     await expect(mgr.missingRequiredForHost(PLUGIN_ID, projectRoot)).resolves.toEqual([]);
   });
 
   it("is empty when nothing is required", async () => {
     const mgr = managerFor([{ id: "token", type: "secret" }]);
-    await expect(mgr.missingRequiredForUi(PLUGIN_ID, null)).resolves.toEqual([]);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual([]);
+  });
+
+  it("checks a stored secret's presence without decrypting it", async () => {
+    const cipher = fakeCipher();
+    const mgr = managerFor([{ id: "token", type: "secret", required: true }], cipher);
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk", "user", null);
+    // A locked keychain must not turn "is it set?" into a failure.
+    cipher.decrypt = () => {
+      throw new Error("keychain locked");
+    };
+
+    expect(await mgr.requiredStatusForUi(PLUGIN_ID, null)).toEqual({
+      missing: [],
+      unreadable: [],
+    });
+    await expect(mgr.missingRequiredForHost(PLUGIN_ID)).resolves.toEqual([]);
+  });
+
+  it("reports an unreadable file apart, without losing the other answers", async () => {
+    const projectRoot = path.join(tmpDir, "checkout");
+    projectStoreMock.getProjectById.mockReturnValue({ path: projectRoot });
+    const mgr = managerFor([
+      { id: "token", type: "secret", required: true },
+      { id: "team", type: "string", scope: "project", required: true },
+    ]);
+    // The project file's read fails; the user-scope secret's answer must stand.
+    const { PluginSettingsStore } = await import("../PluginSettingsStore.js");
+    const readSpy = vi
+      .spyOn(PluginSettingsStore.prototype, "get")
+      .mockRejectedValue(new Error("EACCES"));
+    try {
+      expect(await mgr.requiredStatusForUi(PLUGIN_ID, PROJECT_ID)).toEqual({
+        missing: ["token"],
+        unreadable: ["team"],
+      });
+      // The host can't read it either, so it lists it with the missing ones.
+      await expect(mgr.missingRequiredForHost(PLUGIN_ID, projectRoot)).resolves.toEqual([
+        "token",
+        "team",
+      ]);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("announces every stored change, from a write or a reset", async () => {

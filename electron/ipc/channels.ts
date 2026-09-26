@@ -1105,8 +1105,8 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
   PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
-  /** Declared `required` settings a plugin still has unset, for the panel setup strip. */
-  PLUGIN_SETTINGS_MISSING_REQUIRED: "plugin:settings-missing-required",
+  /** Which declared `required` settings a plugin still has unset, for the panel setup strip. */
+  PLUGIN_SETTINGS_REQUIRED_STATUS: "plugin:settings-required-status",
   /** Cancel an in-flight plugin install by its job id (#11302). */
   PLUGIN_CANCEL_INSTALL: "plugin:cancel-install",
   /** Phase/entry progress for an in-flight install, targeted at the initiating window (#11302). */

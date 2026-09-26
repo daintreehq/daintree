@@ -952,9 +952,16 @@ describe("PanelHeader", () => {
 
     function registerPluginKind(
       id: string,
-      options: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
+      options: {
+        hasPty?: boolean;
+        dockable?: boolean;
+        name?: string;
+        tourId?: string;
+        hasPluginSettings?: boolean;
+      } = {}
     ) {
       registerPanelKind({
+        ...(options.hasPluginSettings ? { hasPluginSettings: true } : {}),
         id,
         name: options.name ?? id,
         iconId: "terminal",
@@ -1213,6 +1220,60 @@ describe("PanelHeader", () => {
         { tourId: "acme.dashboard-intro" },
         { source: "menu" }
       );
+    });
+
+    it("opens the plugin's settings from its entry once the menu has handed focus back", async () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      const settingsLabel = () =>
+        getGenericPanelMenuGroups({
+          location: "grid",
+          isMaximized: false,
+          isDockable: true,
+          canMoveToWorktree: false,
+          canReload: true,
+          hasPluginSettings: true,
+        })
+          .flat()
+          .find((command) => command.id === "plugin-settings")!.label;
+      // Only for a kind whose plugin has settings.
+      expect(findMenuButton(settingsLabel())).toBeUndefined();
+      cleanup();
+
+      act(() => registerPluginKind(PLUGIN_KIND, { name: "Dashboard", hasPluginSettings: true }));
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      expect(menuRows()).toEqual(sharedRows({ hasPluginSettings: true }));
+
+      fireEvent.click(findMenuButton(settingsLabel())!);
+      // Not from the item: the menu is still returning focus to its trigger.
+      expect(mockDispatch).not.toHaveBeenCalled();
+      const closeEvent = new Event("closeAutoFocus", { cancelable: true });
+      act(() => mockMenuCloseAutoFocus?.(closeEvent));
+      // The primitive's own restore runs — pointer or keyboard alike — and the
+      // settings home opens after it.
+      expect(closeEvent.defaultPrevented).toBe(false);
+      expect(mockDispatch).not.toHaveBeenCalled();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "plugin.openSettings",
+        { pluginId: "acme" },
+        { source: "menu" }
+      );
+    });
+
+    it("drops a picked settings entry when the menu reopens before closing", async () => {
+      registerPluginKind(PLUGIN_KIND, { hasPluginSettings: true });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      fireEvent.click(findMenuButton("Plugin settings…")!);
+      act(() => mockMenuOpenChange?.(true));
+      act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockDispatch).not.toHaveBeenCalled();
     });
 
     it("offers a declared tour only once it is registered (#12774)", () => {
