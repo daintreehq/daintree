@@ -30,6 +30,8 @@ class DraftInputPersistence {
   // (mirrors PanelPersistence, #11350/#11352). Rejections are swallowed so a
   // failed write never blocks the next one.
   private readonly writeTailByProject = new Map<string, Promise<void>>();
+  /** Bumped by each rebase, so a flush queued before one re-reads the drafts it would send. */
+  private readonly rebaseEpochByProject = new Map<string, number>();
 
   /**
    * Seed the last-persisted baseline from hydration, before drafts are restored
@@ -41,6 +43,19 @@ class DraftInputPersistence {
   primeProject(projectId: string, drafts: Record<string, string>): void {
     if (this.persistedByProject.has(projectId)) return;
     this.persistedByProject.set(projectId, { ...drafts });
+  }
+
+  /**
+   * Replace an established baseline with what the store now holds, as read
+   * back from it (a host snapshot this view just applied). Unlike
+   * {@link primeProject} it always takes effect: a view that adopts a newer
+   * saved record must diff against that record, or a draft it restored and
+   * then cleared would never be tombstoned. A write still in flight lands on
+   * top of this baseline when it is acknowledged.
+   */
+  rebaseProject(projectId: string, drafts: Record<string, string>): void {
+    this.persistedByProject.set(projectId, { ...drafts });
+    this.rebaseEpochByProject.set(projectId, (this.rebaseEpochByProject.get(projectId) ?? 0) + 1);
   }
 
   /**
@@ -70,11 +85,18 @@ class DraftInputPersistence {
 
   private flushProject(projectId: string, current: Record<string, string>): void {
     // Snapshot synchronously — the map may mutate before the queued send runs.
-    const snapshot = { ...current };
+    let snapshot = { ...current };
+    const epoch = this.rebaseEpochByProject.get(projectId) ?? 0;
     const prior = this.writeTailByProject.get(projectId) ?? Promise.resolve();
     const run = prior
       .catch(() => {})
       .then(async () => {
+        // A rebase landed while this waited: the snapshot predates what the
+        // view restored, so diffing it against the new baseline would delete
+        // those drafts. Send what the view holds now instead.
+        if ((this.rebaseEpochByProject.get(projectId) ?? 0) !== epoch) {
+          snapshot = { ...useTerminalInputStore.getState().getProjectDraftInputs(projectId) };
+        }
         const { changedIds, removedIds } = computeRecordDelta(
           this.persistedByProject.get(projectId) ?? {},
           snapshot
@@ -84,7 +106,13 @@ class DraftInputPersistence {
         }
         try {
           await projectClient.setDraftInputs(projectId, snapshot, changedIds, removedIds);
-          this.persistedByProject.set(projectId, snapshot);
+          // The store merged exactly this delta, so apply it to the baseline as
+          // it stands now: a rebase made while the write was in flight keeps
+          // the keys this write didn't touch.
+          const acknowledged = { ...(this.persistedByProject.get(projectId) ?? {}) };
+          for (const id of changedIds) acknowledged[id] = snapshot[id]!;
+          for (const id of removedIds) delete acknowledged[id];
+          this.persistedByProject.set(projectId, acknowledged);
         } catch (error) {
           // Leave the baseline untouched so the next flush resends the
           // unacknowledged delta.
@@ -115,6 +143,7 @@ class DraftInputPersistence {
   clearProject(projectId: string): void {
     this.persistedByProject.delete(projectId);
     this.writeTailByProject.delete(projectId);
+    this.rebaseEpochByProject.delete(projectId);
   }
 }
 

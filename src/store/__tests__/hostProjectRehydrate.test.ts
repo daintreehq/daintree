@@ -16,7 +16,10 @@ const { store, drafts, selection } = vi.hoisted(() => {
   const drafts = {
     local: {} as Record<string, string>,
     getProjectDraftInputs: vi.fn(() => ({ ...drafts.local })),
-    restoreProjectDraftInputs: vi.fn(),
+    getDraftProjectIds: vi.fn(() => ["proj-1"]),
+    restoreProjectDraftInputs: vi.fn((_projectId: string, restored: Record<string, string>) => {
+      Object.assign(drafts.local, restored);
+    }),
   };
   const selection = { setActiveWorktree: vi.fn() };
   return { store, drafts, selection };
@@ -28,6 +31,8 @@ vi.mock("@/utils/logger", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
 }));
+const setDraftInputs = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@/clients", () => ({ projectClient: { setDraftInputs } }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => store } }));
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => drafts },
@@ -45,6 +50,7 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 }));
 
 import { rehydrateHostProjectState } from "../hostProjectRehydrate";
+import { draftInputPersistence } from "../persistence/draftInputPersistence";
 import {
   resetStoreAccessorsForTesting,
   setWorktreeIdSetAccessor,
@@ -81,6 +87,7 @@ beforeEach(() => {
     local: { id: "local", kind: "browser" },
   };
   drafts.local = { t1: "typed here" };
+  draftInputPersistence.clearProject("proj-1");
   resetStoreAccessorsForTesting();
   setWorktreeSelectionAccessor(() => ({ activeWorktreeId: "wt-main", restoreWorktreeId: null }));
   setWorktreeIdSetAccessor(() => new Set(["wt-main", "wt-feature"]));
@@ -160,5 +167,42 @@ describe("rehydrateHostProjectState", () => {
     expect(store.addPanel).not.toHaveBeenCalled();
     expect(store.hydrateTabGroups).not.toHaveBeenCalled();
     expect(drafts.restoreProjectDraftInputs).not.toHaveBeenCalled();
+  });
+
+  it("rebases draft persistence on the host's snapshot, so a restored draft that is then sent is deleted on the host", async () => {
+    // This view hydrated before the host had any draft for the project.
+    draftInputPersistence.primeProject("proj-1", {});
+    drafts.local = {};
+    hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "host draft" } }));
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+    expect(drafts.local).toEqual({ t1: "host draft" });
+
+    // The person sends it before any flush.
+    drafts.local = {};
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputs).toHaveBeenCalledWith("proj-1", {}, [], ["t1"]);
+  });
+
+  it("keeps an edit made during hydration as a change against the host's snapshot", async () => {
+    draftInputPersistence.primeProject("proj-1", {});
+    drafts.local = {};
+    hydrate.mockImplementation(async () => {
+      drafts.local = { t1: "typed while it hydrated" };
+      return hostSaved({ draftInputs: { t1: "host draft", t2: "only on the host" } });
+    });
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+    expect(drafts.local).toEqual({ t1: "typed while it hydrated", t2: "only on the host" });
+
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputs).toHaveBeenCalledWith(
+      "proj-1",
+      { t1: "typed while it hydrated", t2: "only on the host" },
+      ["t1"],
+      []
+    );
   });
 });
