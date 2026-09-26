@@ -125,6 +125,15 @@ describe("file panel state setters", () => {
     expect(saveMock).toHaveBeenCalled();
   });
 
+  it("setFilePanelPath drops a containment root pinned for the previous file", () => {
+    seedFilePanel({ filePath: "/tmp/plugin/notes.md", fileContainmentRoot: "/tmp/plugin" });
+    usePanelStore.getState().setFilePanelPath("file-1", "/repo/README.md");
+
+    const stored = usePanelStore.getState().panelsById["file-1"];
+    expect(stored).toMatchObject({ filePath: "/repo/README.md" });
+    expect(stored).not.toHaveProperty("fileContainmentRoot");
+  });
+
   it("both setters refuse to touch non-file panels", () => {
     usePanelStore.setState({
       panelsById: {

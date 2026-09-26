@@ -3,6 +3,7 @@ import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
+import { PluginSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { logWarn } from "@/utils/logger";
 import {
   getPanelStoreSnapshot,
@@ -52,6 +53,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   const kindId = config.id;
   const displayName = config.name;
   const stateVersion = config.stateVersion;
+  const hasRequiredSettings = config.hasRequiredSettings === true;
 
   if (!componentPath || !pluginId) {
     // The else-branch of usePluginPanelKinds guards this, but a defensive
@@ -156,6 +158,9 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
       // plugin's persisted panel re-enables (the panelProps memo doesn't depend
       // on the kind registry).
       <ContentPanel {...panelProps} kind={kindId} chrome={undefined}>
+        {/* Above the view and outside its box, so no plugin layout can cover
+            the way to finish setting the plugin up. */}
+        {hasRequiredSettings && <PluginSetupStrip pluginId={ownerPluginId} />}
         {/* `extensionState` is how the panel store persists a view's spawn
             arguments; the content layer speaks the SDK's presentation-neutral
             `initialArgs` instead, so the mapping happens here at the seam. */}

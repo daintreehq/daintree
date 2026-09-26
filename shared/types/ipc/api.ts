@@ -2179,6 +2179,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       entry: import("../actions.js").PluginActionManifestEntry | null;
     }): void;
     /**
+     * Listen for agent-pane listing requests from the main process (a plugin
+     * calling `host.agents.list()`). Reply with {@link sendAgentsListResponse},
+     * correlated by `requestId`.
+     */
+    onAgentsListRequest(callback: (payload: { requestId: string }) => void): () => void;
+    /** Send this view's agent panes back to the main process. */
+    sendAgentsListResponse(payload: {
+      requestId: string;
+      agents: import("../plugin.js").PluginAgentPane[];
+    }): void;
+    /**
      * Listen for imperative plugin UI-prompt requests from the main process (a
      * plugin calling `host.showQuickPick`/`showInputBox`/`showConfirm`, #10522).
      * Reply with {@link sendUiPromptResponse}, correlated by `promptId`.
@@ -2252,6 +2263,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * callback carries no data — re-pull via {@link list}. Returns a cleanup.
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
+    /**
+     * Subscribe to "a plugin's stored settings changed", from the settings form
+     * or the plugin's own `host.settings.set`. Carries only the plugin instance
+     * key; re-read what depends on it. Returns a cleanup.
+     */
+    onSettingsChanged(callback: (payload: { pluginId: string }) => void): () => void;
     /**
      * Subscribe to phase/entry progress for installs started with a `jobId`
      * (#11302). Only the window that started the install receives its events;

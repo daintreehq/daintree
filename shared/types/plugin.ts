@@ -99,6 +99,27 @@ export interface PanelContribution {
   dockable?: boolean;
   /** Schema version stamped on every persisted panel-state write; bump only for an incompatible shape change. */
   stateVersion?: number;
+  /**
+   * Up to five of your own actions, offered in this panel's ⋯ and right-click
+   * menus in the order given. Each is dispatched with `{ panelId }` naming the
+   * panel the menu was opened on.
+   */
+  menu?: PanelMenuItemContribution[];
+}
+
+/** Most entries one panel's `menu` may declare. */
+export const PANEL_MENU_MAX_ITEMS = 5;
+
+/** One entry of a panel's `menu`. */
+export interface PanelMenuItemContribution {
+  /**
+   * One of your own actions, in your plugin's namespace (`"{manifestId}.{id}"`),
+   * from `contributes.commands` or `host.registerAction`. The item appears
+   * while that action is registered.
+   */
+  actionId: string;
+  /** Menu label. Defaults to the action's title. */
+  label?: string;
 }
 
 export interface ToolbarButtonContribution {
@@ -219,17 +240,56 @@ export interface ContextMenuContribution {
 }
 
 /**
- * View contribution location. Only `panel` is supported — it registers a panel
- * kind at plugin load with `showInPalette: true` so the view is spawnable from
- * the panel palette. It is wired today by the inline renderer host (#9229); see
- * `docs/plugins/architecture.md` for the renderer host design. `sidebar` is
- * rejected at the manifest gate (`ViewContributionSchema`) because the sidebar
- * host does not exist yet — accepting it would validate a contribution the
- * runtime cannot honor. The `experimental_` prefix on the contribution point
- * signals that the shape may still change before the feature exits experiment
- * status.
+ * View contribution location.
+ *
+ * `panel` renders into the `contributes.panels` entry with the same id; it is
+ * wired by the inline renderer host (#9229), see `docs/plugins/architecture.md`.
+ *
+ * `settings` is the plugin's custom settings section: at most one per plugin,
+ * tied to no panel, and mounted by the host inside the plugin's settings home
+ * below its declared `contributes.settings` fields (the plugin manager for an
+ * installed plugin, Project settings → Plugins for a project plugin). It
+ * receives {@link PanelViewProps.settingsContext}.
+ *
+ * `sidebar` is rejected at the manifest gate (`ViewContributionSchema`) because
+ * the sidebar host does not exist yet — accepting it would validate a
+ * contribution the runtime cannot honor.
  */
-export type ViewLocation = "panel";
+export type ViewLocation = "panel" | "settings";
+
+/**
+ * Where a `location: "settings"` view is mounted, handed to it as
+ * {@link PanelViewProps.settingsContext}. An installed plugin's section mounts
+ * in the plugin manager with `scope: "user"` and in Project settings → Plugins
+ * with `scope: "project"`, so it renders the rows that belong to that scope; a
+ * project plugin's section always mounts with `scope: "project"`.
+ */
+export interface PluginSettingsViewContext {
+  readonly scope: "user" | "project";
+  /** The project the section is shown for; `null` in the `"user"` home. */
+  readonly projectId: string | null;
+}
+
+/**
+ * The synthetic view-kind id a plugin's `location: "settings"` view mounts
+ * under. It names no panel kind: it exists so the shared plugin-view loader can
+ * activate the owning plugin and key its per-view state, and main recognises
+ * the prefix in `activatePluginForView`.
+ */
+export const PLUGIN_SETTINGS_VIEW_KIND_PREFIX = "plugin-settings-view:";
+
+export function pluginSettingsViewKindId(pluginId: string): string {
+  return `${PLUGIN_SETTINGS_VIEW_KIND_PREFIX}${pluginId}`;
+}
+
+/** The plugin instance key a settings-view kind id names, or `null` for any other id. */
+export function pluginIdFromSettingsViewKindId(kindId: string): string | null {
+  if (typeof kindId !== "string" || !kindId.startsWith(PLUGIN_SETTINGS_VIEW_KIND_PREFIX)) {
+    return null;
+  }
+  const pluginId = kindId.slice(PLUGIN_SETTINGS_VIEW_KIND_PREFIX.length);
+  return pluginId.length > 0 ? pluginId : null;
+}
 
 export interface ViewContribution {
   id: string;
@@ -527,6 +587,11 @@ export interface PanelViewProps {
    * ```
    */
   readonly styleRootAttributes: Readonly<Record<string, string>>;
+  /**
+   * Present only for a `location: "settings"` view: which settings home it is
+   * mounted in, so it renders the rows for that scope. Absent for a panel view.
+   */
+  readonly settingsContext?: PluginSettingsViewContext;
 }
 
 /**
@@ -658,6 +723,21 @@ export interface PluginAgentMcpContribution {
   description?: string;
   /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
   mode: "tools";
+}
+
+/**
+ * `contributes.databases` entry — a SQLite file the plugin opens through
+ * {@link PluginDatabaseApi}. A `"project"` database lives in the repository
+ * (default `.daintree/data/{manifestId}/{id}.db`, or `path` relative to the
+ * project root) and requires `scope: "project"` plus `fs:project-write`; a
+ * `"local"` one lives in the plugin's per-machine data directory.
+ */
+export interface PluginDatabaseContribution {
+  id: string;
+  description?: string;
+  location: PluginDatabaseLocationKind;
+  path?: string;
+  journalMode: "delete" | "wal";
 }
 
 /** Most tools one `agentMcp` endpoint may register. Client tool caps are app-wide, not per server. */
@@ -1224,6 +1304,12 @@ export interface PluginManifest {
      * rejects the key outright for any other origin.
      */
     surfaces?: SurfaceContributions;
+    /**
+     * SQLite databases opened through `host.db`. Optional in the type but
+     * always materialized by the manifest schema's `.default([])`, like
+     * `agentMcp`.
+     */
+    databases?: PluginDatabaseContribution[];
   };
 }
 
@@ -1289,6 +1375,23 @@ export interface SettingDefinition {
    * plaintext when no keychain is available (see {@link PluginSecretStorageTier}).
    */
   secret?: boolean;
+  /**
+   * The plugin can't do its job until this is set. While any required setting
+   * is unset — a secret counts as set only once a value is stored, and a
+   * declared `default` never satisfies it — each of the plugin's open panels
+   * shows a "needs setup" strip above its view that opens the setting, and
+   * {@link SettingsApi.missingRequired} lists it.
+   */
+  required?: boolean;
+  /**
+   * Who edits the value in Settings. `"view"` hands it to the plugin's own
+   * `location: "settings"` view — for a value a plain field can't edit well,
+   * such as a per-channel table stored as `json` — and the generated form
+   * leaves it out rather than showing it twice. Without such a view the form
+   * shows the field anyway, so the value is never left uneditable. Default
+   * `"form"`.
+   */
+  editor?: "form" | "view";
 }
 
 /**
@@ -1380,22 +1483,18 @@ export interface PluginSettingsUiValues {
 export type PluginSecretStorageTier = "keychain" | "unavailable";
 
 /**
- * Persistent, plugin-scoped key/value settings exposed on
- * {@link PluginHostApi.settings}. Values are stored as JSON at
- * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
- * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope),
- * with `chmod 0o600` applied on POSIX. Settings declared `type: "secret"` are
- * encrypted at rest through the OS keychain (Electron `safeStorage`), and are
- * never stored under the project root: a project-scoped secret lives in this
- * machine's per-project local file instead (see {@link PluginSettingsScope}).
- * With no keychain available a secret write is refused rather than stored in
- * plaintext. Non-secret values are always plaintext JSON — do not store
- * credentials in non-secret keys.
- *
- * `scope` defaults to `"user"`. Project scope resolves the active project at
- * call time, so it tracks project switches: `get` returns `undefined` and `set`
- * throws when no project is active.
+ * A plugin's declared `required` settings, split by what their stored state
+ * says. `missing` has nothing stored (a declared default never counts);
+ * `unreadable` is stored in a file that couldn't be read, reported apart so one
+ * bad file doesn't hide — or fake — every other answer. Ids only, never values.
  */
+export interface PluginRequiredSettingsStatus {
+  missing: string[];
+  unreadable: string[];
+  /** Display label (declared `label`, else the id) for every id in either list. */
+  labels: Record<string, string>;
+}
+
 /**
  * Options accepted by long-running host calls (filesystem reads/writes, git
  * reads and mutations, the on-demand worktree-status accessor). Carries an
@@ -1422,10 +1521,29 @@ export interface PluginHostSubscriptionOptions {
   debounceMs?: number;
 }
 
+/**
+ * Persistent, plugin-scoped key/value settings exposed on
+ * {@link PluginHostApi.settings}. Values are stored as JSON at
+ * `~/.daintree/plugin-settings/{pluginId}.json` (user scope; a project
+ * plugin's `pluginId` is its per-project instance key),
+ * `<projectRoot>/.daintree/plugin-settings/{manifestId}.json` (project scope,
+ * committed with the repository) or this machine's per-project local file
+ * (local scope), with `chmod 0o600` applied on POSIX. Settings declared
+ * `type: "secret"` are encrypted at rest through the OS keychain (Electron
+ * `safeStorage`) and never stored under the project root. With no keychain
+ * available a secret write is refused rather than stored in plaintext.
+ * Non-secret values are always plaintext JSON — do not store credentials in
+ * non-secret keys.
+ *
+ * Omitting `scope` targets the key's declared scope (`"user"` for an
+ * undeclared key). While nothing is stored — or, for a project-bound scope,
+ * no project is available — `get` resolves to the declared `default`.
+ */
 export interface SettingsApi {
   /**
-   * Read a setting. Resolves to `undefined` when the key is unset, or (for
-   * `"project"` scope) when no project is active.
+   * Read a setting. While nothing is stored — or, for `"project"` scope, no
+   * project is active — it resolves to the key's declared `default`, and to
+   * `undefined` when it declares none.
    *
    * When the key is declared in `contributes.settings`, its declared `scope`
    * (default `"user"`) is authoritative: omitting `scope` reads from the declared
@@ -1438,25 +1556,51 @@ export interface SettingsApi {
    * Persist a setting. Rejects `undefined` and non-JSON-serializable values.
    * For `"project"` scope with no active project, throws. When the manifest
    * declares `contributes.settings`, an undeclared key is rejected. A declared
-   * secret is rejected when no OS keychain is available to encrypt it.
+   * secret is rejected when no OS keychain is available to encrypt it. Omitting
+   * `scope` targets the key's declared scope (`"user"` for an undeclared key);
+   * an explicit scope that conflicts with the declaration throws.
    */
   set<T = unknown>(key: string, value: T, scope?: PluginSettingsScope): Promise<void>;
   /**
-   * Subscribe to in-process writes of `key` in `scope` (default `"user"`). The
-   * callback fires with the new value after each `set` that changes it. Edits
-   * made to the JSON file by other processes do NOT fire until the plugin
-   * reloads. Must be called during `activate()` — subscribing is revoke-guarded.
+   * Subscribe to in-process writes of `key` in `scope` (default: the key's
+   * declared scope, else `"user"`). The callback fires with the new value after
+   * each `set` that changes it, and with the declared `default` (or
+   * `undefined`) when the stored value is cleared. Edits
+   * made to the JSON file by other processes never fire (a later `get` reads
+   * them). Must be called during `activate()` — subscribing is revoke-guarded.
    * Resolves to a disposer; calling it more than once is a no-op. All
    * subscriptions are automatically disposed when the plugin is unloaded.
    *
    * @throws {Error} If called after activation resolves or times out — the host
-   *   is revoked and the subscription is rejected (the promise rejects).
+   *   is revoked, and the call throws synchronously.
    */
   onDidChange<T = unknown>(
     key: string,
     callback: (value: T | undefined) => void,
     scope?: PluginSettingsScope
   ): Promise<() => void>;
+  /**
+   * Take the user to this plugin's settings, in whichever home they live in —
+   * the plugin manager for an installed plugin's own settings, Project
+   * settings → Plugins for a project plugin or a project-scoped key — and, when
+   * `key` names a declared setting, scroll to it and highlight it briefly.
+   *
+   * A bound (project) plugin opens in its own project's window. Resolves once
+   * the request is handed to the renderer; rejects when no window can show it,
+   * or when the destination is Project settings and no project is open there.
+   */
+  open(key?: string): Promise<void>;
+  /**
+   * The ids of declared `required: true` settings that are still unset, in
+   * manifest order. A secret counts as set only once a value is stored, and a
+   * declared `default` never counts. Project-scoped keys are read against the
+   * plugin's project (or the active project for an installed plugin) and are
+   * reported missing when there is none. A key whose stored file can't be read
+   * is listed too — the plugin couldn't read it either — without hiding the
+   * others. Secrets are checked for presence without being decrypted. Empty
+   * when nothing is required.
+   */
+  missingRequired(): Promise<string[]>;
 }
 
 /**
@@ -1495,19 +1639,198 @@ export interface StorageApi {
   /**
    * Subscribe to in-process writes of `key` in `scope` (default `"user"`). The
    * callback fires with the new value after each `set`/`delete` that changes it.
-   * Edits made to the JSON file by other processes do NOT fire until the plugin
-   * reloads. Must be called during `activate()` — subscribing is revoke-guarded.
+   * Edits made to the JSON file by other processes never fire (a later `get` reads
+   * them). Must be called during `activate()` — subscribing is revoke-guarded.
    * Resolves to a disposer; calling it more than once is a no-op. All
    * subscriptions are automatically disposed when the plugin is unloaded.
    *
    * @throws {Error} If called after activation resolves or times out — the host
-   *   is revoked and the subscription is rejected (the promise rejects).
+   *   is revoked, and the call throws synchronously.
    */
   onDidChange<T = unknown>(
     key: string,
     callback: (value: T | undefined) => void,
     scope?: PluginStorageScope
   ): Promise<() => void>;
+}
+
+/**
+ * Where a declared database lives. `"project"` puts the file in
+ * the repository, so agents in the project's terminals can read and write it
+ * with the `sqlite3` CLI and it travels with a clone; `"local"` keeps it in
+ * this machine's per-plugin data directory, out of the repository.
+ */
+export type PluginDatabaseLocationKind = "project" | "local";
+
+/** The resolved location of one declared database. */
+export interface PluginDatabaseLocation {
+  /** The `contributes.databases[].id` this resolves. */
+  readonly id: string;
+  readonly location: PluginDatabaseLocationKind;
+  /** Absolute path of the SQLite file. May not exist until first opened. */
+  readonly path: string;
+  /** For a `"project"` database, the path relative to the project root. */
+  readonly projectRelativePath: string | null;
+  readonly journalMode: "delete" | "wal";
+}
+
+/** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */
+export type PluginDatabaseParams =
+  | ReadonlyArray<string | number | bigint | null | Uint8Array>
+  | Readonly<Record<string, string | number | bigint | null | Uint8Array>>;
+
+export interface PluginDatabaseRunResult {
+  /** Rows changed by the statement. */
+  changes: number;
+  /** Rowid of the last inserted row, as a number when it fits in 2^53. */
+  lastInsertRowid: number | bigint;
+}
+
+/**
+ * Why a database's contents may have changed. `"self"` is a commit this
+ * handle made; `"external"` is anything else — an agent's `sqlite3` session,
+ * another process, or the file being replaced (`git checkout`, a restore).
+ */
+export interface PluginDatabaseChangeEvent {
+  readonly origin: "self" | "external";
+}
+
+/** The statement surface shared by a database handle and a transaction. */
+export interface PluginDatabaseStatements {
+  /** Every row the statement returns, as plain objects keyed by column name. */
+  query<T = Record<string, unknown>>(sql: string, params?: PluginDatabaseParams): Promise<T[]>;
+  /** The first row, or `undefined`. */
+  get<T = Record<string, unknown>>(
+    sql: string,
+    params?: PluginDatabaseParams
+  ): Promise<T | undefined>;
+  /**
+   * Execute one statement that returns no rows. `query`, `get`, `run` and
+   * `columns` each take exactly one statement; SQL after it rejects with
+   * `DB_MULTIPLE_STATEMENTS` rather than being silently ignored — use `exec`
+   * for a batch.
+   */
+  run(sql: string, params?: PluginDatabaseParams): Promise<PluginDatabaseRunResult>;
+  /** Execute one or more statements with no parameters (schema, pragmas). */
+  exec(sql: string): Promise<void>;
+  /**
+   * The result columns a statement would return, without running it — the
+   * headers for a result that may have no rows.
+   */
+  columns(sql: string): Promise<PluginDatabaseColumn[]>;
+}
+
+/** One result column of a statement, from `PluginDatabase.columns`. */
+export interface PluginDatabaseColumn {
+  /** The name a row object uses for this column (after any `AS` alias). */
+  name: string;
+  /** Source table, or null for an expression. */
+  table: string | null;
+  /** Source column, or null for an expression. */
+  column: string | null;
+  /** Declared type of the source column, or null. */
+  type: string | null;
+}
+
+export interface PluginDatabaseOpenOptions {
+  /**
+   * Open for reading only. The host neither creates the file nor its
+   * directory (SQLite itself may add `-wal`/`-shm` sidecars when reading a
+   * file in WAL mode), raises no write-consent prompt, and refuses `run`, `exec` and
+   * `transaction` with `DB_READONLY`; SQLite itself refuses any write a query
+   * attempts. `migrations` and `definitions` cannot be combined with it. A
+   * missing file rejects with `DB_NOT_FOUND`. The right mode for a dashboard
+   * over data that agents write.
+   */
+  readonly?: boolean;
+  /**
+   * Ordered schema migrations. Migration `n` (0-based) runs when the file's
+   * `PRAGMA user_version` is `n`, inside its own `BEGIN IMMEDIATE`
+   * transaction, and bumps `user_version` to `n + 1`. Append new entries;
+   * never edit or reorder shipped ones. A file whose `user_version` is higher
+   * than `migrations.length` was written by a newer copy of the plugin, and
+   * `open` rejects with `DB_SCHEMA_TOO_NEW` rather than guess.
+   */
+  migrations?: readonly string[];
+  /**
+   * SQL applied after `migrations`, in one transaction, whenever its text
+   * differs from the last applied — views and triggers, which should change
+   * without a numbered migration. Must be idempotent
+   * (`DROP VIEW IF EXISTS v; CREATE VIEW v AS …`). The applied hash is kept in
+   * a host-owned `_daintree_meta` table. A failure rolls back and rejects with
+   * `DB_DEFINITIONS_FAILED`.
+   */
+  definitions?: string;
+}
+
+/**
+ * An open plugin database. The host sets the connection policy on open —
+ * foreign keys enforced, a 5 s busy timeout, and the declared journal mode —
+ * and reopens transparently when the file is replaced underneath it, so a
+ * long-lived handle never keeps reading an unlinked inode.
+ *
+ * Calls are serialised per handle: a statement issued while a
+ * {@link transaction} is running waits for it.
+ */
+export interface PluginDatabase extends PluginDatabaseStatements {
+  readonly id: string;
+  /** Where the file is. Hand `path` to agents; they can use `sqlite3` on it. */
+  readonly location: PluginDatabaseLocation;
+  /** Whether the handle was opened with `readonly: true`. */
+  readonly readonly: boolean;
+  /**
+   * Run `fn` inside `BEGIN IMMEDIATE` … `COMMIT`, rolling back if it throws.
+   * Use the `tx` it is handed — calling the outer handle from inside `fn`
+   * waits for the transaction to finish, and so deadlocks.
+   */
+  transaction<T>(fn: (tx: PluginDatabaseStatements) => Promise<T> | T): Promise<T>;
+  /**
+   * Fire after the database changes, including commits by other processes —
+   * the usual case being an agent writing with the `sqlite3` CLI. Coalesced:
+   * a burst of external commits delivers one event. Returns a disposer.
+   */
+  onDidChange(callback: (event: PluginDatabaseChangeEvent) => void): () => void;
+  /**
+   * Write a consistent snapshot of the database to `destPath` using SQLite's
+   * online backup, then move it into place atomically. The destination is
+   * checked exactly like `host.fs.writeFile`: it must be inside your declared
+   * `scopes.fs.allowedPaths` (or your data directory), needs the matching
+   * `fs:*-write` capability and first-use consent, and a symlink there is
+   * refused. Use it for a "Back up" button, or to hand a sync folder a copy
+   * rather than the live file.
+   */
+  backup(destPath: string): Promise<PluginDatabaseBackupResult>;
+  /** Close the connection and stop change detection. Idempotent. */
+  close(): Promise<void>;
+}
+
+export interface PluginDatabaseBackupResult {
+  /** Absolute path the snapshot now stands at. */
+  path: string;
+  /** Size of the snapshot in bytes. */
+  bytes: number;
+}
+
+/**
+ * Host-managed SQLite for plugins (`host.db`). A database is declared in
+ * `contributes.databases` — which is what names the file, discloses it, and
+ * decides where it lives — then opened by id. Queries run in the plugin's own
+ * process over the runtime's built-in `node:sqlite`; only the location is
+ * resolved by the host.
+ */
+export interface PluginDatabaseApi {
+  /**
+   * Resolve a declared database's location without opening it. By default
+   * this prepares the location for writing (creating the directory, and for a
+   * project database asking for write consent the first time); with
+   * `readonly: true` it only locates an existing file.
+   */
+  resolve(id: string, options?: { readonly?: boolean }): Promise<PluginDatabaseLocation>;
+  /**
+   * Open (creating if needed) a declared database, apply `migrations`, and
+   * return a handle. Handles are closed automatically when the plugin unloads.
+   */
+  open(id: string, options?: PluginDatabaseOpenOptions): Promise<PluginDatabase>;
 }
 
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
@@ -1945,6 +2268,12 @@ export interface LoadedPluginInfo {
    */
   pluginDanger: "safe" | "confirm";
   /**
+   * The `plugin://` module URL of the plugin's `location: "settings"` view,
+   * built by main under this load's authority and generation. Present only
+   * while the plugin is running and declares one.
+   */
+  settingsViewPath?: string;
+  /**
    * True when the plugin was refused at load time by the remote blocklist /
    * kill-switch (#10891) — its `manifest.name` matched a blocklist entry whose
    * version range covers `manifest.version`. Distinct from `disabled` (a
@@ -2213,6 +2542,123 @@ export interface PluginAgentSnapshot {
   /** Unix timestamp in milliseconds when the transition was committed. */
   readonly timestamp: number;
 }
+
+/**
+ * Why an agent pane will not take a drafted handoff right now. Codes, not copy:
+ * the wording belongs to whatever surface shows it.
+ *
+ * - `unknown-terminal` — no pane with that id in this project.
+ * - `not-agent` — the pane is not an agent with an input bar (a plain shell, a
+ *   demoted agent, an agent Daintree has no input bar for).
+ * - `exited` — the agent's process has ended.
+ * - `input-bar-off` — the user has the input bar switched off, so there is no
+ *   visible draft to put anything in.
+ * - `backend-unavailable` — the terminal service is disconnected or recovering.
+ * - `input-locked` — the pane's input is locked.
+ * - `restarting` — the pane is restarting.
+ * - `input-busy` — the draft is about to be submitted by dictation, which would
+ *   send the handoff with it.
+ * - `not-in-grid` — the pane is docked or in the background, where its input bar
+ *   is not on screen.
+ * - `fleet-armed` — a fleet broadcast is armed, so Enter in that draft would go
+ *   to every armed agent.
+ * - `project-unavailable` — the plugin's project has no open view, or it did not
+ *   answer in time.
+ * - `launch-failed` — the user chose to start a new agent and it did not start,
+ *   or the new worktree's setup failed, needs approval or is still running.
+ * - `prompt-open` — another picker from this plugin is already open.
+ * - `busy` — too many targeted sends from this plugin are already in flight.
+ */
+export type PluginSendToAgentRefusalReason =
+  | "unknown-terminal"
+  | "not-agent"
+  | "exited"
+  | "input-bar-off"
+  | "backend-unavailable"
+  | "input-locked"
+  | "restarting"
+  | "input-busy"
+  | "not-in-grid"
+  | "fleet-armed"
+  | "project-unavailable"
+  | "launch-failed"
+  | "prompt-open"
+  | "busy";
+
+/**
+ * One agent pane in the plugin's project, as {@link PluginAgentsApi.list}
+ * reports it.
+ *
+ * `observedState` is what the host last read off the agent's own terminal
+ * output — a heuristic that is often wrong, never a guarantee the agent is
+ * doing (or done doing) anything. Show it as "last seen working", not as fact.
+ */
+export interface PluginAgentPane {
+  /** The pane's id — what {@link PluginHostApi.sendToAgent} takes as `terminalId`. */
+  readonly terminalId: string;
+  /** The pane's title as the user sees it, e.g. `Claude: fix auth tests`. */
+  readonly title: string;
+  /** The agent running in it (`claude`, `codex`, …). */
+  readonly agentId: string;
+  /** The worktree the pane belongs to, or `null` when it has none. */
+  readonly worktree: {
+    readonly id: string;
+    readonly name: string;
+    readonly branch?: string;
+  } | null;
+  /** Last observed agent state, when there is one. An observation, not a fact. */
+  readonly observedState?: AgentState;
+  /** Whether this is the pane the user has selected. */
+  readonly isFocused: boolean;
+  /** Whether {@link PluginHostApi.sendToAgent} would draft into it right now. */
+  readonly canDraft: boolean;
+  /** Why it would not, when `canDraft` is `false`. */
+  readonly draftRefusal?: PluginSendToAgentRefusalReason;
+}
+
+/** `host.agents` — the agent panes in the plugin's project. */
+export interface PluginAgentsApi {
+  /**
+   * The live agent panes in this plugin's project, grouped by nothing and in
+   * the order the grid holds them. A project plugin sees only its own
+   * project's agents; an installed plugin sees the project the user is looking
+   * at. Exited and demoted agents are left out. Gated on `agent:read`.
+   *
+   * Resolves `[]` when the project has no open view or once the plugin is
+   * unloaded.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare `agent:read`.
+   */
+  list(): Promise<PluginAgentPane[]>;
+}
+
+/** Options for {@link PluginHostApi.sendToAgent}. */
+export interface PluginSendToAgentOptions {
+  /**
+   * Draft straight into this pane (an id from {@link PluginAgentsApi.list}),
+   * with no picker. Omit to let the user choose.
+   */
+  terminalId?: string;
+  /**
+   * The worktree the call is about — typically `PanelViewProps.worktreeId`.
+   * Only steers the picker: an agent there is preselected, and "New agent here"
+   * starts one there.
+   */
+  worktreeId?: string;
+  /** Heading shown above the text in the draft, e.g. a card title. At most 120 characters. */
+  title?: string;
+}
+
+/**
+ * How a {@link PluginHostApi.sendToAgent} call ended. `drafted` means the text
+ * is in that agent's draft and nothing was submitted. A `launch-failed` refusal
+ * that got as far as creating a worktree names it in `worktreeId`, so the
+ * plugin can tell the user where it is.
+ */
+export type PluginSendToAgentResult =
+  | { status: "drafted"; terminalId: string }
+  | { status: "cancelled" }
+  | { status: "refused"; reason: PluginSendToAgentRefusalReason; worktreeId?: string };
 
 /**
  * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
@@ -2651,8 +3097,8 @@ export interface PluginFsStat {
 export interface PluginFsWriteOptions {
   /**
    * The revision the caller last read — the sha256 hex of the file's bytes,
-   * as returned by an earlier write or computed by the caller from
-   * {@link PluginFsApi.readFileBytes}. The write is refused with
+   * as returned by an earlier write or by
+   * {@link PluginFsApi.readFileWithRevision}. The write is refused with
    * `REVISION_MISMATCH` when the file's current bytes hash differently; the
    * error carries the current revision so the caller can enter a conflict
    * state without a second read. `null` means the file must not exist yet
@@ -2667,14 +3113,59 @@ export interface PluginFsWriteResult {
   revision: string;
 }
 
+/** Result of {@link PluginFsApi.readFileWithRevision}. */
+export interface PluginFsReadWithRevisionResult {
+  /** The file's bytes decoded as UTF-8, exactly as {@link PluginFsApi.readFile} returns them. */
+  contents: string;
+  /**
+   * sha256 hex of the exact bytes read — pass it straight to
+   * {@link PluginFsWriteOptions.expectedRevision}.
+   */
+  revision: string;
+}
+
+/** Options for {@link PluginFsApi.watch}. */
+export interface PluginFsWatchOptions extends PluginHostCallOptions {
+  /**
+   * Watch every directory beneath each path, including subdirectories created
+   * after the subscription. The callback then receives the absolute path of
+   * whatever changed at any depth. Off by default: a plain watch reports only
+   * a directory's immediate children. A non-boolean value rejects the watch.
+   *
+   * On Linux, Node implements this in JavaScript with one inotify watch per
+   * file and directory, it can report names under symlinked subdirectories,
+   * and it can stop reporting a file that is replaced by rename — see the
+   * host API docs before relying on it there.
+   */
+  recursive?: boolean;
+  /**
+   * Coalesce a burst of changes into one trailing callback fired `debounceMs`
+   * after the last change, carrying the most recent changed path. `0` /
+   * omitted delivers every event; any other value is clamped to 50–60000ms.
+   * A value that is not a finite, non-negative number rejects the watch.
+   */
+  debounceMs?: number;
+  /**
+   * Accept a path that does not exist yet, and keep watching through a
+   * deletion. The host checks once a second: when a missing path appears it
+   * re-proves containment (so a symlink created there cannot redirect the
+   * watch), attaches, and calls back with the path; when a watched path
+   * disappears, or is replaced by a new directory, it detaches, calls back,
+   * and waits again. Without it a missing path rejects the watch, and a
+   * deleted directory silently stops reporting.
+   */
+  allowMissing?: boolean;
+}
+
 /**
  * Error codes {@link PluginFsApi.writeFile} rejects with, carried on
  * the error's `code` property alongside a `message` that starts with the same
  * token. The reads reject with `TARGET_IS_SYMLINK` and `TARGET_UNAVAILABLE` the
- * same way — see {@link PluginFsApi.readFile}. In-process callers (built-in plugins) receive the error object
- * intact; an error crossing the plugin worker port or the renderer bridge
- * keeps only its message, so a caller behind either boundary should match on
- * the message prefix.
+ * same way — see {@link PluginFsApi.readFile}. In-process callers (built-in
+ * plugins) and plugin workers both receive `code` (and, for a revision
+ * mismatch, `currentRevision`) on the error — the worker port carries those
+ * fields across. The renderer bridge to a plugin's view keeps only the
+ * message, so hand a conflict to a view as a handler result, not a throw.
  */
 export type PluginFsWriteErrorCode =
   "REVISION_MISMATCH" | "TARGET_UNAVAILABLE" | "TARGET_EXISTS" | "TARGET_IS_SYMLINK";
@@ -2735,6 +3226,42 @@ export interface PluginFsApi {
    */
   readFileBytes(filePath: string, options?: PluginHostCallOptions): Promise<Uint8Array>;
   /**
+   * Read a file as UTF-8 text together with its revision — the sha256 hex of
+   * the exact bytes read, computed the same way {@link writeFile} computes the
+   * revision it returns. Hand `revision` straight to
+   * {@link PluginFsWriteOptions.expectedRevision} for a read-modify-write that
+   * refuses to clobber a change made in between. Same capability gate,
+   * containment, verified open and cancellation as {@link readFile}.
+   */
+  readFileWithRevision(
+    filePath: string,
+    options?: PluginHostCallOptions
+  ): Promise<PluginFsReadWithRevisionResult>;
+  /**
+   * Create a directory and any missing ancestors. Creating a directory that
+   * already exists is a no-op; a non-directory at the path rejects. Gated and
+   * consented like {@link writeFile}, and both happen before anything is
+   * created: containment is proven first, so a symlinked ancestor that
+   * resolves outside every allowed root is refused. Each missing component is
+   * then created one at a time, refused if something other than a real
+   * directory appears there, and audited individually.
+   */
+  mkdir(dirPath: string): Promise<void>;
+  /**
+   * Append UTF-8 text to a file, creating it if absent (the parent directory
+   * must already exist). Gated, consented, serialised and audited like
+   * {@link writeFile}; a symlink leaf is refused with `TARGET_IS_SYMLINK`, and
+   * a FIFO, device or directory with `TARGET_UNAVAILABLE`.
+   * The bytes land through one `O_APPEND` descriptor in one `write()` per call
+   * (a short write is completed by more), so concurrent appenders — an agent
+   * adding a line to the same JSONL file — each land at the end instead of
+   * racing a read-and-rewrite. Whole-line atomicity against another writer is
+   * a practical outcome for small lines, not a guarantee. No revision is returned: an
+   * append is meaningful without one, and computing it would mean reading the
+   * whole file back.
+   */
+  appendFile(filePath: string, contents: string): Promise<void>;
+  /**
    * Write UTF-8 text to a file, creating it if absent (parent directories must
    * already exist within scope). Rejects on a missing write capability or an
    * out-of-scope path. Recorded in the audit trail. No cancellation signal —
@@ -2782,12 +3309,14 @@ export interface PluginFsApi {
    * Resolves to a disposer that tears the watcher down; all watchers are
    * automatically torn down on unload. Rejects on a missing read capability so
    * authoring mistakes surface loudly. Pass `options.signal` to abort the
-   * subscription attempt before it is wired.
+   * subscription attempt before it is wired, `options.recursive` to watch a
+   * whole subtree, and `options.debounceMs` to coalesce bursts — see
+   * {@link PluginFsWatchOptions}.
    */
   watch(
     paths: string[],
     callback: (changedPath: string) => void,
-    options?: PluginHostCallOptions
+    options?: PluginFsWatchOptions
   ): Promise<() => void>;
 }
 
@@ -2962,6 +3491,102 @@ export interface PluginSystemApi {
    * it. The path must exist.
    */
   showItemInFolder(targetPath: string): Promise<void>;
+}
+
+/** Paper sizes {@link PluginDocumentsApi.renderPdf} accepts. */
+export type PluginPdfPageSize = "A4" | "Letter" | "Legal" | "A3" | "A5" | "Tabloid";
+
+/** Page margins for {@link PluginDocumentsApi.renderPdf}, in inches (0–3 each). */
+export interface PluginPdfMargins {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+}
+
+/**
+ * Options for {@link PluginDocumentsApi.renderPdf}. Exactly one of `html` or
+ * `htmlPath` is required; any other key, or a value of the wrong shape, is
+ * refused with a `VALIDATION:` error rather than ignored.
+ */
+export interface PluginRenderPdfOptions {
+  /**
+   * Inline HTML, at most 5 MiB (UTF-8). The document has no base URL, so a
+   * relative reference resolves to nothing: embed images and fonts as `data:`
+   * URIs, or write the HTML to disk and pass {@link htmlPath} instead.
+   */
+  html?: string;
+  /**
+   * Absolute path to an HTML file (at most 5 MiB, read as UTF-8),
+   * read-contained exactly like {@link PluginFsApi.readFile} and gated on the
+   * read capability for its root class. It is snapshotted once consent is
+   * given and the snapshot is what renders. Relative images and stylesheets
+   * resolve against its directory as long as they stay inside the same
+   * allowed root.
+   */
+  htmlPath?: string;
+  /**
+   * Absolute path of the PDF to write; must end in `.pdf` and its parent
+   * directory must exist. Contained, capability-gated, consent-gated and
+   * replaced atomically exactly like {@link PluginFsApi.writeFile}.
+   */
+  outputPath: string;
+  /** Paper size. Defaults to `"A4"`. A CSS `@page size` is not honoured. */
+  pageSize?: PluginPdfPageSize;
+  /** Landscape orientation. Defaults to `false`. */
+  landscape?: boolean;
+  /** Print CSS backgrounds and colours. Defaults to `true`. */
+  printBackground?: boolean;
+  /** Page margins in inches. Each side defaults to Chromium's 1 cm (~0.4 in). */
+  margins?: PluginPdfMargins;
+  /** Pages to keep, e.g. `"1-3, 5"`. Omitted keeps every page. */
+  pageRanges?: string;
+}
+
+/** Result of {@link PluginDocumentsApi.renderPdf}. */
+export interface PluginRenderPdfResult {
+  /** The contained absolute path the PDF was written to. */
+  path: string;
+  /** Size of the written PDF in bytes. */
+  bytes: number;
+  /**
+   * SHA-256 hex of the written bytes — the same revision
+   * {@link PluginFsApi.writeFile} returns, so it can be passed straight back as
+   * an `expectedRevision`.
+   */
+  revision: string;
+}
+
+/**
+ * Host-mediated document export on {@link PluginHostApi.documents}. Rendering
+ * runs in the main process — Electron's `printToPDF` is unreachable from the
+ * plugin worker — in a hidden, sandboxed window with JavaScript disabled, a
+ * throwaway in-memory session, permissions denied, navigation and popups
+ * blocked, and the network cut off: only `data:` URIs and `file:` URLs inside
+ * a root the plugin can read load, so remote images, fonts and stylesheets are
+ * never fetched.
+ *
+ * NOT revoke-guarded, like {@link PluginFsApi}; every method rejects once the
+ * plugin unloads.
+ */
+export interface PluginDocumentsApi {
+  /**
+   * Render HTML to a PDF file and resolve its path, size and revision.
+   *
+   * Gated exactly like {@link PluginFsApi.writeFile} on the output path:
+   * `fs:project-write` or `fs:user-data-write` for its root class, then the
+   * just-in-time consent prompt; a symlink at the output leaf is refused with
+   * `TARGET_IS_SYMLINK`, and a target that moves while the render runs with
+   * `TARGET_UNAVAILABLE`. A call waiting on the consent prompt is untimed and
+   * holds no render slot, but a plugin may have only two waiting. Renders run
+   * two at a time across all plugins; a plugin with two calls holding render
+   * slots, or a call arriving when eight are, rejects with `RENDER_BUSY:`. A
+   * call not finished within 30 seconds of taking its slot rejects with
+   * `RENDER_TIMEOUT:`, a page that fails to load or print with
+   * `RENDER_FAILED:`, a PDF over 50 MiB with `PAYLOAD_TOO_LARGE:`, and a
+   * call outstanding when the plugin unloads with `RENDER_CANCELLED:`.
+   */
+  renderPdf(options: PluginRenderPdfOptions): Promise<PluginRenderPdfResult>;
 }
 
 /**
@@ -3444,6 +4069,44 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   sendToActiveAgent(text: string, options?: { submit?: boolean }): Promise<void>;
   /**
+   * The agent panes in this plugin's project, for choosing where to hand work.
+   * Gated on `agent:read`. See {@link PluginAgentsApi}.
+   */
+  readonly agents: PluginAgentsApi;
+  /**
+   * Hand `text` to an agent: it is appended to that agent's visible draft,
+   * below anything the user already typed, as a fenced block headed by
+   * `options.title` and the plugin's name. Nothing is ever submitted — the user
+   * adds their instruction and presses Enter. There is no `submit` option.
+   *
+   * With `options.terminalId` the draft goes straight to that pane. Without it
+   * the user picks from the project's agents, grouped by worktree (an agent in
+   * `options.worktreeId` is preselected, else the focused one), or starts a new
+   * agent in that worktree or in a new worktree; the text lands in the new
+   * agent's draft once it is up.
+   *
+   * Gated on `agent:input` with the same first-use consent prompt as
+   * {@link sendToActiveAgent}. A project plugin only ever reaches its own
+   * project's panes. Never moves focus.
+   *
+   * Resolves `{ status: "drafted", terminalId }`, `{ status: "cancelled" }`
+   * (the user dismissed the picker, or the call was aborted or the plugin
+   * unloaded while it was open), or `{ status: "refused", reason }` when the
+   * target cannot take a draft — see {@link PluginSendToAgentRefusalReason}.
+   * Once the user picks a row that starts an agent, the launch is theirs: an
+   * abort or unload no longer cancels it, and the call reports its outcome.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `agent:input`, or the user denies the consent prompt.
+   * @throws {Error} If `text` is blank or longer than 32,768 characters, or an
+   *   option has the wrong type or length.
+   */
+  sendToAgent(
+    text: string,
+    options?: PluginSendToAgentOptions,
+    callOptions?: PluginHostCallOptions
+  ): Promise<PluginSendToAgentResult>;
+  /**
    * Signal that decorations for `scope` (optionally narrowed to `paths`) have
    * changed and any renderer showing them should re-pull. Unlike the
    * `register*` methods this is NOT revoke-guarded: it is called from the
@@ -3610,6 +4273,12 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   readonly storage: StorageApi;
   /**
+   * Host-managed SQLite databases declared in `contributes.databases`. See
+   * {@link PluginDatabaseApi}. NOT revoke-guarded: open and query from timers
+   * and callbacks. Open handles close when the plugin unloads.
+   */
+  readonly db: PluginDatabaseApi;
+  /**
    * Structured diagnostic logger backed by a bounded per-plugin ring buffer in
    * the main process. Lines are forwarded to the host console (prefixed
    * `[plugin:{pluginId}]`) and retained for the most recent ~500 entries so
@@ -3673,6 +4342,14 @@ export interface PluginHostApi extends PluginActivationApi {
    * NOT revoke-guarded — same membership lifetime as {@link fs}.
    */
   readonly system: PluginSystemApi;
+  /**
+   * Host-mediated document export — HTML to PDF, rendered in the main process
+   * and written under the same gates as {@link PluginFsApi.writeFile}. See
+   * {@link PluginDocumentsApi}.
+   *
+   * NOT revoke-guarded — same membership lifetime as {@link fs}.
+   */
+  readonly documents: PluginDocumentsApi;
 }
 
 /**
@@ -4081,6 +4758,16 @@ export interface ProjectPluginInfo {
   description?: string;
   /** Declared capabilities, disclosed in the manager. Never a consent gate. */
   capabilities: PluginCapability[];
+  /** Declared `contributes.databases`, disclosed in the manager. */
+  databases?: PluginDatabaseContribution[];
+  /**
+   * Declared `contributes.settings`, so the plugin's Settings section can still
+   * say what it holds while the plugin isn't running and no loaded instance
+   * carries its manifest. Absent when it declares none.
+   */
+  settings?: SettingDefinition[];
+  /** The manifest declares a `location: "settings"` view. */
+  declaresSettingsView?: boolean;
   /** Directory name under `.daintree/plugins/`. Not required to equal `id`. */
   dirName: string;
   state: ProjectPluginState;

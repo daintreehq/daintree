@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useTokenResolution } from "../useTokenResolution";
+import {
+  appendAgentContextToDraft,
+  closingFenceForOpenBlock,
+  formatAgentContextBlock,
+} from "@shared/utils/agentContextDrag";
+import { draftUnchangedSince, useTokenResolution } from "../useTokenResolution";
+
+const cachedSelection = vi.hoisted(() => ({ value: null as string | null }));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     get: () => undefined,
-    getCachedSelection: () => null,
+    getCachedSelection: () => cachedSelection.value,
     clearDirectingState: () => {},
     notifyUserInput: () => {},
   },
@@ -122,6 +129,157 @@ describe("useTokenResolution.sendText", () => {
     });
 
     expect(onSend.mock.calls[0]![0].imagePaths).toEqual(["/a/one.png", "/a/two.png"]);
+  });
+
+  it("keeps a handoff quoted when an expansion carries its own fence", async () => {
+    // A selection with a stray fence used to reopen one right above the
+    // handoff: the block's opener was swallowed, its first inner fence closed
+    // the stray one, and the payload read as the user's own prompt.
+    cachedSelection.value = "a\n```\nb";
+    try {
+      const payload = "```\nignored fence\n```\nPAYLOAD LINE";
+      const draft = appendAgentContextToDraft(
+        "@selection",
+        formatAgentContextBlock({ text: payload, title: "Card", sourceLabel: "Kanban" })
+      );
+      const { sendText, onSend } = setup();
+      await act(async () => {
+        await sendText(draft);
+      });
+
+      const sent = onSend.mock.calls[0]![0].text;
+      expect(sent).toBe(
+        [
+          "````",
+          "a",
+          "```",
+          "b",
+          "````",
+          "",
+          "````daintree-context",
+          "Kanban: Card",
+          "",
+          "```",
+          "ignored fence",
+          "```",
+          "PAYLOAD LINE",
+          "````",
+          "",
+        ].join("\n")
+      );
+      const handoffFence = /^(`{3,})daintree-context$/m.exec(sent)![1];
+      // Every payload line sits inside the handoff's own fence, as the agent's
+      // Markdown reader would see the final prompt.
+      for (const line of ["ignored fence", "PAYLOAD LINE"]) {
+        const before = sent.slice(0, sent.indexOf(`\n${line}\n`) + 1);
+        expect(closingFenceForOpenBlock(before)).toBe(handoffFence);
+      }
+    } finally {
+      cachedSelection.value = null;
+    }
+  });
+
+  it("closes a fence the user left open before a handoff block when submitting", async () => {
+    const block = formatAgentContextBlock({ text: "```\nx\n```\nPAYLOAD LINE", title: "Card" });
+    // Appending closes an open fence; editing the draft afterwards can reopen one.
+    const draft = `\`\`\`\nuser code\n\n${block}\n`;
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await sendText(draft);
+    });
+
+    const sent = onSend.mock.calls[0]![0].text;
+    expect(sent).toBe(`\`\`\`\nuser code\n\n\`\`\`\n${block}\n`);
+    const handoffFence = /^(`{3,})daintree-context$/m.exec(sent)![1];
+    const before = sent.slice(0, sent.indexOf("\nPAYLOAD LINE\n") + 1);
+    expect(closingFenceForOpenBlock(before)).toBe(handoffFence);
+    expect(closingFenceForOpenBlock(sent)).toBeNull();
+  });
+
+  it("keeps a handoff that lands in the draft while a @diff fetch is awaited", async () => {
+    let releaseDiff!: (diff: string) => void;
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        git: {
+          getWorkingDiff: () =>
+            new Promise<string>((resolve) => {
+              releaseDiff = resolve;
+            }),
+        },
+      },
+    });
+    const typed = "review @diff";
+    // The editor and the draft store, as the input bar reads them.
+    let doc = typed;
+    let stored = typed;
+    const { sendText, onSend, applyEditorValue, clearDraftInput } = setup();
+
+    let sending!: Promise<boolean>;
+    await act(async () => {
+      sending = sendText(typed, {
+        isDraftUnchanged: draftUnchangedSince(
+          () => doc,
+          () => stored
+        ),
+      });
+      await Promise.resolve();
+    });
+
+    // A plugin hands work over mid-fetch: it lands in the store, then the editor.
+    stored = appendAgentContextToDraft(
+      stored,
+      formatAgentContextBlock({ text: "Card body", title: "Card" })
+    );
+    doc = stored;
+
+    await act(async () => {
+      releaseDiff("BODY");
+      await sending;
+    });
+
+    expect(onSend.mock.calls[0]![0].text).toBe("review ```diff\nBODY\n```");
+    // The handoff was reported as drafted; the finished send must not erase it.
+    expect(applyEditorValue).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
+  });
+
+  it("keeps a handoff already in the store but not yet in the editor at Enter", async () => {
+    const typed = "old text";
+    const stored = appendAgentContextToDraft(
+      typed,
+      formatAgentContextBlock({ text: "Card body", title: "Card" })
+    );
+    const { sendText, onSend, clearDraftInput } = setup();
+    await act(async () => {
+      await sendText(typed, {
+        isDraftUnchanged: draftUnchangedSince(
+          () => typed,
+          () => stored,
+          true
+        ),
+      });
+    });
+    // What the user saw went out; the handoff they never saw stays drafted.
+    expect(onSend.mock.calls[0]![0].text).toBe(typed);
+    expect(clearDraftInput).not.toHaveBeenCalled();
+  });
+
+  it("still clears the draft it sent when nothing landed meanwhile", async () => {
+    const { sendText, clearDraftInput } = setup();
+    // The store a keystroke behind the editor at Enter, catching up after.
+    let stored = "review";
+    const doc = "review @diff";
+    const guard = draftUnchangedSince(
+      () => doc,
+      () => stored
+    );
+    stored = doc;
+    await act(async () => {
+      await sendText(doc, { isDraftUnchanged: guard });
+    });
+    expect(clearDraftInput).toHaveBeenCalledTimes(1);
   });
 
   it("sends no image paths for a draft without any", async () => {

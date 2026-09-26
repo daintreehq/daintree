@@ -17,6 +17,7 @@ import {
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   getPanelKindRegistrySnapshot,
   panelKindHasPty,
@@ -70,6 +71,7 @@ import {
   Clipboard,
   Copy,
   CopyPlus,
+  DatabaseBackup,
   ExternalLink,
   Globe,
   Info,
@@ -89,6 +91,7 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
+  Settings,
   Trash2,
   Unlock,
 } from "lucide-react";
@@ -115,17 +118,28 @@ import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
+  isPluginMenuCommandId,
+  pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
 } from "@/components/Panel/genericPanelMenu";
+import {
+  getRegisteredPluginActionsSnapshot,
+  subscribeToRegisteredPluginActions,
+} from "@/services/plugin/registeredPluginActions";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
 // Main, the pins and the most recent few: what a hover submenu is good for.
 // Anything past that is found by searching the picker.
 const MOVE_TO_WORKTREE_SUBMENU_LIMIT = 10;
+
+/** A task turn after the close hook, which is where the menu primitive restores focus. */
+const AFTER_MENU_FOCUS_RESTORE_MS = 0;
 
 /** A menu item's shortcut: the action's live keybinding, or nothing. */
 function ContextMenuKeybinding({ actionId }: { actionId: ActionId }) {
@@ -188,6 +202,12 @@ export function TerminalContextMenu({
     getRegisteredTourIdsSnapshot,
     getRegisteredTourIdsSnapshot
   );
+  // A plugin's own menu items wait on their actions registering.
+  const registeredPluginActions = useSyncExternalStore(
+    subscribeToRegisteredPluginActions,
+    getRegisteredPluginActionsSnapshot,
+    getRegisteredPluginActionsSnapshot
+  );
 
   // Which panel the picker was opened for, not a bare flag: the dock's tab
   // group hands this menu a new terminal when its active tab changes, and the
@@ -238,6 +258,15 @@ export function TerminalContextMenu({
   // opens the dialog — the same handoff as the move picker, so the menu's own
   // focus return can't land after the dialog has taken focus.
   const pendingHandOverRef = useRef<HandOverRequest | null>(null);
+  // "Plugin settings…", "Back up data…" and a plugin's own items are spent the
+  // same way, after the menu has returned focus to the pane, so the settings
+  // home, the save dialog or the plugin's own confirmation records the pane as
+  // where to return it.
+  const pendingMenuDispatchRef = useRef<{
+    actionId: ActionId;
+    args: Record<string, unknown>;
+    source: MenuActionSourceValue;
+  } | null>(null);
   const nextHandOverIdRef = useRef(0);
   const handleRequestHandOver = useCallback(
     (orchestratorPaneId: string) => {
@@ -263,6 +292,7 @@ export function TerminalContextMenu({
       if (open) {
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
+        pendingMenuDispatchRef.current = null;
         // Only a PTY can be handed over; the other kinds' menus never ask.
         if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
           refreshOrchestratorCandidates();
@@ -479,6 +509,16 @@ export function TerminalContextMenu({
 
       if (actionId === "open-link") {
         void terminalInstanceService.openHoveredLink(terminalId);
+        return;
+      }
+
+      if (isPluginMenuCommandId(actionId)) {
+        // The panel the menu was opened on, by id — see `pendingMenuDispatchRef`.
+        pendingMenuDispatchRef.current = {
+          actionId: pluginMenuCommandActionId(actionId),
+          args: { panelId: terminalId },
+          source: sourceRef.current,
+        };
         return;
       }
 
@@ -722,6 +762,36 @@ export function TerminalContextMenu({
           );
           break;
         }
+        case "plugin-settings": {
+          const pluginId = readPanelKindMenuCapabilities(
+            panelKindRegistry,
+            terminal.kind ?? "terminal",
+            registeredTourIds
+          ).pluginSettingsId;
+          if (!pluginId) break;
+          // Spent by the close hook once focus is back on the pane — see
+          // `pendingMenuDispatchRef`.
+          pendingMenuDispatchRef.current = {
+            actionId: GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+            args: { pluginId },
+            source: sourceRef.current,
+          };
+          break;
+        }
+        case "plugin-backup": {
+          const pluginId = readPanelKindMenuCapabilities(
+            panelKindRegistry,
+            terminal.kind ?? "terminal",
+            registeredTourIds
+          ).pluginBackupId;
+          if (!pluginId) break;
+          pendingMenuDispatchRef.current = {
+            actionId: GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
+            args: { pluginId },
+            source: sourceRef.current,
+          };
+          break;
+        }
         case "reload-browser":
           void actionService.dispatch(
             "browser.reload",
@@ -757,6 +827,24 @@ export function TerminalContextMenu({
       if (suppressNextCloseAutoFocusRef.current) {
         suppressNextCloseAutoFocusRef.current = false;
         event.preventDefault();
+      }
+      const pendingDispatch = pendingMenuDispatchRef.current;
+      pendingMenuDispatchRef.current = null;
+      if (pendingDispatch !== null) {
+        // Restoration is left to run, and the action runs after it: whatever it
+        // opens then records the pane, not the unmounting item, as where focus
+        // returns when it closes.
+        setTimeout(() => {
+          // A context menu restores whatever was focused before the right-click,
+          // which can be another pane when the click landed on something that
+          // takes no focus. The action belongs to this panel, so it starts there.
+          const panel = document.querySelector(`[data-panel-id="${CSS.escape(terminalId)}"]`);
+          if (!panel?.contains(document.activeElement)) focusPanelInput(terminalId);
+          void actionService.dispatch(pendingDispatch.actionId, pendingDispatch.args, {
+            source: pendingDispatch.source,
+          });
+        }, AFTER_MENU_FOCUS_RESTORE_MS);
+        return;
       }
       const pendingHandOver = pendingHandOverRef.current;
       pendingHandOverRef.current = null;
@@ -824,7 +912,8 @@ export function TerminalContextMenu({
   const kindCapabilities = readPanelKindMenuCapabilities(
     panelKindRegistry,
     kind,
-    registeredTourIds
+    registeredTourIds,
+    registeredPluginActions
   );
   const hasPty = terminal.kind ? kindCapabilities.hasPty : true;
   // A non-PTY plugin kind matches none of the built-in guards, so without this
@@ -844,6 +933,26 @@ export function TerminalContextMenu({
       {kindCapabilities.tour.label}
     </ContextMenuItem>
   ) : null;
+  // A PTY-backed plugin kind's plugin settings, beside its tour on the same
+  // terminal menus: the last of the plugin's own entries, with "Back up data…"
+  // just before it as on the generic list.
+  const pluginOwnedMenuItems =
+    kindCapabilities.pluginBackupId || kindCapabilities.pluginSettingsId ? (
+      <>
+        {kindCapabilities.pluginBackupId && (
+          <ContextMenuItem onSelect={() => handleAction("plugin-backup")}>
+            <DatabaseBackup className={ICON_CLASS} aria-hidden="true" />
+            Back up data…
+          </ContextMenuItem>
+        )}
+        {kindCapabilities.pluginSettingsId && (
+          <ContextMenuItem onSelect={() => handleAction("plugin-settings")}>
+            <Settings className={ICON_CLASS} aria-hidden="true" />
+            Plugin settings…
+          </ContextMenuItem>
+        )}
+      </>
+    ) : null;
 
   const submenuWorktrees = worktrees.slice(0, MOVE_TO_WORKTREE_SUBMENU_LIMIT);
   const hasMoreWorktrees = worktrees.length > submenuWorktrees.length;
@@ -1000,6 +1109,7 @@ export function TerminalContextMenu({
             Rename browser
           </ContextMenuItem>
           {tourMenuItem}
+          {pluginOwnedMenuItems}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1064,6 +1174,7 @@ export function TerminalContextMenu({
             Rename dev preview
           </ContextMenuItem>
           {tourMenuItem}
+          {pluginOwnedMenuItems}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1114,6 +1225,7 @@ export function TerminalContextMenu({
             Rename review
           </ContextMenuItem>
           {tourMenuItem}
+          {pluginOwnedMenuItems}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1164,6 +1276,9 @@ export function TerminalContextMenu({
             canMoveToWorktree,
             canReload: canReloadPanelKind(kind),
             tourLabel: kindCapabilities.tour?.label,
+            hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
+            hasPluginDatabases: kindCapabilities.pluginBackupId !== null,
+            pluginMenuItems: kindCapabilities.pluginMenuItems,
           }).map((group, groupIndex) => (
             <Fragment key={group[0]?.id ?? groupIndex}>
               {groupIndex > 0 && <ContextMenuSeparator />}
@@ -1463,6 +1578,7 @@ export function TerminalContextMenu({
             View terminal info
           </ContextMenuItem>
           {tourMenuItem}
+          {pluginOwnedMenuItems}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />

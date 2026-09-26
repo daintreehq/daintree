@@ -1202,6 +1202,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
   };
+  "plugin:backup-databases": {
+    args: [pluginId: string];
+    result: import("./pluginDataBackup.js").PluginDataBackupOutcome;
+  };
   "plugin:bg-update-check-latest": {
     args: [];
     result: import("../plugin.js").PluginBackgroundUpdateCheckResult | null;
@@ -1390,6 +1394,10 @@ export interface GeneratedIpcInvokeMap {
       projectId: string | null,
     ];
     result: import("../plugin.js").PluginSettingsUiValues;
+  };
+  "plugin:settings-required-status": {
+    args: [pluginId: string, projectId: string | null];
+    result: import("../plugin.js").PluginRequiredSettingsStatus;
   };
   "plugin:settings-reveal-secret": {
     args: [

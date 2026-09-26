@@ -525,6 +525,9 @@ export interface GeneratedElectronAPI {
     activateStagedProjectPlugin(
       ...args: IpcInvokeMap["plugin:project-activate-staged"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-activate-staged"]["result"]>;
+    backupDatabases(
+      ...args: IpcInvokeMap["plugin:backup-databases"]["args"]
+    ): Promise<IpcInvokeMap["plugin:backup-databases"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
@@ -588,6 +591,9 @@ export interface GeneratedElectronAPI {
     getRecipes(
       ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;
+    getRequiredSettingsStatus(
+      ...args: IpcInvokeMap["plugin:settings-required-status"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-required-status"]["result"]>;
     getRuntimeStatuses(
       ...args: IpcInvokeMap["plugin:runtime-statuses-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:runtime-statuses-get"]["result"]>;

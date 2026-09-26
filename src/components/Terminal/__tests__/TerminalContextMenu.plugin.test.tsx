@@ -8,8 +8,13 @@
  * anything for a plugin view. `hasPty` gated only some of those items, so the
  * mislabeled ones survived.
  */
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, render, screen, cleanup } from "@testing-library/react";
+
+const menuCloseHook = vi.hoisted(() => ({
+  current: undefined as ((event: Event) => void) | undefined,
+}));
 
 // Render menu content synchronously. Radix only mounts it behind a real
 // right-click into a portal, which tells us nothing about which branch ran —
@@ -38,9 +43,17 @@ vi.mock("@/components/ui/context-menu", () => {
   return {
     ContextMenu: Passthrough,
     ContextMenuTrigger: Passthrough,
-    ContextMenuContent: ({ children }: { children?: React.ReactNode }) => (
-      <div data-testid="context-menu-content">{children}</div>
-    ),
+    ContextMenuContent: ({
+      children,
+      onCloseAutoFocus,
+    }: {
+      children?: React.ReactNode;
+      onCloseAutoFocus?: (event: Event) => void;
+    }) => {
+      // Captured so a test can play the close Radix runs once the menu is gone.
+      menuCloseHook.current = onCloseAutoFocus;
+      return <div data-testid="context-menu-content">{children}</div>;
+    },
     ContextMenuItem: Item,
     ContextMenuActionItem: Item,
     ContextMenuCheckboxItem: Item,
@@ -143,6 +156,7 @@ import {
   unregisterPanelKind,
 } from "@shared/config/panelKindRegistry";
 import { registerTour } from "@/components/Tour/tourRegistry";
+import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
 import type { PanelLocation } from "@/types";
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import {
@@ -252,9 +266,20 @@ function renderMenuFor(panel: Record<string, unknown>, forceLocation?: PanelLoca
 
 function registerPluginKind(
   id: string,
-  options: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
+  options: {
+    hasPty?: boolean;
+    dockable?: boolean;
+    name?: string;
+    tourId?: string;
+    hasPluginSettings?: boolean;
+    hasPluginDatabases?: boolean;
+    pluginMenu?: Array<{ actionId: string; label?: string }>;
+  } = {}
 ) {
   registerPanelKind({
+    ...(options.hasPluginSettings ? { hasPluginSettings: true } : {}),
+    ...(options.hasPluginDatabases ? { hasPluginDatabases: true } : {}),
+    ...(options.pluginMenu ? { pluginMenu: options.pluginMenu } : {}),
     id,
     name: options.name ?? id,
     iconId: "terminal",
@@ -300,6 +325,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     keybindingDisplays.current = {};
     unregisterPanelKind(PTY_PLUGIN_KIND);
     unregisterPanelKind(VIEW_PLUGIN_KIND);
+    publishRegisteredPluginActions([]);
     __resetPanelCloseGuardsForTests();
   });
 
@@ -610,5 +636,145 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       { tourId: "acme.shell-intro" },
       expect.anything()
     );
+  });
+
+  /** Plays the close Radix runs once the menu is gone, then the next task turn. */
+  async function closeMenu(): Promise<Event> {
+    const event = new Event("closeAutoFocus", { cancelable: true });
+    act(() => menuCloseHook.current?.(event));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return event;
+  }
+
+  it.each([
+    ["a view panel's generic menu", VIEW_PLUGIN_KIND, false],
+    ["a PTY-backed panel's terminal menu", PTY_PLUGIN_KIND, true],
+  ] as const)(
+    "opens the plugin's settings from %s after focus is back on the pane",
+    async (_label, kind, hasPty) => {
+      registerPluginKind(kind, { hasPty, hasPluginSettings: true });
+      renderMenuFor({
+        id: "panel-1",
+        title: "Acme",
+        kind,
+        pluginId: "acme",
+        worktreeId: "wt-1",
+      });
+
+      findRow("Plugin settings…")!.click();
+      expect(dispatch).not.toHaveBeenCalledWith(
+        "plugin.openSettings",
+        expect.anything(),
+        expect.anything()
+      );
+      const event = await closeMenu();
+
+      // Restoration was left to the primitive, and the settings home opened after.
+      expect(event.defaultPrevented).toBe(false);
+      expect(dispatch).toHaveBeenCalledWith(
+        "plugin.openSettings",
+        { pluginId: "acme" },
+        expect.anything()
+      );
+    }
+  );
+
+  it("starts a deferred action in its own panel when focus was restored to another one", async () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { hasPluginDatabases: true });
+    renderMenuFor(pluginPanel);
+    const own = document.createElement("div");
+    own.dataset.panelId = pluginPanel.id;
+    own.tabIndex = -1;
+    const other = document.createElement("input");
+    document.body.append(own, other);
+    const unregister = registerPanelFocusHandler(pluginPanel.id, () => {
+      own.focus();
+      return true;
+    });
+    try {
+      findRow("Back up data…")!.click();
+      // The primitive hands focus back to what had it before the right-click.
+      other.focus();
+      let focusedAtDispatch: Element | null = null;
+      dispatch.mockImplementation(async () => {
+        focusedAtDispatch = document.activeElement;
+        return { ok: true };
+      });
+
+      await closeMenu();
+
+      expect(dispatch).toHaveBeenCalledWith(
+        "plugin.backupDatabases",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(focusedAtDispatch).toBe(own);
+    } finally {
+      unregister();
+      own.remove();
+      other.remove();
+    }
+  });
+
+  it("renders Back up data… and the plugin's own items as the shared list does", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, {
+      hasPluginDatabases: true,
+      hasPluginSettings: true,
+      pluginMenu: [{ actionId: "acme.refresh" }, { actionId: "acme.missing" }],
+    });
+    act(() => publishRegisteredPluginActions([["acme.refresh", "Refresh data"]]));
+    renderMenuFor(pluginPanel);
+
+    expect(menuRows()).toEqual(
+      sharedRows({
+        canMoveToWorktree: false,
+        isDockable: panelKindIsDockable(VIEW_PLUGIN_KIND),
+        hasPluginDatabases: true,
+        hasPluginSettings: true,
+        pluginMenuItems: [{ actionId: "acme.refresh", label: "Refresh data" }],
+      })
+    );
+    expect(findRow("Back up data…")).toBeDefined();
+  });
+
+  it("dispatches a plugin's own item with the panel it was opened on, after focus is back", async () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { pluginMenu: [{ actionId: "acme.refresh" }] });
+    act(() => publishRegisteredPluginActions([["acme.refresh", "Refresh data"]]));
+    renderMenuFor(pluginPanel);
+
+    findRow("Refresh data")!.click();
+    expect(dispatch).not.toHaveBeenCalledWith("acme.refresh", expect.anything(), expect.anything());
+    await closeMenu();
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "acme.refresh",
+      { panelId: "panel-1" },
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ["a view panel's generic menu", VIEW_PLUGIN_KIND, false],
+    ["a PTY-backed panel's terminal menu", PTY_PLUGIN_KIND, true],
+  ] as const)("backs up the plugin's data from %s", async (_label, kind, hasPty) => {
+    registerPluginKind(kind, { hasPty, hasPluginDatabases: true });
+    renderMenuFor({ id: "panel-1", title: "Acme", kind, pluginId: "acme", worktreeId: "wt-1" });
+
+    findRow("Back up data…")!.click();
+    await closeMenu();
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "plugin.backupDatabases",
+      { pluginId: "acme" },
+      expect.anything()
+    );
+  });
+
+  it("offers no settings entry for a kind whose plugin has none", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND);
+    renderMenuFor({ id: "panel-1", title: "Acme", kind: VIEW_PLUGIN_KIND, worktreeId: "wt-1" });
+    expect(findRow("Plugin settings…")).toBeUndefined();
   });
 });

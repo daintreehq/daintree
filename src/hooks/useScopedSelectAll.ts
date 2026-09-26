@@ -29,6 +29,43 @@ function isTargetInScope(container: Element, target: Element): boolean {
 }
 
 /**
+ * Whether the region is the one the user last put a caret or selection in.
+ * Clicking plain rendered text moves the document selection there even though
+ * focus stays on the pane root, and there is exactly one selection per
+ * document, so this names at most one of several regions in the same pane.
+ */
+function holdsSelection(container: Element): boolean {
+  const anchor = container.ownerDocument.defaultView?.getSelection()?.anchorNode;
+  return anchor != null && container.contains(anchor);
+}
+
+/**
+ * Every mounted `"self"`-scoped region. Focus outranks a held selection: when
+ * the focused element sits in one of these, only that region may claim the
+ * chord, even if the selection was left behind in another.
+ */
+const selfScopedRegions = new Set<Element>();
+
+function isFocusInOtherSelfRegion(container: Element, target: Element): boolean {
+  for (const region of selfScopedRegions) {
+    if (region !== container && region.contains(target)) return true;
+  }
+  return false;
+}
+
+/**
+ * What a region claims Select All for.
+ *
+ * - `"surface"`: the region is the document of its pane or dialog, so the chord
+ *   anywhere in that surface selects it.
+ * - `"self"`: the region is one block among others (a plugin view can mount
+ *   several Markdown blocks beside its own controls), so it claims the chord
+ *   only when focus is inside it or the user last clicked or selected in it;
+ *   otherwise it declines and leaves the chord to whatever else owns it.
+ */
+export type SelectAllScope = "surface" | "self";
+
+/**
  * Give a read-only rendered region an owner for Select All.
  *
  * The Edit menu's Select All is a native accelerator that ends in
@@ -72,7 +109,8 @@ function isTargetInScope(container: Element, target: Element): boolean {
  */
 export function useScopedSelectAll(
   ref: RefObject<HTMLElement | null>,
-  enabled: boolean = true
+  enabled: boolean = true,
+  scope: SelectAllScope = "surface"
 ): void {
   const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
@@ -98,11 +136,25 @@ export function useScopedSelectAll(
     }
 
     if (!isTargetInScope(container, target)) return;
+    if (scope === "self" && !container.contains(target)) {
+      if (isFocusInOtherSelfRegion(container, target)) return;
+      if (!holdsSelection(container)) return;
+    }
 
     event.preventDefault();
     event.stopPropagation();
     container.ownerDocument.defaultView?.getSelection()?.selectAllChildren(container);
   });
+
+  useEffect(() => {
+    if (!enabled || scope !== "self") return;
+    const container = ref.current;
+    if (!container) return;
+    selfScopedRegions.add(container);
+    return () => {
+      selfScopedRegions.delete(container);
+    };
+  }, [enabled, scope, ref]);
 
   useEffect(() => {
     if (!enabled) return;

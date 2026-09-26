@@ -13,7 +13,10 @@ export const createFilePanelActions = (
       if (panel.kind !== "file") return state;
       if (panel.filePath === filePath) return state;
 
-      const newById = { ...state.panelsById, [id]: { ...panel, filePath } };
+      // A root pinned for the file a link opened says nothing about the file
+      // the user picks next, so it doesn't carry over.
+      const { fileContainmentRoot: _pinnedRoot, ...rest } = panel;
+      const newById = { ...state.panelsById, [id]: { ...rest, filePath } };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
     });

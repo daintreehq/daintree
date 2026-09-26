@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, ArrowUpCircle, RefreshCw, Trash2 } from "lucide-react";
 import {
   getPluginCategoryMeta,
@@ -9,6 +9,7 @@ import { CapabilityRow } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
+import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { Button } from "@/components/ui/button";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -35,6 +36,7 @@ import {
   type PluginCapability,
   type PluginInstallSource,
 } from "@shared/types/plugin";
+import { PluginDatabasesSection } from "./PluginDatabasesSection";
 
 /** Provenance source → short badge label (built-in / file / URL / catalog). */
 export const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
@@ -275,6 +277,13 @@ interface PluginDetailPaneProps {
   onRetry?: () => void;
   onUninstall: () => void;
   onCheckForUpdate: () => void;
+  /**
+   * A pending `plugin.openSettings` for this plugin: switches to the Settings
+   * tab and, with a `key`, lands on that setting. `nonce` distinguishes repeats.
+   */
+  settingsRequest?: { key?: string; nonce: number } | null;
+  /** Told once `settingsRequest` has been applied, so its source can drop it. */
+  onSettingsRequestHandled?: (nonce: number) => void;
 }
 
 /**
@@ -305,6 +314,8 @@ export function PluginDetailPane({
   onRetry,
   onUninstall,
   onCheckForUpdate,
+  settingsRequest = null,
+  onSettingsRequestHandled,
 }: PluginDetailPaneProps) {
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
@@ -318,13 +329,16 @@ export function PluginDetailPane({
   const categoryId = resolvePluginCategory(plugin.manifest);
   const categoryLabel = categoryId === "other" ? null : getPluginCategoryMeta(categoryId).label;
   const blocklisted = plugin.blocklisted === true;
-  const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
+  // From the manifest, not the running instance: a stopped plugin's settings
+  // stay reachable, and its custom section says it needs the plugin enabled.
+  const hasSettings = pluginHasSettings(plugin);
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
   const granted = grantedCapabilities(plugin);
   const commands = plugin.manifest.contributes.commands ?? [];
   const panels = plugin.manifest.contributes.panels ?? [];
   const agents = plugin.manifest.contributes.agents ?? [];
+  const databases = plugin.manifest.contributes.databases ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
   // Read here rather than inside the tab body: the Logs tab is earned by
   // content like every other tab past Overview (#11302), and the pane cannot
@@ -386,8 +400,31 @@ export function PluginDetailPane({
     if (currentTab !== activeTab) setActiveTab(currentTab);
   }, [currentTab, activeTab]);
 
+  // A settings deep link opens the Settings tab. With a key, the form lands on
+  // the row once its value has loaded, focuses it and reports back itself;
+  // without one, focus goes to the Settings tab, the heading of what was asked
+  // for — leaving it in the manager's search box would put the keyboard user
+  // back at the top of a list they never asked to browse.
+  const requestNonce = settingsRequest?.nonce;
+  const requestKey = settingsRequest?.key;
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [keylessFocusNonce, setKeylessFocusNonce] = useState<number | null>(null);
+  useEffect(() => {
+    if (requestNonce === undefined || !hasSettings) return;
+    setActiveTab("settings");
+    if (requestKey === undefined) setKeylessFocusNonce(requestNonce);
+  }, [requestNonce, requestKey, hasSettings]);
+  useEffect(() => {
+    if (keylessFocusNonce === null || currentTab !== "settings") return;
+    paneRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.focus({ preventScroll: true });
+    setKeylessFocusNonce(null);
+    onSettingsRequestHandled?.(keylessFocusNonce);
+  }, [keylessFocusNonce, currentTab, onSettingsRequestHandled]);
+
   return (
-    <div className="text-text-primary">
+    <div className="text-text-primary" ref={paneRef}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3.5 min-w-0">
           <PluginIconTile manifest={plugin.manifest} size="lg" dimmed={plugin.disabled === true} />
@@ -652,6 +689,8 @@ export function PluginDetailPane({
 
             {agents.length > 0 && <PluginContributedAgents agents={agents} />}
 
+            {databases.length > 0 && <PluginDatabasesSection databases={databases} />}
+
             {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
               <PluginContributors authors={plugin.manifest.authors} />
             )}
@@ -663,7 +702,18 @@ export function PluginDetailPane({
           plugin before turning it on, or keep editing it while it's off. The tab
           only exists when the plugin declares settings, so there's no empty
           branch to fall back to. */}
-        {currentTab === "settings" && <PluginSettingsForm plugin={plugin} />}
+        {currentTab === "settings" && (
+          <PluginSettingsForm
+            plugin={plugin}
+            viewScope="user"
+            focusRequest={
+              requestNonce !== undefined && requestKey !== undefined
+                ? { key: requestKey, nonce: requestNonce }
+                : null
+            }
+            onFocusHandled={onSettingsRequestHandled}
+          />
+        )}
 
         {currentTab === "capabilities" && (
           <PluginCapabilityList plugin={plugin} granted={granted} />

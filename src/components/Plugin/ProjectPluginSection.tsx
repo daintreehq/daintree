@@ -6,6 +6,7 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
+import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type ProjectPluginInfo,
@@ -286,6 +287,10 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             ))}
           </ul>
         </div>
+      )}
+
+      {plugin.databases && plugin.databases.length > 0 && (
+        <PluginDatabasesSection databases={plugin.databases} />
       )}
 
       {logs.lines && logs.lines.length > 0 && (

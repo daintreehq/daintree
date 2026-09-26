@@ -3301,6 +3301,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "plugins",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Snapshot every database a plugin has created to a file or folder the user picks in a native dialog. A plugin with no database on disk yet gets a notice instead.",
+    "examples": undefined,
+    "id": "plugin.backupDatabases",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Back up plugin data",
+  },
+  {
+    "category": "plugins",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Report why a plugin is in its state: its recorded load or activation failure, whether it runs, and its recent host-logger lines. A refused project plugin is reported with its rejection. An unknown id fails, listing the ids that exist.",
     "examples": [
       {
@@ -3322,6 +3334,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "query",
     "requiresArgs": true,
     "title": "Read plugin diagnostics",
+  },
+  {
+    "category": "plugins",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Show a plugin's settings in the one place they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a project-scoped setting. A declared key is requested for landing; an undeclared one is ignored.",
+    "examples": undefined,
+    "id": "plugin.openSettings",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Open plugin settings",
   },
   {
     "category": "plugins",

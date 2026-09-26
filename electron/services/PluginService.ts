@@ -41,6 +41,7 @@ import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import type { HostGitFactory } from "./plugin/pluginHostGit.js";
+import type { PluginDataBackupSource } from "./plugin/pluginDataBackup.js";
 import {
   PLUGIN_PROCESS_STREAM_CHANNEL,
   type PluginProcessInfo,
@@ -137,6 +138,7 @@ import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
+  pluginIdFromSettingsViewKindId,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../../shared/types/plugin.js";
@@ -259,7 +261,7 @@ import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
-import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
+import type { LoadedPluginInfo, PluginRequiredSettingsStatus } from "../../shared/types/plugin.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../shared/types/project.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
@@ -1118,6 +1120,7 @@ export class PluginService {
       // renders a settings form whether or not the plugin is running.
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
+      onSettingChanged: (pluginId) => this.emitSettingsChanged(pluginId),
     });
 
     this.storage = new PluginStorageManager({
@@ -2117,9 +2120,11 @@ export class PluginService {
     const viewsByBareId = new Map<string, ViewContribution>();
     const unmatchedViewIds = new Set<string>();
     for (const view of manifest.contributes.views) {
-      // `location` is narrowed to `"panel"` and `componentPath` safety is
-      // enforced by `ViewContributionSchema` at manifest parse — an unsupported
-      // location or unsafe path fails validation before we reach this loop.
+      // `componentPath` safety is enforced by `ViewContributionSchema` at
+      // manifest parse. A settings view renders in the plugin's settings home,
+      // never into a panel, so it is left out of the panel match entirely —
+      // `settingsViewPath` builds its URL on demand.
+      if (view.location === "settings") continue;
       if (viewsByBareId.has(view.id)) {
         // Two entries with the same bare id — last would silently overwrite
         // earlier. Surface the authoring mistake; keep the first to make the
@@ -2147,6 +2152,22 @@ export class PluginService {
       tourIdByPanelId.set(tour.panelKind, makePluginTourId(manifest.name, tour.id));
     }
 
+    // Every panel of the plugin offers "Plugin settings…" when there is anything
+    // to configure, and checks its required settings when it declares any.
+    // Only present-when-true, so a plugin with no settings registers exactly
+    // the config it did before.
+    const declaredSettings = manifest.contributes.settings;
+    const pluginSettingsKindFlags = {
+      ...(declaredSettings.length > 0 ||
+      manifest.contributes.views.some((v) => v.location === "settings")
+        ? { hasPluginSettings: true }
+        : {}),
+      ...(declaredSettings.some((s) => s.required === true) ? { hasRequiredSettings: true } : {}),
+      // "Back up data…" on every panel of a plugin that declares a database;
+      // main checks what actually exists when it is picked.
+      ...((manifest.contributes.databases?.length ?? 0) > 0 ? { hasPluginDatabases: true } : {}),
+    };
+
     for (const panel of manifest.contributes.panels) {
       // A project plugin's panel kinds register under the project-qualified
       // runtime id, so two projects can each contribute `acme.dash/overview`
@@ -2170,6 +2191,7 @@ export class PluginService {
       if (view) unmatchedViewIds.delete(panel.id);
       const tourId = tourIdByPanelId.get(panel.id);
       registerPanelKind({
+        ...pluginSettingsKindFlags,
         id: panelId,
         name: panel.name,
         iconId: panel.iconId,
@@ -2188,6 +2210,16 @@ export class PluginService {
         // bags on a promise the author never made (#12280).
         ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
         ...(tourId !== undefined ? { tourId } : {}),
+        // Authored in the manifest namespace, dispatched in the instance's —
+        // the same rewrite the toolbar and menu contributions above get.
+        ...(panel.menu !== undefined && panel.menu.length > 0
+          ? {
+              pluginMenu: panel.menu.map((item) => ({
+                actionId: qualifyActionId(item.actionId),
+                ...(item.label !== undefined ? { label: item.label } : {}),
+              })),
+            }
+          : {}),
         // Keyed by the INSTANCE, because `unregisterPluginPanelKinds` matches
         // on `extensionId` alone: keying by manifest id would make one
         // project's unload sweep every other project's copies of the same kind.
@@ -3124,6 +3156,10 @@ export class PluginService {
     requestRecoveryPath = false
   ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
+    const settingsPluginId = pluginIdFromSettingsViewKindId(panelKindId);
+    if (settingsPluginId !== null) {
+      return this.activatePluginForSettingsView(settingsPluginId, requestRecoveryPath);
+    }
     for (const [pluginId, plugin] of this.plugins) {
       const projectId = plugin.binding?.projectId ?? null;
       for (const panel of plugin.manifest.contributes.panels) {
@@ -3151,7 +3187,9 @@ export class PluginService {
           if (!live || live !== plugin) return { ok: true };
           const view = panel.hasPty
             ? undefined
-            : live.manifest.contributes.views.find((v) => v.id === panel.id);
+            : live.manifest.contributes.views.find(
+                (v) => v.id === panel.id && v.location !== "settings"
+              );
           if (!view) return { ok: true };
           // Same reason the map re-read above exists: without a live authority
           // the URL would address nothing, so offer no recovery path at all
@@ -3171,6 +3209,51 @@ export class PluginService {
       }
     }
     return { ok: true };
+  }
+
+  /**
+   * {@link activatePluginForView} for a plugin's `location: "settings"` view,
+   * which names no panel kind: the id carries the instance key directly. Same
+   * activation, failure reporting and recovery-URL contract as a panel view.
+   */
+  private async activatePluginForSettingsView(
+    pluginId: string,
+    requestRecoveryPath: boolean
+  ): Promise<PluginActivationResult> {
+    const plugin = this.plugins.get(pluginId);
+    const view = plugin?.manifest.contributes.views.find((v) => v.location === "settings");
+    if (!plugin || !view) return { ok: true };
+    await this.activatePlugin(pluginId);
+    const loadError = this.getPluginLoadError(pluginId);
+    if (loadError) return { ok: false, error: loadError.message, stack: loadError.stack };
+    if (!requestRecoveryPath) return { ok: true };
+    const live = this.plugins.get(pluginId);
+    if (!live || live !== plugin) return { ok: true };
+    const authority = this.pluginAuthorities.get(pluginId);
+    if (!authority) return { ok: true };
+    live.recoveryViewGeneration ??= allocatePluginViewGeneration();
+    return {
+      ok: true,
+      recoveryComponentPath: buildPluginViewUrl(
+        authority,
+        view.componentPath,
+        live.recoveryViewGeneration
+      ),
+    };
+  }
+
+  /**
+   * The `plugin://` URL of a running plugin's settings view under this load's
+   * authority and generation, or `undefined` when it declares none (or has no
+   * live authority, in which case the URL would address nothing).
+   */
+  private settingsViewPath(pluginId: string): string | undefined {
+    const plugin = this.plugins.get(pluginId);
+    const view = plugin?.manifest.contributes.views.find((v) => v.location === "settings");
+    if (!plugin || !view) return undefined;
+    const authority = this.pluginAuthorities.get(pluginId);
+    if (!authority) return undefined;
+    return buildPluginViewUrl(authority, view.componentPath, plugin.viewGeneration);
   }
 
   /**
@@ -4136,6 +4219,23 @@ export class PluginService {
   }
 
   /**
+   * What "Back up data…" needs to find a loaded plugin's databases, read from
+   * the host's own manifest and binding so a caller can name nothing but the
+   * plugin. Null when the plugin is not loaded.
+   */
+  getDataBackupSource(pluginId: string): PluginDataBackupSource | null {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return null;
+    return {
+      manifestId: plugin.manifest.name,
+      displayName: plugin.manifest.displayName ?? plugin.manifest.name,
+      declarations: plugin.manifest.contributes.databases ?? [],
+      projectRoot: plugin.binding?.projectRoot ?? null,
+      dataDir: this.pluginDataDir(pluginId),
+    };
+  }
+
+  /**
    * The managed plugins directory this instance discovers user plugins from.
    * Public because tests and the packaging flow construct the service with a
    * temp root, so callers that need to reason about that root (the manifest
@@ -4794,6 +4894,30 @@ export class PluginService {
       return;
     }
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /**
+   * Tell renderers a plugin's stored settings changed, so anything derived from
+   * them (the panel "needs setup" strip) re-reads. Scoped like runtime status:
+   * a project instance's key stays in its own project's views.
+   */
+  private emitSettingsChanged(pluginId: string): void {
+    if (this.disposed) return;
+    const event = { name: "plugin:settings-changed" as const, payload: { pluginId } };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /** {@link PluginSettingsManager.requiredStatusForUi}, for the renderer bridge. */
+  async getRequiredSettingsStatusForUi(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<PluginRequiredSettingsStatus> {
+    return this.settings.requiredStatusForUi(pluginId, projectId);
   }
 
   private setDevSessionDetail(pluginId: string, detail: string | null): void {
@@ -5530,9 +5654,9 @@ export class PluginService {
 
     // The instance is leaving the inventory, so its runtime status goes with it
     // — unlike a worker teardown, which retains the status precisely because the
-    // plugin is still there to explain (#12278). Emitted after the delete so the
-    // renderer receives the `null` that drops it from the map.
-    if (this.workerStatuses.delete(pluginId)) this.emitRuntimeStatus(pluginId);
+    // plugin is still there to explain (#12278). Emitted further down, once the
+    // plugin itself is gone.
+    this.workerStatuses.delete(pluginId);
 
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.
@@ -5562,6 +5686,11 @@ export class PluginService {
     this.plugins.delete(pluginId);
     this.pluginWorkerActivity.delete(pluginId);
     this.hostBindings.delete(pluginId);
+    // Every unload emits, worker or not: a plugin with only views has no
+    // worker status, yet a renderer holding one of its settings views needs
+    // the signal to retire it. Emitted after both deletes, so the renderer
+    // receives a `null` (or, under a dev session, a null `viewGeneration`).
+    this.emitRuntimeStatus(pluginId);
     // Drop the project-scope index entry with the instance it described.
     // Leaving it behind would keep filtering broadcasts against a plugin id
     // that no longer exists, and would resurface if the id were reloaded
@@ -5946,9 +6075,12 @@ export class PluginService {
       const blocklisted = blocklistReason !== undefined;
       const pendingRestart = blocklisted ? false : isRunning ? disabled : !disabled;
       const pluginDanger = computePluginDanger(p.manifest);
+      const settingsViewPath = isRunning ? this.settingsViewPath(instanceId) : undefined;
+      const settingsView = settingsViewPath !== undefined ? { settingsViewPath } : {};
       if (p.isBuiltin) {
         return {
           ...identity,
+          ...settingsView,
           manifest: p.manifest,
           dir: p.dir,
           loadedAt,
@@ -5970,6 +6102,7 @@ export class PluginService {
       const record = isProject ? undefined : installed[p.manifest.name];
       return {
         ...identity,
+        ...settingsView,
         manifest: p.manifest,
         dir: p.dir,
         loadedAt,

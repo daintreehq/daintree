@@ -14,6 +14,13 @@ import {
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
 import { createHash } from "node:crypto";
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
+import { validateRenderPdfOptions } from "../utils/pluginPdfOptions.js";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
+import { join as joinPath } from "node:path";
+import { databaseError, openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
+import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
   ActionDispatchResult,
@@ -31,8 +38,10 @@ import type { NotificationType } from "../types/notification.js";
 import type {
   ActionHandler,
   PluginActionContribution,
+  PluginRenderPdfOptions,
   PluginChannelSchema,
   PluginConfirmOptions,
+  PluginDatabaseLocation,
   PluginHostApi,
   PluginIdentity,
   PluginInputBoxOptions,
@@ -55,6 +64,9 @@ import type {
   PluginWorktreeSnapshot,
   PluginWorktreesResult,
   PluginAgentSnapshot,
+  PluginAgentPane,
+  PluginSendToAgentOptions,
+  PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
   PanelReloadResult,
   PluginSystemWakeEvent,
@@ -115,6 +127,13 @@ export interface SentToActiveAgentRecord {
   submit: boolean;
 }
 
+/** Captured `host.sendToAgent(text, options)` calls, with what each resolved. */
+export interface SentToAgentRecord {
+  text: string;
+  options: PluginSendToAgentOptions | undefined;
+  result: PluginSendToAgentResult;
+}
+
 export interface RegisteredForgeProviderRecord {
   descriptor: ForgeProviderDescriptor;
   impl: ForgeProviderImpl;
@@ -162,7 +181,11 @@ export interface ShowConfirmRecord {
   options: PluginConfirmOptions;
 }
 
-/** Captured `host.fs.writeFile(path, contents)` calls. */
+/**
+ * Captured `host.fs.writeFile(path, contents)` calls — and, in
+ * {@link MockHostState.fsAppendCalls}, `host.fs.appendFile(path, contents)`
+ * calls, where `contents` is the appended text alone.
+ */
 export interface FsWriteRecord {
   path: string;
   contents: string;
@@ -182,6 +205,8 @@ export interface MockHostState {
   readonly shownToasts: ReadonlyArray<ShownToastRecord>;
   readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
   readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
+  /** Every `host.sendToAgent` call that got past validation, in order. */
+  readonly sentToAgentCalls: ReadonlyArray<SentToAgentRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
@@ -198,6 +223,10 @@ export interface MockHostState {
   readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
   readonly spawnCalls: ReadonlyArray<SpawnRecord>;
   readonly fsWriteCalls: ReadonlyArray<FsWriteRecord>;
+  /** Captured `host.fs.appendFile(path, contents)` calls, in order. */
+  readonly fsAppendCalls: ReadonlyArray<FsWriteRecord>;
+  /** Captured `host.fs.mkdir(path)` calls, in order. */
+  readonly fsMkdirCalls: ReadonlyArray<string>;
   readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
   /** Captured `host.clipboard.writeText(text)` calls, in order. */
   readonly clipboardWriteCalls: ReadonlyArray<string>;
@@ -212,6 +241,12 @@ export interface MockHostState {
   readonly systemOpenPathCalls: ReadonlyArray<string>;
   /** Captured `host.system.showItemInFolder(path)` calls, in order. */
   readonly systemShowItemCalls: ReadonlyArray<string>;
+  /**
+   * Captured `host.documents.renderPdf(options)` calls, in order, as a shallow
+   * copy of the options. Only calls that passed the mock's validation are
+   * recorded; each one also leaves a placeholder PDF in the mock filesystem.
+   */
+  readonly documentsRenderPdfCalls: ReadonlyArray<PluginRenderPdfOptions>;
 
   /**
    * Replace the active worktree and notify every `onDidChangeActiveWorktree`
@@ -261,11 +296,13 @@ export interface MockHostState {
   seedActionCatalog(entries: PluginActionManifestEntry[]): void;
 
   /**
-   * Fire every active `host.fs.watch` callback with `changedPath`, simulating a
-   * filesystem change the watcher would observe. Like the other `simulate*`
-   * helpers it notifies every registered watcher without path filtering
-   * (containment is a production concern, not modeled here) and lets callback
-   * errors propagate so a test sees them.
+   * Fire the active `host.fs.watch` callbacks that would observe a change at
+   * `changedPath`: a watcher sees its watched path itself and that path's
+   * direct children, and — registered with `recursive: true` — anything
+   * beneath it. A watcher registered with `debounceMs` coalesces a burst into
+   * one trailing callback with the latest path after that delay (drive it with
+   * fake timers). Callback errors propagate so a test sees them; a debounced
+   * callback's error surfaces from the timer instead.
    */
   simulateFsWatch(changedPath: string): void;
 
@@ -285,6 +322,14 @@ export interface MockHostState {
   simulateWorktreesResult(result: PluginWorktreesResult | null): void;
   /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
   simulateConfirmResponse(result: boolean): void;
+  /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
+  simulateAgentsChange(agents: PluginAgentPane[]): void;
+  /**
+   * Configure what the user picks when `sendToAgent` is called without a
+   * `terminalId`: a pane id drafts there, `null` (the default) dismisses the
+   * picker and resolves `{ status: "cancelled" }`.
+   */
+  simulateSendToAgentPick(terminalId: string | null): void;
 }
 
 export interface CreateMockHostOptions {
@@ -295,6 +340,12 @@ export interface CreateMockHostOptions {
    * for an app-global plugin, which has no project.
    */
   projectRoot?: string;
+  /**
+   * The plugin's implicit data dir, inside which `fs.appendFile` grows
+   * missing parents the way the host does. Defaults to the same place the
+   * host uses: `~/.daintree/plugin-data/{pluginId}`.
+   */
+  pluginDataDir?: string;
   activeWorktree?: PluginWorktreeSnapshot | null;
   worktrees?: PluginWorktreeSnapshot[];
   /**
@@ -313,6 +364,18 @@ export interface CreateMockHostOptions {
    * production.
    */
   worktreesResult?: PluginWorktreesResult;
+  /**
+   * `host.db` backing. Every database id resolves to a real SQLite file under
+   * `directory` (a fresh temp directory when omitted), so a plugin's queries,
+   * migrations and change handling run against the same `node:sqlite` the real
+   * host uses. `declared` restricts which ids resolve, the way
+   * `contributes.databases` does in production; omit it to accept any id.
+   */
+  databases?: {
+    directory?: string;
+    declared?: readonly string[];
+    journalMode?: "delete" | "wal";
+  };
   settings?: {
     user?: Record<string, unknown>;
     project?: Record<string, unknown>;
@@ -364,6 +427,12 @@ export interface CreateMockHostOptions {
    * resolvable active agent" path. Defaults to `true`.
    */
   hasActiveAgent?: boolean;
+  /**
+   * The agent panes `agents.list()` reports and `sendToAgent` resolves a
+   * `terminalId` against. A pane with `canDraft: false` refuses with its
+   * `draftRefusal`. Defaults to none.
+   */
+  agents?: PluginAgentPane[];
 }
 
 /**
@@ -519,6 +588,16 @@ function validateQuickPickItems(items: PluginQuickPickItem[]): PluginQuickPickIt
   });
 }
 
+/** One `host.fs.watch` registration in the mock. */
+interface MockFsWatcher {
+  readonly paths: string[];
+  readonly callback: (changedPath: string) => void;
+  readonly recursive: boolean;
+  readonly debounceMs: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  pending: string | null;
+}
+
 /** Reject a postToPanel/broadcastToRenderer channel the way production does. */
 function isInvalidChannel(channel: unknown, allowEmpty: boolean): boolean {
   if (typeof channel !== "string") return true;
@@ -554,6 +633,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const shownToasts: ShownToastRecord[] = [];
   const dispatchedActions: DispatchedActionRecord[] = [];
   const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
+  const sentToAgentCalls: SentToAgentRecord[] = [];
+  let agentPanes: PluginAgentPane[] = options.agents ?? [];
+  let sendToAgentPick: string | null = null;
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
@@ -568,11 +650,17 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const spawnCalls: SpawnRecord[] = [];
   const fsFiles = new Map<string, string>();
   const fsWriteCalls: FsWriteRecord[] = [];
+  const fsAppendCalls: FsWriteRecord[] = [];
+  const fsMkdirCalls: string[] = [];
+  // Directories made through `mkdir`; directories implied by a written file's
+  // path are derived from `fsFiles` instead, as before.
+  const fsDirs = new Set<string>();
   const gitCommitCalls: GitCommitRecord[] = [];
   const clipboardWriteCalls: string[] = [];
   const clipboardWriteImageCalls: number[] = [];
   const systemOpenPathCalls: string[] = [];
   const systemShowItemCalls: string[] = [];
+  const documentsRenderPdfCalls: PluginRenderPdfOptions[] = [];
   let clipboardText = "";
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
@@ -650,7 +738,66 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const actionCatalog = new Map<string, PluginActionManifestEntry>();
   // Active `host.fs.watch` registrations; a watcher's disposer removes its
   // record, and `simulateFsWatch` fires each one's callback.
-  const fsWatchers = new Set<{ paths: string[]; callback: (changedPath: string) => void }>();
+  const fsWatchers = new Set<MockFsWatcher>();
+
+  const parentOf = (target: string): string => {
+    const slash = Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\"));
+    return slash <= 0 ? "/" : target.slice(0, slash);
+  };
+  const trimDir = (dir: string): string =>
+    dir.length > 1 && dir.endsWith("/") ? dir.slice(0, -1) : dir;
+  // A directory exists when `mkdir` made it, when a stored file or directory
+  // sits beneath it, or when it is (or contains) a worktree the mock was given.
+  // A path holding a file is never a directory.
+  const mockDirExists = (dir: string): boolean => {
+    if (dir === "/") return true;
+    if (fsFiles.has(dir)) return false;
+    if (fsDirs.has(dir)) return true;
+    const prefix = `${dir}/`;
+    for (const key of fsFiles.keys()) if (key.startsWith(prefix)) return true;
+    for (const made of fsDirs) if (made.startsWith(prefix)) return true;
+    const roots = [activeWorktree?.path, ...worktrees.map((w) => w.path)];
+    return roots.some((root) => root !== undefined && (root === dir || root.startsWith(prefix)));
+  };
+  // Every ancestor of `dir`, outermost first, then `dir` itself; "/" excluded.
+  const dirChain = (dir: string): string[] => {
+    const chain: string[] = [];
+    for (let current = trimDir(dir); current !== "/"; current = parentOf(current)) {
+      chain.unshift(current);
+    }
+    return chain;
+  };
+  // The host's implicit per-plugin data dir grows missing parents for a write
+  // inside it — and only inside it, so the match is anchored at the root, not
+  // found anywhere in the path. Separators are compared as "/" so a Windows
+  // root matches either spelling.
+  const toSlashes = (target: string): string => target.replace(/\\/g, "/");
+  const mockDataDir = trimDir(
+    toSlashes(options.pluginDataDir ?? joinPath(homedir(), ".daintree", "plugin-data", pluginId))
+  );
+  const isMockDataDirPath = (target: string): boolean =>
+    toSlashes(target).startsWith(`${mockDataDir}/`);
+  // A path is a file or a directory, never both. The host refuses a regular
+  // file standing where a directory chain it grows must go: TARGET_EXISTS at
+  // the directory it was asked for (or the data dir it bootstraps), and the
+  // lookup's own ENOTDIR for anything beneath a file.
+  const refuseFileInChain = (dir: string): void => {
+    const blocked = dirChain(dir).find((candidate) => fsFiles.has(candidate));
+    if (blocked === undefined) return;
+    const atTarget = blocked === trimDir(dir) || toSlashes(blocked) === mockDataDir;
+    throw fsWriteError(
+      atTarget ? "TARGET_EXISTS" : "ENOTDIR",
+      `mock fs: "${blocked}" is a file, not a directory`
+    );
+  };
+  // Outside the data dir nothing is grown, and a file among the ancestors
+  // fails the host's own lookup of the leaf.
+  const refuseFileAncestor = (target: string): void => {
+    const blocked = dirChain(parentOf(target)).find((candidate) => fsFiles.has(candidate));
+    if (blocked !== undefined) {
+      throw fsWriteError("ENOTDIR", `mock fs: "${blocked}" is a file, not a directory`);
+    }
+  };
 
   // Resolve the declared scope for a key from the opt-in `manifestSettings`,
   // mirroring PluginSettingsManager.getDeclaredScope. Returns undefined when no
@@ -658,6 +805,27 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const getDeclaredSettingScope = (key: string): PluginSettingsScope | undefined => {
     const def = options.manifestSettings?.find((s) => s.id === key);
     return def ? ((def.scope ?? "user") as PluginSettingsScope) : undefined;
+  };
+
+  // The scope a call targets: the declared one when omitted; a conflicting
+  // explicit scope throws, as the real host's write and subscribe guards do.
+  const resolveSettingScope = (
+    method: string,
+    key: string,
+    requested: PluginSettingsScope | undefined
+  ): PluginSettingsScope => {
+    const declared = getDeclaredSettingScope(key);
+    if (requested !== undefined && declared !== undefined && requested !== declared) {
+      throw new Error(
+        `settings.${method}: key "${key}" is declared in "${declared}" scope, not "${requested}"`
+      );
+    }
+    return requested ?? declared ?? "user";
+  };
+
+  const getDeclaredSettingDefault = (key: string): unknown => {
+    const declared = options.manifestSettings?.find((s) => s.id === key)?.default;
+    return declared === undefined ? undefined : (JSON.parse(JSON.stringify(declared)) as unknown);
   };
 
   const settings: SettingsApi = {
@@ -672,13 +840,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         );
       }
       const effectiveScope = declaredScope ?? scope ?? "user";
-      return settingsStore[effectiveScope].get(key) as T | undefined;
+      const stored = settingsStore[effectiveScope].get(key);
+      return (stored !== undefined ? stored : getDeclaredSettingDefault(key)) as T | undefined;
     },
     async set<T = unknown>(
       key: string,
       value: T,
-      scope: PluginSettingsScope = "user"
+      requestedScope?: PluginSettingsScope
     ): Promise<void> {
+      const scope = resolveSettingScope("set", key, requestedScope);
       if (value === undefined) {
         throw new Error("settings.set: value cannot be undefined");
       }
@@ -694,8 +864,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     onDidChange<T = unknown>(
       key: string,
       callback: (value: T | undefined) => void,
-      scope: PluginSettingsScope = "user"
+      requestedScope?: PluginSettingsScope
     ): Promise<() => void> {
+      const scope = resolveSettingScope("onDidChange", key, requestedScope);
       let subs = settingsSubs[scope].get(key);
       if (!subs) {
         subs = new Set();
@@ -714,6 +885,32 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         }
       };
       return Promise.resolve(dispose);
+    },
+    // Recorded as the dispatch the real host sends, so a test asserts it the
+    // same way it asserts any other `host.dispatch`.
+    async open(key?: string): Promise<void> {
+      if (key !== undefined && (typeof key !== "string" || key.length === 0)) {
+        throw new Error("settings.open: key must be a non-empty string when given");
+      }
+      dispatchedActions.push({
+        actionId: "plugin.openSettings",
+        args: key === undefined ? { pluginId } : { pluginId, key },
+      });
+    },
+    // Manifest-aware only: with no `manifestSettings` nothing is declared, so
+    // nothing can be required. A default never satisfies a required key.
+    async missingRequired(): Promise<string[]> {
+      return (options.manifestSettings ?? [])
+        .filter((def) => def.required === true)
+        .filter((def) => {
+          const store = settingsStore[(def.scope ?? "user") as PluginSettingsScope];
+          // As the real host: a secret is set once anything is stored — it is
+          // never decrypted to look — while other values must be non-empty.
+          if (def.type === "secret" || def.secret === true) return !store.has(def.id);
+          const value = store.get(def.id);
+          return value === undefined || value === null || value === "";
+        })
+        .map((def) => def.id);
     },
   };
 
@@ -819,9 +1016,71 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     projectRoot: mockProjectRoot,
   });
 
+  let mockDatabaseDir: string | null = options.databases?.directory ?? null;
+  const resolveMockDatabase = async (
+    id: string,
+    readonly = false
+  ): Promise<PluginDatabaseLocation> => {
+    if (typeof id !== "string" || id.length === 0) {
+      throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
+    }
+    const declared = options.databases?.declared;
+    if (declared && !declared.includes(id)) {
+      throw new Error(
+        `DB_NOT_DECLARED: plugin "${pluginId}" db: "${id}" is not declared in contributes.databases`
+      );
+    }
+    // Readonly locates an existing file and creates nothing, as the host does.
+    const notFound = () => databaseError("DB_NOT_FOUND", `database "${id}" does not exist yet`);
+    if (readonly && mockDatabaseDir === null) throw notFound();
+    mockDatabaseDir ??= mkdtempSync(path.join(tmpdir(), "daintree-mock-db-"));
+    if (!readonly) mkdirSync(mockDatabaseDir, { recursive: true });
+    // Canonical, as the host's is: a directory swapped for a link after the
+    // handle opened resolves elsewhere, and the handle then refuses to reopen.
+    let realDir: string;
+    try {
+      realDir = realpathSync(mockDatabaseDir);
+    } catch (error) {
+      if (readonly && (error as NodeJS.ErrnoException).code === "ENOENT") throw notFound();
+      throw error;
+    }
+    const target = path.join(realDir, `${id}.db`);
+    const leaf = lstatSync(target, { throwIfNoEntry: false });
+    if (leaf?.isSymbolicLink()) {
+      throw databaseError("TARGET_IS_SYMLINK", `database "${id}" file is a symlink`);
+    }
+    if (leaf && !leaf.isFile()) {
+      throw databaseError("TARGET_UNAVAILABLE", `database "${id}" is not a regular file`);
+    }
+    if (!leaf && readonly) throw notFound();
+    return Object.freeze({
+      id,
+      location: "local" as const,
+      path: target,
+      projectRelativePath: null,
+      journalMode: options.databases?.journalMode ?? "delete",
+    });
+  };
+
   const host: PluginHostApi & MockHostState = {
     pluginId,
     pluginInfo,
+    db: {
+      resolve: (id, resolveOptions) => resolveMockDatabase(id, resolveOptions?.readonly === true),
+      open: async (id, openOptions) =>
+        openPluginDatabase(await resolveMockDatabase(id, openOptions?.readonly === true), {
+          ...openOptions,
+          revalidate: () => resolveMockDatabase(id, openOptions?.readonly === true),
+          // The mock has no fs gate; it approves any absolute destination.
+          prepareBackup: async (destPath) => {
+            if (!path.isAbsolute(destPath)) {
+              throw new Error(`Plugin "${pluginId}" db.backup: destination must be absolute`);
+            }
+            // The real host returns the realpath form, which the handle checks.
+            return path.join(realpathSync(path.dirname(destPath)), path.basename(destPath));
+          },
+        }),
+    },
     panelKindId(bareId: string) {
       if (typeof bareId !== "string" || bareId.length === 0) {
         throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
@@ -1042,6 +1301,67 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         throw new Error("NO_ACTIVE_AGENT: no active agent terminal to receive input");
       }
       sentToActiveAgentCalls.push({ text, submit: options?.submit === true });
+    },
+    agents: {
+      async list() {
+        if (!capabilities.has("agent:read")) {
+          throw new Error(
+            'PERMISSION_REQUIRED: agents.list requires "agent:read", which is not declared in manifest.capabilities'
+          );
+        }
+        return agentPanes.map((pane) => ({ ...pane }));
+      },
+    },
+    async sendToAgent(text, options, callOptions) {
+      // Same order as production: capability, then argument validation. The
+      // mock has no renderer, so a named pane resolves against `agents` and a
+      // picker resolves to `simulateSendToAgentPick`.
+      if (!capabilities.has("agent:input")) {
+        throw new Error(
+          'PERMISSION_REQUIRED: sendToAgent requires "agent:input", which is not declared in manifest.capabilities'
+        );
+      }
+      if (typeof text !== "string" || text.trim().length === 0) {
+        throw new Error("sendToAgent: text must be a non-empty, non-whitespace string");
+      }
+      if (options !== undefined && (typeof options !== "object" || options === null)) {
+        throw new Error("sendToAgent: options must be an object");
+      }
+      if (options?.title !== undefined && typeof options.title !== "string") {
+        throw new Error("sendToAgent: options.title must be a string");
+      }
+      if (validateAgentContextPayload({ v: 1, text, title: options?.title }) === null) {
+        throw new Error("sendToAgent: text or options.title is over its length limit");
+      }
+      for (const key of ["terminalId", "worktreeId"] as const) {
+        const value = options?.[key];
+        // Same bound as production's `SEND_TO_AGENT_MAX_ID_LENGTH`.
+        if (
+          value !== undefined &&
+          (typeof value !== "string" || value.length === 0 || value.length > 512)
+        ) {
+          throw new Error(
+            `sendToAgent: options.${key} must be a non-empty string of at most 512 characters`
+          );
+        }
+      }
+      if (callOptions?.signal?.aborted) return { status: "cancelled" };
+      const target = options?.terminalId ?? sendToAgentPick;
+      let result: PluginSendToAgentResult;
+      if (target === null) {
+        result = { status: "cancelled" };
+      } else {
+        const pane = agentPanes.find((candidate) => candidate.terminalId === target);
+        if (!pane) {
+          result = { status: "refused", reason: "unknown-terminal" };
+        } else if (!pane.canDraft) {
+          result = { status: "refused", reason: pane.draftRefusal ?? "not-agent" };
+        } else {
+          result = { status: "drafted", terminalId: pane.terminalId };
+        }
+      }
+      sentToAgentCalls.push({ text, options, result });
+      return result;
     },
     onDidChangeAgentState(callback) {
       agentStateSubs.add(callback);
@@ -1387,11 +1707,57 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         // to exercise a plugin's byte path without modelling binary storage.
         return new TextEncoder().encode(v);
       },
+      async readFileWithRevision(filePath, options) {
+        options?.signal?.throwIfAborted();
+        const v = fsFiles.get(filePath);
+        if (v === undefined) {
+          throw new Error(`ENOENT: mock fs has no file "${filePath}"`);
+        }
+        return { contents: v, revision: mockRevision(v) };
+      },
+      async mkdir(dirPath) {
+        if (typeof dirPath !== "string" || dirPath.length === 0) {
+          throw new Error(`Plugin "${pluginId}" fs.mkdir: path must be a non-empty string`);
+        }
+        refuseFileInChain(dirPath);
+        // Recursive, like the host: every missing ancestor is created too.
+        for (const dir of dirChain(dirPath)) fsDirs.add(dir);
+        fsMkdirCalls.push(dirPath);
+      },
+      async appendFile(filePath, contents) {
+        if (typeof contents !== "string") {
+          throw new Error(`Plugin "${pluginId}" fs.appendFile: contents must be a string`);
+        }
+        const parent = parentOf(filePath);
+        if (!mockDirExists(parent)) {
+          if (!isMockDataDirPath(filePath)) {
+            refuseFileAncestor(filePath);
+            throw new Error(`ENOENT: mock fs: parent directory "${parent}" does not exist`);
+          }
+          refuseFileInChain(parent);
+          for (const dir of dirChain(parent)) fsDirs.add(dir);
+        }
+        if (!fsFiles.has(filePath) && mockDirExists(filePath)) {
+          throw fsWriteError("TARGET_UNAVAILABLE", `mock fs: "${filePath}" is not a regular file`);
+        }
+        fsFiles.set(filePath, (fsFiles.get(filePath) ?? "") + contents);
+        fsAppendCalls.push({ path: filePath, contents });
+      },
       async writeFile(filePath, contents, options) {
         // The checked-write contract (#12323), modelled just far enough for a
         // plugin's conflict path to be exercised: `expectedRevision` compares
         // against the stored text's revision, `null` means create-new.
         const existing = fsFiles.get(filePath);
+        if (isMockDataDirPath(filePath)) refuseFileInChain(parentOf(filePath));
+        else refuseFileAncestor(filePath);
+        if (existing === undefined && mockDirExists(filePath)) {
+          // Create-new sees any entry as taken; every other write fails on
+          // the directory itself.
+          if (options?.expectedRevision === null) {
+            throw fsWriteError("TARGET_EXISTS", `mock fs: "${filePath}" already exists`);
+          }
+          throw new Error(`EISDIR: mock fs: "${filePath}" is a directory`);
+        }
         if (options !== undefined) {
           const expected = options.expectedRevision;
           if (expected === null && existing !== undefined) {
@@ -1427,6 +1793,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         // (basename only, like a real readdir).
         const prefix = dirPath.endsWith("/") ? dirPath : `${dirPath}/`;
         const isDir = new Map<string, boolean>();
+        for (const made of fsDirs) {
+          if (!made.startsWith(prefix)) continue;
+          const rest = made.slice(prefix.length);
+          const slash = rest.indexOf("/");
+          const name = slash === -1 ? rest : rest.slice(0, slash);
+          if (name.length > 0) isDir.set(name, true);
+        }
         for (const filePath of fsFiles.keys()) {
           if (!filePath.startsWith(prefix)) continue;
           const rest = filePath.slice(prefix.length);
@@ -1463,7 +1836,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       async stat(targetPath, options) {
         options?.signal?.throwIfAborted();
         return {
-          isDirectory: false,
+          isDirectory: fsDirs.has(targetPath),
           isFile: fsFiles.has(targetPath),
           isSymbolicLink: false,
           size: fsFiles.get(targetPath)?.length ?? 0,
@@ -1477,18 +1850,48 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (typeof callback !== "function") {
           throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
         }
+        const recursive = options?.recursive;
+        if (recursive !== undefined && typeof recursive !== "boolean") {
+          throw new Error(`Plugin "${pluginId}" fs.watch: recursive must be a boolean`);
+        }
+        const debounceMs = options?.debounceMs;
+        if (
+          debounceMs !== undefined &&
+          (typeof debounceMs !== "number" || !Number.isFinite(debounceMs) || debounceMs < 0)
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" fs.watch: debounceMs must be a finite, non-negative number`
+          );
+        }
+        const allowMissing = options?.allowMissing;
+        if (allowMissing !== undefined && typeof allowMissing !== "boolean") {
+          throw new Error(`Plugin "${pluginId}" fs.watch: allowMissing must be a boolean`);
+        }
         if (!Array.isArray(paths) || paths.length === 0) {
           throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
         }
         // Record the watcher so `simulateFsWatch` can fire it. The disposer
         // removes the record (idempotent) — once disposed the watcher no longer
-        // receives simulated changes.
-        const record = { paths, callback };
+        // receives simulated changes, and a pending debounced one is dropped.
+        const record: MockFsWatcher = {
+          paths: paths.map(trimDir),
+          callback,
+          recursive: recursive === true,
+          // Same floor and ceiling as the host.
+          debounceMs:
+            debounceMs === undefined || debounceMs === 0
+              ? 0
+              : Math.min(Math.max(debounceMs, 50), 60_000),
+          timer: null,
+          pending: null,
+        };
         fsWatchers.add(record);
         let disposed = false;
         return () => {
           if (disposed) return;
           disposed = true;
+          if (record.timer !== null) clearTimeout(record.timer);
+          record.timer = null;
           fsWatchers.delete(record);
         };
       },
@@ -1553,6 +1956,29 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         systemShowItemCalls.push(targetPath);
       },
     },
+    // No Chromium here, so nothing is rendered: the call is recorded and a
+    // placeholder PDF lands in the in-memory fs, so a plugin that reads,
+    // lists or opens its export afterwards sees a file. Options go through
+    // the real host's validator and an `htmlPath` must exist in the mock fs;
+    // containment and gating live in the real host and are tested there.
+    documents: {
+      async renderPdf(options) {
+        // The real host's own validator, so a plugin's export test fails on
+        // exactly what Daintree refuses.
+        validateRenderPdfOptions(pluginId, options);
+        if (options.htmlPath !== undefined && !fsFiles.has(options.htmlPath)) {
+          throw new Error(`INVALID_PATH: mock fs has no file "${options.htmlPath}"`);
+        }
+        documentsRenderPdfCalls.push({ ...options });
+        const placeholder = `%PDF-1.4\n% createMockHost placeholder\n%%EOF\n`;
+        fsFiles.set(options.outputPath, placeholder);
+        return {
+          path: options.outputPath,
+          bytes: new TextEncoder().encode(placeholder).byteLength,
+          revision: mockRevision(placeholder),
+        };
+      },
+    },
     settings,
     storage,
     logger: {
@@ -1568,6 +1994,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     shownToasts,
     dispatchedActions,
     sentToActiveAgentCalls,
+    sentToAgentCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
     registeredMcpTools,
@@ -1579,11 +2006,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     showConfirmCalls,
     spawnCalls,
     fsWriteCalls,
+    fsAppendCalls,
+    fsMkdirCalls,
     gitCommitCalls,
     clipboardWriteCalls,
     clipboardWriteImageCalls,
     systemOpenPathCalls,
     systemShowItemCalls,
+    documentsRenderPdfCalls,
 
     simulateActiveWorktreeChange(snapshot) {
       activeWorktree = snapshot;
@@ -1623,7 +2053,32 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateFsWatch(changedPath) {
       // Snapshot before firing so a callback that registers/disposes a watcher
       // doesn't mutate the set mid-iteration.
-      for (const { callback } of [...fsWatchers]) callback(changedPath);
+      for (const record of [...fsWatchers]) {
+        if (!fsWatchers.has(record)) continue;
+        // The paths the real watcher would report: the watched path itself, a
+        // direct child, or — only for a recursive watch — anything beneath it.
+        const covered = record.paths.some(
+          (watched) =>
+            changedPath === watched ||
+            parentOf(changedPath) === watched ||
+            (record.recursive && changedPath.startsWith(watched === "/" ? "/" : `${watched}/`))
+        );
+        if (!covered) continue;
+        if (record.debounceMs === 0) {
+          record.callback(changedPath);
+          continue;
+        }
+        // One trailing callback per burst, carrying the latest path — drive it
+        // with fake timers or a real wait.
+        record.pending = changedPath;
+        if (record.timer !== null) clearTimeout(record.timer);
+        record.timer = setTimeout(() => {
+          record.timer = null;
+          const latest = record.pending;
+          record.pending = null;
+          if (latest !== null && fsWatchers.has(record)) record.callback(latest);
+        }, record.debounceMs);
+      }
     },
     simulateQuickPickResponse(result) {
       quickPickResponse = result;
@@ -1633,6 +2088,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     simulateConfirmResponse(result) {
       confirmResponse = result;
+    },
+    simulateAgentsChange(agents) {
+      agentPanes = agents;
+    },
+    simulateSendToAgentPick(terminalId) {
+      sendToAgentPick = terminalId;
     },
   };
 

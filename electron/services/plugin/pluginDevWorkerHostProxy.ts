@@ -35,8 +35,12 @@ import type {
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
   PluginSystemWakeEvent,
+  PluginDatabase,
+  PluginDatabaseLocation,
   PluginFsDirEntry,
   PluginFsWriteResult,
+  PluginFsReadWithRevisionResult,
+  PluginRenderPdfResult,
   PluginFsStat,
   PluginGitStatus,
   PluginGitCommitResult,
@@ -60,10 +64,16 @@ import type {
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
-import type { PanelReloadResult } from "../../../shared/types/plugin.js";
+import type {
+  PanelReloadResult,
+  PluginAgentPane,
+  PluginSendToAgentResult,
+} from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import { errorWithFields } from "./pluginHostErrorFields.js";
+import { openPluginDatabase } from "./pluginDatabase.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type {
   PluginHostCallMethod,
@@ -125,6 +135,8 @@ export class PluginDevWorkerHostProxy {
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
   private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
+  /** Open `host.db` handles, closed on dispose so a reload never leaks a connection. */
+  private readonly databases = new Set<PluginDatabase>();
   /** Bound `agentMcp` rosters, keyed by endpoint id. The map object per roster
    * is its identity: a disposer only unbinds the roster it was handed for. */
   private readonly mcpRosters = new Map<string, Map<string, RegisteredMcpTool>>();
@@ -174,6 +186,8 @@ export class PluginDevWorkerHostProxy {
     for (const controller of this.mcpInvokeAborts.values()) controller.abort();
     this.mcpInvokeAborts.clear();
     this.commandModules.clear();
+    for (const database of this.databases) void database.close();
+    this.databases.clear();
   }
 
   /** Route a message received from main. Returns true if it was consumed. */
@@ -185,7 +199,7 @@ export class PluginDevWorkerHostProxy {
         this.pendingCalls.delete(msg.requestId);
         pending.cleanup?.();
         if (msg.ok) pending.resolve(msg.result);
-        else pending.reject(new Error(msg.error));
+        else pending.reject(errorWithFields(msg.error, msg.errorFields));
         return true;
       }
       case "invoke":
@@ -426,7 +440,8 @@ export class PluginDevWorkerHostProxy {
     method: PluginHostCallMethod,
     params: unknown,
     graceValue: T,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { hostAnswersAbort?: boolean }
   ): Promise<T> {
     if (this.disposed) {
       return Promise.resolve(graceValue);
@@ -436,14 +451,21 @@ export class PluginDevWorkerHostProxy {
     }
     // Cancellation settles the grace value inside `call`'s abort branch, so a
     // real validation or transport error is never rewritten into a dismissal.
-    return this.call<T>(method, params, signal, { value: graceValue });
+    return this.call<T>(method, params, signal, { value: graceValue }, options?.hostAnswersAbort);
   }
 
+  /**
+   * `hostAnswersAbort` is for a call whose outcome main decides even after a
+   * cancel: the abort still reaches main as a `host-cancel`, but the caller
+   * keeps waiting for main's answer instead of being settled here, because
+   * main may already have acted and reports what actually happened.
+   */
   private call<T>(
     method: PluginHostCallMethod,
     params: unknown,
     signal?: AbortSignal,
-    grace?: { value: unknown }
+    grace?: { value: unknown },
+    hostAnswersAbort = false
   ): Promise<T> {
     if (this.disposed) {
       return Promise.reject(new Error("Plugin dev worker disposed"));
@@ -468,6 +490,15 @@ export class PluginDevWorkerHostProxy {
         onAbort = (): void => {
           const pending = this.pendingCalls.get(requestId);
           if (!pending) return;
+          if (hostAnswersAbort) {
+            try {
+              this.post({ type: "host-cancel", requestId });
+            } catch {
+              // best-effort — the call itself is still in flight, and its
+              // answer (or dispose's grace value) still settles the caller
+            }
+            return;
+          }
           this.pendingCalls.delete(requestId);
           cleanup();
           try {
@@ -927,6 +958,23 @@ export class PluginDevWorkerHostProxy {
       // Capability check, consent prompt, active-agent resolution, and the PTY
       // write all run on the real main-side host — the worker only relays.
       sendToActiveAgent: (text, options) => this.call<void>("sendToActiveAgent", { text, options }),
+      // Listing and drafting both run on the real host in main, which owns the
+      // capability gate, the consent prompt and the project binding. Grace
+      // values match the host's own unload answers ([] / cancelled).
+      agents: {
+        list: () => this.callWithGrace<PluginAgentPane[]>("agents.list", undefined, []),
+      },
+      // A cancel is main's to answer: a targeted draft, or a picker the user
+      // already accepted, lands anyway, and settling "cancelled" here would
+      // report a draft that happened as one that did not.
+      sendToAgent: (text, options, callOptions) =>
+        this.callWithGrace<PluginSendToAgentResult>(
+          "sendToAgent",
+          { text, options },
+          { status: "cancelled" },
+          callOptions?.signal,
+          { hostAnswersAbort: true }
+        ),
       // Imperative UI prompts (#10522). Post-activation-safe (no
       // assertActivationOpen): plugins prompt from command handlers. They use
       // callWithGrace so a plugin unload mid-prompt resolves the dismiss value
@@ -981,11 +1029,47 @@ export class PluginDevWorkerHostProxy {
       // missing capability / out-of-scope path, preserving the in-process
       // contract) and opens a subscription whose change events arrive over the
       // subscription-event channel keyed by the same id.
+      // The host resolves and contains the path; the connection is opened
+      // here, in the worker, so queries never cross the port.
+      db: {
+        resolve: (id, options) =>
+          this.call<PluginDatabaseLocation>("db.resolve", {
+            id,
+            ...(options?.readonly === true && { readonly: true }),
+          }),
+        open: async (id, options) => {
+          const params = { id, ...(options?.readonly === true && { readonly: true }) };
+          const location = await this.call<PluginDatabaseLocation>("db.resolve", params);
+          const database: PluginDatabase = await openPluginDatabase(location, {
+            ...options,
+            revalidate: () => this.call<PluginDatabaseLocation>("db.resolve", params),
+            prepareBackup: (destPath) => this.call<string>("db.prepareBackup", { id, destPath }),
+            onClosed: () => this.databases.delete(database),
+          });
+          if (this.disposed) {
+            await database.close();
+            throw new Error(
+              `PLUGIN_UNLOADED: plugin "${this.pluginId}" db.open: plugin is no longer loaded`
+            );
+          }
+          this.databases.add(database);
+          return database;
+        },
+      },
       fs: {
         readFile: (filePath, options) =>
           this.call<string>("fs.readFile", { path: filePath }, options?.signal),
         readFileBytes: (filePath, options) =>
           this.call<Uint8Array>("fs.readFileBytes", { path: filePath }, options?.signal),
+        readFileWithRevision: (filePath, options) =>
+          this.call<PluginFsReadWithRevisionResult>(
+            "fs.readFileWithRevision",
+            { path: filePath },
+            options?.signal
+          ),
+        mkdir: (dirPath) => this.call<void>("fs.mkdir", { path: dirPath }),
+        appendFile: (filePath, contents) =>
+          this.call<void>("fs.appendFile", { path: filePath, contents }),
         writeFile: (filePath, contents, options) =>
           this.call<PluginFsWriteResult>("fs.writeFile", {
             path: filePath,
@@ -1006,9 +1090,30 @@ export class PluginDevWorkerHostProxy {
           // ahead of the subscription map; tear it down if the watch rejects.
           this.subscriptions.set(subscriptionId, (payload) => callback(payload as string));
           try {
-            await this.call<void>("fs.watch", { subscriptionId, paths }, options?.signal);
+            await this.call<void>(
+              "fs.watch",
+              {
+                subscriptionId,
+                paths,
+                // Forwarded as given so the host rejects a malformed value.
+                ...(options?.recursive !== undefined && { recursive: options.recursive }),
+                ...(options?.debounceMs !== undefined && { debounceMs: options.debounceMs }),
+                ...(options?.allowMissing !== undefined && { allowMissing: options.allowMissing }),
+              },
+              options?.signal
+            );
           } catch (err) {
             this.subscriptions.delete(subscriptionId);
+            // A cancel that reaches main after the watch settled finds no call
+            // to abort, so main would keep a watcher nobody listens to; this
+            // releases it (and is a no-op when main never registered one).
+            if (options?.signal?.aborted) {
+              try {
+                this.post({ type: "unsubscribe", subscriptionId });
+              } catch {
+                // best-effort
+              }
+            }
             throw err;
           }
           let disposed = false;
@@ -1050,6 +1155,11 @@ export class PluginDevWorkerHostProxy {
         showItemInFolder: (targetPath) =>
           this.call<void>("system.showItemInFolder", { targetPath }),
       },
+      // Rendering needs Electron's printToPDF, which only exists in main.
+      documents: {
+        renderPdf: (options) =>
+          this.call<PluginRenderPdfResult>("documents.renderPdf", { options }),
+      },
       settings: {
         // Forward an omitted scope as `undefined` (not a defaulted "user") so the
         // real host resolves the key's manifest-declared scope on read (#10586) —
@@ -1057,12 +1167,15 @@ export class PluginDevWorkerHostProxy {
         // rejects.
         get: <T = unknown>(key: string, scope?: PluginSettingsScope) =>
           this.call<T | undefined>("settings.get", { key, scope }),
-        set: <T = unknown>(key: string, value: T, scope: PluginSettingsScope = "user") =>
+        // Omitted scopes cross as `undefined` for the same reason as `get`.
+        set: <T = unknown>(key: string, value: T, scope?: PluginSettingsScope) =>
           this.call<void>("settings.set", { key, value, scope }),
+        open: (key?: string) => this.call<void>("settings.open", key === undefined ? {} : { key }),
+        missingRequired: () => this.call<string[]>("settings.missingRequired", {}),
         onDidChange: <T = unknown>(
           key: string,
           callback: (value: T | undefined) => void,
-          scope: PluginSettingsScope = "user"
+          scope?: PluginSettingsScope
         ) => {
           this.assertActivationOpen("settings.onDidChange");
           const dispose = this.subscribe(

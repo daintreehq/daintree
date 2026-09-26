@@ -9,6 +9,7 @@ import {
 import {
   AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   BUILT_IN_PLUGIN_CAPABILITIES,
+  PANEL_MENU_MAX_ITEMS,
   PLUGIN_CATEGORY_IDS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
 } from "../../shared/types/plugin.js";
@@ -63,6 +64,24 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
 // contribution wired to one is a dead button — reject it at parse time (#10580).
 const DENY_PLUGIN_DISPATCH_SET: ReadonlySet<string> = new Set(DENY_PLUGIN_DISPATCH_ACTION_IDS);
 
+// The whole-id grammar the host's action registration enforces
+// (`PLUGIN_ACTION_ID_RE` in PluginService), so a panel menu accepts exactly
+// the ids a plugin can actually register.
+const PANEL_MENU_ACTION_ID = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+
+/**
+ * One `contributes.panels[].menu` entry. `actionId` must name one of the
+ * plugin's own actions, enforced by the manifest-level `superRefine` below;
+ * the host shows the entry while that action is registered and dispatches it
+ * with `{ panelId }`.
+ */
+export const PanelMenuItemSchema = z
+  .object({
+    actionId: z.string().min(1).max(200),
+    label: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+
 /**
  * The unrefined object base — exported so the field-consumer contract test
  * (`manifestContributionConsumers.test.ts`) can enumerate `.shape` without
@@ -93,18 +112,24 @@ export const PanelContributionObjectSchema = z
     // a NEWER build of the plugin rather than let it be misread and rewritten.
     // Bump it when the shape changes incompatibly, never for an additive key.
     stateVersion: z.number().int().min(1).max(1_000_000).optional(),
+    // The plugin's own actions on this panel's ⋯ and right-click menus, in
+    // declared order. Which actions may appear is checked at manifest level,
+    // where the plugin's namespace and declared commands are known.
+    menu: z.array(PanelMenuItemSchema).max(PANEL_MENU_MAX_ITEMS).optional(),
   })
   .strict();
 
 /**
- * The validated `contributes.panels` entry: the object base plus a cross-field
- * rule. `hasPty: true` with an explicit `dockable: false` is rejected — a
+ * The validated `contributes.panels` entry: the object base plus cross-field
+ * rules. `hasPty: true` with an explicit `dockable: false` is rejected — a
  * PTY-backed plugin kind renders through `TerminalPane` and its kind collapses
  * to the built-in dockable `terminal` at creation (`addPanel.ts`), so the
- * opt-out could never be honored and would silently vanish. Plugin PTY kinds
- * are unsupported in v1 anyway; surface the conflict to the author at
- * manifest-write time instead of swallowing it at runtime (#11375). `hasPty`
- * has already defaulted to `false` here, so an omitted `hasPty` never trips it.
+ * opt-out could never be honored and would silently vanish; surface the
+ * conflict to the author at manifest-write time instead of swallowing it at
+ * runtime (#11375). `hasPty` with menu entries is rejected for the same reason: a
+ * PTY kind uses the terminal menus, where the entries would never show.
+ * `hasPty` has already defaulted to `false` here, so an omitted `hasPty` never
+ * trips either.
  */
 export const PanelContributionSchema = PanelContributionObjectSchema.superRefine((panel, ctx) => {
   if (panel.hasPty === true && panel.dockable === false) {
@@ -116,6 +141,27 @@ export const PanelContributionSchema = PanelContributionObjectSchema.superRefine
       params: { errorCode: "pty_panel_dock_opt_out_unsupported" },
     });
   }
+  if (panel.hasPty === true && panel.menu !== undefined && panel.menu.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["menu"],
+      message:
+        "A PTY-backed panel (hasPty: true) renders as a terminal and uses the terminal's menus, so its menu entries would never appear. Remove the menu, or put the actions on a view panel.",
+      params: { errorCode: "pty_panel_menu_unsupported" },
+    });
+  }
+  const seenMenuActions = new Set<string>();
+  panel.menu?.forEach((item, index) => {
+    if (seenMenuActions.has(item.actionId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["menu", index, "actionId"],
+        message: `Duplicate menu action "${item.actionId}" — each action appears at most once in a panel's menu.`,
+        params: { errorCode: "panel_menu_duplicate_action" },
+      });
+    }
+    seenMenuActions.add(item.actionId);
+  });
 });
 
 export const ToolbarButtonContributionSchema = z
@@ -246,13 +292,14 @@ function isSafePluginAssetPath(componentPath: string): boolean {
 }
 
 /**
- * View contribution. A view renders into a `contributes.panels` entry with a
- * matching `id`; at plugin load (`PluginService.loadPlugin`) the panels loop
- * attaches the view's `componentPath` to that panel kind. A view whose `id`
- * matches no panel is rejected by the manifest-level `superRefine` (#10620) —
- * it would otherwise silently never render. Only `location: "panel"` is supported — it
- * sets `showInPalette: true` so the view is spawnable from the panel palette.
- * `"sidebar"` is rejected at the schema boundary: the sidebar host does not
+ * View contribution. A `location: "panel"` view renders into a
+ * `contributes.panels` entry with a matching `id`; at plugin load
+ * (`PluginService.loadPlugin`) the panels loop attaches the view's
+ * `componentPath` to that panel kind. A panel view whose `id` matches no panel
+ * is rejected by the manifest-level `superRefine` (#10620) — it would otherwise
+ * silently never render. A `location: "settings"` view is the plugin's custom
+ * settings section instead: it names no panel, and a manifest may declare at
+ * most one. `"sidebar"` is rejected at the schema boundary: the sidebar host does not
  * exist yet, so accepting it would validate a manifest the runtime cannot
  * honor. Contributed via the stable `contributes.views` key (the pre-1.0
  * `experimental_views` name is still accepted as a deprecated alias). See
@@ -265,7 +312,10 @@ export const ViewContributionSchema = z
       message:
         "componentPath must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
-    location: z.literal("panel"),
+    // `"settings"` is the plugin's custom settings section: tied to no panel,
+    // at most one per manifest (both checked in the manifest `superRefine`),
+    // and mounted in the plugin's settings home below its declared fields.
+    location: z.enum(["panel", "settings"]),
     // `iconId` is advisory only — the SDK `validate` command flags an
     // unrenderable id, but at runtime the matching `contributes.panels` entry
     // owns the rendered icon (the panels loop reads `panel.iconId`, never the
@@ -318,6 +368,44 @@ export const AgentMcpContributionSchema = z
     name: z.string().min(1).max(80),
     description: z.string().min(1).max(400).optional(),
     mode: z.literal("tools"),
+  })
+  .strict();
+
+const DATABASE_FILE_EXTENSION = /\.(db|sqlite|sqlite3)$/;
+
+/**
+ * `contributes.databases` manifest entry — a SQLite file the plugin opens
+ * through `host.db`. The declaration is what names the file, discloses it, and
+ * decides where it lives, so the host can resolve and contain the path before
+ * the plugin ever sees it.
+ *
+ * `path` is only meaningful for a `"project"` database: it is relative to the
+ * project root, so the committed data contract an agent reads can name the
+ * same file. A `"local"` database always lives in the plugin's own data
+ * directory. Strict, so a stray `url` or `driver` is refused rather than read
+ * as a backend the host does not have.
+ */
+export const DatabaseContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    description: z.string().min(1).max(400).optional(),
+    location: z.enum(["project", "local"]).default("project"),
+    path: z
+      .string()
+      .min(1)
+      .max(512)
+      .refine(isSafePluginAssetPath, {
+        message:
+          "path must be a relative project path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+      })
+      .refine((value) => !/(^|\/)\.git(\/|$)/i.test(value.replace(/^\.\//, "")), {
+        message: "path must not be inside .git",
+      })
+      .refine((value) => DATABASE_FILE_EXTENSION.test(value), {
+        message: "path must end in .db, .sqlite or .sqlite3",
+      })
+      .optional(),
+    journalMode: z.enum(["delete", "wal"]).default("delete"),
   })
   .strict();
 
@@ -1422,6 +1510,11 @@ export const SettingDefinitionObjectSchema = z
     // File-extension filter for type: "file" (no leading dot). Non-empty when present.
     extensions: z.array(z.string().min(1)).min(1).optional(),
     secret: z.boolean().optional(),
+    // Drives the panel "needs setup" strip and `host.settings.missingRequired`.
+    required: z.boolean().optional(),
+    // "view": the plugin's own settings section edits this value, so the
+    // generated form leaves it out rather than showing it twice.
+    editor: z.enum(["form", "view"]).optional(),
   })
   .strict();
 
@@ -1451,6 +1544,18 @@ export const SettingDefinitionSchema = SettingDefinitionObjectSchema.superRefine
   // `extensions` narrows the native file chooser — it is only meaningful for
   // `type: "file"`. Reject it on every other type at the manifest gate so a
   // misplaced filter surfaces loudly instead of silently doing nothing.
+  // A secret's default would ship in plugin.json — committed to the plugin's
+  // repository and readable by anyone who has it — which is the one place a
+  // credential must never live. It would also silently stand in for a key the
+  // user never entered. Rejected at the gate rather than ignored.
+  if (val.default !== undefined && effectiveType === "secret") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'Settings of type "secret" cannot declare a default — it would ship in plugin.json. Leave it unset and mark it required instead.',
+      path: ["default"],
+    });
+  }
   if (val.extensions !== undefined && effectiveType !== "file") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -1538,6 +1643,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   recipes: 50,
   agentMcp: AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   tours: 10,
+  databases: 16,
 } as const;
 
 /**
@@ -1977,6 +2083,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(TourContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.tours)
               .default([]),
+            databases: z
+              .array(DatabaseContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.databases)
+              .default([]),
             // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
@@ -2002,6 +2112,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             recipes: [],
             agentMcp: [],
             tours: [],
+            databases: [],
             surfaces: {},
           })
       ),
@@ -2082,6 +2193,39 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
         }
       }
+
+      // A project database is a file in the repository, so it is disclosed
+      // and gated like any other project write — and it needs a project to
+      // resolve against, which an installed plugin does not have.
+      manifest.contributes.databases.forEach((database, index) => {
+        if (database.location === "project") {
+          if (manifest.scope !== "project") {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "databases", index, "location"],
+              message:
+                'a "project" database is available only to a "scope": "project" plugin — an installed plugin is bound to no project to put the file in. Use "location": "local".',
+              params: { errorCode: "database_project_scope_only" },
+            });
+          } else if (!manifest.capabilities.includes("fs:project-write")) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "databases", index, "location"],
+              message:
+                'a "project" database writes into the repository and requires the "fs:project-write" capability to be declared in capabilities.',
+              params: { errorCode: "database_project_write_required" },
+            });
+          }
+        } else if (database.path !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "databases", index, "path"],
+            message:
+              'path applies only to a "project" database; a "local" database always lives in the plugin\'s own data directory.',
+            params: { errorCode: "database_local_path_unsupported" },
+          });
+        }
+      });
 
       // The inverse asymmetry: `contributes.surfaces` is available to project
       // plugins ALONE. An installed plugin taking over a project's empty canvas,
@@ -2338,6 +2482,39 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         });
       }
 
+      // A panel's `menu` offers only the plugin's OWN actions: each entry is
+      // dispatched with `{ panelId }`, which no built-in takes, and the panel
+      // menus already carry the host's commands. So a built-in id, allowed on
+      // the surfaces above, is refused here; the own-namespace rules match
+      // theirs, including the imperative escape hatch when no commands exist.
+      manifest.contributes.panels.forEach((panel, panelIndex) => {
+        panel.menu?.forEach((item, itemIndex) => {
+          const { actionId } = item;
+          const issuePath = ["contributes", "panels", panelIndex, "menu", itemIndex, "actionId"];
+          if (
+            !actionId.startsWith(ownNamespacePrefix) ||
+            actionId.length === ownNamespacePrefix.length ||
+            !PANEL_MENU_ACTION_ID.test(actionId)
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: issuePath,
+              message: `Panel menu actionId "${actionId}" must be one of this plugin's own actions, written "${manifest.name}.<id>" — a panel's menu can't offer built-in or other plugins' actions.`,
+              params: { errorCode: "panel_menu_action_not_own" },
+            });
+            return;
+          }
+          if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: issuePath,
+              message: `Panel menu actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+              params: { errorCode: "action_id_undeclared_command" },
+            });
+          }
+        });
+      });
+
       // Duplicate contribution ids — within each contribution array, the bare
       // `id` is the lookup key the runtime keys its registries on (panel kind,
       // command descriptor, MCP server, agent, view, setting, forge provider,
@@ -2380,12 +2557,16 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("recipes", manifest.contributes.recipes);
       reportDuplicateIds("agentMcp", manifest.contributes.agentMcp);
       reportDuplicateIds("tours", manifest.contributes.tours);
+      reportDuplicateIds("databases", manifest.contributes.databases);
 
       // Cross-reference integrity — a contribution that names another by id must
       // point at one that exists in the same manifest, else the reference dangles
       // and the wiring silently no-ops at runtime.
       const settingIds = new Set(manifest.contributes.settings.map((setting) => setting.id));
       const viewIds = new Set(manifest.contributes.views.map((view) => view.id));
+      const settingsViewIds = new Set(
+        manifest.contributes.views.filter((view) => view.location === "settings").map((v) => v.id)
+      );
       const panelIds = new Set(manifest.contributes.panels.map((panel) => panel.id));
 
       // `forgeProvider.settingsScopeRef` → a declared setting; `viewRefs[]` →
@@ -2430,6 +2611,17 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
           continue;
         }
+        // A surface mounts through the claimed view's panel kind, and a
+        // settings view has none.
+        if (settingsViewIds.has(claim.viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces", slot, "viewId"],
+            message: `surfaces.${slot}.viewId "${claim.viewId}" names a location: "settings" view — a surface draws a panel view, and a settings view renders only in the plugin's settings.`,
+            params: { errorCode: "surface_view_ref_settings" },
+          });
+          continue;
+        }
         // A PTY panel is rendered by TerminalPane, so its matching view is
         // ignored at load and no component path is ever attached. The claim
         // would then hold the project's slot against every other plugin while
@@ -2460,7 +2652,32 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         }
       });
 
+      // A settings view is the plugin's one custom settings section. It renders
+      // into the plugin's settings home, not a panel, so it may not share an id
+      // with a panel (the panels loop would otherwise attach it as that panel's
+      // view), and a second one has nowhere to go.
+      let settingsViewSeen = false;
       manifest.contributes.views.forEach((view, index) => {
+        if (view.location === "settings") {
+          if (settingsViewSeen) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "location"],
+              message: `View "${view.id}" is a second location: "settings" view — a plugin has one settings section, so declare at most one.`,
+              params: { errorCode: "settings_view_duplicate" },
+            });
+          }
+          settingsViewSeen = true;
+          if (panelIds.has(view.id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "id"],
+              message: `Settings view "${view.id}" shares its id with a contributes.panels entry — a settings view renders in the plugin's settings, not a panel, so give it an id of its own.`,
+              params: { errorCode: "settings_view_panel_id_collision" },
+            });
+          }
+          return;
+        }
         if (!panelIds.has(view.id)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

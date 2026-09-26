@@ -10,6 +10,7 @@ import {
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
+  DatabaseContributionSchema,
   FileDecorationContributionSchema,
   FileEditorContributionSchema,
   ForgeProviderContributionSchema,
@@ -18,6 +19,7 @@ import {
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
+  PanelMenuItemSchema,
   PreviewToolContributionSchema,
   GuestAdapterContributionSchema,
   ProcessToolContributionSchema,
@@ -102,6 +104,11 @@ const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.t
 const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
 const BUILTIN_GUEST_ADAPTERS = "electron/services/sitePreview/builtinGuestAdapters.ts";
 const GUEST_ADAPTER_ASSETS = "electron/services/sitePreview/guestAdapterAssets.ts";
+const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
+const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
+const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
+const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
+const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -130,7 +137,9 @@ const SWEPT_SCHEMAS = {
   recipes: RecipeContributionSchema,
   agentMcp: AgentMcpContributionSchema,
   tours: TourContributionSchema,
+  databases: DatabaseContributionSchema,
   surfaces: SurfaceContributionsSchema,
+  "panels.menu": PanelMenuItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
@@ -168,6 +177,7 @@ const TOP_LEVEL_GROUPS = [
   "recipes",
   "agentMcp",
   "tours",
+  "databases",
   "surfaces",
 ] as const;
 
@@ -214,7 +224,9 @@ type FieldConsumerCoverage = {
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
   agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
+  databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
+  "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "recipes.terminals": Record<
@@ -282,6 +294,35 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
       note: "Registered as the panel kind's extensionState schema version; stamped onto the panel record at the write gate (setPanelExtensionState) and enforced on restore by decodePanelExtensionState, which refuses a bag written above it (#12280).",
+    },
+    menu: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop → PanelKindConfig.pluginMenu)" },
+        { file: GENERIC_PANEL_MENU, symbol: "readPanelKindMenuCapabilities (pluginMenuItems)" },
+      ],
+      note: "Registered on the panel kind and drawn by both panel menus, above the plugin's own entries, once each action is registered.",
+    },
+  },
+  "panels.menu": {
+    actionId: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (panel_menu_action_not_own)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId → pluginMenu)" },
+        { file: GENERIC_PANEL_MENU, symbol: "pluginMenuCommandActionId" },
+      ],
+      note: "Checked to be the plugin's own action, qualified to the instance namespace, then dispatched with { panelId } from the panel menus.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: GENERIC_PANEL_MENU,
+          symbol: "readPanelKindMenuCapabilities (label ?? action title)",
+        },
+      ],
+      note: "The menu row's text; the action's registered title when absent.",
     },
   },
   toolbarButtons: {
@@ -496,8 +537,11 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     location: {
       mode: "cross-reference",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (literal 'panel')" }],
-      note: "Literal gate tying the view to the panel host; a sidebar host is rejected at parse.",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (enum 'panel' | 'settings')" },
+        { file: PLUGIN_SERVICE, symbol: "settingsViewPath (location 'settings')" },
+      ],
+      note: "'panel' ties the view to the panel host; 'settings' is the plugin's one custom settings section, mounted in its settings home and never matched to a panel. A sidebar host is rejected at parse.",
     },
     iconId: {
       mode: "verbatim",
@@ -821,6 +865,22 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Normalized into type: 'secret' by the schema; also read directly by the form.",
     },
+    required: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/plugin/PluginSettingsManager.ts",
+          symbol: "missingRequired (host.settings.missingRequired, setup strip)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (hasRequiredSettings kind flag)" },
+      ],
+      note: "An unset required setting shows the panel's needs-setup strip and is listed by host.settings.missingRequired.",
+    },
+    editor: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SETTINGS_FORM, symbol: "PluginSettingsForm (fields)" }],
+      note: 'editor: "view" leaves the field to the plugin\'s own settings view, when it declares one.',
+    },
   },
   agentMcp: {
     id: {
@@ -842,6 +902,33 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "intentional-metadata",
       consumers: [{ file: PLUGIN_SCHEMA, symbol: "AgentMcpContributionSchema (literal 'tools')" }],
       note: "Only 'tools' is accepted; kept explicit so a later endpoint mode is additive.",
+    },
+  },
+  databases: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_HOST_FACTORY, symbol: "createHost resolveDatabase" }],
+      note: "What host.db.open names; also the default file name under .daintree/data/<manifestId>/.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASES_SECTION, symbol: "PluginDatabasesSection" }],
+      note: "Shown beside the database in the plugin manager's disclosure.",
+    },
+    location: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASE, symbol: "resolvePluginDatabaseLocation" }],
+      note: "Chooses the project root or the plugin's data dir as the containment root.",
+    },
+    path: {
+      mode: "derived-input",
+      consumers: [{ file: PLUGIN_DATABASE, symbol: "resolvePluginDatabaseLocation" }],
+      note: "Resolved against the bound project root and realpath-contained to it.",
+    },
+    journalMode: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASE_HANDLE, symbol: "openPluginDatabase connect" }],
+      note: "Re-applied as PRAGMA journal_mode on every open.",
     },
   },
   recipes: {

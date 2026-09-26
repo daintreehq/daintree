@@ -21,12 +21,14 @@ import {
   ChevronDown,
   CirclePlay,
   CopyPlus,
+  DatabaseBackup,
   Ellipsis,
   Lock,
   PanelBottomClose,
   PanelTopClose,
   Pencil,
   RefreshCw,
+  Settings,
   ShieldAlert,
   Trash2,
   Unlock,
@@ -102,12 +104,20 @@ import {
   GENERIC_PANEL_MENU_ACTION_IDS,
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
+  isPluginMenuCommandId,
+  pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
   type GenericPanelMenuCommandId,
 } from "./genericPanelMenu";
+import {
+  getRegisteredPluginActionsSnapshot,
+  subscribeToRegisteredPluginActions,
+} from "@/services/plugin/registeredPluginActions";
 
 import {
   getPanelKindRegistrySnapshot,
@@ -137,6 +147,12 @@ import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
  * as fine print beside it and made maximize and dock hard to tell apart.
  */
 const CONTROL_ICON = "[&_svg]:size-3.5";
+
+/**
+ * A task turn after a menu's close hook: the menu primitive restores focus in
+ * that same hook, so work that moves focus elsewhere starts after it lands.
+ */
+const AFTER_MENU_FOCUS_RESTORE_MS = 0;
 
 /** An overflow item's shortcut: the action's live keybinding, or nothing. */
 function OverflowMenuShortcut({ actionId }: { actionId: ActionId }) {
@@ -444,11 +460,45 @@ function PanelHeaderComponent({
     getRegisteredTourIdsSnapshot,
     getRegisteredTourIdsSnapshot
   );
-  const kindTour = readPanelKindMenuCapabilities(
+  // Plugin menu items appear once their action registers, which can be long
+  // after the kind did.
+  const registeredPluginActions = useSyncExternalStore(
+    subscribeToRegisteredPluginActions,
+    getRegisteredPluginActionsSnapshot,
+    getRegisteredPluginActionsSnapshot
+  );
+  const storedKindCapabilities = readPanelKindMenuCapabilities(
     panelKindRegistry,
     storedKind ?? kind,
-    registeredTourIds
-  ).tour;
+    registeredTourIds,
+    registeredPluginActions
+  );
+  const kindTour = storedKindCapabilities.tour;
+  const pluginSettingsId = storedKindCapabilities.pluginSettingsId;
+  const pluginBackupId = storedKindCapabilities.pluginBackupId;
+  // Recorded on select and spent by the menu's close hook, after it has handed
+  // focus back to the trigger: opening the settings home, a save dialog or a
+  // plugin's own confirmation from `onSelect` would race that restore, and
+  // whatever returns focus on its own close would capture the dying menu item
+  // instead of this panel.
+  const pendingMenuDispatchRef = useRef<{
+    actionId: ActionId;
+    args: Record<string, unknown>;
+  } | null>(null);
+  const handlePluginSettingsSelect = () => {
+    if (pluginSettingsId === null) return;
+    pendingMenuDispatchRef.current = {
+      actionId: GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+      args: { pluginId: pluginSettingsId },
+    };
+  };
+  const handlePluginBackupSelect = () => {
+    if (pluginBackupId === null) return;
+    pendingMenuDispatchRef.current = {
+      actionId: GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
+      args: { pluginId: pluginBackupId },
+    };
+  };
   const handleTourSelect = () => {
     if (!kindTour) return;
     void actionService.dispatch(
@@ -504,9 +554,22 @@ function PanelHeaderComponent({
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
     pendingMovePickerRef.current = null;
+    pendingMenuDispatchRef.current = null;
   }, []);
   const handleOverflowMenuCloseAutoFocus = useCallback(
     (event: Event) => {
+      const pendingDispatch = pendingMenuDispatchRef.current;
+      pendingMenuDispatchRef.current = null;
+      if (pendingDispatch !== null) {
+        // Left to the menu primitive's own restore (ringless for a pointer,
+        // ringed for the keyboard), then dispatched once focus is back.
+        setTimeout(() => {
+          void actionService.dispatch(pendingDispatch.actionId, pendingDispatch.args, {
+            source: "menu",
+          });
+        }, AFTER_MENU_FOCUS_RESTORE_MS);
+        return;
+      }
       const pendingPanelId = pendingMovePickerRef.current;
       pendingMovePickerRef.current = null;
       if (pendingPanelId === null || pendingPanelId !== id) return;
@@ -529,9 +592,21 @@ function PanelHeaderComponent({
         canMoveToWorktree,
         canReload: canReloadPanelKind(kind),
         tourLabel: kindTour?.label,
+        hasPluginSettings: pluginSettingsId !== null,
+        hasPluginDatabases: pluginBackupId !== null,
+        pluginMenuItems: storedKindCapabilities.pluginMenuItems,
       })
     : null;
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
+    if (isPluginMenuCommandId(commandId)) {
+      // The panel the menu was opened on, by id: the plugin's action decides
+      // what that means for it.
+      pendingMenuDispatchRef.current = {
+        actionId: pluginMenuCommandActionId(commandId),
+        args: { panelId: id },
+      };
+      return;
+    }
     if (commandId === "move-to-worktree") {
       handleMoveToWorktreeSelect();
       return;
@@ -546,6 +621,14 @@ function PanelHeaderComponent({
     }
     if (commandId === "tour") {
       handleTourSelect();
+      return;
+    }
+    if (commandId === "plugin-settings") {
+      handlePluginSettingsSelect();
+      return;
+    }
+    if (commandId === "plugin-backup") {
+      handlePluginBackupSelect();
       return;
     }
     if (commandId === "kill" && hasPanelCloseGuard(id)) {
@@ -1586,6 +1669,18 @@ function PanelHeaderComponent({
                     <DropdownMenuItem onSelect={handleTourSelect}>
                       <CirclePlay className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       {kindTour.label}
+                    </DropdownMenuItem>
+                  )}
+                  {pluginBackupId && (
+                    <DropdownMenuItem onSelect={handlePluginBackupSelect}>
+                      <DatabaseBackup className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Back up data…
+                    </DropdownMenuItem>
+                  )}
+                  {pluginSettingsId && (
+                    <DropdownMenuItem onSelect={handlePluginSettingsSelect}>
+                      <Settings className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Plugin settings…
                     </DropdownMenuItem>
                   )}
                   {hasPty && (

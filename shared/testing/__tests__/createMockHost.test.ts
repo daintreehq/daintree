@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createMockHost } from "../createMockHost.js";
 import type {
   PluginActionContribution,
@@ -1069,15 +1071,75 @@ describe("createMockHost", () => {
       expect(cb).toHaveBeenCalledWith("/tmp/repo/file.ts");
     });
 
-    it("fires every active watcher", async () => {
+    it("fires every watcher covering the change, and only those", async () => {
       const host = createMockHost();
       const a = vi.fn();
       const b = vi.fn();
-      await host.fs.watch(["/a"], a);
-      await host.fs.watch(["/b"], b);
-      host.simulateFsWatch("/changed");
-      expect(a).toHaveBeenCalledWith("/changed");
-      expect(b).toHaveBeenCalledWith("/changed");
+      const other = vi.fn();
+      await host.fs.watch(["/repo"], a);
+      await host.fs.watch(["/elsewhere", "/repo/"], b);
+      await host.fs.watch(["/other"], other);
+      host.simulateFsWatch("/repo/changed");
+      expect(a).toHaveBeenCalledWith("/repo/changed");
+      expect(b).toHaveBeenCalledWith("/repo/changed");
+      expect(other).not.toHaveBeenCalled();
+    });
+
+    it("reaches a nested path only through a recursive watch", async () => {
+      const host = createMockHost();
+      const plain = vi.fn();
+      const deep = vi.fn();
+      await host.fs.watch(["/repo"], plain);
+      await host.fs.watch(["/repo"], deep, { recursive: true });
+      host.simulateFsWatch("/repo/cards/todo/a.md");
+      expect(plain).not.toHaveBeenCalled();
+      expect(deep).toHaveBeenCalledExactlyOnceWith("/repo/cards/todo/a.md");
+    });
+
+    it("coalesces a burst into one trailing callback with debounceMs", async () => {
+      vi.useFakeTimers();
+      try {
+        const host = createMockHost();
+        const cb = vi.fn();
+        await host.fs.watch(["/repo"], cb, { debounceMs: 100 });
+        host.simulateFsWatch("/repo/a");
+        host.simulateFsWatch("/repo/b");
+        vi.advanceTimersByTime(99);
+        host.simulateFsWatch("/repo/c");
+        expect(cb).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(100);
+        expect(cb).toHaveBeenCalledExactlyOnceWith("/repo/c");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("drops a pending debounced callback on dispose", async () => {
+      vi.useFakeTimers();
+      try {
+        const host = createMockHost();
+        const cb = vi.fn();
+        const dispose = await host.fs.watch(["/repo"], cb, { debounceMs: 100 });
+        host.simulateFsWatch("/repo/a");
+        dispose();
+        vi.advanceTimersByTime(500);
+        expect(cb).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rejects malformed watch options, as the host does", async () => {
+      const host = createMockHost();
+      await expect(
+        host.fs.watch(["/repo"], vi.fn(), { recursive: "yes" as unknown as boolean })
+      ).rejects.toThrow(/recursive must be a boolean/);
+      await expect(host.fs.watch(["/repo"], vi.fn(), { debounceMs: Infinity })).rejects.toThrow(
+        /debounceMs/
+      );
+      await expect(host.fs.watch(["/repo"], vi.fn(), { debounceMs: -1 })).rejects.toThrow(
+        /debounceMs/
+      );
     });
 
     it("stops firing after the disposer runs, and is idempotent", async () => {
@@ -1197,6 +1259,87 @@ describe("createMockHost production-parity validation (#10617)", () => {
     expect(host.sentToActiveAgentCalls).toEqual([{ text: "run it", submit: true }]);
   });
 
+  describe("agent handoff", () => {
+    const panes = [
+      {
+        terminalId: "t-1",
+        title: "Claude: auth",
+        agentId: "claude",
+        worktree: { id: "wt-1", name: "main" },
+        isFocused: true,
+        canDraft: true,
+      },
+      {
+        terminalId: "t-2",
+        title: "Codex: docs",
+        agentId: "codex",
+        worktree: null,
+        isFocused: false,
+        canDraft: false,
+        draftRefusal: "input-locked" as const,
+      },
+    ];
+
+    it("agents.list gates on agent:read and reports the configured panes", async () => {
+      await expect(createMockHost({ capabilities: ["agent:input"] }).agents.list()).rejects.toThrow(
+        /PERMISSION_REQUIRED/
+      );
+      const host = createMockHost({ agents: panes });
+      await expect(host.agents.list()).resolves.toEqual(panes);
+      host.simulateAgentsChange([]);
+      await expect(host.agents.list()).resolves.toEqual([]);
+    });
+
+    it("sendToAgent gates on agent:input and validates like production", async () => {
+      await expect(
+        createMockHost({ capabilities: ["agent:read"] }).sendToAgent("x")
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      const host = createMockHost({ agents: panes });
+      await expect(host.sendToAgent("  ")).rejects.toThrow(/non-empty/);
+      await expect(host.sendToAgent("x", { title: "t".repeat(121) })).rejects.toThrow(/limit/);
+      await expect(host.sendToAgent("x", { terminalId: "" })).rejects.toThrow(/terminalId/);
+      await expect(host.sendToAgent("x", { worktreeId: "w".repeat(513) })).rejects.toThrow(
+        /worktreeId/
+      );
+      await expect(host.sendToAgent("x", { terminalId: "t".repeat(512) })).resolves.toEqual({
+        status: "refused",
+        reason: "unknown-terminal",
+      });
+      expect(host.sentToAgentCalls).toHaveLength(1);
+    });
+
+    it("sendToAgent drafts into a named pane, and refuses one that cannot take it", async () => {
+      const host = createMockHost({ agents: panes });
+      await expect(host.sendToAgent("x", { terminalId: "t-1" })).resolves.toEqual({
+        status: "drafted",
+        terminalId: "t-1",
+      });
+      await expect(host.sendToAgent("x", { terminalId: "t-2" })).resolves.toEqual({
+        status: "refused",
+        reason: "input-locked",
+      });
+      await expect(host.sendToAgent("x", { terminalId: "nope" })).resolves.toEqual({
+        status: "refused",
+        reason: "unknown-terminal",
+      });
+      expect(host.sentToAgentCalls.map((call) => call.result.status)).toEqual([
+        "drafted",
+        "refused",
+        "refused",
+      ]);
+    });
+
+    it("sendToAgent's picker is dismissed unless a pick is configured", async () => {
+      const host = createMockHost({ agents: panes });
+      await expect(host.sendToAgent("x")).resolves.toEqual({ status: "cancelled" });
+      host.simulateSendToAgentPick("t-1");
+      await expect(host.sendToAgent("x", { worktreeId: "wt-1" })).resolves.toEqual({
+        status: "drafted",
+        terminalId: "t-1",
+      });
+    });
+  });
+
   describe("imperative UI prompts", () => {
     it("showQuickPick validates items, records the call, and returns the configured response", async () => {
       const host = createMockHost();
@@ -1267,6 +1410,204 @@ describe("createMockHost production-parity validation (#10617)", () => {
     });
   });
 
+  describe("fs.readFileWithRevision, mkdir and appendFile", () => {
+    it("reads a revision that writeFile accepts as expectedRevision", async () => {
+      const host = createMockHost();
+      const { revision: written } = await host.fs.writeFile("/repo/doc.md", "v1");
+      const read = await host.fs.readFileWithRevision("/repo/doc.md");
+      expect(read).toEqual({ contents: "v1", revision: written });
+      await expect(
+        host.fs.writeFile("/repo/doc.md", "v2", { expectedRevision: read.revision })
+      ).resolves.toMatchObject({ revision: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      await expect(host.fs.readFileWithRevision("/repo/missing.md")).rejects.toThrow(/ENOENT/);
+    });
+
+    it("appends to a file, creating it, and records each append", async () => {
+      const host = createMockHost();
+      await host.fs.mkdir("/repo");
+      await host.fs.appendFile("/repo/log.jsonl", "a\n");
+      await host.fs.appendFile("/repo/log.jsonl", "b\n");
+      expect(await host.fs.readFile("/repo/log.jsonl")).toBe("a\nb\n");
+      expect(host.fsAppendCalls).toEqual([
+        { path: "/repo/log.jsonl", contents: "a\n" },
+        { path: "/repo/log.jsonl", contents: "b\n" },
+      ]);
+      expect(host.fsWriteCalls).toEqual([]);
+      await expect(host.fs.appendFile("/repo/log.jsonl", 1 as unknown as string)).rejects.toThrow(
+        /contents must be a string/
+      );
+    });
+
+    it("records mkdir and lists the directory it made", async () => {
+      const host = createMockHost();
+      await host.fs.mkdir("/repo/data/2026");
+      expect(host.fsMkdirCalls).toEqual(["/repo/data/2026"]);
+      expect((await host.fs.stat("/repo/data/2026")).isDirectory).toBe(true);
+      expect(await host.fs.readdir("/repo/data")).toEqual([
+        { name: "2026", isDirectory: true, isFile: false, isSymbolicLink: false },
+      ]);
+      await host.fs.writeFile("/repo/taken", "x");
+      await expect(host.fs.mkdir("/repo/taken")).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+      await expect(host.fs.mkdir("/repo/taken/inner")).rejects.toMatchObject({ code: "ENOTDIR" });
+    });
+
+    it("creates every missing ancestor on mkdir, like the host", async () => {
+      const host = createMockHost();
+      await host.fs.mkdir("/repo/data/2026/09");
+      for (const dir of ["/repo", "/repo/data", "/repo/data/2026", "/repo/data/2026/09"]) {
+        expect((await host.fs.stat(dir)).isDirectory).toBe(true);
+      }
+    });
+
+    it("refuses an append to a directory or under a missing parent", async () => {
+      const host = createMockHost();
+      await host.fs.mkdir("/repo/logs");
+      await expect(host.fs.appendFile("/repo/logs", "x")).rejects.toMatchObject({
+        code: "TARGET_UNAVAILABLE",
+      });
+      await expect(host.fs.appendFile("/repo/missing/log.jsonl", "x")).rejects.toThrow(/ENOENT/);
+      expect(host.fsAppendCalls).toEqual([]);
+    });
+
+    it("treats a worktree root as an existing parent", async () => {
+      const host = createMockHost({
+        activeWorktree: { path: "/wt/main" } as unknown as PluginWorktreeSnapshot,
+      });
+      await host.fs.appendFile("/wt/main/log.jsonl", "x");
+      expect(await host.fs.readFile("/wt/main/log.jsonl")).toBe("x");
+    });
+
+    it("grows missing parents inside the plugin data dir, as writeFile does there", async () => {
+      const dataDir = "/home/me/.daintree/plugin-data/acme.habits";
+      const host = createMockHost({ pluginId: "acme.habits", pluginDataDir: dataDir });
+      await host.fs.appendFile(`${dataDir}/2026/log.jsonl`, "x");
+      expect((await host.fs.stat(`${dataDir}/2026`)).isDirectory).toBe(true);
+    });
+
+    it("matches the data dir at its root only, with either separator", async () => {
+      const host = createMockHost({
+        pluginId: "acme.habits",
+        pluginDataDir: "C:\\Users\\me\\.daintree\\plugin-data\\acme.habits",
+      });
+      await host.fs.appendFile(
+        "C:\\Users\\me\\.daintree\\plugin-data\\acme.habits\\2026\\log.jsonl",
+        "x"
+      );
+      // The same fragment inside a project path is not the data dir.
+      await expect(
+        host.fs.appendFile("/repo/.daintree/plugin-data/acme.habits/2026/log.jsonl", "x")
+      ).rejects.toThrow(/ENOENT/);
+    });
+
+    it("never lets one path be both a file and a directory", async () => {
+      const dataDir = "/home/me/.daintree/plugin-data/acme.habits";
+      const host = createMockHost({ pluginId: "acme.habits", pluginDataDir: dataDir });
+      await host.fs.writeFile(`${dataDir}/notes`, "file");
+
+      // Growing parents stops at a file, with the code the host gives.
+      await expect(host.fs.appendFile(`${dataDir}/notes/log.jsonl`, "x")).rejects.toMatchObject({
+        code: "TARGET_EXISTS",
+      });
+      await expect(
+        host.fs.appendFile(`${dataDir}/notes/2026/log.jsonl`, "x")
+      ).rejects.toMatchObject({ code: "ENOTDIR" });
+      await expect(host.fs.writeFile(`${dataDir}/notes/a.md`, "x")).rejects.toMatchObject({
+        code: "TARGET_EXISTS",
+      });
+      expect((await host.fs.stat(`${dataDir}/notes`)).isFile).toBe(true);
+      expect(await host.fs.readFile(`${dataDir}/notes`)).toBe("file");
+
+      // Outside the data dir the lookup fails on the file ancestor.
+      await host.fs.writeFile("/repo/readme", "file");
+      await expect(host.fs.appendFile("/repo/readme/log.jsonl", "x")).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+      await expect(host.fs.writeFile("/repo/readme/a.md", "x")).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+
+      // A directory is never overwritten by a file.
+      await host.fs.mkdir("/repo/cards");
+      await expect(
+        host.fs.writeFile("/repo/cards", "x", { expectedRevision: null })
+      ).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+      await expect(host.fs.writeFile("/repo/cards", "x")).rejects.toThrow(/EISDIR/);
+      expect((await host.fs.stat("/repo/cards")).isDirectory).toBe(true);
+      expect(host.fsWriteCalls.map((call) => call.path)).toEqual([
+        `${dataDir}/notes`,
+        "/repo/readme",
+      ]);
+      expect(host.fsAppendCalls).toEqual([]);
+    });
+
+    it("defaults the data dir to the host's location under the home directory", async () => {
+      const host = createMockHost({ pluginId: "acme.habits" });
+      const dataDir = join(homedir(), ".daintree", "plugin-data", "acme.habits");
+      await host.fs.appendFile(join(dataDir, "log.jsonl"), "x");
+      expect(host.fsAppendCalls).toHaveLength(1);
+    });
+  });
+
+  describe("documents.renderPdf", () => {
+    it("records the call and leaves a placeholder PDF the plugin can read back", async () => {
+      const host = createMockHost();
+      await host.fs.writeFile("/data/invoice.html", "<h1>Invoice</h1>");
+      const result = await host.documents.renderPdf({
+        htmlPath: "/data/invoice.html",
+        outputPath: "/data/invoice.pdf",
+        pageSize: "Letter",
+      });
+      expect(host.documentsRenderPdfCalls).toEqual([
+        { htmlPath: "/data/invoice.html", outputPath: "/data/invoice.pdf", pageSize: "Letter" },
+      ]);
+      const stored = await host.fs.readFile("/data/invoice.pdf");
+      expect(stored.startsWith("%PDF-")).toBe(true);
+      expect(result.path).toBe("/data/invoice.pdf");
+      expect(result.bytes).toBe(new TextEncoder().encode(stored).byteLength);
+      expect(result.revision).toMatch(/^[0-9a-f]{64}$/);
+      // Not a text write: the fs.writeFile recording stays about writeFile.
+      expect(host.fsWriteCalls.map((c) => c.path)).toEqual(["/data/invoice.html"]);
+    });
+
+    it("validates options exactly as the real host does", async () => {
+      const host = createMockHost();
+      await expect(
+        host.documents.renderPdf({ html: "<p/>", outputPath: "relative/a.pdf" })
+      ).rejects.toThrow(/outputPath must be an absolute path/);
+      await expect(
+        host.documents.renderPdf({
+          html: "<p/>",
+          outputPath: "/data/a.pdf",
+          pageSize: "B5" as never,
+        })
+      ).rejects.toThrow(/pageSize must be one of/);
+      await expect(
+        host.documents.renderPdf({
+          html: "x".repeat(5 * 1024 * 1024 + 1),
+          outputPath: "/data/a.pdf",
+        })
+      ).rejects.toThrow(/byte limit/);
+      expect(host.documentsRenderPdfCalls).toEqual([]);
+    });
+
+    it("refuses the argument shapes the real host refuses, recording nothing", async () => {
+      const host = createMockHost();
+      await expect(host.documents.renderPdf({ outputPath: "/data/a.pdf" })).rejects.toThrow(
+        /VALIDATION: .*exactly one of html or htmlPath/
+      );
+      await expect(
+        host.documents.renderPdf({ html: "<p/>", htmlPath: "/x.html", outputPath: "/data/a.pdf" })
+      ).rejects.toThrow(/exactly one of html or htmlPath/);
+      await expect(
+        host.documents.renderPdf({ html: "<p/>", outputPath: "/data/a.html" })
+      ).rejects.toThrow(/outputPath must end in \.pdf/);
+      await expect(
+        host.documents.renderPdf({ htmlPath: "/missing.html", outputPath: "/data/a.pdf" })
+      ).rejects.toThrow(/INVALID_PATH/);
+      expect(host.documentsRenderPdfCalls).toEqual([]);
+    });
+  });
+
   describe("fs.readdir", () => {
     it("lists files and subdirectories previously written under the directory", async () => {
       const host = createMockHost();
@@ -1284,5 +1625,98 @@ describe("createMockHost production-parity validation (#10617)", () => {
       const host = createMockHost();
       expect(await host.fs.readdir("/empty")).toEqual([]);
     });
+  });
+});
+
+describe("createMockHost host.db", () => {
+  it("backs databases with real SQLite files and honours the declared list", async () => {
+    const host = createMockHost({ databases: { declared: ["ledger"] } });
+    const db = await host.db.open("ledger", { migrations: ["CREATE TABLE t (x INTEGER)"] });
+    await db.run("INSERT INTO t VALUES (?)", [3]);
+    expect(await db.query("SELECT x FROM t")).toEqual([{ x: 3 }]);
+    await db.close();
+    await expect(host.db.open("other")).rejects.toThrow(/DB_NOT_DECLARED/);
+  });
+});
+
+describe("createMockHost host.db readonly", () => {
+  it("creates nothing for a readonly open of a missing database", async () => {
+    const host = createMockHost();
+    await expect(host.db.open("ledger", { readonly: true })).rejects.toThrow(/DB_NOT_FOUND/);
+    await expect(host.db.resolve("ledger", { readonly: true })).rejects.toThrow(/DB_NOT_FOUND/);
+    await (await host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] })).close();
+    const reader = await host.db.open("ledger", { readonly: true });
+    await expect(reader.run("INSERT INTO t VALUES (1)")).rejects.toThrow(/DB_READONLY/);
+    await reader.close();
+  });
+});
+
+describe("createMockHost settings.open and settings.missingRequired", () => {
+  it("records open as the dispatch the real host sends, for its own plugin", async () => {
+    const host = createMockHost({ pluginId: "acme.linear" });
+
+    await host.settings.open("apiKey");
+    await host.settings.open();
+
+    expect(host.dispatchedActions).toEqual([
+      { actionId: "plugin.openSettings", args: { pluginId: "acme.linear", key: "apiKey" } },
+      { actionId: "plugin.openSettings", args: { pluginId: "acme.linear" } },
+    ]);
+    await expect(host.settings.open("")).rejects.toThrow(/non-empty/);
+  });
+
+  it("lists required settings still unset, and a default never counts", async () => {
+    const host = createMockHost({
+      manifestSettings: [
+        { id: "apiKey", type: "secret", required: true },
+        { id: "team", scope: "project", required: true, default: "core" },
+        { id: "optional" },
+      ],
+    });
+
+    expect(await host.settings.missingRequired()).toEqual(["apiKey", "team"]);
+    await host.settings.set("apiKey", "sk");
+    await host.settings.set("team", "infra", "project");
+    expect(await host.settings.missingRequired()).toEqual([]);
+  });
+});
+
+describe("createMockHost required secrets", () => {
+  it("counts a stored secret as set whatever its value, as the host does without decrypting", async () => {
+    const host = createMockHost({
+      manifestSettings: [
+        { id: "token", type: "secret", required: true },
+        { id: "legacy", secret: true, required: true },
+        { id: "name", type: "string", required: true },
+      ],
+    });
+    await host.settings.set("token", "");
+    await host.settings.set("legacy", "");
+    await host.settings.set("name", "");
+
+    expect(await host.settings.missingRequired()).toEqual(["name"]);
+  });
+});
+
+describe("createMockHost settings follow the declarations", () => {
+  it("writes and subscribes in the declared scope, and reads the declared default while unset", async () => {
+    const host = createMockHost({
+      manifestSettings: [{ id: "channel", type: "string", scope: "project", default: "blog" }],
+    });
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("channel", (v) => heard.push(v));
+
+    expect(await host.settings.get("channel")).toBe("blog");
+    await host.settings.set("channel", "x");
+
+    expect(await host.settings.get("channel", "project")).toBe("x");
+    expect(heard).toEqual(["x"]);
+    await expect(host.settings.set("channel", "y", "user")).rejects.toThrow(
+      /declared in "project"/
+    );
+    // Synchronous, like the real host's subscribe guard.
+    expect(() => host.settings.onDidChange("channel", () => {}, "local")).toThrow(
+      /declared in "project"/
+    );
   });
 });

@@ -7,7 +7,6 @@ Each section below documents a contribution point, its schema, an example, and c
 ## Status legend
 
 - **Shipped** — available in the current Daintree release
-- **Planned** — design locked, implementation in progress
 - **Future** — not yet committed
 
 ## Project scope
@@ -17,14 +16,15 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | Contribution | Under `scope: "project"` |
 | --- | --- |
 | `panels` | Available — registered against the project, visible only in its views |
-| `views` | Available — served and mounted only in the owning project's renderer |
+| `views` | Available — served and mounted only in the owning project's renderer; a `location: "settings"` view renders in Project settings → Plugins |
 | `commands` | Available — in that project's palette, dispatched into that project's renderer |
 | `toolbarButtons` | Available — only in the owning project's toolbar |
 | `contextMenus` | Available — only in the owning project's views |
 | `keybindings` | Available — renderer-level, so they resolve within the focused project |
-| `settings` | Available — `scope: "project"` values resolve from the bound project root, not the focused one |
+| `settings` | Available — every field, whatever its `scope`, lives in Project settings; `project` and `local` values resolve from the bound project root, not the focused one |
 | `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
 | `agentMcp` | Available — every credential for the endpoint is minted per terminal and bound to one project, and a project plugin's endpoint can only be granted to its own project |
+| `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
 | `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
@@ -34,6 +34,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against |
 | `tours` | Rejected — plugin tours are offered from the app-wide Help menu and command palette, and tour playback has no per-project visibility yet |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
+| `fileEditors` | Rejected — built-in only; the editor slot resolves through the host-bundled builtin view registry, which a project plugin has no renderer in |
 | `previewTools` | Rejected — built-in only; the tool's components resolve out of the host bundle, which no other origin's renderer reaches |
 | `guestAdapters` | Rejected — built-in only; the bundle is emitted by Daintree's own build and runs with full DOM access inside the previewed site |
 
@@ -138,7 +139,7 @@ If a manifest-declared command has no matching `src/{id}.{ext}` file and no impe
 
 **Collision rule:** a command whose resolved `{pluginId}.{id}` matches a built-in Daintree action id is rejected at load with a provenance `loadError` — the command does not register. Pick a different id.
 
-**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `forgeProviders`, `fileDecorationProviders`, `agents`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
+**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array that has one — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `skills`, `recipes`, `tours`, `forgeProviders`, `fileDecorationProviders`, `fileEditors`, `previewTools`, `guestAdapters`, `agents`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
 
 ## Panels — _Shipped_
 
@@ -167,20 +168,21 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
+| `id` | yes | Letters, digits, `.`, `_` and `-`, at most 64 characters. Namespaced at runtime as `{pluginId}.{id}`. |
 | `name` | yes | Display label in the panel header and palette. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts`. An unrecognized ID falls back to the generic terminal glyph on panel surfaces; `daintree-plugin validate` warns about it. |
 | `color` | yes | Any CSS colour, applied raw to the panel's icon on the palette and launcher surfaces — not to the active-tab indicator, which is a fixed accent. The convention for plugin panels is a theme category token, `var(--theme-category-orange)`, so it follows the active theme; every fixture in the repo uses that form. |
-| `hasPty` | no | `false` (default) for UI-only panels. `true` is reserved for PTY-backed panels, not available to plugins in v1. |
+| `hasPty` | no | `false` (default) for a view panel. `true` makes the kind a terminal: it renders through the terminal host, never loads a view, and is refused together with `menu` or `dockable: false`. Not a way to build plugin UI. |
 | `canRestart` | no | Show a "restart" control in the panel header. |
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
 | `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
 | `stateVersion` | no | Integer &ge; 1 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
+| `menu` | no | Up to five of your own actions to offer in the panel's ⋯ and right-click menus. See [Panel menu](#panel-menu) below. |
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
 
-`terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`
+`terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`, `wallet`, `receipt`, `chart-column`, `chart-line`, `chart-pie`, `calendar`, `clock`, `kanban`, `check-square`, `list-todo`, `users`, `contact`, `handshake`, `briefcase`, `inbox`, `mail`, `image`, `palette`, `book-open`, `bookmark`, `notebook`, `newspaper`, `megaphone`, `target`, `heart-pulse`, `flame`, `dumbbell`, `utensils`, `tag`, `shopping-cart`, `boxes`, `database`, `table`, `layout-grid`, `map`, `star`, `rocket`, `lightbulb`, `flask`
 
 `shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
 
@@ -192,11 +194,75 @@ You never have to handle a version _above_ the one you declare. That only happen
 
 Bump `stateVersion` when the shape changes incompatibly, never for an additive key your view can already tolerate missing.
 
+### Panel menu
+
+`menu` puts your own actions on the panel's ⋯ menu and its right-click menu, which always show the same list. Each entry is `{ "actionId": "<your action>", "label"?: "<text>" }`:
+
+```json
+{
+  "contributes": {
+    "commands": [
+      {
+        "id": "refresh",
+        "title": "Refresh data",
+        "description": "",
+        "category": "general",
+        "kind": "command",
+        "danger": "safe"
+      },
+      {
+        "id": "export",
+        "title": "Export ledger",
+        "description": "",
+        "category": "general",
+        "kind": "command",
+        "danger": "safe"
+      }
+    ],
+    "panels": [
+      {
+        "id": "ledger",
+        "name": "Ledger",
+        "iconId": "wallet",
+        "color": "var(--theme-category-green)",
+        "menu": [
+          { "actionId": "acme.ledger.refresh" },
+          { "actionId": "acme.ledger.export", "label": "Export as CSV…" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- **Only your own actions.** `actionId` is written in your manifest namespace, `"{manifestId}.{id}"`, and names a `contributes.commands` entry or an action you register with `host.registerAction`. When you declare commands, the id must match one of them (`action_id_undeclared_command`); a built-in action or another plugin's is refused (`panel_menu_action_not_own`). A project plugin writes its manifest id too; the host moves the id into the instance's namespace for you.
+- **At most five**, each action once (`panel_menu_duplicate_action`). A `hasPty: true` panel renders as a terminal with the terminal's menus, so a `menu` on one is refused (`pty_panel_menu_unsupported`).
+- **Where they appear.** In their own group, directly above the host's entries for your plugin (below), in the order you declared them, each with the same generic plugin glyph — the entry names no icon.
+- **When they appear.** An entry shows only while its action is registered, so an action you register late in `activate()`, or withdraw, comes and goes with it.
+- **Label.** `label` is the menu text, 1–80 characters after trimming. Leave it out to use the action's `title`. End it with `…` when the action asks for more before it acts, as the host's own entries do.
+- **Arguments.** The action is dispatched with `{ panelId }`, the id of the panel whose menu was used, the same `panelId` your view receives in `PanelViewProps`. If the action declares an `inputSchema`, it has to accept that property, or the dispatch fails validation. From the right-click menu, focus moves into that panel before the action runs, so a dialog it opens hands focus back there.
+- **Danger.** The action's own danger tier applies: a `"confirm"` action asks first, as it does from the palette.
+
+### Host entries on plugin panel menus
+
+Every panel of a plugin carries some entries you never declare. The ⋯ menu and the right-click menu list the same groups, separated, in this order:
+
+1. Layout: Move to worktree… where there is one to move to, Move to dock (or Move to grid from the dock), Maximize or Restore.
+2. Rename panel and **Reload panel** — a fresh view attempt, the same one `requestReload` asks for; see [Views → Reloading a view](./views.md#reloading-a-view).
+3. Your `menu` entries.
+4. Your plugin's own entries, in this order, each only when it applies:
+   - **<Panel name> Welcome Tour** — once a tour whose `panelKind` names this panel is registered (see [Tours](#tours--shipped-installed-plugins)).
+   - **Back up data…** — when the plugin declares any [database](#databases--shipped).
+   - **Plugin settings…** — when the plugin declares any [settings](#settings-schema--shipped) field or a `location: "settings"` view. It opens whichever home those settings live in.
+5. Send to background, Trash panel, Remove panel.
+
+None of these needs wiring in your view, and none can be removed from a manifest.
+
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
-## Views — _Shipped (panel surface)_
+## Views — _Shipped_
 
-Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is the only supported value; `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` until #10466 — the old key is still accepted as a deprecated alias that logs a warning).
+Views are the React components a plugin renders. A `location: "panel"` view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. A `location: "settings"` view is the plugin's custom settings section instead (below). `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). [Views: what you get in the DOM](./views.md) is the authoring guide.
 
 ```json
 {
@@ -215,24 +281,26 @@ Views are the React components that render inside a panel. A view binds to a pan
 }
 ```
 
-**Pairing with `contributes.panels`** — a view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view whose `id` matches no panel is rejected at manifest validation (`view_panel_ref_unknown`) — it would otherwise never render, so it's a hard load error rather than a silent runtime skip. A view targeting a panel with `hasPty: true` is skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
+**A settings view** — `location: "settings"` is the one exception to the pairing below. It names no panel: its `id` may not match a panel's (`settings_view_panel_id_collision`), a plugin declares at most one (`settings_view_duplicate`), and a surface can't claim it (`surface_view_ref_settings`). The host mounts it in the plugin's settings home, below the generated [settings](#settings-schema--shipped) fields, with `settingsContext` and without the panel-record props. See [Settings → A custom section](#a-custom-settings-section) and [Views → A settings section](./views.md#a-settings-section).
+
+**Pairing with `contributes.panels`** — a panel view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view whose `id` matches no panel is rejected at manifest validation (`view_panel_ref_unknown`) — it would otherwise never render, so it's a hard load error rather than a silent runtime skip. A view targeting a panel with `hasPty: true` is skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
 
 **Fields:**
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Matches the panel `id` it provides a component for. Namespaced at runtime as `{pluginId}.{id}`. |
-| `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin. The module's default export is a React component. Absolute paths, URL schemes, and `..` segments are rejected at manifest validation. |
-| `location` | yes | `"panel"` (docked in the grid). `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
+| `id` | yes | For a panel view, the panel `id` it provides a component for; for a settings view, an id of its own. Letters, digits, `.`, `_` and `-`, at most 64 characters. |
+| `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin (`.js` or `.mjs`). The module's default export is a React component. Absolute paths, backslashes, URL schemes, `?`, `#` and `..` segments are rejected at manifest validation. |
+| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), or `"settings"` for the plugin's custom settings section. `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
 | `iconId` | no | Accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. Set it there instead. |
 
 The view schema is strict and carries no `name` or `description`: the matching panel is the single source of truth for a view's display metadata, so those fields were removed (#10888) rather than validate values the runtime ignores.
 
-**Bundling** — plugin views ship as **pre-built ESM modules**. You don't compile TypeScript or JSX at plugin-load time. `@daintreehq/plugin-vite` produces the bundle with the correct externals for React 19 sharing. See [Architecture → Renderer host](./architecture.md#renderer-host) for the internals.
+**Bundling** — the host serves the module as-is and compiles nothing, so a view is either hand-written browser ESM (the zero-build path: `createElement`, no JSX, bare imports limited to the host import map) or a bundle `@daintreehq/plugin-vite` produces with the right externals for sharing the host's React 19. See [Views → Getting data in](./views.md#getting-data-in) for what the import map serves and [Architecture → Renderer host](./architecture.md#renderer-host) for the internals.
 
 **Component contract:**
 
-> **Mixed availability.** `useHostChannel`, `usePluginEvent`, and `usePluginPanelEvent` (see [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React and `@daintreehq/tour` specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
+> **Mixed availability.** `useHostChannel`, `usePluginEvent`, and `usePluginPanelEvent` (see [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React, `@daintreehq/tour` and `@daintreehq/plugin-ui` specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). There are no hooks for worktrees, settings or commands: a view reads its own worktree from the `worktreeId` prop, and anything else — settings values, worktree details, data — comes from your worker over a channel.
 
 ```tsx
 // src/dashboard.tsx
@@ -293,9 +361,12 @@ export default function Dashboard(props) {
 | `disposeSignal` | `AbortSignal` | Lifetime of **this mounted view attempt**. Aborts on unmount, on "Try again", on an accepted `requestReload`, and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. A **temporary** unmount aborts it too — maximizing a sibling pane or leaving a dock tab. Switching to another project does not: the view stays mounted and the signal stays open. On unmount it aborts just after React has run your effect cleanups, so a cleanup may still see it open. Tie only view-scoped work to it. |
 | `panelRemovedSignal` | `AbortSignal` | Lifetime of **the panel record**. The same object is handed to every mount of a given `panelId`, so it survives remounts, retries, trash-then-restore, and plugin upgrades. Aborts exactly once, when the panel is permanently removed. |
 | `initialArgs` | `Record<string, unknown>` \| `undefined` | The argument bag the panel was spawned with — set when the panel is opened via the `panel.openPluginPanel` action's `initialArgs` (e.g. dispatched from a context menu with a file path) — merged with whatever the view has since persisted through `persistState`. It rides the panel's save/restore-surviving extension state, so a restored panel comes back the way the user left it. A snapshot taken at mount, not a live value: it does not update while the view is mounted, including in response to your own `persistState` calls. `undefined` when the panel was opened without args and has persisted nothing. |
+| `stateVersion` | `number` \| `undefined` | Which version of your declared state shape `initialArgs` holds: the panel's `stateVersion` when the bag was written, `0` for a bag that predates versioning, absent when you declare no `stateVersion`. See [panel state versioning](#panels--shipped). |
 | `persistState` | `(patch: Record<string, unknown>) => boolean` \| `undefined` | Writes view state back onto the panel record, so the next mount sees it in `initialArgs`. The two are one bag: spawn seeds it, this updates it, `initialArgs` reads it back — which is what lets a view survive the teardowns a panel routinely outlives (maximizing a sibling pane, leaving a dock tab, a project view reclaimed under memory pressure, a restart) without forgetting where the user was. The patch is **merged**, so independent parts of a view can each persist their own key; a key set to `undefined` is removed. An unchanged write is free — it neither churns the store nor schedules a save — so calling it from a render-derived effect is fine. Keep it small: the host refuses an update whose serialized form exceeds 64KB, and anything larger, not JSON round-trippable, or that should outlive the panel belongs in `host.storage`. Returns `true` when the stored state now matches what you asked for (applied, or already identical) and `false` when the host rejected the write — the merged bag would exceed 64KB, or it is not JSON-serializable (a cyclic value, a `BigInt`, a throwing `toJSON`). `true` means accepted and scheduled, not flushed: the layout save is debounced. |
-| `requestReload` | `() => void` \| `undefined` | Ask the host to discard this view attempt and mount a fresh one for the same panel, without restarting the backend. The current `disposeSignal` aborts and React cleanup runs; the next attempt gets a new `disposeSignal` and the latest accepted `persistState` bag as `initialArgs`, while `panelId`, `panelRemovedSignal` and the backend carry over. The module is reused, so module globals, document-wide registrations and anything on `window` survive — a reload frees only what your cleanup releases, and cannot rescue a blocked renderer. A request, not a command: the host may refuse it, reports no completion, and merges calls in the same tick. A callback held past its own attempt does nothing. A fourth reload within 30 seconds of three accepted ones stops the view until the user reloads the panel. Absent on project surfaces. See [Views → Reloading a view](./views.md#reloading-a-view). |
+| `requestReload` | `() => void` \| `undefined` | Ask the host to discard this view attempt and mount a fresh one for the same panel, without restarting the backend. The current `disposeSignal` aborts and React cleanup runs; the next attempt gets a new `disposeSignal` and the latest accepted `persistState` bag as `initialArgs`, while `panelId`, `panelRemovedSignal` and the backend carry over. The module is reused, so module globals, document-wide registrations and anything on `window` survive — a reload frees only what your cleanup releases, and cannot rescue a blocked renderer. A request, not a command: the host may refuse it, reports no completion, and merges calls in the same tick. A callback held past its own attempt does nothing. A fourth reload within 30 seconds of three accepted ones stops the view until the user reloads the panel. Absent on project surfaces and settings views. See [Views → Reloading a view](./views.md#reloading-a-view). |
 | `setHasUnsavedChanges` | `(hasUnsavedChanges: boolean) => void` \| `undefined` | Tell the host whether the view holds work a reload would lose. The user and agents can reload a plugin panel without being asked, since persisted state comes back; while this is `true`, they are asked to confirm first. Your own `requestReload` is never held up by it. The setter belongs to its attempt, so one held past its teardown does nothing, and a new attempt starts with nothing unsaved. Absent where the host offers no reload. See [Views → Reloading a view](./views.md#reloading-a-view). |
+| `styleRootAttributes` | `Readonly<Record<string, string>>` | Spread onto any container you render through `createPortal`, so the runtime-compiled Tailwind classes inside it still apply. See [Views → Styling](./views.md#styling). |
+| `settingsContext` | `{ scope: "user" \| "project"; projectId: string \| null }` \| `undefined` | Present only on a `location: "settings"` view: which settings home it is mounted in. `projectId` is `null` in the `"user"` home. See [A custom settings section](#a-custom-settings-section). |
 
 The view is wrapped in an error boundary by the host. An unhandled render error shows a diagnostics pane with "Try again" — which produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise — alongside "Close panel", "Copy diagnostics", and "View logs".
 
@@ -430,7 +501,7 @@ Bindings register when the plugin loads and unregister on unload. Conflicts with
 
 ## Settings schema — _Shipped_
 
-Declares user-configurable settings for your plugin.
+Declares the values your plugin needs from the user. Daintree stores them, renders the form for them in the plugin's settings home, and hands them back through [`host.settings`](./host-api.md#settings), so a plugin never builds a settings screen of its own.
 
 ```json
 {
@@ -440,8 +511,9 @@ Declares user-configurable settings for your plugin.
         "id": "linear.apiToken",
         "type": "secret",
         "scope": "user",
-        "label": "Linear API Token",
-        "description": "Personal API token from linear.app/settings/api"
+        "label": "Linear API token",
+        "description": "Personal API token from linear.app/settings/api",
+        "required": true
       },
       {
         "id": "linear.defaultTeam",
@@ -460,29 +532,48 @@ Declares user-configurable settings for your plugin.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Setting key, used to read/write the value via the host API. |
+| `id` | yes | Setting key, used to read and write the value through the host API. Letters, digits, `.`, `_` and `-`, so it can always be named by a `${settings:id}` token. |
 | `type` | no | One of `string`, `number`, `boolean`, `enum`, `json`, `secret`, `path`, `directory`, `file`. Defaults to `string`. |
-| `label` | no | Field label shown in the generated form. |
-| `description` | no | Help text shown beneath the field. |
-| `default` | no | Default value. |
-| `scope` | no | `user` (global), `project` (per-project, stored in the repository), or `local` (per-project, stored on this machine only). Defaults to `user`. A `secret` in `project` scope is stored like `local`, never in the repository. |
+| `label` | no | Field label in the generated form. Defaults to the `id`. |
+| `description` | no | Help text beneath the field. |
+| `default` | no | The value `host.settings.get` returns while nothing is stored, and what the form's reset restores. Rejected on a `secret`: it would ship in `plugin.json` — mark the secret `required` instead. |
+| `scope` | no | `user` (default), `project` or `local`. See **Scopes** below. |
 | `options` | no | Non-empty string array; required when `type` is `enum`. |
-| `min` / `max` | no | Numeric bounds for `number` settings. `min` cannot exceed `max`. |
+| `min` / `max` | no | Numeric bounds for `number` settings, enforced by the form. `min` cannot exceed `max`. |
 | `mustExist` | no | For `path` / `directory` / `file`: when `true`, the form flags a stored path that no longer resolves on disk. Advisory — it never blocks saving. |
 | `extensions` | no | For `file` only: restrict the native chooser to these extensions (no leading dot, e.g. `["json", "md"]`). Rejected on any other type. |
 | `secret` | no | Legacy boolean; `secret: true` normalizes to `type: "secret"`. Prefer `type: "secret"`. |
+| `required` | no | `true` when the plugin can't do its job without a value. See **Required settings** below. |
+| `editor` | no | `"form"` (default) or `"view"`. `"view"` hands the value to your own [custom section](#a-custom-settings-section) — for something a plain field edits badly, like a per-channel table stored as `json` — and the generated form leaves it out instead of showing it twice. Without a `location: "settings"` view the field is shown anyway. |
 
-The `path` and `directory` types render a read-only text input plus a **Browse** button that opens a native folder chooser; `file` opens a single-file chooser narrowed by `extensions`. The stored value is an absolute filesystem path. Plugins read it back through the host settings API like any other setting.
+**Types.** `string` is a text input, `number` a number input held to `min` / `max`, `boolean` a switch, `enum` a select over `options`, and `json` a text area that must parse as JSON before it is stored (clearing it resets to the default). `path` and `directory` render a read-only input plus a **Browse** button that opens a native folder chooser; `file` opens a single-file chooser narrowed by `extensions`. The stored value is an absolute path. The form applies each change as it is made; there is no Save.
 
-**Scopes:** `user` (global, persisted in Daintree config), `project` (per-project, persisted in `<projectRoot>/.daintree/plugin-settings/`), `local` (per-project, persisted on this machine only). Secret values are never persisted in the repository: a `project`-scoped secret is stored on this machine, in the `local` file.
+**Scopes.** `user` is one value for the whole app, persisted in `~/.daintree/plugin-settings/`. `project` is per project and persisted in the repository, at `<projectRoot>/.daintree/plugin-settings/`, so a value committed there reaches everyone who clones it. `local` is per project but stays on this machine, under `~/.daintree/plugin-settings/local/<projectId>/`. An installed plugin's `project` and `local` values follow the active project: with none open they read as unset and `host.settings.set` refuses them. A project plugin's always resolve against its own project.
 
-Settings appear in Preferences → Plugins → `{pluginId}` as a generated form. Values are read via the host API:
+**Secrets.** A `secret` is a masked input with a reveal toggle and a Clear that asks first. Its value is encrypted at rest through the OS keychain; where no keychain is available, the form says secrets can't be saved on this device and `host.settings.set` rejects rather than storing plaintext. A secret is never written into the repository: a `project`-scoped secret is stored like a `local` one, so each collaborator enters their own. It can't declare a `default`.
+
+**Required settings.** While a `required` setting is unset, each of the plugin's open panels and surfaces shows a neutral "<Plugin> needs setup" strip above its content, whose **Open plugin settings** lands on the first missing setting, and [`host.settings.missingRequired()`](./host-api.md#settings) lists it. The strip goes away by itself once the value is stored. A `default` never satisfies it — the form shows a **Use default** button that stores the default explicitly — and a secret counts as set only once a value is stored. A required setting whose stored file can't be read shows as "Couldn't read <label>" instead.
+
+**Where they appear.** Each field has exactly one home. An installed plugin's `user` fields are in the plugin manager, on its Settings tab; its `project` / `local` fields are in Project settings → Plugins, with the plugin selected; a project plugin's fields are all in Project settings. Each home shows only its own fields, with a row pointing to the other when there is one. Every way in lands in the right home: the **Plugin settings…** entry in your panels' ⋯ and right-click menus, the setup strip, [`host.settings.open(key?)`](./host-api.md#settings), and the `plugin.openSettings` action behind them, which scrolls to and briefly highlights `key` when it names a declared setting — or, for an `editor: "view"` key, your custom section. A project-scoped destination with no project open is refused rather than sent somewhere the field isn't. `plugin.openSettings` is UI navigation: it is hidden from agents and MCP clients.
+
+### A custom settings section
+
+When fields aren't enough — a sign-in flow, a list editor, a connection test — declare one view with `location: "settings"` (see [Views](#views--shipped)). The host mounts it in the plugin's settings home below the generated fields, inside a settings group it draws, so the section reads as more rows of the same page. Declaring it is also enough to give your panels a **Plugin settings…** entry, with no settings fields at all.
+
+- **Where it mounts.** An installed plugin's section mounts in both homes — `settingsContext: { scope: "user", projectId: null }` in the plugin manager, `{ scope: "project", projectId }` in Project settings — so render the rows for the scope you're given. A project plugin's section always mounts with `scope: "project"`.
+- **What it receives.** `pluginId`, a `panelId` of its own per home, `disposeSignal`, `panelRemovedSignal`, `styleRootAttributes` and `settingsContext`. There is no panel record behind it, so `initialArgs`, `persistState`, `stateVersion`, `worktreeId`, `requestReload` and `setHasUnsavedChanges` are absent.
+- **Containment.** The group is isolated and contained (`contain: layout paint`, overflow clipped), so a `position: fixed` descendant stays inside it; portal anything that has to float, with `styleRootAttributes` on the portal container.
+- **Lifecycle.** Loading it activates a loaded plugin that hasn't activated yet, like opening a panel; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as one row saying it's available once the plugin runs. When the plugin stops, is muted or reloads, the section unmounts and its `disposeSignal` and `panelRemovedSignal` abort; after a reload it shows "Reloading…" until the new module is served, then mounts that, so an open settings page never runs the retired module. A render error shows the same diagnostics pane with **Try again** that a panel gets, and the rest of the page keeps working.
+
+[Views → A settings section](./views.md#a-settings-section) covers writing one.
+
+Values are read via the host API:
 
 ```ts
 const token = await host.settings.get<string>("linear.apiToken");
 ```
 
-Changes fire a subscription callback, so you don't need to reactivate to pick them up.
+Changes made through Daintree fire the `host.settings.onDidChange` subscription, so you don't need to reactivate to pick them up.
 
 ## Context menus — _Shipped_
 
@@ -592,6 +683,48 @@ The entry is strict: an unknown field (a `url`, a `command`) is rejected rather 
 **Enabling it per project.** Declaring the endpoint exposes nothing, for an installed plugin or a project one. Each endpoint is enabled per project, as a user decision that is stored in Daintree's own user store (`projectAgentMcpEnablement`), keyed by the plugin _instance_ so an answer for an installed plugin never reaches a project plugin with the same manifest id, and never in the repository. The user switches it on or off in **Project settings → Plugins → Agent tools**; switching it off revokes every live credential for it at once. Once an endpoint is enabled, each Claude Code launch in that project receives a credential for it. Other agent CLIs are not handed plugin endpoints yet. The Daintree MCP server must be enabled in Settings → MCP server, since the endpoint is served on its listener.
 
 **Available under `scope: "project"`.** Unlike `mcpServers` and `skills`, this surface has a project axis: every credential is minted for one terminal launch in one project, the route re-checks that project's enablement on every request, and a project plugin's endpoint can only be granted to the project that loaded it. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose) for the credential and consent model.
+
+## Databases — _Shipped_
+
+Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--host-managed-sqlite). The declaration is what names the file, discloses it in the plugin manager, and decides where it lives, so the host resolves and contains the path before your code sees it.
+
+```json
+{
+  "scope": "project",
+  "capabilities": ["fs:project-write"],
+  "contributes": {
+    "databases": [
+      {
+        "id": "ledger",
+        "description": "Transactions, categories and budgets.",
+        "path": "data/finance.db"
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Letters, digits, `.`, `_` and `-`, at most 64 characters. What `host.db.open(id)` names, and the default file name. |
+| `description` | no | 1–400 characters. Shown beside the database in the plugin manager, which lists every declared database. |
+| `location` | no | `"project"` (default) or `"local"`. |
+| `path` | no | `"project"` only. Relative to the project root (no leading `/`, backslash, `..` segment or URL syntax), at most 512 characters, ending in `.db`, `.sqlite` or `.sqlite3`, never inside `.git`. Defaults to `.daintree/data/<manifestId>/<id>.db`. |
+| `journalMode` | no | `"delete"` (default) or `"wal"`. |
+
+**`"project"`** puts the file in the repository. That is the location for data agents edit: an agent in the project's terminal can open the same file with the `sqlite3` CLI, the file travels with a clone, and the committed data contract (your plugin's `AGENTS.md`) can name it by its project-relative path. It needs `scope: "project"` (`database_project_scope_only`) and the `fs:project-write` capability (`database_project_write_required`), because it writes into the repository. Whether the file itself is committed is the project's decision; gitignore it to keep the data out of history.
+
+**`"local"`** keeps the file in this machine's per-plugin data directory (`databases/<id>.db` there), out of the repository, and needs no capability — the same footing as `host.storage`. It is available to installed and project plugins alike. Use it for caches and per-user state that no agent needs to reach. A `path` on a local database is refused (`database_local_path_unsupported`).
+
+**Where the file lands.** The host resolves the declaration, never your code: `host.db.open` creates the file and its directory on first open, contained to the project root (or data directory) on the real path, so a symlinked directory cannot carry it outside, and it refuses a path that resolves inside `.git` or a database file that is itself a symlink. `host.db.resolve(id)` returns the location without opening it, for handing to an agent. See [Host API → `db`](./host-api.md#db--host-managed-sqlite).
+
+**`journalMode`.** The default, `"delete"`, keeps the database one self-contained file between writes, so git, a backup, or a sync folder never sees committed data stranded in a `-wal` sidecar. The host re-applies the declared mode on every open, so an agent that ran `PRAGMA journal_mode=WAL` cannot silently switch it. Choose `"wal"` only for a local, write-heavy database nothing else copies.
+
+At most 16 databases per plugin; entries are strict, so a `url` or `driver` field is refused rather than read as a backend the host does not have.
+
+**Back up data…** Every panel of a plugin that declares a database offers **Back up data…** in its ⋯ and right-click menus, with no wiring in your view. The host finds the declared databases that exist, never creating one, and snapshots them with SQLite's online backup from a read-only connection, so a write in progress is either wholly in the copy or not in it at all. One database asks where to save the file, suggesting `<manifestId>-<id>-<YYYY-MM-DD_HHmmss>.db` in Downloads; several ask for a folder and write one file each under that pattern. A plugin with no database on disk yet says so instead of opening a dialog. The entry is host UI: the `plugin.backupDatabases` action behind it is closed to plugins and hidden from agents and MCP clients. For a copy your own code makes — into a sync folder, say — use the open handle's `backup(destPath)`.
 
 ## Skills — _Shipped_
 
@@ -780,7 +913,7 @@ Rules:
 
 - **Slot-replacing, never removing.** Surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay where they are. The host draws a thin strip of its own above the region, outside the view's box, carrying a switch between the panel name and the stock launcher and, while the surface shows, a "No panels open" label and the launcher's search entry, so a broken or half-finished surface cannot strand the user. Nothing overlaps the view, so it needs no reserved space.
 - **The user decides whether it stays.** The first time a claimed surface would show in a project, a notice names the plugin and offers to keep it or use the launcher. The answer, whether given there or with the strip's switch, is remembered per project in Daintree's own settings, never in the repository, and is shown with a reset under the project's plugin settings. A slot that passes to a different plugin asks again.
-- **`viewId` must name a declared `contributes.views` entry**, cross-checked at validation like any other dangling reference (`surface_view_ref_unknown`). It must not name a panel with `hasPty: true` (`surface_view_ref_pty`) — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing.
+- **`viewId` must name a declared `contributes.views` entry**, cross-checked at validation like any other dangling reference (`surface_view_ref_unknown`). It must not name a panel with `hasPty: true` (`surface_view_ref_pty`) — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing — nor a `location: "settings"` view (`surface_view_ref_settings`), which renders only in the plugin's settings.
 - **At most one plugin per slot per project.** First claim wins; a second is refused and logged with both plugin names, so the author can tell which manifest to change. Never a silent last-wins. The refused plugin still loads and its other contributions work, and its claim is remembered — it inherits the slot if the incumbent later unloads.
 - The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
 

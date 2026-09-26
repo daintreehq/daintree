@@ -41,6 +41,15 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },
 }));
 
+// The agent-context drop has its own suite
+// (useTerminalFileTransfer.agentContext.test.ts). Its real draft module reaches
+// the project store graph, which the narrow client mock above cannot satisfy,
+// and no drag in this suite carries that type.
+vi.mock("@/services/agentHandoff/agentDraft", () => ({
+  draftAgentContext: vi.fn(),
+  getDraftRefusal: vi.fn(() => "not-agent"),
+}));
+
 import type { EditorView } from "@codemirror/view";
 import { IMAGE_EXTENSIONS, useTerminalFileTransfer } from "../useTerminalFileTransfer";
 import { useDragDrop } from "../hooks/useDragDrop";

@@ -1,0 +1,111 @@
+// Lets a zero-build plugin (hand-written ESM, no node_modules) import the SDK's
+// runtime helpers in its worker. Bare specifiers resolve from the plugin's own
+// directory, where nothing is installed, so without this every such plugin
+// re-implements frontmatter parsing and the checked-write retry loop by hand.
+//
+// Kept to Node builtins: the worker bootstrap installs it before anything else
+// is imported.
+
+import { registerHooks, type ResolveFnOutput, type ResolveHookSync } from "node:module";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const SDK_PACKAGE = "@daintreehq/plugin-sdk";
+
+/** Specifier → file in the app's SDK copy (`dist-electron/electron/plugin-sdk/`). */
+export const HOST_SERVED_SDK_ENTRIES: Readonly<Record<string, string>> = {
+  [SDK_PACKAGE]: "index.js",
+  [`${SDK_PACKAGE}/files`]: "files.js",
+  [`${SDK_PACKAGE}/data`]: "data.js",
+};
+
+const REFUSED_SDK_ENTRIES: Readonly<Record<string, string>> = {
+  [`${SDK_PACKAGE}/react`]:
+    "it is for panel views, which get React from the host's import map, and only resolves in a view bundled with @daintreehq/plugin-vite",
+  [`${SDK_PACKAGE}/testing`]: "it is a test-time mock host, not something a running plugin loads",
+};
+
+// "Not found" from `import` and from `require()`. Both are also raised when an
+// installed SDK's export names a file that is missing, so they only mean "no
+// SDK of the plugin's own" once the lookup below has confirmed there is none.
+const NOT_FOUND = new Set(["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND"]);
+
+// An installed SDK that does not export the entry: one older than the entry.
+const NOT_EXPORTED = "ERR_PACKAGE_PATH_NOT_EXPORTED";
+
+function isSdkSpecifier(specifier: string): boolean {
+  return specifier === SDK_PACKAGE || specifier.startsWith(`${SDK_PACKAGE}/`);
+}
+
+/**
+ * Whether Node's package lookup from the importing module would find an
+ * installed SDK — the same `node_modules` walk up the directory tree.
+ */
+function hasInstalledSdk(parentURL: string | undefined): boolean {
+  if (!parentURL?.startsWith("file:")) return false;
+  let dir = path.dirname(fileURLToPath(parentURL));
+  for (;;) {
+    if (existsSync(path.join(dir, "node_modules", SDK_PACKAGE, "package.json"))) return true;
+    const parent = path.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/**
+ * Whether a failed lookup means the plugin has no usable SDK of its own. A
+ * broken install — an export pointing at a missing file, say — is not that,
+ * and is rethrown so the plugin sees its own error.
+ */
+function shouldFallBack(error: unknown, parentURL: string | undefined): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === NOT_EXPORTED) return true;
+  return typeof code === "string" && NOT_FOUND.has(code) && !hasInstalledSdk(parentURL);
+}
+
+function notServed(specifier: string): Error {
+  const reason = REFUSED_SDK_ENTRIES[specifier];
+  const served = Object.keys(HOST_SERVED_SDK_ENTRIES).join(", ");
+  const message =
+    `Cannot find module '${specifier}'. Without an install, Daintree serves only ${served} ` +
+    `to plugin workers` +
+    (reason ? `; ${specifier} is not served because ${reason}.` : ".") +
+    ` To use it, install @daintreehq/plugin-sdk in the plugin and bundle it.`;
+  return Object.assign(new Error(message), { code: "ERR_MODULE_NOT_FOUND" });
+}
+
+/**
+ * The resolve hook, separate from its installation so it can be exercised
+ * without touching the process's loader. A plugin that installed or bundled
+ * its own SDK resolves to that copy; the app's copy is only the fallback.
+ */
+export function createPluginSdkResolveHook(sdkDir: string): ResolveHookSync {
+  return (specifier, context, nextResolve): ResolveFnOutput => {
+    if (!isSdkSpecifier(specifier)) return nextResolve(specifier, context);
+    try {
+      return nextResolve(specifier, context);
+    } catch (error) {
+      if (!shouldFallBack(error, context.parentURL)) throw error;
+      const file = HOST_SERVED_SDK_ENTRIES[specifier];
+      if (!file) throw notServed(specifier);
+      return {
+        url: pathToFileURL(path.join(sdkDir, file)).href,
+        format: "module",
+        shortCircuit: true,
+      };
+    }
+  };
+}
+
+/**
+ * Install the fallback for this process. `registerHooks` runs the hook
+ * in-thread and synchronously — no loader worker and no separate hook module
+ * to ship — and covers `require()` as well as `import`. The API is not yet
+ * marked stable in Node 24 (Electron 42's runtime) and the tests run it under
+ * the repo's Node 22, so an Electron upgrade should be checked against a real
+ * plugin worker; the bootstrap treats a throw here as losing only the fallback.
+ */
+export function installPluginSdkResolution(sdkDir: string): void {
+  registerHooks({ resolve: createPluginSdkResolveHook(sdkDir) });
+}

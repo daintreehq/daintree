@@ -1,6 +1,7 @@
 import type { PanelKind, PanelLocation, TerminalInstance } from "../types/panel.js";
 import type { TerminalSnapshot } from "../types/project.js";
 import type { AddPanelOptions } from "../types/addPanelOptions.js";
+import type { PanelMenuItemContribution } from "../types/plugin.js";
 import { getAgentConfig } from "./agentRegistry.js";
 import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
 
@@ -165,6 +166,28 @@ export interface PanelKindConfig {
    * `panelKind`; absent means the menus offer no tour.
    */
   tourId?: string;
+  /**
+   * The owning plugin declares settings (fields or a `location: "settings"`
+   * view), so the kind's menus offer "Plugin settings…". Absent for built-ins
+   * and for plugins with nothing to configure.
+   */
+  hasPluginSettings?: boolean;
+  /**
+   * The owning plugin declares at least one `required` setting, so the kind's
+   * host checks what is still unset and shows its "needs setup" strip.
+   */
+  hasRequiredSettings?: boolean;
+  /**
+   * The owning plugin declares `contributes.databases`, so the kind's menus
+   * offer "Back up data…". Absent for built-ins and plugins with none.
+   */
+  hasPluginDatabases?: boolean;
+  /**
+   * The kind's `contributes.panels[].menu`, with each `actionId` already in the
+   * plugin instance's namespace. The menus show an entry once its action is
+   * registered and dispatch it with `{ panelId }`. Absent when none is declared.
+   */
+  pluginMenu?: readonly PanelMenuItemContribution[];
   /**
    * Owning project, or `null`/absent for global plugin and built-in kinds. Set
    * only for kinds contributed by a project-local plugin, whose `id` is the

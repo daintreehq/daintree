@@ -957,3 +957,63 @@ describe("host identity (#12211)", () => {
     expect(() => host.panelKindId("overview")).toThrow(/cannot qualify panel kind/);
   });
 });
+
+describe("createHost settings.open and settings.missingRequired", () => {
+  it("opens the plugin's own settings, routed to its own project's renderer", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.settings.open("apiKey");
+    await host.settings.open();
+
+    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(
+      1,
+      "plugin.openSettings",
+      { pluginId: PLUGIN_ID, key: "apiKey" },
+      PROJECT_A
+    );
+    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(
+      2,
+      "plugin.openSettings",
+      { pluginId: PLUGIN_ID },
+      PROJECT_A
+    );
+  });
+
+  it("stays ambient for an unbound plugin", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.settings.open("apiKey");
+
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+      "plugin.openSettings",
+      { pluginId: PLUGIN_ID, key: "apiKey" },
+      null
+    );
+  });
+
+  it("rejects an empty key, a failed dispatch, and an unloaded plugin", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.settings.open("")).rejects.toThrow(/non-empty string/);
+    h.sendDispatchToRenderer.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "PROJECT_VIEW_UNAVAILABLE", message: "no window" },
+    } as never);
+    await expect(host.settings.open("apiKey")).rejects.toThrow(/no window/);
+    h.plugins.delete(PLUGIN_ID);
+    await expect(host.settings.open()).rejects.toThrow(/no longer loaded/);
+  });
+
+  it("answers missingRequired against the bound project's root", async () => {
+    const h = makeHarness();
+    const missingRequiredForHost = vi.fn(async () => ["apiKey"]);
+    (h.deps as unknown as { settings: unknown }).settings = { missingRequiredForHost };
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.settings.missingRequired()).resolves.toEqual(["apiKey"]);
+    expect(missingRequiredForHost).toHaveBeenCalledWith(PLUGIN_ID, ROOT_A);
+  });
+});

@@ -12,6 +12,7 @@ export {
   createContentAttributes,
   createPlainPasteKeymap,
   formatFileSize,
+  minimalDocChange,
   removeChipRange,
 } from "./base";
 export type { AutoSizeConfig } from "./base";

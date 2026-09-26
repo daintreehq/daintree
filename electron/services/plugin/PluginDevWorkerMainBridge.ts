@@ -28,6 +28,7 @@ import type {
   PluginProcessMode,
   PluginSettingsScope,
   PluginStorageScope,
+  PluginRenderPdfOptions,
 } from "../../../shared/types/plugin.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
@@ -35,6 +36,7 @@ import type {
   BroadcastToRendererParams,
   DispatchParams,
   SendToActiveAgentParams,
+  SendToAgentParams,
   InvalidateFileDecorationsParams,
   LoggerParams,
   PluginWorkerToHostMessage,
@@ -46,6 +48,7 @@ import type {
   RegisterHandlerParams,
   RegisterMcpToolsParams,
   SettingsGetParams,
+  SettingsOpenParams,
   SettingsSetParams,
   StorageGetParams,
   StorageSetParams,
@@ -58,11 +61,13 @@ import type {
   UnregisterMcpToolsParams,
   FsPathParams,
   FsWriteFileParams,
+  FsAppendFileParams,
   FsWatchParams,
   GitOpParams,
   ClipboardWriteTextParams,
   ClipboardWriteImageParams,
   SystemPathParams,
+  DocumentsRenderPdfParams,
   ProcessSpawnParams,
   ProcessHandleRefParams,
   ProcessWriteParams,
@@ -71,6 +76,8 @@ import type {
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import { serializableErrorFields } from "./pluginHostErrorFields.js";
+import { approvePluginDatabaseBackup } from "./pluginInternalApprovers.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
@@ -736,11 +743,13 @@ export class PluginDevWorkerMainBridge {
       this.workerHost.send({ type: "host-result", requestId: msg.requestId, ok: true, result });
     } catch (err) {
       if (this.disposed || generation !== this.reloadGeneration) return;
+      const errorFields = serializableErrorFields(err);
       this.workerHost.send({
         type: "host-result",
         requestId: msg.requestId,
         ok: false,
         error: formatErrorMessage(err, "host call failed"),
+        ...(errorFields && { errorFields }),
       });
     } finally {
       // Only if this controller is still the one registered: a worker that
@@ -799,6 +808,14 @@ export class PluginDevWorkerMainBridge {
         await this.host.sendToActiveAgent(p.text, p.options);
         return undefined;
       }
+      case "agents.list":
+        return this.host.agents.list();
+      case "sendToAgent": {
+        // `signal` ties an open picker to this generation, like showQuickPick:
+        // a retired worker's question comes off the screen with it.
+        const p = params as SendToAgentParams;
+        return this.host.sendToAgent(p.text, p.options, { signal });
+      }
       case "showQuickPick": {
         // Reuse the real host so validation/provenance/cancellation all match
         // the installed-plugin path. `signal` is what ties the dialog to this
@@ -825,6 +842,13 @@ export class PluginDevWorkerMainBridge {
         await this.host.settings.set(p.key, p.value, p.scope);
         return undefined;
       }
+      case "settings.open": {
+        const p = params as SettingsOpenParams;
+        await this.host.settings.open(p.key);
+        return undefined;
+      }
+      case "settings.missingRequired":
+        return this.host.settings.missingRequired();
       case "storage.get": {
         const p = params as StorageGetParams;
         return this.host.storage.get(p.key, p.scope);
@@ -839,10 +863,30 @@ export class PluginDevWorkerMainBridge {
         await this.host.storage.delete(p.key, p.scope);
         return undefined;
       }
+      case "db.prepareBackup": {
+        const p = params as { id: string; destPath: string };
+        return approvePluginDatabaseBackup(this.host.db, p.id, p.destPath);
+      }
+      case "db.resolve": {
+        const p = params as { id: string; readonly?: unknown };
+        return p.readonly === true
+          ? this.host.db.resolve(p.id, { readonly: true })
+          : this.host.db.resolve(p.id);
+      }
       case "fs.readFile":
         return this.host.fs.readFile((params as FsPathParams).path, { signal });
       case "fs.readFileBytes":
         return this.host.fs.readFileBytes((params as FsPathParams).path, { signal });
+      case "fs.readFileWithRevision":
+        return this.host.fs.readFileWithRevision((params as FsPathParams).path, { signal });
+      case "fs.mkdir":
+        await this.host.fs.mkdir((params as FsPathParams).path);
+        return undefined;
+      case "fs.appendFile": {
+        const p = params as FsAppendFileParams;
+        await this.host.fs.appendFile(p.path, p.contents);
+        return undefined;
+      }
       case "fs.writeFile": {
         const p = params as FsWriteFileParams;
         // Forwarded exactly as sent so a malformed options value is refused
@@ -872,11 +916,18 @@ export class PluginDevWorkerMainBridge {
               payload: changedPath,
             });
           },
-          { signal }
+          {
+            signal,
+            // Forwarded as given so the host rejects a malformed value.
+            ...(p.recursive !== undefined && { recursive: p.recursive }),
+            ...(p.debounceMs !== undefined && { debounceMs: p.debounceMs }),
+            ...(p.allowMissing !== undefined && { allowMissing: p.allowMissing }),
+          }
         );
-        // Disposed or reloaded while the watch was settling — tear it down
-        // rather than leak it past the cleanup pass that already ran.
-        if (this.disposed || generation !== this.reloadGeneration) {
+        // Disposed, reloaded or cancelled while the watch was settling — tear
+        // it down rather than leak it: the cleanup pass already ran, or the
+        // worker already rejected the call and dropped its callback.
+        if (this.disposed || generation !== this.reloadGeneration || signal.aborted) {
           try {
             dispose();
           } catch {
@@ -956,6 +1007,11 @@ export class PluginDevWorkerMainBridge {
         await this.host.system.showItemInFolder((params as SystemPathParams).targetPath);
         return undefined;
       }
+      case "documents.renderPdf":
+        // Forwarded as sent; the host validates every option.
+        return this.host.documents.renderPdf(
+          (params as DocumentsRenderPdfParams).options as PluginRenderPdfOptions
+        );
       case "clipboard.readText":
         return this.host.clipboard.readText();
       default:

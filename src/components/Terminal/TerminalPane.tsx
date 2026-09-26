@@ -36,6 +36,7 @@ import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { FindCodexSessionAction } from "./FindCodexSessionAction";
 import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
+import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
 import { useContextInjection } from "@/hooks/useContextInjection";
 import { getRestartBannerVariant } from "./restartStatus";
@@ -558,6 +559,8 @@ function TerminalPaneComponent({
   );
   // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
   const kind = "terminal" as const;
+  // The stored kind, which for a PTY-backed plugin panel names the plugin's kind.
+  const storedKind = usePanelStore((state) => state.panelsById?.[id]?.kind);
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
   // Live preset color — re-derives from settings whenever the user edits a preset's color
   const presetCustomPresets = useAgentSettingsStore((s) =>
@@ -1393,6 +1396,10 @@ function TerminalPaneComponent({
           onCancelRetry={handleCancelRetry}
         />
       )}
+
+      {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
+          terminal rather than over it. Nothing for a plain terminal. */}
+      {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
 
       <BannerSlot visible={showRestartError}>
         {restartError && (

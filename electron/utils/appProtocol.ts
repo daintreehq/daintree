@@ -43,6 +43,9 @@ const IMMUTABLE_ASSET_RE =
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
+  // Module scripts are MIME-checked strictly and this is served nosniff, so an
+  // unmapped `.mjs` (octet-stream) would refuse to import.
+  ".mjs": "text/javascript",
   ".css": "text/css",
   ".json": "application/json",
   ".png": "image/png",

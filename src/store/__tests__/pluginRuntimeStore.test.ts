@@ -115,6 +115,38 @@ describe("usePluginRuntimeStore", () => {
     expect(state.pluginMetaById.has("gregpriday.video-manager")).toBe(false);
   });
 
+  it("learns a project plugin's name when the project's plugins change, not only on provenance", async () => {
+    const listeners = new Map<string, () => void>();
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        plugin: { list: listMock, onProvenanceChanged: onProvenanceChangedMock },
+        events: {
+          on: (name: string, cb: () => void) => {
+            listeners.set(name, cb);
+            return () => listeners.delete(name);
+          },
+        },
+      },
+    });
+    listMock.mockResolvedValue([]);
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+
+    // Trusting the folder loads its plugins; main pushes a project snapshot.
+    listMock.mockResolvedValue([
+      makePlugin({ id: "lab.content", displayName: "Content Calendar", projectId: "p1" }),
+    ]);
+    listeners.get("plugin:project-plugins-changed")?.();
+
+    await vi.waitFor(() =>
+      expect(
+        usePluginRuntimeStore.getState().pluginMetaById.get("project__p1__lab.content")?.displayName
+      ).toBe("Content Calendar")
+    );
+  });
+
   it("falls back to the manifest id, never the instance key, when no displayName is declared", async () => {
     listMock.mockResolvedValue([
       makePlugin({ id: "gregpriday.video-manager", projectId: "b6700c7a" }),

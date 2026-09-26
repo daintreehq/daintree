@@ -9,10 +9,24 @@ import {
   requestUserViewReload,
 } from "@/services/plugin/pluginPanelLifecycle";
 import { usePanelStore } from "@/store/panelStore";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useProjectStore } from "@/store/projectStore";
+import { resolvePluginSettingsTarget } from "@/services/plugin/pluginSettingsHome";
 import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
 import { isBuiltInPanelKind } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmationStaged";
+import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
+import { systemClient } from "@/clients/systemClient";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+/** The folder part of a path main returned, kept in the platform's own separators. */
+function dirnameOf(filePath: string): string {
+  const cut = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return cut > 0 ? filePath.slice(0, cut) : filePath;
+}
 
 /**
  * The plugin-authoring feedback loop (#12214). An agent writing a plugin into a
@@ -32,7 +46,7 @@ import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmat
 const DIAGNOSTICS_LOG_LIMIT_DEFAULT = 50;
 const DIAGNOSTICS_LOG_LIMIT_MAX = 500;
 
-export function registerPluginActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+export function registerPluginActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("plugin.reloadWindow", () =>
     defineAction({
       id: "plugin.reloadWindow",
@@ -323,6 +337,153 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
             ? `No plugin "${args.pluginId}". Known ids: ${known.join(", ")}`
             : `No plugin "${args.pluginId}", and no plugins are loaded or discovered in this project.`
         );
+      },
+    })
+  );
+
+  actions.set("plugin.openSettings", () =>
+    defineAction({
+      id: "plugin.openSettings",
+      title: "Open plugin settings",
+      description:
+        "Show a plugin's settings in the one place they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a project-scoped setting. A declared key is requested for landing; an undeclared one is ignored.",
+      category: "plugins",
+      kind: "command",
+      danger: "safe",
+      nonRepeatable: true,
+      // Needs a plugin id, and there is no focused-plugin fallback to act on.
+      palette: { mode: "hidden" },
+      // UI navigation for the plugin's own menus and `host.settings.open`. It is
+      // in no assistant or external tier, and hidden from tool listings too: an
+      // agent has nothing to gain from moving the user's settings dialog.
+      mcpVisibility: "hidden",
+      scope: "renderer",
+      argsSchema: z.object({
+        pluginId: z
+          .string()
+          .min(1)
+          .describe(
+            "An instance key (exact; an installed plugin's is its manifest id), or the manifest id of this project's own plugin."
+          ),
+        key: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("A setting id from the plugin's contributes.settings to land on."),
+      }),
+      resultSchema: z.object({
+        pluginId: z.string(),
+        /** Where the request was sent. The home lands on it once it renders. */
+        home: z.enum(["plugin-manager", "project-settings"]),
+        /** The declared setting the request asked to land on, or null. */
+        requestedKey: z.string().nullable(),
+      }),
+      run: async ({ pluginId, key }, ctx) => {
+        const projectId = ctx?.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
+        const resolution = resolvePluginSettingsTarget(
+          pluginId,
+          key,
+          await pluginClient.list(),
+          projectId
+        );
+        if (!resolution.ok) {
+          throw new Error(
+            {
+              "not-found": `No plugin "${pluginId}" is loaded here`,
+              ambiguous: `"${pluginId}" names more than one plugin here — pass its instance key`,
+              "no-settings": `Plugin "${pluginId}" has no settings`,
+              "needs-project": `Plugin "${pluginId}" keeps ${key === undefined ? "its settings" : `"${key}"`} in Project settings, and no project is open`,
+            }[resolution.reason]
+          );
+        }
+        const { target } = resolution;
+        usePluginManagerStore.getState().requestSettings({
+          pluginId: target.plugin.instanceId,
+          home: target.home,
+          ...(target.key !== undefined ? { key: target.key } : {}),
+        });
+        if (target.home === "project") callbacks.onOpenSettingsTab({ tab: "project:plugins" });
+        return {
+          pluginId,
+          home: target.home === "project" ? "project-settings" : "plugin-manager",
+          requestedKey: target.key ?? null,
+        };
+      },
+    })
+  );
+
+  actions.set("plugin.backupDatabases", () =>
+    defineAction({
+      id: "plugin.backupDatabases",
+      title: "Back up plugin data",
+      description:
+        "Snapshot every database a plugin has created to a file or folder the user picks in a native dialog. A plugin with no database on disk yet gets a notice instead.",
+      category: "plugins",
+      kind: "command",
+      danger: "safe",
+      nonRepeatable: true,
+      // Needs a plugin id, and there is no focused-plugin fallback to act on.
+      palette: { mode: "hidden" },
+      // UI for the plugin panels' menus. It opens a native dialog only a person
+      // can answer, so it is in no assistant or external tier and hidden from
+      // tool listings too.
+      mcpVisibility: "hidden",
+      // A plugin reaching this would raise a save dialog for any plugin's data,
+      // its own included, with nothing the user asked for behind it.
+      denyPluginDispatch: true,
+      scope: "renderer",
+      argsSchema: z.object({
+        pluginId: z.string().min(1).describe("The plugin instance key whose data to back up."),
+      }),
+      // Every outcome, failures included, is reported by the notice below.
+      selfNotifiesOnExecutionError: true,
+      run: async ({ pluginId }) => {
+        const retry = () =>
+          void actionService.dispatch("plugin.backupDatabases", { pluginId }, { source: "user" });
+        let outcome;
+        try {
+          outcome = await pluginClient.backupDatabases(pluginId);
+        } catch (error) {
+          notify({
+            type: "error",
+            priority: "high",
+            title: "Couldn't back up plugin data",
+            message: formatErrorMessage(error, "The backup stopped before any file was written."),
+            action: { label: "Try again", onClick: retry },
+          });
+          throw error;
+        }
+        if (outcome.status === "cancelled") return outcome;
+        if (outcome.status === "no-data") {
+          notify({
+            type: "info",
+            priority: "high",
+            transient: true,
+            duration: 4000,
+            message: `${outcome.pluginName} has no data to back up yet`,
+          });
+          return outcome;
+        }
+        const [first] = outcome.paths;
+        const reveal = revealCopy();
+        notify({
+          type: "success",
+          priority: "high",
+          title: `${outcome.pluginName} data backed up`,
+          message:
+            outcome.paths.length === 1
+              ? `Saved to ${first}`
+              : `${outcome.paths.length} databases saved to ${dirnameOf(first!)}`,
+          ...(first !== undefined
+            ? {
+                action: {
+                  label: reveal.label,
+                  onClick: () => void systemClient.showItemInFolderUnconfined(first),
+                },
+              }
+            : {}),
+        });
+        return outcome;
       },
     })
   );

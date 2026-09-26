@@ -1385,8 +1385,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // Valid args so dispatch reaches the plugin-dispatch gate rather than
     // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both;
     // project.runCheck requires projectId + runnerId; the terminal-watch tools
-    // take terminalIds or a watchId; plugin.reloadPanel a panelId). Schemas are
-    // non-strict, so the union satisfies every denied action.
+    // take terminalIds or a watchId; plugin.reloadPanel a panelId;
+    // plugin.backupDatabases a pluginId). Schemas are non-strict, so the union
+    // satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       panelId: "p-placeholder",
@@ -1396,6 +1397,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       runnerId: "r-placeholder",
       terminalIds: ["t-placeholder"],
       watchId: "w-placeholder",
+      pluginId: "acme.placeholder",
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never

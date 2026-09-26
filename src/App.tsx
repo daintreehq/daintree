@@ -226,6 +226,7 @@ function AppInner() {
     settingsTab,
     settingsSubtab,
     settingsSectionId,
+    settingsNavNonce,
     handleSettings,
     handleOpenSettingsTab,
     setIsSettingsOpen,
@@ -573,6 +574,7 @@ function AppInner() {
                 settingsTab={settingsTab}
                 settingsSubtab={settingsSubtab}
                 settingsSectionId={settingsSectionId}
+                settingsNavNonce={settingsNavNonce}
                 refreshSettings={refreshSettings}
                 currentProject={currentProject}
                 isShortcutsOpen={isShortcutsOpen}

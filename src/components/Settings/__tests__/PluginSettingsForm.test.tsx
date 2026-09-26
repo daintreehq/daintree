@@ -545,20 +545,93 @@ describe("PluginSettingsForm", () => {
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
   });
 
-  it("renders a scope badge per field", async () => {
+  it("shows an installed plugin's fields in their one home each, with a scope badge", async () => {
+    currentProjectId = "proj-1";
+    const plugin = makePlugin([
+      { id: "u", type: "string", label: "U" },
+      { id: "p", type: "string", label: "P", scope: "project" },
+      { id: "l", type: "string", label: "L", scope: "local" },
+    ]);
+
+    // The plugin manager holds what applies to every project, and points on.
+    const manager = render(<PluginSettingsForm plugin={plugin} viewScope="user" />);
+    expect(await screen.findByText("All projects")).toBeTruthy();
+    expect(screen.queryByLabelText("P")).toBeNull();
+    expect(screen.queryByLabelText("L")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open project settings" })).toBeTruthy();
+    manager.unmount();
+
+    // Project settings hold what differs per project, and point back.
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    // Named for what a change reaches: one project, or every project.
+    expect(await screen.findByText("This project")).toBeTruthy();
+    expect(screen.getByText("This project, this machine")).toBeTruthy();
+    expect(screen.queryByText("All projects")).toBeNull();
+    expect(screen.queryByLabelText("U")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open plugin manager" })).toBeTruthy();
+  });
+
+  it("shows every field of a project plugin in its project home, and none in the manager", async () => {
+    currentProjectId = "proj-1";
+    const plugin = {
+      ...makePlugin([
+        { id: "u", type: "string", label: "U" },
+        { id: "p", type: "string", label: "P", scope: "project" },
+      ]),
+      origin: "project" as const,
+    };
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    expect(await screen.findByLabelText("U")).toBeTruthy();
+    expect(screen.getByLabelText("P")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open (plugin manager|project settings)/ })).toBe(
+      null
+    );
+  });
+
+  it("lets the user accept an unstored required field's default explicitly", async () => {
     render(
       <PluginSettingsForm
         plugin={makePlugin([
-          { id: "u", type: "string", label: "U" },
-          { id: "p", type: "string", label: "P", scope: "project" },
-          { id: "l", type: "string", label: "L", scope: "local" },
+          { id: "region", type: "string", label: "Region", required: true, default: "us" },
+          { id: "port", type: "number", label: "Port", default: 80 },
         ])}
       />
     );
-    // Named for what a change reaches: one project, or every project.
-    expect(await screen.findByText("All projects")).toBeTruthy();
-    expect(screen.getByText("This project")).toBeTruthy();
-    expect(screen.getByText("This project, this machine")).toBeTruthy();
+    const input = (await screen.findByLabelText("Region")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("us"));
+    // Blurring the unchanged default saves nothing, as for every field…
+    fireEvent.blur(input);
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+
+    // …so a required one offers the acceptance as its own action. An optional
+    // field with a default needs none: its default already applies.
+    const accept = screen.getByRole("button", { name: "Use default" });
+    expect(screen.getAllByRole("button", { name: "Use default" })).toHaveLength(1);
+    fireEvent.click(accept);
+    await waitFor(() =>
+      expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
+        "acme.test",
+        "region",
+        "us",
+        "user",
+        null
+      )
+    );
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Use default" })).toBeNull());
+  });
+
+  it("offers no default acceptance once a required value is stored", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { region: "eu" } }));
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "region", type: "string", label: "Region", required: true, default: "us" },
+        ])}
+      />
+    );
+    const input = (await screen.findByLabelText("Region")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("eu"));
+    expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
   });
 
   it("disables project-scoped fields when no project is active", async () => {
@@ -566,6 +639,7 @@ describe("PluginSettingsForm", () => {
     render(
       <PluginSettingsForm
         plugin={makePlugin([{ id: "p", type: "string", label: "P", scope: "project" }])}
+        viewScope="project"
       />
     );
     const input = (await screen.findByLabelText("P")) as HTMLInputElement;

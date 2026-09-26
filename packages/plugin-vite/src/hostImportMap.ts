@@ -2,11 +2,12 @@
 // can read the host contract without importing Vite.
 /**
  * The exact specifiers the Daintree host import map serves: React's public
- * entrypoints and the public subpaths of `@daintreehq/tour`. This is the single
+ * entrypoints, the public subpaths of `@daintreehq/tour`, and
+ * `@daintreehq/plugin-ui` (host UI components, compiled from `src/pluginUi`). This is the single
  * source of truth for the host/plugin contract: `vite.config.ts` imports this
  * list to emit one facade chunk per specifier and to build the `<script
  * type="importmap">` it injects, and the plugin build (`index.ts`) errors at build
- * time on any React or tour subpath outside it. Keeping the two sides on one
+ * time on any React, tour or plugin-ui subpath outside it. Keeping the two sides on one
  * constant is what stops the "externalized but unresolved at runtime" drift
  * (e.g. `react-dom/server`) that this list previously had to be hand-synced
  * against.
@@ -26,4 +27,5 @@ export const HOST_IMPORTMAP_SPECIFIERS = [
   "@daintreehq/tour/react",
   "@daintreehq/tour/kit",
   "@daintreehq/tour/mock-app",
+  "@daintreehq/plugin-ui",
 ] as const;

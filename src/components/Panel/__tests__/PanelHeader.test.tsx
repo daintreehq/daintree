@@ -11,6 +11,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import { registerTour } from "@/components/Tour/tourRegistry";
+import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
 import type { PanelKind } from "@/types";
 import {
   __resetPanelCloseGuardsForTests,
@@ -1003,9 +1004,20 @@ describe("PanelHeader", () => {
 
     function registerPluginKind(
       id: string,
-      options: { hasPty?: boolean; dockable?: boolean; name?: string; tourId?: string } = {}
+      options: {
+        hasPty?: boolean;
+        dockable?: boolean;
+        name?: string;
+        tourId?: string;
+        hasPluginSettings?: boolean;
+        hasPluginDatabases?: boolean;
+        pluginMenu?: Array<{ actionId: string; label?: string }>;
+      } = {}
     ) {
       registerPanelKind({
+        ...(options.hasPluginSettings ? { hasPluginSettings: true } : {}),
+        ...(options.hasPluginDatabases ? { hasPluginDatabases: true } : {}),
+        ...(options.pluginMenu ? { pluginMenu: options.pluginMenu } : {}),
         id,
         name: options.name ?? id,
         iconId: "terminal",
@@ -1043,6 +1055,7 @@ describe("PanelHeader", () => {
       for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
       unregisterPanelKind(PLUGIN_KIND);
       unregisterPanelKind(PTY_PLUGIN_KIND);
+      publishRegisteredPluginActions([]);
       __resetPanelCloseGuardsForTests();
     });
 
@@ -1264,6 +1277,104 @@ describe("PanelHeader", () => {
         { tourId: "acme.dashboard-intro" },
         { source: "menu" }
       );
+    });
+
+    it("opens the plugin's settings from its entry once the menu has handed focus back", async () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      const settingsLabel = () =>
+        getGenericPanelMenuGroups({
+          location: "grid",
+          isMaximized: false,
+          isDockable: true,
+          canMoveToWorktree: false,
+          canReload: true,
+          hasPluginSettings: true,
+        })
+          .flat()
+          .find((command) => command.id === "plugin-settings")!.label;
+      // Only for a kind whose plugin has settings.
+      expect(findMenuButton(settingsLabel())).toBeUndefined();
+      cleanup();
+
+      act(() => registerPluginKind(PLUGIN_KIND, { name: "Dashboard", hasPluginSettings: true }));
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      expect(menuRows()).toEqual(sharedRows({ hasPluginSettings: true }));
+
+      fireEvent.click(findMenuButton(settingsLabel())!);
+      // Not from the item: the menu is still returning focus to its trigger.
+      expect(mockDispatch).not.toHaveBeenCalled();
+      const closeEvent = new Event("closeAutoFocus", { cancelable: true });
+      act(() => mockMenuCloseAutoFocus?.(closeEvent));
+      // The primitive's own restore runs — pointer or keyboard alike — and the
+      // settings home opens after it.
+      expect(closeEvent.defaultPrevented).toBe(false);
+      expect(mockDispatch).not.toHaveBeenCalled();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "plugin.openSettings",
+        { pluginId: "acme" },
+        { source: "menu" }
+      );
+    });
+
+    it("offers Back up data… and the plugin's own items, each dispatched once focus is back", async () => {
+      registerPluginKind(PLUGIN_KIND, {
+        hasPluginDatabases: true,
+        pluginMenu: [{ actionId: "acme.refresh" }, { actionId: "acme.export", label: "Export" }],
+      });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      // No action registered yet, so no item would dispatch anything.
+      expect(menuRows()).toEqual(sharedRows({ hasPluginDatabases: true }));
+
+      act(() => publishRegisteredPluginActions([["acme.refresh", "Refresh data"]]));
+      expect(menuRows()).toEqual(
+        sharedRows({
+          hasPluginDatabases: true,
+          pluginMenuItems: [{ actionId: "acme.refresh", label: "Refresh data" }],
+        })
+      );
+
+      const pick = async (label: string) => {
+        fireEvent.click(findMenuButton(label)!);
+        expect(mockDispatch).not.toHaveBeenCalled();
+        act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      };
+
+      await pick("Refresh data");
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "acme.refresh",
+        { panelId: "test-panel" },
+        { source: "menu" }
+      );
+
+      mockDispatch.mockClear();
+      await pick("Back up data…");
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "plugin.backupDatabases",
+        { pluginId: "acme" },
+        { source: "menu" }
+      );
+    });
+
+    it("drops a picked settings entry when the menu reopens before closing", async () => {
+      registerPluginKind(PLUGIN_KIND, { hasPluginSettings: true });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      fireEvent.click(findMenuButton("Plugin settings…")!);
+      act(() => mockMenuOpenChange?.(true));
+      act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockDispatch).not.toHaveBeenCalled();
     });
 
     it("offers a declared tour only once it is registered (#12774)", () => {

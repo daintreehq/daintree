@@ -17,6 +17,9 @@ import type {
 const AGENT_TOOLS_DESCRIPTION =
   "Which plugin tools Claude agents in this project may call. Turning one on applies to agents started from now on; turning it off also cuts off agents already running.";
 
+/** How long a run of runtime-status pushes is gathered into one endpoint read. */
+const STATUS_BURST_COALESCE_MS = 50;
+
 function openMcpSettings() {
   window.dispatchEvent(new CustomEvent("daintree:open-settings-tab", { detail: { tab: "mcp" } }));
 }
@@ -107,8 +110,16 @@ export function ProjectAgentToolsSection() {
     refresh();
     const unsubscribers = [window.electron.plugin.onProvenanceChanged(refresh)];
     const events = window.electron.events;
+    // Status changes arrive in bursts — every unload emits one, so revoking a
+    // folder sends one per plugin — and each refresh is a full snapshot read.
+    let statusTimer: ReturnType<typeof setTimeout> | undefined;
     if (typeof events?.on === "function") {
-      unsubscribers.push(events.on("plugin:runtime-status-changed", refresh));
+      unsubscribers.push(
+        events.on("plugin:runtime-status-changed", () => {
+          clearTimeout(statusTimer);
+          statusTimer = setTimeout(refresh, STATUS_BURST_COALESCE_MS);
+        })
+      );
     }
     const mcpServer = window.electron.mcpServer;
     if (typeof mcpServer?.onRuntimeStateChanged === "function") {
@@ -116,6 +127,7 @@ export function ProjectAgentToolsSection() {
     }
     window.addEventListener("focus", refresh);
     return () => {
+      clearTimeout(statusTimer);
       window.removeEventListener("focus", refresh);
       for (const unsubscribe of unsubscribers) unsubscribe();
     };

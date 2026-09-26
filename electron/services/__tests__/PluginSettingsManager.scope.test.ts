@@ -583,3 +583,131 @@ describe("PluginSettingsManager project-scoped secrets (#12613)", () => {
     ).toBeUndefined();
   });
 });
+
+describe("PluginSettingsManager required settings", () => {
+  const PLUGIN_ID = "acme.scope-test";
+  const PROJECT_ID = "c".repeat(64);
+
+  it("lists unset required keys in manifest order, and a stored value clears one", async () => {
+    const mgr = managerFor([
+      { id: "token", type: "secret", required: true },
+      { id: "optional", type: "string" },
+      { id: "region", type: "string", required: true, default: "us" },
+    ]);
+
+    // A declared default never satisfies a required key.
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual(["token", "region"]);
+
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-live", "user", null);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual(["region"]);
+
+    // An emptied field is unset again.
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "region", "", "user", null);
+    await expect(mgr.missingRequiredForHost(PLUGIN_ID)).resolves.toEqual(["region"]);
+  });
+
+  it("reports a project-scoped key missing with no project, and reads the bound project's", async () => {
+    const projectRoot = path.join(tmpDir, "checkout");
+    projectStoreMock.getProjectById.mockReturnValue({ path: projectRoot });
+    const mgr = managerFor([{ id: "team", type: "string", scope: "project", required: true }]);
+
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual(["team"]);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, PROJECT_ID)).missing).toEqual(["team"]);
+
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "team", "core", "project", PROJECT_ID);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, PROJECT_ID)).missing).toEqual([]);
+    await expect(mgr.missingRequiredForHost(PLUGIN_ID, projectRoot)).resolves.toEqual([]);
+  });
+
+  it("is empty when nothing is required", async () => {
+    const mgr = managerFor([{ id: "token", type: "secret" }]);
+    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual([]);
+  });
+
+  it("checks a stored secret's presence without decrypting it", async () => {
+    const cipher = fakeCipher();
+    const mgr = managerFor([{ id: "token", type: "secret", required: true }], cipher);
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk", "user", null);
+    // A locked keychain must not turn "is it set?" into a failure.
+    cipher.decrypt = () => {
+      throw new Error("keychain locked");
+    };
+
+    expect(await mgr.requiredStatusForUi(PLUGIN_ID, null)).toEqual({
+      missing: [],
+      unreadable: [],
+      labels: {},
+    });
+    await expect(mgr.missingRequiredForHost(PLUGIN_ID)).resolves.toEqual([]);
+  });
+
+  it("reports an unreadable file apart, without losing the other answers", async () => {
+    const projectRoot = path.join(tmpDir, "checkout");
+    projectStoreMock.getProjectById.mockReturnValue({ path: projectRoot });
+    const mgr = managerFor([
+      { id: "token", type: "secret", required: true },
+      { id: "team", type: "string", scope: "project", required: true },
+    ]);
+    // The project file's read fails; the user-scope secret's answer must stand.
+    const { PluginSettingsStore } = await import("../PluginSettingsStore.js");
+    const readSpy = vi
+      .spyOn(PluginSettingsStore.prototype, "get")
+      .mockRejectedValue(new Error("EACCES"));
+    try {
+      expect(await mgr.requiredStatusForUi(PLUGIN_ID, PROJECT_ID)).toEqual({
+        missing: ["token"],
+        unreadable: ["team"],
+        labels: { token: "token", team: "team" },
+      });
+      // The host can't read it either, so it lists it with the missing ones.
+      await expect(mgr.missingRequiredForHost(PLUGIN_ID, projectRoot)).resolves.toEqual([
+        "token",
+        "team",
+      ]);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("announces every stored change, from a write or a reset", async () => {
+    const onSettingChanged = vi.fn();
+    const manifest = manifestWith([{ id: "token", type: "secret", required: true }]);
+    const mgr = new PluginSettingsManager({
+      getPluginsRoot: () => path.join(tmpDir, "plugins"),
+      getManifest: () => manifest,
+      cipher: fakeCipher(),
+      onSettingChanged,
+    });
+
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk", "user", null);
+    await mgr.deleteSettingValueFromUi(PLUGIN_ID, "token", "user", null);
+
+    expect(onSettingChanged.mock.calls).toEqual([[PLUGIN_ID], [PLUGIN_ID]]);
+  });
+});
+
+describe("PluginSettingsManager settings-form writes need a live declaration", () => {
+  it("refuses a form write or reset once the plugin's manifest is gone, and writes nothing", async () => {
+    const projectRoot = path.join(tmpDir, "repo");
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === "p1" ? { path: projectRoot } : null
+    );
+    const mgr = managerFor([{ id: "apiKey", type: "secret", scope: "project" }]);
+    const unloaded = "project__p1__acme.gone";
+
+    await expect(
+      mgr.setSettingValueFromUi(unloaded, "apiKey", "sk-live", "project", "p1")
+    ).rejects.toThrow(/isn't running/);
+    await expect(mgr.deleteSettingValueFromUi(unloaded, "apiKey", "project", "p1")).rejects.toThrow(
+      /isn't running/
+    );
+    await expect(fs.readdir(projectRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a form write for a key the manifest does not declare", async () => {
+    const mgr = managerFor([]);
+    await expect(
+      mgr.setSettingValueFromUi("acme.scope-test", "token", "x", "user", null)
+    ).rejects.toThrow(/not declared/);
+  });
+});

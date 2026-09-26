@@ -1097,6 +1097,8 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
   PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
+  /** Which declared `required` settings a plugin still has unset, for the panel setup strip. */
+  PLUGIN_SETTINGS_REQUIRED_STATUS: "plugin:settings-required-status",
   /** Cancel an in-flight plugin install by its job id (#11302). */
   PLUGIN_CANCEL_INSTALL: "plugin:cancel-install",
   /** Phase/entry progress for an in-flight install, targeted at the initiating window (#11302). */
@@ -1105,6 +1107,8 @@ export const CHANNELS = {
   PLUGIN_PICK_PATH: "plugin:pick-path",
   /** Existence probe for a stored plugin `mustExist` path setting. */
   PLUGIN_PATH_EXISTS: "plugin:path-exists",
+  /** Snapshot a plugin's existing databases to a file or folder the user picks. */
+  PLUGIN_BACKUP_DATABASES: "plugin:backup-databases",
   /** Opt-in background plugin update check (#10893): read the enabled setting. */
   PLUGIN_BG_UPDATE_CHECK_SETTINGS_GET: "plugin:bg-update-check-settings-get",
   /** Opt-in background plugin update check (#10893): set the enabled setting. */
@@ -1123,6 +1127,10 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_GET_REQUEST: "plugin:actions-get-request",
   /** Bridge: renderer returns the single projected action entry (or null) to the main process. */
   PLUGIN_ACTIONS_GET_RESPONSE: "plugin:actions-get-response",
+  /** Bridge: main process asks the renderer for the project's agent panes (`host.agents.list`). */
+  PLUGIN_AGENTS_LIST_REQUEST: "plugin:agents-list-request",
+  /** Bridge: renderer returns the project's agent panes to the main process. */
+  PLUGIN_AGENTS_LIST_RESPONSE: "plugin:agents-list-response",
   /** Bridge: main process asks the renderer to render an imperative plugin UI prompt (#10522). */
   PLUGIN_UI_PROMPT_REQUEST: "plugin:ui-prompt-request",
   /** Bridge: renderer returns the user's answer to a plugin UI prompt (fire-and-forget). */

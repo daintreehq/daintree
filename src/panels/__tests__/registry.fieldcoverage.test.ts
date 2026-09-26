@@ -250,6 +250,9 @@ const FILE_FIELD_CLASSIFICATION = {
   // Open-time scroll hint only — deliberately unserialized so a restored panel
   // opens at the top rather than at a stale position.
   initialLine: false,
+  // Open-time containment root pinned by a link from untrusted Markdown; a
+  // restored panel infers its root again rather than reviving a stale pin.
+  fileContainmentRoot: false,
 } as const satisfies Record<keyof FilePanelData, boolean>;
 
 // ── Diff field classification ────────────────────────────────────────

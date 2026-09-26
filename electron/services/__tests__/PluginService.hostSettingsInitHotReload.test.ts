@@ -73,6 +73,8 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  // A project plugin's settings writes are announced to its own project only.
+  broadcastToProjectRenderers: vi.fn(),
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -281,7 +283,7 @@ type ServiceWithSettingsManager = {
 
 async function setupSettingsService(
   pluginId: string,
-  settings?: Array<{ id: string; type: string; scope?: SettingsScope }>
+  settings?: Array<{ id: string; type: string; scope?: SettingsScope; default?: unknown }>
 ): Promise<{ service: PluginService; settingsRoot: string }> {
   const pluginsRoot = path.join(tmpDir, "plugins");
   const dir = path.join(pluginsRoot, pluginId);
@@ -588,6 +590,46 @@ describe("createHost — settings", () => {
       "utf-8"
     );
     expect(JSON.parse(raw)).toEqual({ ref: "branch-x" });
+  });
+
+  it("set and onDidChange target the declared scope when no scope is given", async () => {
+    const projectDir = path.join(tmpDir, "proj-declared-set");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-declared-set", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-set");
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("channel", (v) => heard.push(v));
+
+    await host.settings.set("channel", "x");
+
+    const raw = await fs.readFile(
+      path.join(projectDir, ".daintree", "plugin-settings", "acme.settings-declared-set.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(raw)).toEqual({ channel: "x" });
+    expect(heard).toEqual(["x"]);
+    await expect(host.settings.set("channel", "y", "user")).rejects.toThrow(
+      /declared in "project"/
+    );
+  });
+
+  it("get answers the declared default while nothing is stored", async () => {
+    const projectDir = path.join(tmpDir, "proj-default");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-default", [
+      { id: "channel", type: "string", scope: "project", default: "blog" },
+      { id: "tags", type: "json", default: ["a"] },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-default");
+
+    expect(await host.settings.get("channel")).toBe("blog");
+    const tags = await host.settings.get<string[]>("tags");
+    tags?.push("mutated");
+    expect(await host.settings.get("tags")).toEqual(["a"]);
+    await host.settings.set("channel", "x");
+    expect(await host.settings.get("channel")).toBe("x");
   });
 
   it("get throws when the explicit scope conflicts with the declared scope", async () => {

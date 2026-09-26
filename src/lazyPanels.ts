@@ -189,6 +189,11 @@ export const LazyPluginQuickPickDialog = lazy(() =>
     default: m.PluginQuickPickDialog,
   }))
 );
+export const LazyPluginSendToAgentDialog = lazy(() =>
+  import("./components/Plugin/PluginSendToAgentDialog").then((m) => ({
+    default: m.PluginSendToAgentDialog,
+  }))
+);
 export const LazyPluginInputBoxDialog = lazy(() =>
   import("./components/Plugin/PluginInputBoxDialog").then((m) => ({
     default: m.PluginInputBoxDialog,

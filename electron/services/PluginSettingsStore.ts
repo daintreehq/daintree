@@ -61,8 +61,16 @@ export type StoredSecretTier = "keychain" | "plaintext";
  * them so they survive project-root switches that change the resolved path.
  */
 export class PluginSettingsStore {
-  private cache: Map<string, unknown> | null = null;
-  private loadPromise: Promise<Map<string, unknown>> | null = null;
+  /** The decoded file, and the identity of the file it was read from or written as. */
+  private snapshot: { map: Map<string, unknown>; signature: string } | null = null;
+  /** The one read in flight; every caller that needs a fresh snapshot shares it. */
+  private loading: Promise<Map<string, unknown>> | null = null;
+  /**
+   * True while a write persists a map it already mutated. The file on disk
+   * differs from the map for exactly that window, and re-reading it then
+   * would swap in the pre-write contents under the write.
+   */
+  private persisting = false;
   /** Serializes writes so concurrent `set` calls can't interleave read-modify-write. */
   private writeChain: Promise<void> = Promise.resolve();
   private readonly cipher: SecretCipher;
@@ -244,29 +252,66 @@ export class PluginSettingsStore {
     return true;
   }
 
+  /**
+   * The snapshot stands only while the file is the one it came from. A project
+   * settings file is git-tracked, so a pull or a branch switch rewrites it under
+   * us; served from a stale snapshot, the next write would put the old values
+   * back. The check is the file's identity, not its bytes: a same-length
+   * rewrite that also keeps the nanosecond mtime would go unnoticed, which a
+   * checkout or an editor save does not do.
+   */
   private async load(): Promise<Map<string, unknown>> {
-    if (this.cache) return this.cache;
-    if (!this.loadPromise) {
-      this.loadPromise = this.readFile();
+    const current = this.snapshot;
+    if (current && !this.loading) {
+      if (this.persisting) return current.map;
+      const signature = await this.fileSignature();
+      // Whatever moved on while we waited is at least as new: a read another
+      // caller started, a write in progress, or a snapshot either installed.
+      if (this.loading) return this.loading;
+      if (this.snapshot !== current || this.persisting) return this.snapshot?.map ?? this.load();
+      if (signature === current.signature) return current.map;
     }
-    try {
-      this.cache = await this.loadPromise;
-    } catch (err) {
-      // Don't permanently poison the instance on a transient/corrupt read —
-      // drop the failed promise so a later access (e.g. after the file is
-      // repaired) re-reads from disk.
-      this.loadPromise = null;
-      throw err;
+    if (!this.loading) {
+      const read = this.readFile().then(
+        (next) => {
+          if (this.loading === read) {
+            this.snapshot = next;
+            this.loading = null;
+          }
+          return next.map;
+        },
+        (err: unknown) => {
+          // Don't poison the instance on a transient or corrupt read: the next
+          // access (e.g. after the file is repaired) reads again.
+          if (this.loading === read) this.loading = null;
+          throw err;
+        }
+      );
+      this.loading = read;
     }
-    return this.cache;
+    return this.loading;
   }
 
-  private async readFile(): Promise<Map<string, unknown>> {
+  /** Inode, size and mtime — enough to see a rename-over or an in-place rewrite. */
+  private async fileSignature(): Promise<string> {
+    try {
+      const st = await fs.stat(this.filePath, { bigint: true });
+      return `${st.ino}:${st.size}:${st.mtimeNs}`;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+      throw err;
+    }
+  }
+
+  private async readFile(): Promise<{ map: Map<string, unknown>; signature: string }> {
+    // Taken before the read: a change landing in between leaves the signature
+    // behind the contents, which costs one extra re-read, never a stale snapshot.
+    const signature = await this.fileSignature();
     let raw: string;
     try {
       raw = await fs.readFile(this.filePath, "utf-8");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { map: new Map(), signature };
       throw err;
     }
     let parsed: unknown;
@@ -278,7 +323,7 @@ export class PluginSettingsStore {
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error(`Plugin settings file must contain a JSON object: ${this.filePath}`);
     }
-    return new Map(Object.entries(parsed as Record<string, unknown>));
+    return { map: new Map(Object.entries(parsed as Record<string, unknown>)), signature };
   }
 
   private async persist(cache: Map<string, unknown>): Promise<void> {
@@ -288,10 +333,26 @@ export class PluginSettingsStore {
     // from JSON.stringify and lose it on the next reload.
     const obj: Record<string, unknown> = Object.create(null);
     for (const [k, v] of cache) obj[k] = v;
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await resilientAtomicWriteFile(this.filePath, JSON.stringify(obj, null, 2), "utf-8", {
-      mode: SETTINGS_FILE_MODE,
-    });
+    const text = JSON.stringify(obj, null, 2);
+    this.persisting = true;
+    try {
+      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+      await resilientAtomicWriteFile(this.filePath, text, "utf-8", {
+        mode: SETTINGS_FILE_MODE,
+      });
+      // What was just written is now the snapshot — if the file is still what
+      // was written. Something replacing it between the rename and the stat
+      // would otherwise lend its identity to our values; read back after the
+      // stat, and on any doubt drop the snapshot so the next access reads the
+      // file. A read still in flight began before this write, so it may not
+      // install its result either way.
+      const signature = await this.fileSignature();
+      const onDisk = await fs.readFile(this.filePath, "utf-8").catch(() => null);
+      this.loading = null;
+      this.snapshot = onDisk === text ? { map: cache, signature } : null;
+    } finally {
+      this.persisting = false;
+    }
   }
 }
 

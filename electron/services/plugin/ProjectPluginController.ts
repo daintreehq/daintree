@@ -635,6 +635,15 @@ export class ProjectPluginController {
         version: d.manifest.version,
         ...(d.manifest.description !== undefined ? { description: d.manifest.description } : {}),
         capabilities: [...(d.manifest.capabilities ?? [])],
+        ...(d.manifest.contributes.databases?.length
+          ? { databases: d.manifest.contributes.databases.map((db) => ({ ...db })) }
+          : {}),
+        ...(d.manifest.contributes.settings?.length
+          ? { settings: d.manifest.contributes.settings.map((s) => ({ ...s })) }
+          : {}),
+        ...(d.manifest.contributes.views?.some((v) => v.location === "settings")
+          ? { declaresSettingsView: true }
+          : {}),
         dirName: d.dirName,
         state,
         muted,

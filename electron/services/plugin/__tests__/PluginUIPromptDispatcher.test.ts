@@ -52,7 +52,12 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   isCachedViewWebContents: registryMock.isCachedViewWebContents,
 }));
 
-import { PluginUIPromptDispatcher } from "../PluginUIPromptDispatcher.js";
+import {
+  IMMEDIATE_PROMPT_ACK_GRACE_MS,
+  IMMEDIATE_PROMPT_TIMEOUT_MS,
+  MAX_PENDING_TARGETED_SENDS_PER_PLUGIN,
+  PluginUIPromptDispatcher,
+} from "../PluginUIPromptDispatcher.js";
 import { isAppError } from "../../../utils/errorTypes.js";
 import type { PluginUiPromptParams } from "../../../../shared/types/pluginUiPrompt.js";
 
@@ -478,6 +483,293 @@ describe("PluginUIPromptDispatcher", () => {
     expect(isAppError(error) && error.code).toBe("PROJECT_VIEW_UNAVAILABLE");
     // Never delivered to the focused project instead.
     expect(wcB.send).not.toHaveBeenCalled();
+  });
+
+  describe("sendToAgent", () => {
+    const PICKER: PluginUiPromptParams = {
+      kind: "sendToAgent",
+      request: { text: "body", sourceLabel: "Acme" },
+    };
+    const TARGETED: PluginUiPromptParams = {
+      kind: "sendToAgent",
+      request: { text: "body", sourceLabel: "Acme", terminalId: "t-1" },
+    };
+
+    it("dismisses a picker as cancelled rather than undefined", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const promise = d.requestPrompt("p1", PICKER);
+      d.cancelForPlugin("p1");
+      await expect(promise).resolves.toEqual({ status: "cancelled" });
+    });
+
+    it("refuses a second picker as prompt-open instead of claiming the user dismissed it", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const first = d.requestPrompt("p1", QUICK_PICK);
+      await expect(d.requestPrompt("p1", PICKER)).resolves.toEqual({
+        status: "refused",
+        reason: "prompt-open",
+      });
+      d.dispose();
+      await first;
+    });
+
+    it("never caps, and never counts toward the cap, a send that names its pane", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const sends = () =>
+        wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST).length;
+
+      const picker = d.requestPrompt("p1", PICKER);
+      const targeted = d.requestPrompt("p1", TARGETED);
+      const alsoTargeted = d.requestPrompt("p1", TARGETED);
+      expect(sends()).toBe(3);
+
+      d.dispose();
+      await Promise.all([picker, targeted, alsoTargeted]);
+
+      const d2 = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const pending = d2.requestPrompt("p1", TARGETED);
+      // A dialog still opens while a targeted send is in flight.
+      const dialog = d2.requestPrompt("p1", QUICK_PICK);
+      expect(sends()).toBe(5);
+      d2.dispose();
+      await Promise.all([pending, dialog]);
+    });
+
+    it("gives a targeted send its own cap and refuses past it as busy", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const inFlight = Array.from({ length: MAX_PENDING_TARGETED_SENDS_PER_PLUGIN }, () =>
+        d.requestPrompt("p1", TARGETED)
+      );
+      await expect(d.requestPrompt("p1", TARGETED)).resolves.toEqual({
+        status: "refused",
+        reason: "busy",
+      });
+      // Another plugin is not held to p1's cap.
+      const other = d.requestPrompt("p2", TARGETED);
+      expect(
+        wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+      ).toHaveLength(MAX_PENDING_TARGETED_SENDS_PER_PLUGIN + 1);
+      d.dispose();
+      await Promise.all([...inFlight, other]);
+    });
+
+    it("times out a targeted send the renderer never answers, and stamps its deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+        const now = Date.now();
+        const promise = d.requestPrompt("p1", TARGETED);
+        const sent = wc.send.mock.calls.find(
+          (c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST
+        )?.[1] as { expiresAt?: number };
+        expect(sent.expiresAt).toBe(now + IMMEDIATE_PROMPT_TIMEOUT_MS);
+
+        // Past the deadline main still waits out the grace for a late answer.
+        let settled = false;
+        void promise.then(() => {
+          settled = true;
+        });
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_TIMEOUT_MS);
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_ACK_GRACE_MS);
+        await expect(promise).resolves.toEqual({
+          status: "refused",
+          reason: "project-unavailable",
+        });
+        // The slot is released: another targeted send goes out.
+        void d.requestPrompt("p1", TARGETED);
+        expect(
+          wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+        ).toHaveLength(2);
+        d.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reports a draft whose answer lands just after the deadline, within the grace", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+        const promise = d.requestPrompt("p1", TARGETED);
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_TIMEOUT_MS + 1);
+        ipcMainMock._emit(
+          CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+          { sender: { id: 7 } },
+          { promptId: lastPromptId(wc), result: { status: "drafted", terminalId: "t-1" } }
+        );
+        await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+        d.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets neither an abort nor an unload pre-empt a targeted send's real answer", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const controller = new AbortController();
+      const promise = d.requestPrompt("p1", TARGETED, undefined, controller.signal);
+      const promptId = lastPromptId(wc);
+
+      controller.abort();
+      d.cancelForPlugin("p1");
+      // No dismissal is sent for it: there is nothing on screen, and the
+      // renderer has already acted on the request by the time a cancel arrives.
+      expect(
+        wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_CANCEL)
+      ).toHaveLength(0);
+
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+        { sender: { id: 7 } },
+        { promptId, result: { status: "drafted", terminalId: "t-1" } }
+      );
+      await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+      d.dispose();
+    });
+
+    const respond = (promptId: string, payload: Record<string, unknown>) =>
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+        { sender: { id: 7 } },
+        { promptId, ...payload }
+      );
+
+    it("reports what an accepted picker's launch did, even when cancelled during setup", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const controller = new AbortController();
+      const promise = d.requestPrompt("p1", PICKER, undefined, controller.signal);
+      const promptId = lastPromptId(wc);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+
+      // The user chose "New agent in new worktree"; the worktree is being set up.
+      respond(promptId, { accepted: true });
+      controller.abort();
+      d.cancelForPlugin("p1");
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      // The picker is gone, so there is nothing to dismiss.
+      expect(
+        wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_CANCEL)
+      ).toHaveLength(0);
+      // And the closed picker no longer holds the plugin's one dialog.
+      const next = d.requestPrompt("p1", CONFIRM);
+      expect(lastPromptId(wc)).not.toBe(promptId);
+
+      const outcome = { status: "refused", reason: "launch-failed", worktreeId: "wt-new" };
+      respond(promptId, { result: outcome });
+      await expect(promise).resolves.toEqual(outcome);
+      d.dispose();
+      await next;
+    });
+
+    it("waits out an acceptance already on its way when the abort lands first", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+        const controller = new AbortController();
+        const promise = d.requestPrompt("p1", PICKER, undefined, controller.signal);
+        const promptId = lastPromptId(wc);
+
+        controller.abort();
+        expect(wc.send).toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, {
+          pluginId: "p1",
+          promptId,
+        });
+        respond(promptId, { accepted: true });
+        // Past the grace that bounds an unanswered cancel: the launch is the user's.
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_ACK_GRACE_MS * 2);
+
+        respond(promptId, { result: { status: "drafted", terminalId: "t-new" } });
+        await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-new" });
+        d.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("settles an aborted picker on the renderer's dismissal, or as cancelled if none comes", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+        const dismissed = new AbortController();
+        const first = d.requestPrompt("p1", PICKER, undefined, dismissed.signal);
+        dismissed.abort();
+        respond(lastPromptId(wc), { result: { status: "cancelled" } });
+        await expect(first).resolves.toEqual({ status: "cancelled" });
+
+        const hung = new AbortController();
+        const second = d.requestPrompt("p1", PICKER, undefined, hung.signal);
+        hung.abort();
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_ACK_GRACE_MS);
+        await expect(second).resolves.toEqual({ status: "cancelled" });
+        d.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("ignores an acceptance for a prompt that is not a picker", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const controller = new AbortController();
+      const promise = d.requestPrompt("p1", CONFIRM, undefined, controller.signal);
+      respond(lastPromptId(wc), { accepted: true });
+      controller.abort();
+      await expect(promise).resolves.toBe(false);
+    });
+
+    it("never times out a picker, and sends it no deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const wc = makeWebContents(7);
+        setActiveWebContents(wc);
+        const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+        let settled = false;
+        const promise = d.requestPrompt("p1", PICKER).then((value) => {
+          settled = true;
+          return value;
+        });
+        const sent = wc.send.mock.calls.find(
+          (c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST
+        )?.[1] as { expiresAt?: number };
+        expect(sent).not.toHaveProperty("expiresAt");
+        vi.advanceTimersByTime(IMMEDIATE_PROMPT_TIMEOUT_MS * 10);
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        d.dispose();
+        await promise;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("delivers a bound prompt to a cached (not currently visible) view", async () => {

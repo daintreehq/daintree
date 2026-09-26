@@ -12,3 +12,13 @@ export { localAuthStubs } from "../../../shared/types/plugin-sdk.js";
 // must carry; authors read it at runtime, so the api-report's value declaration
 // needs a real binding behind it.
 export { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "../../../shared/types/plugin-sdk.js";
+// The agent-context drag contract: a view sets the type and payload at
+// `dragstart`, so the constants and the helper need real bindings.
+export {
+  AGENT_CONTEXT_DRAG_MIME,
+  AGENT_CONTEXT_MAX_TEXT_LENGTH,
+  AGENT_CONTEXT_MAX_TITLE_LENGTH,
+  AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH,
+  setAgentContextDragData,
+  encodeAgentContextDragPayload,
+} from "../../../shared/types/plugin-sdk.js";

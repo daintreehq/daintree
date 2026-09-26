@@ -3259,6 +3259,16 @@ function buildElectronApi(): ElectronAPI {
         ipcRenderer.send(CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE, payload);
       },
 
+      onAgentsListRequest: (callback: (payload: { requestId: string }) => void) =>
+        _typedOn(CHANNELS.PLUGIN_AGENTS_LIST_REQUEST, callback),
+
+      sendAgentsListResponse: (payload: {
+        requestId: string;
+        agents: import("../shared/types/plugin.js").PluginAgentPane[];
+      }) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE, payload);
+      },
+
       onUiPromptRequest: (
         callback: (
           payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptRequest
@@ -3336,6 +3346,8 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:actions-changed", callback),
       onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
         _eventBusOn("plugin:provenance-changed", callback),
+      onSettingsChanged: (callback: (payload: { pluginId: string }) => void) =>
+        _eventBusOn("plugin:settings-changed", callback),
       // Direct channel, not the event bus: install progress is targeted at the
       // window that started the install, never broadcast to every view (#11302).
       onInstallProgress: (

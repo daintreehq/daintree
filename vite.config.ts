@@ -294,22 +294,65 @@ type HostFacadeSpecifier = (typeof HOST_IMPORTMAP_SPECIFIERS)[number];
 // against silently differed between `npm run dev` and a packaged build.
 const HOST_FACADE_VIRTUAL_PREFIX = "virtual:daintree-host/";
 
-// The host compiles the tour from source (see the `@daintreehq/tour` aliases).
-function isTourSourceModule(id: string): boolean {
-  return id.split(path.sep).join("/").includes("/packages/tour/src/");
+function toPosixId(id: string): string {
+  return id.split(path.sep).join("/");
 }
 
-// The tour's public subpaths. Everything else in HOST_IMPORTMAP_SPECIFIERS is
-// React, which differs in how its facade is generated (CJS, see
-// renderHostFacade) and which shared chunk backs it.
-function isHostTourSpecifier(specifier: string): boolean {
-  return specifier === "@daintreehq/tour" || specifier.startsWith("@daintreehq/tour/");
+// The host compiles the tour from source (see the `@daintreehq/tour` aliases).
+function isTourSourceModule(id: string): boolean {
+  return toPosixId(id).includes("/packages/tour/src/");
+}
+
+// Only the thin public surface of `@daintreehq/plugin-ui`; the components it
+// lazily loads live elsewhere in `src/` and keep their own chunks.
+function isPluginUiSourceModule(id: string): boolean {
+  return toPosixId(id).includes("/src/pluginUi/");
 }
 
 // The codeSplitting group that holds the tour engine. One chunk shared by the
 // host's lazy TourDialog and the tour facades is what makes a plugin scene's
 // `useCue` see the host's `TourPlayerContext`.
 const TOUR_CHUNK_NAME = "tour";
+
+// The codeSplitting group that holds `src/pluginUi`, so serving it to plugins
+// never folds it into the eager `boot` chunk.
+const PLUGIN_UI_CHUNK_NAME = "plugin-ui";
+
+// Host modules served to plugins that the host compiles from its own ESM
+// source, as opposed to React's CJS (see renderHostFacade). Each lives in one
+// codeSplitting group chunk that every facade for it imports — one instance
+// shared by host and plugins — and none may load at startup; hostFacadePlugin
+// proves both.
+interface HostSourceModule {
+  readonly chunkName: string;
+  serves(specifier: string): boolean;
+  isSourceModule(id: string): boolean;
+  /**
+   * Hold the facade to exactly HOST_FACADE_REQUIRED_EXPORTS rather than a
+   * minimum. For a module written only to be served, any extra export is an
+   * accidental public contract.
+   */
+  readonly exactExports?: boolean;
+}
+
+const HOST_SOURCE_MODULES: readonly HostSourceModule[] = [
+  {
+    chunkName: TOUR_CHUNK_NAME,
+    serves: (specifier) =>
+      specifier === "@daintreehq/tour" || specifier.startsWith("@daintreehq/tour/"),
+    isSourceModule: isTourSourceModule,
+  },
+  {
+    chunkName: PLUGIN_UI_CHUNK_NAME,
+    serves: (specifier) => specifier === "@daintreehq/plugin-ui",
+    isSourceModule: isPluginUiSourceModule,
+    exactExports: true,
+  },
+];
+
+function hostSourceModuleFor(specifier: string): HostSourceModule | undefined {
+  return HOST_SOURCE_MODULES.find((module) => module.serves(specifier));
+}
 
 // Resolution anchor for reading the installed React packages. Anchored on cwd
 // rather than `import.meta.url` because Vite may load this config as either ESM
@@ -375,13 +418,14 @@ function hostReactExportNames(specifier: string): string[] {
 // direct `export { default }`, which would throw for subpaths (e.g.
 // jsx-runtime) that have no own default export.
 //
-// Tour specifiers take the star form: the tour package is ESM source (aliased to
-// packages/tour/src), so its export names are statically known and `export *`
-// carries all of them — no config-time require of a package that ships no CJS
-// and whose `dist/` may not be built. It has no default export to synthesize.
+// Host source modules (the tour, plugin-ui) take the star form: they are ESM
+// source (aliased into packages/tour/src and src/pluginUi), so their export
+// names are statically known and `export *` carries all of them — no
+// config-time require of a package that ships no CJS and whose `dist/` may not
+// be built. Neither has a default export to synthesize.
 function renderHostFacade(specifier: string): string {
   const target = JSON.stringify(specifier);
-  if (isHostTourSpecifier(specifier)) return `export * from ${target};\n`;
+  if (hostSourceModuleFor(specifier)) return `export * from ${target};\n`;
   const named = hostReactExportNames(specifier);
   const lines = [`import * as m from ${target};`];
   if (named.length > 0) lines.push(`export { ${named.join(", ")} } from ${target};`);
@@ -394,7 +438,7 @@ function renderHostFacade(specifier: string): string {
 // from the bundle by this name — never predicted — because only Rolldown knows
 // the final hash.
 function hostFacadeChunkName(specifier: string): string {
-  if (isHostTourSpecifier(specifier)) return `host-${specifier.slice(1).replaceAll("/", "-")}`;
+  if (hostSourceModuleFor(specifier)) return `host-${specifier.slice(1).replaceAll("/", "-")}`;
   return `host-react-${specifier.replaceAll("/", "-")}`;
 }
 
@@ -536,6 +580,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "resolveMockState",
     "useMockKit",
   ],
+  "@daintreehq/plugin-ui": ["Markdown"],
 };
 
 interface FacadeLookupChunk {
@@ -594,7 +639,8 @@ function findHostFacadePaths(bundle: Record<string, FacadeLookupChunk>): Record<
 // chunk. The `tour` group claims the tour source first, so it stays one chunk
 // that only the lazy TourDialog and the facades import; generateBundle proves
 // that the chunk exists, that both facades use it, and that nothing on the
-// startup path reaches it statically.
+// startup path reaches it statically. The `@daintreehq/plugin-ui` facade gets
+// the same treatment against the `plugin-ui` group's chunk.
 function hostFacadePlugin(): Plugin {
   return {
     name: "host-facade",
@@ -631,12 +677,16 @@ function hostFacadePlugin(): Plugin {
       let vendorReactFileName: string | null = null;
       const facadeImports = new Map<string, readonly string[]>();
       const chunksByFileName = new Map<string, Rolldown.OutputChunk>();
-      const tourSourceChunks: Rolldown.OutputChunk[] = [];
+      const sourceChunks = new Map<HostSourceModule, Rolldown.OutputChunk[]>(
+        HOST_SOURCE_MODULES.map((module) => [module, []])
+      );
 
       for (const output of Object.values(bundle)) {
         if (output.type !== "chunk") continue;
         chunksByFileName.set(output.fileName, output);
-        if (output.moduleIds.some(isTourSourceModule)) tourSourceChunks.push(output);
+        for (const [module, chunks] of sourceChunks) {
+          if (output.moduleIds.some(module.isSourceModule)) chunks.push(output);
+        }
         if (output.name === "vendor-react") vendorReactFileName = output.fileName;
         if (!output.name || !isHostFacadeChunkName(output.name)) continue;
         chunksByName.set(output.name, { fileName: output.fileName, exports: output.exports });
@@ -655,16 +705,20 @@ function hostFacadePlugin(): Plugin {
         );
       }
 
-      // Same for the tour: its source must live in exactly one chunk, the
-      // `tour` group's. A second chunk holding tour source is a second
+      // Same for each host source module: its source must live in exactly one
+      // chunk, its group's. A second chunk holding tour source is a second
       // TourPlayerContext, and a plugin scene bound to the other one never sees
       // the host's player.
-      const tourChunk = tourSourceChunks.find((chunk) => chunk.name === TOUR_CHUNK_NAME) ?? null;
-      if (!tourChunk || tourSourceChunks.length !== 1) {
-        problems.push(
-          `tour source must be in exactly one chunk named \`${TOUR_CHUNK_NAME}\`; found it in: ` +
-            (tourSourceChunks.map((chunk) => chunk.name || chunk.fileName).join(", ") || "(none)")
-        );
+      const sharedChunks = new Map<HostSourceModule, Rolldown.OutputChunk | null>();
+      for (const [module, chunks] of sourceChunks) {
+        const owned = chunks.find((chunk) => chunk.name === module.chunkName) ?? null;
+        sharedChunks.set(module, owned);
+        if (!owned || chunks.length !== 1) {
+          problems.push(
+            `${module.chunkName} source must be in exactly one chunk named \`${module.chunkName}\`; found it in: ` +
+              (chunks.map((chunk) => chunk.name || chunk.fileName).join(", ") || "(none)")
+          );
+        }
       }
 
       for (const [name, specifier] of HOST_FACADE_CHUNK_NAMES) {
@@ -674,12 +728,12 @@ function hostFacadePlugin(): Plugin {
           continue;
         }
         const actual = new Set(chunk.exports);
-        const isTour = isHostTourSpecifier(specifier);
+        const sourceModule = hostSourceModuleFor(specifier);
 
         // Check 1 — nothing the generator asked for got tree-shaken away. The
-        // tour facades are `export *`, so they have no generator list and rely
-        // on check 2 alone.
-        if (!isTour) {
+        // host source module facades are `export *`, so they have no generator
+        // list and rely on check 2 alone.
+        if (!sourceModule) {
           const elided = [...hostReactExportNames(specifier), "default"].filter(
             (n) => !actual.has(n)
           );
@@ -700,50 +754,62 @@ function hostFacadePlugin(): Plugin {
               `Emitted exports: ${chunk.exports.join(", ") || "(none)"}`
           );
         }
+        if (sourceModule?.exactExports) {
+          const promised = new Set<string>(HOST_FACADE_REQUIRED_EXPORTS[specifier]);
+          const extra = chunk.exports.filter((n) => !promised.has(n));
+          if (extra.length > 0) {
+            problems.push(
+              `"${specifier}" (${chunk.fileName}) exports ${extra.join(", ")} beyond its ` +
+                "declared contract. Declare them in HOST_FACADE_REQUIRED_EXPORTS and the SDK's " +
+                "plugin-ui.d.ts, or stop exporting them from src/pluginUi."
+            );
+          }
+        }
 
         // Every facade must reach its module through the one shared chunk. If a
         // facade stopped importing it, the module got inlined into the facade —
         // i.e. a second copy — which breaks hooks (React) or context (tour).
-        const sharedFileName = isTour ? (tourChunk?.fileName ?? null) : vendorReactFileName;
+        const sharedFileName = sourceModule
+          ? (sharedChunks.get(sourceModule)?.fileName ?? null)
+          : vendorReactFileName;
         if (sharedFileName && !facadeImports.get(name)?.includes(sharedFileName)) {
           problems.push(
             `"${specifier}" (${chunk.fileName}) does not import the shared ` +
-              `${isTour ? TOUR_CHUNK_NAME : "vendor-react"} chunk (${sharedFileName}) — the ` +
+              `${sourceModule?.chunkName ?? "vendor-react"} chunk (${sharedFileName}) — the ` +
               "module may have been duplicated into the facade."
           );
         }
       }
 
-      // Serving the tour to plugins must not load it at startup. Walk the
-      // static imports of the app entry and of every first-render seed chunk
-      // (App.tsx is a dynamic import but loads on first render all the same);
-      // none may reach the tour chunk.
-      if (tourChunk) {
-        const seeds = new Set(getFirstRenderPreloadSeeds());
-        const root = process.cwd();
-        const startupRoots = [...chunksByFileName.values()].filter((chunk) => {
-          if (chunk.name && isHostFacadeChunkName(chunk.name)) return false;
-          if (chunk.isEntry) return true;
-          const facade = chunk.facadeModuleId;
-          if (!facade || facade.startsWith("\0")) return false;
-          return seeds.has(path.relative(root, facade).split(path.sep).join("/"));
-        });
-        for (const startup of startupRoots) {
-          const seen = new Set<string>();
-          const queue = [startup.fileName];
-          while (queue.length > 0) {
-            const fileName = queue.pop()!;
-            if (seen.has(fileName)) continue;
-            seen.add(fileName);
-            queue.push(...(chunksByFileName.get(fileName)?.imports ?? []));
-          }
-          if (seen.has(tourChunk.fileName)) {
-            problems.push(
-              `startup chunk ${startup.name || startup.fileName} statically imports the ` +
-                `${TOUR_CHUNK_NAME} chunk (${tourChunk.fileName}) — the tour would load on ` +
-                "first render instead of when a tour opens."
-            );
-          }
+      // Serving a host source module to plugins must not load it at startup.
+      // Walk the static imports of the app entry and of every first-render seed
+      // chunk (App.tsx is a dynamic import but loads on first render all the
+      // same); none may reach a host source module's chunk.
+      const seeds = new Set(getFirstRenderPreloadSeeds());
+      const root = process.cwd();
+      const startupRoots = [...chunksByFileName.values()].filter((chunk) => {
+        if (chunk.name && isHostFacadeChunkName(chunk.name)) return false;
+        if (chunk.isEntry) return true;
+        const facade = chunk.facadeModuleId;
+        if (!facade || facade.startsWith("\0")) return false;
+        return seeds.has(toPosixId(path.relative(root, facade)));
+      });
+      for (const startup of startupRoots) {
+        const seen = new Set<string>();
+        const queue = [startup.fileName];
+        while (queue.length > 0) {
+          const fileName = queue.pop()!;
+          if (seen.has(fileName)) continue;
+          seen.add(fileName);
+          queue.push(...(chunksByFileName.get(fileName)?.imports ?? []));
+        }
+        for (const [module, shared] of sharedChunks) {
+          if (!shared || !seen.has(shared.fileName)) continue;
+          problems.push(
+            `startup chunk ${startup.name || startup.fileName} statically imports the ` +
+              `${module.chunkName} chunk (${shared.fileName}) — it would load on first ` +
+              "render instead of when something first uses it."
+          );
         }
       }
 
@@ -1573,12 +1639,27 @@ export default defineConfig(({ command, mode }) => {
                 // first-render budget scripts and the modulepreload seed
                 // derivation. Virtual modules (\0-prefixed helpers, html
                 // proxies) stay wherever automatic chunking puts them.
+                // `src/pluginUi` belongs to the `plugin-ui` group below.
                 test: (id: string) => {
                   if (id.includes("\0") || id.includes(".html")) return false;
+                  if (isPluginUiSourceModule(id)) return false;
                   return !id.split(path.sep).join("/").endsWith("src/main.tsx");
                 },
                 priority: 1,
                 maxSize: 400_000,
+              },
+              {
+                // Same reason as `tour`: the plugin-ui facade is an entry, so
+                // `src/pluginUi` is `$initial` and `boot` would sweep it into
+                // the first-render closure (its test skips it instead). Below
+                // `boot` on purpose: a group also captures its modules'
+                // dependencies unless a higher-priority group has them, and
+                // the lazy `import()` here depends on Vite's preload helper.
+                // Ranked above `boot`, this group took the helper and every
+                // startup chunk ended up importing it.
+                name: PLUGIN_UI_CHUNK_NAME,
+                test: (id: string) => isPluginUiSourceModule(id),
+                priority: 0,
               },
             ],
           },
@@ -1604,6 +1685,8 @@ export default defineConfig(({ command, mode }) => {
         "@daintreehq/tour/kit": path.resolve(__dirname, "./packages/tour/src/kit.ts"),
         "@daintreehq/tour/mock-app": path.resolve(__dirname, "./packages/tour/src/mock-app.ts"),
         "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
+        // Nothing in the app imports this; the host facade does, for plugins.
+        "@daintreehq/plugin-ui": path.resolve(__dirname, "./src/pluginUi/index.ts"),
         // refractor/core eagerly imports parse-entities, whose browser-condition
         // decode-named-character-reference touches `document` at module scope —
         // that crashes the diff-tokenize Web Worker at startup. Pin the package's

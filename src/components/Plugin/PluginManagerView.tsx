@@ -458,6 +458,26 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     target?.focus();
   }, [isOpen]);
 
+  // And hand it back on close. A region traps nothing and restores nothing, so
+  // without this focus stayed on the hidden view's last control — or fell to
+  // the body — instead of the panel or control the user opened the manager
+  // from. Skipped when the user has already put focus somewhere else visible.
+  const wasOpenRef = useRef(isOpen);
+  useEffect(() => {
+    const wasOpen = wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+    if (!wasOpen || isOpen) return;
+    const target = usePluginManagerStore.getState().returnFocusTarget;
+    usePluginManagerStore.setState({ returnFocusTarget: null });
+    // The view renders nothing while closed, so focus that was inside it is on
+    // the body by now.
+    const active = document.activeElement;
+    const focusIsStranded = active === null || active === document.body;
+    if (target?.isConnected && focusIsStranded) {
+      target.focus({ preventScroll: true });
+    }
+  }, [isOpen]);
+
   // Re-validate the selection after every list refresh (reopen, uninstall,
   // cross-window provenance change). A single effect keyed on the list nulls a
   // selection whose plugin is gone — kept here rather than in a second reset
@@ -521,6 +541,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     setHighlightedPluginId(focusPluginId);
     clearFocusPluginId();
   }, [focusPluginId, clearFocusPluginId, pm.plugins, skipMotion]);
+
+  // A `plugin.openSettings` whose home is the manager: select the plugin the
+  // same way a deep-link `open` does. The detail pane then opens its Settings
+  // tab and lands on the key, and consumes the request once it has.
+  const settingsRequest = usePluginManagerStore((s) =>
+    s.settingsRequest?.home === "manager" ? s.settingsRequest : null
+  );
+  const consumeSettingsRequest = usePluginManagerStore((s) => s.consumeSettingsRequest);
+  const settingsRequestPluginId = settingsRequest?.pluginId ?? null;
+  const settingsRequestNonce = settingsRequest?.nonce;
+  useEffect(() => {
+    if (!isOpen || settingsRequestPluginId === null) return;
+    if (!pm.plugins.some((p) => p.manifest.name === settingsRequestPluginId)) return;
+    setQuery("");
+    setSelectedProjectPluginId(null);
+    setSelectedPluginId(settingsRequestPluginId);
+  }, [isOpen, settingsRequestPluginId, settingsRequestNonce, pm.plugins]);
 
   // Fade the deep-link highlight after a beat. Kept separate from the consume
   // effect above: clearing focusPluginId there flips that effect's own
@@ -1017,6 +1054,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               onRetry={() => void pm.retryPlugin(selectedPlugin)}
               onUninstall={() => pm.armUninstall(selectedPlugin)}
               onCheckForUpdate={() => void pm.handleCheckForUpdate(selectedPlugin)}
+              settingsRequest={
+                settingsRequest !== null && settingsRequest.pluginId === selectedPlugin.instanceId
+                  ? settingsRequest
+                  : null
+              }
+              onSettingsRequestHandled={consumeSettingsRequest}
             />
           ) : hasPlugins ? (
             // Catalog home — the marketplace face of the manager. Clicking a

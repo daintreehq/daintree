@@ -12,6 +12,7 @@ The whole design is shaped by one case: an agent working in a fresh worktree sho
 <projectRoot>/.daintree/
 ├── recipes/                     # existing, git-tracked
 ├── plugin-settings/             # existing, git-tracked, project-scope settings (never secrets)
+├── data/<manifestId>/<id>.db    # a declared "project" database, git-tracked unless you ignore it
 └── plugins/
     └── acme.dashboard/
         ├── plugin.json          # must declare "scope": "project"
@@ -118,7 +119,20 @@ There is no sandbox. A project plugin's `main` runs in a worker with full Node p
 
 There is deliberately **no per-capability consent dialog** at the project gate. Offering to deny filesystem access would claim an enforcement Daintree does not have. The gate asks one question — do you trust everyone who can write to this folder, including the agents you run here — and the capability list is disclosure beside it.
 
-Capability grants (the just-in-time consent prompts on high-risk host surfaces) are held per plugin _instance_, so one project's grant never answers for another project's copy of the same plugin id.
+### Consent on first use
+
+Trusting the folder lets the plugin run; it does not pre-approve what the plugin does through the host. The first time the plugin exercises a high-risk capability on the host-mediated path, the user is asked, naming the plugin, the capability and everything the manifest declares:
+
+| Capability | Asked on the first |
+| --- | --- |
+| `fs:project-write` / `fs:user-data-write` | `host.fs.writeFile`, `appendFile` or `mkdir`; a writable `host.db.open` or `resolve` of a `"project"` database; `db.backup`; `host.documents.renderPdf` |
+| `agent:input` | `host.sendToAgent` or `host.sendToActiveAgent` |
+| `shell:exec` | `host.process.spawn` |
+| `git:write` | `host.git.add` or `commit` |
+
+One grant covers every call of that capability, so a plugin that already writes files asks for nothing new to render a PDF. Only an approval the user pins is remembered. A one-time approval lets that one call through; a refusal, or a prompt left to time out, rejects it with `PERMISSION_REQUIRED:`. None of the three is remembered and the next call asks again — so a plugin must not retry a refused write from a timer or a watch callback, and should not start a write-class call from `activate()`, whose 5-second budget a waiting prompt would outlast. Reads (`fs:*-read`, `agent:read`, `git:read`) and a `readonly` database open are gated by the manifest alone and never prompt.
+
+Grants are held per plugin _instance_, so one project's grant never answers for another project's copy of the same plugin id, and revoking the project's trust purges them. An agent MCP endpoint is a separate decision again, made per endpoint in Project settings → Plugins → Agent tools.
 
 ## What a project plugin may contribute
 
@@ -126,14 +140,15 @@ Scoped to the owning project, and visible only in its views:
 
 | Contribution | Behaviour under `scope: "project"` |
 | --- | --- |
-| `panels` | Registered against the project; the panel kind is qualified at runtime so two projects can contribute the same id |
-| `views` | Served and mounted only in the owning project's renderer |
+| `panels` | Registered against the project; the panel kind is qualified at runtime so two projects can contribute the same id — ask `host.panelKindId(id)` for it. A panel's `menu` puts up to five of your actions on its ⋯ and right-click menus |
+| `views` | Served and mounted only in the owning project's renderer. One view may be `location: "settings"`, mounted in Project settings → Plugins below the generated fields |
 | `commands` | In that project's palette, dispatched into that project's renderer |
 | `toolbarButtons` | Only in the owning project's toolbar |
 | `contextMenus` | Only in the owning project's views |
 | `keybindings` | Renderer-level, so they resolve within the focused project |
-| `settings` | `scope: "project"` settings resolve from the bound project root, not from whatever is focused |
+| `settings` | All of a project plugin's fields live in Project settings → Plugins; `scope: "project"` values resolve from the bound project root, not from whatever is focused. See [Settings and storage](#settings-and-storage) |
 | `surfaces` | Project-scope only — see [Surfaces](#surfaces) |
+| `databases` | SQLite files opened with `host.db`. A `"project"` database resolves against the bound project root, so it is the same file an agent in the project's terminal opens with `sqlite3`; `"local"` stays in this machine's plugin data. See [Databases](./contribution-points.md#databases--shipped) |
 | `agentMcp` | Tools served to agents in this project's terminals only. Every credential is minted for one terminal launch in one project, and a project plugin's endpoint can only be granted to the project that loaded it. Still off until the user turns the endpoint on for the project — trusting the folder does not do it. See [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
@@ -147,7 +162,10 @@ Forbidden under `scope: "project"`, each rejected at manifest validation with an
 | `fileDecorationProviders` | Decoration requests carry a resource path with no owning-project routing, so the provider would be consulted for files in every open project |
 | `processTools` | Process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app |
 | `mcpServers` | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, and a tool call from the settings UI or the in-app assistant carries no project to check the contribution against. (These tools never reach terminal agents at all — for that, use `agentMcp`.) |
+| `tours` | Plugin tours are offered from the app-wide Help menu and command palette with no project axis, and tour playback has no per-project visibility to narrow a panel tour to the owning project's views |
 | `forgeProviders` | Forge providers need synchronous host methods (`parseRemote`, the URL builders) that cannot cross the plugin worker's async message port, so the descriptor could never be given an implementation |
+
+`fileEditors`, `previewTools` and `guestAdapters` are refused too, as they are for every plugin but a built-in one.
 
 These are deferred, not closed. Each error names the structural obstacle so that when the obstacle goes, the rule can go with it. An installed or builtin plugin is unaffected — being app-wide is what the absent `scope` means.
 
@@ -182,7 +200,7 @@ Rules:
 
 ## Binding — which project a host call reaches
 
-A project plugin's host object is bound to its project at construction, and every closure reads that binding rather than the focused project view. `host.dispatch` and `host.actions.*` target the bound project's renderer; `showQuickPick` / `showInputBox` / `showConfirm` are delivered into that project's view so the user finds the prompt when they switch to it; `getWorktrees` / `getActiveWorktree` / `getWorktreeStatus` and the worktree change events see only that project's worktrees; `sendToActiveAgent` reaches only agents belonging to it; toasts and renderer pushes go to its views.
+A project plugin's host object is bound to its project at construction, and every closure reads that binding rather than the focused project view. `host.dispatch` and `host.actions.*` target the bound project's renderer; `showQuickPick` / `showInputBox` / `showConfirm` are delivered into that project's view so the user finds the prompt when they switch to it; `getWorktrees` / `getActiveWorktree` / `getWorktreeStatus` and the worktree change events see only that project's worktrees; `sendToActiveAgent`, `sendToAgent` and `agents.list` reach only agents belonging to it; `host.db` and `host.settings.open` resolve against it; toasts and renderer pushes go to its views.
 
 There is no fallback to the focused view. `host.dispatch` and the UI prompts reject with `PROJECT_VIEW_UNAVAILABLE` when the bound project has no live renderer, rather than landing somewhere else — handing project A's plugin project B's renderer is the confused-deputy bug the binding exists to prevent. The read-only catalog surfaces (`host.actions.list` / `get` / `canDispatch`) never throw by contract, so they answer empty in the same situation. A project view that has been backgrounded and cached still counts as live: the project is open, just not on screen. A renderer actually reclaimed under memory pressure does not — there is nothing to target until the user opens that project's view again.
 
@@ -190,19 +208,33 @@ Installed and builtin plugins keep their existing ambient behaviour — they hav
 
 ## Settings and storage
 
-`host.settings` with `scope: "project"` resolves from the bound project root, so a project plugin writes `<projectRoot>/.daintree/plugin-settings/<manifestId>.json` — never moved by a project switch. Secret settings are the exception: a `type: "secret"` value is never written into the repository, so a project-scope secret goes to this machine's per-project local file, `~/.daintree/plugin-settings/local/<projectId>/<instanceKey>.json`, keyed by the same bound project. `host.storage` has three scopes and follows the same split:
+Every file a project plugin's settings, storage and data can land in, by scope:
 
-| Scope      | File                                                        |
-| ---------- | ----------------------------------------------------------- |
-| `user`     | `~/.daintree/plugin-storage/<instanceKey>.json`             |
-| `project`  | `<projectRoot>/.daintree/plugin-storage/<manifestId>.json`  |
-| `worktree` | `<worktreePath>/.daintree/plugin-storage/<manifestId>.json` |
+| What | Scope | File |
+| --- | --- | --- |
+| Setting | `project` | `<projectRoot>/.daintree/plugin-settings/<manifestId>.json` — committed |
+| Setting | `local` | `~/.daintree/plugin-settings/local/<projectId>/<instanceKey>.json` |
+| Setting | `user` | `~/.daintree/plugin-settings/<instanceKey>.json` |
+| Secret setting, any scope | — | never under the project root: a `project` secret goes to the `local` file, encrypted through the OS keychain |
+| `host.storage` | `user` | `~/.daintree/plugin-storage/<instanceKey>.json` |
+| `host.storage` | `project` | `<projectRoot>/.daintree/plugin-storage/<manifestId>.json` |
+| `host.storage` | `worktree` | `<worktreePath>/.daintree/plugin-storage/<manifestId>.json` |
+| Database | `"project"` | `<projectRoot>/.daintree/data/<manifestId>/<id>.db`, or the declared `path` |
+| Database | `"local"` | `~/.daintree/plugin-data/<instanceKey>/databases/<id>.db` |
 
-In-repository files are named by the **manifest id**, never by the instance key: the instance key embeds this machine's project id, and writing that into a tracked filename would commit one developer's local identity into everyone's checkout. The project root already provides the isolation. Files under the user's own directory are keyed by the **instance key**, so two projects shipping the same manifest id keep separate state.
+In-repository files are named by the **manifest id**, never by the instance key: the instance key embeds this machine's project id, and writing that into a tracked filename would commit one developer's local identity into everyone's checkout. The project root already provides the isolation. Files under the user's own directory are keyed by the **instance key**, so two projects shipping the same manifest id keep separate state. For a project plugin that makes `user` settings per project and per machine too — it is not a way to share a value across projects. Use `project` for a team default, `local` for a machine path or a personal value, and say `local` rather than relying on `user` when that is what you mean.
+
+**Where the user edits them.** A project plugin's fields all live in **Project settings → Plugins**, with the plugin selected; there is no second home in the plugin manager. The generated form covers most fields; declare one view with `location: "settings"` for what it cannot — a connection test, a table stored as `json` — and give the fields that view owns `editor: "view"` so they are not shown twice ([Views → A settings section](./views.md#a-settings-section)). The section mounts with `settingsContext.scope` set to `"project"`. While the plugin is stopped, staged or disabled, its section says so rather than mounting. Mark a field `required: true` when the plugin cannot work without it: the plugin's panels and its surface show a "needs setup" strip until it is set, and `host.settings.missingRequired()` lists it. `host.settings.open(key)`, your panels' **Plugin settings…** menu entry and the strip all land on the field in this project's window.
+
+Settings belong to the user. They are read through `host.settings`, which notices a committed `project` file changing under a pull or a branch switch, but the data contract you hand agents should leave the settings files alone.
+
+**Structured data goes in a database.** For anything you query, total or page through, declare a database in `contributes.databases` and open it with [`host.db`](./host-api.md#db--host-managed-sqlite) instead of a JSON blob in `host.storage`. A `"project"` database is resolved against the bound project root — the main checkout, even while the user is on a linked worktree — so it is the same file an agent in the main checkout opens with `sqlite3`. An agent in a linked worktree opens that worktree's committed copy instead, and its writes never reach the panel; say in your data contract which checkout agents must write, and give them the main checkout's path. Keep the default `"journalMode": "delete"` for a committed database, so no `-wal` / `-shm` sidecars sit beside it; decide deliberately whether the file is committed at all or listed in `.gitignore` as local data that happens to live in the repository.
+
+**Backup.** Every panel of a plugin that declares databases has a host-owned **Back up data…** entry on its ⋯ and right-click menus. It snapshots each declared database that already exists — creating none — with SQLite's online backup, to a file or folder the user picks, and refuses the live file and a destination with a leftover journal beside it. You write nothing for it. For a copy your plugin makes itself — a scheduled export into a sync folder, say — use `db.backup(destPath)`, which writes a consistent snapshot through the same checks and consent as `host.fs.writeFile`. Never point a sync folder at the live file.
 
 The project root a bound plugin writes to is the one from its binding, not the focused project. The `"worktree"` storage scope follows the same rule: it resolves your bound project's own current worktree, and fails closed — read `undefined`, write throws — when that project has none, rather than falling back to whichever worktree the app considers active. An installed or builtin plugin, having no project of its own, still resolves the app-global active worktree.
 
-The `${worktree}` and `${project}` tokens in `scopes.fs.allowedPaths` expand against the bound project's own worktrees, so a project plugin's containment roots do not move when the user switches projects. An installed or builtin plugin keeps expanding them ambiently — it has no project of its own.
+The `${worktree}` and `${project}` tokens in `scopes.fs.allowedPaths` expand against the bound project's own worktrees, so a project plugin's containment roots do not move when the user switches projects. `${project}` is the main checkout only: a plugin that declares it alone gets `PATH_NOT_ALLOWED` for every path in a linked worktree, so declare `${worktree}` beside it if the plugin reads what the user is working on. An installed or builtin plugin keeps expanding them ambiently — it has no project of its own.
 
 A project plugin that declares no `scopes.fs.allowedPaths` at all defaults to its own project root. It lives inside that tree, so the tree is the only sensible default — and without it `host.fs` and `host.git` would reach nothing but the plugin's own data directory. Declaring `allowedPaths` replaces that default rather than adding to it. An installed plugin that declares nothing still gets nothing, because it has no project to widen to.
 
@@ -236,11 +268,13 @@ A project plugin's panel kind is qualified at runtime as `project:{projectId}/{m
 - **The first negation without the second.** `!dist/` alone makes git descend into the directory and still excludes every file in it. Both lines, always.
 - **A manifest without `"scope": "project"`** under `.daintree/plugins/` is rejected (`project_scope_required`), and a manifest _with_ it installed into the user directory is rejected the other way (`project_scope_not_allowed`). The guard runs in both directions so a plugin cannot quietly load under assumptions its author never made.
 - **Editing `src/` and expecting a reload.** Only `plugin.json` and `dist/` are watched. Keep the watcher running.
+- **Writing from `activate()`.** A first write-class call waits on a consent prompt, and `activate()` has 5 seconds. Open a writable project database or write a file from the first handler that needs it.
 - **Expecting a restart to be required.** It never is. Every contribution point available to a project plugin registers, reloads and unregisters live; anything that genuinely needed an app restart is simply not offered here.
 
 ## See also
 
 - [Agent brief](./agent-brief.md) — the compressed version to hand an agent, with a zero-build skeleton
+- [Building apps](./building-apps.md) — a project plugin as an application over data agents also edit
 - [Manifest reference](./manifest.md) — `scope`, `contributes.surfaces`
 - [Contribution points](./contribution-points.md) — per-point project-scope status
 - [Trust model](./trust-model.md) — the capability contract and the non-guarantees

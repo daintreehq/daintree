@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os, { tmpdir } from "node:os";
@@ -75,6 +76,7 @@ vi.mock("../PluginActionAuditService.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { sharedWatcherListenerCount } from "../FileObservationService.js";
 import {
   getPluginCapabilityConsentService,
   _resetPluginCapabilityServicesForTest,
@@ -1492,5 +1494,713 @@ describe("host.fs.writeFile checked path (#12323)", () => {
       (c) => (c[0] as { channel: string }).channel === "plugin:fs-write"
     );
     expect(writeAudits.length).toBe(1);
+  });
+});
+
+function fsWriteAudits(): Array<{ actionId: string }> {
+  return appendSpy.mock.calls
+    .map((c) => c[0] as { channel: string; actionId: string })
+    .filter((record) => record.channel === "plugin:fs-write");
+}
+
+describe("host.fs.readFileWithRevision", () => {
+  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+  it("returns the text and the revision writeFile accepts as expectedRevision", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "ledger.json");
+    await fs.writeFile(target, '﻿{"rows":[]}');
+
+    const read = await host.fs.readFileWithRevision(target);
+    expect(read.contents).toBe(await host.fs.readFile(target));
+    expect(read.revision).toBe(
+      createHash("sha256")
+        .update(await fs.readFile(target))
+        .digest("hex")
+    );
+
+    const written = await host.fs.writeFile(target, '{"rows":[1]}', {
+      expectedRevision: read.revision,
+    });
+    expect(written.revision).toBe(sha('{"rows":[1]}'));
+    expect((await host.fs.readFileWithRevision(target)).revision).toBe(written.revision);
+  });
+
+  it("hands back a revision that goes stale when the file changes underneath", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "board.md");
+    await fs.writeFile(target, "v1");
+    const { revision } = await host.fs.readFileWithRevision(target);
+    await fs.writeFile(target, "agent edit");
+    await expect(
+      host.fs.writeFile(target, "mine", { expectedRevision: revision })
+    ).rejects.toMatchObject({ code: "REVISION_MISMATCH", currentRevision: sha("agent edit") });
+  });
+
+  it("keeps the read gates: capability, containment and an aborted signal", async () => {
+    const writeOnly = registerPlugin(["fs:project-write"], [allowed]);
+    const target = join(allowed, "x.txt");
+    await fs.writeFile(target, "x");
+    await expect(writeOnly.fs.readFileWithRevision(target)).rejects.toThrow(/PERMISSION_REQUIRED/);
+
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(baseDir, "secret.txt"), "TOPSECRET");
+    await fs.symlink(join(baseDir, "secret.txt"), join(allowed, "link.txt"));
+    await expect(host.fs.readFileWithRevision(join(allowed, "link.txt"))).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+    await expect(
+      host.fs.readFileWithRevision(target, { signal: AbortSignal.abort() })
+    ).rejects.toThrow();
+  });
+});
+
+describe("host.fs.mkdir", () => {
+  it("creates missing ancestors, audits each one, and is a no-op on an existing directory", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "data", "2026", "09");
+
+    await host.fs.mkdir(target);
+    expect((await fs.stat(target)).isDirectory()).toBe(true);
+    const real = await fs.realpath(allowed);
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(real, "data")}`,
+      `fs.mkdir:${join(real, "data", "2026")}`,
+      `fs.mkdir:${join(real, "data", "2026", "09")}`,
+    ]);
+
+    await expect(host.fs.mkdir(target)).resolves.toBeUndefined();
+    await expect(host.fs.mkdir(join(allowed, "data"))).resolves.toBeUndefined();
+    expect(fsWriteAudits().length).toBe(3);
+  });
+
+  it("refuses a path whose existing ancestor is a symlink out of scope, creating nothing", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const outside = join(baseDir, "outside");
+    await fs.mkdir(outside);
+    await fs.symlink(outside, join(allowed, "escape"));
+
+    await expect(host.fs.mkdir(join(allowed, "escape", "new", "deeper"))).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+    expect(existsSync(join(outside, "new"))).toBe(false);
+    expect(fsWriteAudits().length).toBe(0);
+  });
+
+  it("refuses a traversal out of the root", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(host.fs.mkdir(join(allowed, "..", "sibling"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    expect(existsSync(join(baseDir, "sibling"))).toBe(false);
+  });
+
+  it("requires a write capability for the path's root class", async () => {
+    const readOnly = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(readOnly.fs.mkdir(join(allowed, "nope"))).rejects.toThrow(/PERMISSION_REQUIRED/);
+
+    const userDataOnly = registerPlugin(["fs:user-data-read", "fs:user-data-write"], [allowed]);
+    await expect(userDataOnly.fs.mkdir(join(allowed, "nope"))).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(existsSync(join(allowed, "nope"))).toBe(false);
+  });
+
+  it("does not create anything when the user denies consent", async () => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(host.fs.mkdir(join(allowed, "denied"))).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(existsSync(join(allowed, "denied"))).toBe(false);
+  });
+
+  it("refuses a file standing at the target", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await fs.writeFile(join(allowed, "taken"), "file");
+    await expect(host.fs.mkdir(join(allowed, "taken"))).rejects.toMatchObject({
+      code: "TARGET_EXISTS",
+    });
+  });
+
+  it("creates directories inside the implicit data dir before it exists", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    await host.fs.mkdir(join(dataDir(), "cache", "thumbs"));
+    expect((await fs.stat(join(dataDir(), "cache", "thumbs"))).isDirectory()).toBe(true);
+  });
+});
+
+describe("host.fs.appendFile", () => {
+  it("creates a missing file, appends to an existing one, and audits each append", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const log = join(allowed, "habits.jsonl");
+
+    await host.fs.appendFile(log, '{"day":1}\n');
+    await host.fs.appendFile(log, '{"day":2}\n');
+    expect(await fs.readFile(log, "utf-8")).toBe('{"day":1}\n{"day":2}\n');
+
+    const audits = fsWriteAudits();
+    expect(audits.length).toBe(2);
+    expect(audits[0]?.actionId).toBe(`fs.appendFile:${await fs.realpath(log)}`);
+  });
+
+  it("lands every concurrent append whole", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const log = join(allowed, "inbox.jsonl");
+    const lines = Array.from({ length: 25 }, (_, i) => `{"n":${i}}\n`);
+    await Promise.all(lines.map((line) => host.fs.appendFile(log, line)));
+    const written = (await fs.readFile(log, "utf-8")).split("\n").filter(Boolean);
+    expect(written.sort()).toEqual(lines.map((line) => line.trim()).sort());
+  });
+
+  it("keeps an existing file's inode rather than replacing it", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const log = join(allowed, "ledger.jsonl");
+    await fs.writeFile(log, "a\n");
+    const before = await fs.stat(log);
+    await host.fs.appendFile(log, "b\n");
+    expect((await fs.stat(log)).ino).toBe(before.ino);
+  });
+
+  it("refuses a symlink leaf, even one pointing inside scope", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const real = join(allowed, "real.jsonl");
+    await fs.writeFile(real, "keep\n");
+    const link = join(allowed, "link.jsonl");
+    await fs.symlink(real, link);
+
+    await expect(host.fs.appendFile(link, "sneak\n")).rejects.toMatchObject({
+      code: "TARGET_IS_SYMLINK",
+    });
+    expect(await fs.readFile(real, "utf-8")).toBe("keep\n");
+  });
+
+  it("refuses a symlink leaf pointing out of scope", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const secret = join(baseDir, "secret.jsonl");
+    await fs.writeFile(secret, "outside\n");
+    await fs.symlink(secret, join(allowed, "escape.jsonl"));
+    await expect(host.fs.appendFile(join(allowed, "escape.jsonl"), "x\n")).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+    expect(await fs.readFile(secret, "utf-8")).toBe("outside\n");
+  });
+
+  it("requires a write capability and a string", async () => {
+    const readOnly = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(readOnly.fs.appendFile(join(allowed, "log.jsonl"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(existsSync(join(allowed, "log.jsonl"))).toBe(false);
+
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(
+      host.fs.appendFile(join(allowed, "log.jsonl"), 42 as unknown as string)
+    ).rejects.toThrow(/contents must be a string/);
+  });
+
+  it("needs the parent directory to exist outside the data dir", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(host.fs.appendFile(join(allowed, "missing", "log.jsonl"), "x")).rejects.toThrow(
+      /ENOENT/
+    );
+  });
+
+  it("refuses a directory at the target", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await fs.mkdir(join(allowed, "dir.jsonl"));
+    await expect(host.fs.appendFile(join(allowed, "dir.jsonl"), "x")).rejects.toThrow();
+  });
+});
+
+describe("host.fs.watch recursive and debounced", () => {
+  async function waitFor(check: () => boolean, timeoutMs = 3000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error("waitFor timed out");
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  it("reports a nested change and a file in a subdirectory created after subscribing", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const nested = join(allowed, "cards", "todo");
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(join(nested, "a.md"), "a");
+    const realAllowed = await fs.realpath(allowed);
+
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([allowed], (p) => changes.push(p), { recursive: true });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(nested, "a.md"), "changed");
+      await waitFor(() => changes.includes(join(realAllowed, "cards", "todo", "a.md")));
+
+      await fs.mkdir(join(allowed, "cards", "done"));
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(allowed, "cards", "done", "b.md"), "b");
+      await waitFor(() => changes.includes(join(realAllowed, "cards", "done", "b.md")));
+    } finally {
+      dispose();
+    }
+  });
+
+  it("keeps a plain watch to immediate children while a recursive one shares the directory", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.mkdir(join(allowed, "sub"));
+    const realAllowed = await fs.realpath(allowed);
+
+    const plain: string[] = [];
+    const deep: string[] = [];
+    const disposePlain = await host.fs.watch([allowed], (p) => plain.push(p));
+    const disposeDeep = await host.fs.watch([allowed], (p) => deep.push(p), { recursive: true });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(allowed, "sub", "deep.txt"), "x");
+      await waitFor(() => deep.includes(join(realAllowed, "sub", "deep.txt")));
+      expect(plain).not.toContain(join(realAllowed, "sub", "deep.txt"));
+    } finally {
+      disposePlain();
+      disposeDeep();
+    }
+  });
+
+  it("coalesces a burst into one trailing callback", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([allowed], (p) => changes.push(p), { debounceMs: 250 });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      for (let i = 0; i < 8; i++) {
+        await fs.writeFile(join(allowed, `burst-${i}.txt`), String(i));
+      }
+      await waitFor(() => changes.length > 0);
+      await new Promise((r) => setTimeout(r, 600));
+      expect(changes.length).toBe(1);
+      expect(changes[0]).toMatch(/burst-\d\.txt$/);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("drops a pending debounced callback when disposed", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([allowed], (p) => changes.push(p), { debounceMs: 400 });
+    await new Promise((r) => setTimeout(r, 100));
+    await fs.writeFile(join(allowed, "late.txt"), "x");
+    await new Promise((r) => setTimeout(r, 150));
+    dispose();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(changes).toEqual([]);
+  });
+});
+
+describe("host.fs.watch allowMissing", () => {
+  async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error("waitFor timed out");
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  it("still rejects a missing path without the option", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(host.fs.watch([join(allowed, "board")], () => undefined)).rejects.toThrow();
+  });
+
+  it("waits for a missing directory, then reports changes inside it", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const board = join(allowed, "board");
+    const realBoard = join(await fs.realpath(allowed), "board");
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([board], (p) => changes.push(p), { allowMissing: true });
+    try {
+      await fs.mkdir(board);
+      await waitFor(() => changes.includes(realBoard));
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(board, "board.json"), "{}");
+      await waitFor(() => changes.includes(join(realBoard, "board.json")));
+    } finally {
+      dispose();
+    }
+  });
+
+  it("keeps watching through a deletion and recreation", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const logs = join(allowed, "logs");
+    await fs.mkdir(logs);
+    const realLogs = await fs.realpath(logs);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([logs], (p) => changes.push(p), { allowMissing: true });
+    try {
+      const transitions = () => changes.filter((p) => p === realLogs).length;
+      await fs.rm(logs, { recursive: true });
+      await waitFor(() => transitions() >= 1);
+      await fs.mkdir(logs);
+      // The second transition is the reattachment, not a late deletion event.
+      await waitFor(() => transitions() >= 2);
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(logs, "2026-09.jsonl"), "{}\n");
+      await waitFor(() => changes.includes(join(realLogs, "2026-09.jsonl")));
+    } finally {
+      dispose();
+    }
+  });
+
+  it("refuses to attach when the path is created as a link leading out of scope", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const outside = join(homeDir, "outside");
+    await fs.mkdir(outside, { recursive: true });
+    const link = join(allowed, "linked");
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([link], (p) => changes.push(p), { allowMissing: true });
+    try {
+      await fs.symlink(outside, link);
+      await new Promise((r) => setTimeout(r, 2500));
+      await fs.writeFile(join(outside, "secret.txt"), "x");
+      await new Promise((r) => setTimeout(r, 300));
+      expect(changes).toEqual([]);
+    } finally {
+      dispose();
+    }
+  });
+
+  /**
+   * Swap the directory for a new one with a different inode. Both exist at
+   * once before the rename, so the filesystem cannot hand the old inode back.
+   */
+  async function replaceDirectory(dir: string): Promise<void> {
+    const next = `${dir}-next`;
+    await fs.mkdir(next);
+    await fs.rm(dir, { recursive: true });
+    await fs.rename(next, dir);
+  }
+
+  it("keeps two subscribers on the new directory after it is replaced", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const board = join(allowed, "board");
+    await fs.mkdir(board);
+    const realBoard = await fs.realpath(board);
+    const first: string[] = [];
+    const second: string[] = [];
+    const disposeFirst = await host.fs.watch([board], (p) => first.push(p), {
+      allowMissing: true,
+    });
+    const disposeSecond = await host.fs.watch([board], (p) => second.push(p), {
+      allowMissing: true,
+    });
+    try {
+      await replaceDirectory(board);
+      // Each subscriber announces its own re-attachment.
+      await waitFor(() => first.includes(realBoard) && second.includes(realBoard));
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(board, "card.md"), "x");
+      const card = join(realBoard, "card.md");
+      await waitFor(() => first.includes(card) && second.includes(card));
+    } finally {
+      disposeFirst();
+      disposeSecond();
+    }
+  });
+
+  it("re-attaches after a replacement while an ordinary watch holds the old directory", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const board = join(allowed, "board");
+    await fs.mkdir(board);
+    const realBoard = await fs.realpath(board);
+    const disposeOrdinary = await host.fs.watch([board], () => undefined);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([board], (p) => changes.push(p), { allowMissing: true });
+    try {
+      await replaceDirectory(board);
+      await waitFor(() => changes.includes(realBoard));
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(board, "card.md"), "x");
+      await waitFor(() => changes.includes(join(realBoard, "card.md")));
+    } finally {
+      dispose();
+      disposeOrdinary();
+    }
+  });
+
+  it("leaves no watcher or poll behind when cancelled during the first presence check", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const board = join(allowed, "board");
+    await fs.mkdir(board);
+    const realBoard = await fs.realpath(board);
+    const listenersBefore = sharedWatcherListenerCount();
+
+    let releaseStat!: () => void;
+    const statGate = new Promise<void>((resolve) => {
+      releaseStat = resolve;
+    });
+    const statReached = vi.fn();
+    const realStat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation((async (
+      ...args: Parameters<typeof fs.stat>
+    ) => {
+      if (args[0] === realBoard) {
+        statReached();
+        await statGate;
+      }
+      return realStat(...args);
+    }) as typeof fs.stat);
+    const created: unknown[] = [];
+    const cleared = new Set<unknown>();
+    const realSetInterval = globalThis.setInterval;
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      ...args: Parameters<typeof setInterval>
+    ) => {
+      const id = realSetInterval(...args);
+      created.push(id);
+      return id;
+    }) as typeof setInterval);
+    const realClearInterval = globalThis.clearInterval;
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(((
+      id: Parameters<typeof clearInterval>[0]
+    ) => {
+      cleared.add(id);
+      realClearInterval(id);
+    }) as typeof clearInterval);
+
+    try {
+      const controller = new AbortController();
+      const pending = host.fs.watch([board], () => undefined, {
+        allowMissing: true,
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(statReached).toHaveBeenCalled());
+      controller.abort();
+      releaseStat();
+
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      expect(sharedWatcherListenerCount()).toBe(listenersBefore);
+      expect(created.every((id) => cleared.has(id))).toBe(true);
+      const watchers = (svc as unknown as { pluginFsWatchers: Map<string, Set<unknown>> })
+        .pluginFsWatchers;
+      expect(watchers.get("acme.fsgit")?.size ?? 0).toBe(0);
+    } finally {
+      statSpy.mockRestore();
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
+  it("rejects a non-boolean allowMissing", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(
+      host.fs.watch([allowed], () => undefined, { allowMissing: "yes" as unknown as boolean })
+    ).rejects.toThrow(/allowMissing must be a boolean/);
+  });
+});
+
+describe("host.fs mutation gating before any directory is created", () => {
+  it("creates no data dir when consent to a data-dir mkdir or append is denied", async () => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    await expect(host.fs.mkdir(join(dataDir(), "cache"))).rejects.toThrow(/PERMISSION_REQUIRED/);
+    await expect(host.fs.appendFile(join(dataDir(), "logs", "a.jsonl"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    await expect(host.fs.writeFile(join(dataDir(), "notes", "a.md"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(existsSync(dataDir())).toBe(false);
+    expect(fsWriteAudits()).toEqual([]);
+  });
+
+  it("asks for consent once per call, even when the data dir is bootstrapped", async () => {
+    const bridge = vi.fn(async () => "approved-once" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    await host.fs.appendFile(join(dataDir(), "log.jsonl"), "x\n");
+    expect(bridge).toHaveBeenCalledTimes(1);
+  });
+
+  it("audits every directory it creates, including the data dir bootstrap", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    await host.fs.mkdir(dataDir());
+    // The bootstrap creates the whole host-owned chain under the home dir,
+    // and each directory it makes is audited.
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(homeDir, ".daintree")}`,
+      `fs.mkdir:${join(homeDir, ".daintree", "plugin-data")}`,
+      `fs.mkdir:${dataDir()}`,
+    ]);
+
+    appendSpy.mockClear();
+    await host.fs.appendFile(join(dataDir(), "2026", "09", "log.jsonl"), "x\n");
+    const realData = await fs.realpath(dataDir());
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(realData, "2026")}`,
+      `fs.mkdir:${join(realData, "2026", "09")}`,
+      `fs.appendFile:${join(realData, "2026", "09", "log.jsonl")}`,
+    ]);
+  });
+
+  it("audits each ancestor a project mkdir creates", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await host.fs.mkdir(join(allowed, "a", "b"));
+    const real = await fs.realpath(allowed);
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(real, "a")}`,
+      `fs.mkdir:${join(real, "a", "b")}`,
+    ]);
+  });
+});
+
+describe("host.fs audits a mutation that fails part-way", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("audits the directories a mkdir created before a later component failed", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const real = await fs.realpath(allowed);
+    const realMkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation((async (target: string, options?: unknown) => {
+      if (target === join(real, "a", "b", "c")) {
+        throw Object.assign(new Error("EACCES: denied"), { code: "EACCES" });
+      }
+      return realMkdir(target, options as undefined);
+    }) as typeof fs.mkdir);
+
+    await expect(host.fs.mkdir(join(allowed, "a", "b", "c"))).rejects.toThrow(/EACCES/);
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([
+      `fs.mkdir:${join(real, "a")}`,
+      `fs.mkdir:${join(real, "a", "b")}`,
+    ]);
+  });
+
+  it("creates nothing when the plugin unloads during the mkdir containment recheck", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const seam = svc as unknown as {
+      expandAllowedPathEntries(id: string, options: unknown): Promise<unknown>;
+    };
+    const realExpand = seam.expandAllowedPathEntries.bind(svc);
+    let calls = 0;
+    vi.spyOn(seam, "expandAllowedPathEntries").mockImplementation(async (id, options) => {
+      const entries = await realExpand(id, options);
+      // The second containment is the recheck inside the path lock; the roots
+      // it resolved were valid when read, but the plugin is gone by the time
+      // they are used.
+      if (++calls === 2) svc.unloadPlugin("acme.fsgit");
+      return entries;
+    });
+
+    await expect(host.fs.mkdir(join(allowed, "a", "b"))).rejects.toThrow(/PLUGIN_UNLOADED/);
+    expect(calls).toBe(2);
+    expect(existsSync(join(allowed, "a"))).toBe(false);
+    expect(fsWriteAudits()).toEqual([]);
+  });
+
+  it("stops a directory chain part-way when the plugin unloads", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const real = await fs.realpath(allowed);
+    const realMkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation((async (target: string, options?: unknown) => {
+      const made = await realMkdir(target, options as undefined);
+      if (target === join(real, "a")) svc.unloadPlugin("acme.fsgit");
+      return made;
+    }) as typeof fs.mkdir);
+
+    await expect(host.fs.mkdir(join(allowed, "a", "b", "c"))).rejects.toThrow(/PLUGIN_UNLOADED/);
+    expect(existsSync(join(allowed, "a"))).toBe(true);
+    expect(existsSync(join(allowed, "a", "b"))).toBe(false);
+    // What did land is still audited.
+    expect(fsWriteAudits().map((a) => a.actionId)).toEqual([`fs.mkdir:${join(real, "a")}`]);
+  });
+
+  it("stops the data dir bootstrap part-way when the plugin unloads", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    const realMkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation((async (target: string, options?: unknown) => {
+      const made = await realMkdir(target, options as undefined);
+      if (target === join(homeDir, ".daintree")) svc.unloadPlugin("acme.fsgit");
+      return made;
+    }) as typeof fs.mkdir);
+
+    await expect(host.fs.appendFile(join(dataDir(), "logs", "a.jsonl"), "x\n")).rejects.toThrow(
+      /PLUGIN_UNLOADED/
+    );
+    expect(existsSync(join(homeDir, ".daintree", "plugin-data"))).toBe(false);
+  });
+
+  it("audits an append whose close fails after the bytes were written", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const log = join(allowed, "log.jsonl");
+    const realOpen = fs.open.bind(fs);
+    // `close` is an own property of each FileHandle, so the handle the append
+    // opens is wrapped rather than a prototype patched.
+    vi.spyOn(fs, "open").mockImplementationOnce((async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args);
+      const realClose = handle.close.bind(handle);
+      handle.close = async () => {
+        await realClose();
+        throw new Error("EIO: close failed");
+      };
+      return handle;
+    }) as typeof fs.open);
+
+    await expect(host.fs.appendFile(log, "line\n")).rejects.toThrow(/EIO/);
+    expect(await fs.readFile(log, "utf-8")).toBe("line\n");
+    const records = appendSpy.mock.calls
+      .map((c) => c[0] as { channel: string; actionId: string; result: string })
+      .filter((record) => record.channel === "plugin:fs-write");
+    expect(records).toEqual([
+      expect.objectContaining({
+        actionId: `fs.appendFile:${await fs.realpath(log)}`,
+        result: "error",
+      }),
+    ]);
+  });
+});
+
+describe("host.fs.appendFile special files", () => {
+  it("refuses a FIFO at the target without blocking on it", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const fifo = join(allowed, "pipe.jsonl");
+    execFileSync("mkfifo", [fifo]);
+    await expect(host.fs.appendFile(fifo, "x\n")).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+    });
+    // The path lock was released: a regular append on another path still runs.
+    await host.fs.appendFile(join(allowed, "after.jsonl"), "ok\n");
+    expect(await fs.readFile(join(allowed, "after.jsonl"), "utf-8")).toBe("ok\n");
+  });
+});
+
+describe("host.fs.watch option validation", () => {
+  it("rejects a non-boolean recursive and a non-finite or negative debounceMs", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const cb = () => {};
+    await expect(
+      host.fs.watch([allowed], cb, { recursive: "yes" as unknown as boolean })
+    ).rejects.toThrow(/recursive must be a boolean/);
+    for (const debounceMs of [Infinity, Number.NaN, -1, "100" as unknown as number]) {
+      await expect(host.fs.watch([allowed], cb, { debounceMs })).rejects.toThrow(/debounceMs/);
+    }
+    const watchers = (svc as unknown as { pluginFsWatchers: Map<string, Set<unknown>> })
+      .pluginFsWatchers;
+    expect(watchers.get("acme.fsgit")?.size ?? 0).toBe(0);
+  });
+
+  it("clamps an oversized debounceMs instead of letting it overflow to an immediate fire", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([allowed], (p) => changes.push(p), {
+      debounceMs: 1e12,
+    });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(allowed, "slow.txt"), "x");
+      await new Promise((r) => setTimeout(r, 400));
+      expect(changes).toEqual([]);
+    } finally {
+      dispose();
+    }
   });
 });

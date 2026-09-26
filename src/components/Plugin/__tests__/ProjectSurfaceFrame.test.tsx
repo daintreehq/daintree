@@ -222,6 +222,25 @@ describe("ProjectSurfaceFrame", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("says the surface's plugin needs setup above the region, never inside it", async () => {
+    Reflect.set(window.electron.plugin, "getRequiredSettingsStatus", () =>
+      Promise.resolve({ missing: ["apiKey"], unreadable: [] })
+    );
+    registerSurfaceKind({ hasRequiredSettings: true });
+    setClaim(answer("surface"));
+
+    renderFrame();
+
+    const setup = await screen.findByTestId("plugin-setup-strip");
+    const region = screen.getByTestId("project-surface-region");
+    expect(setup.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(region.contains(setup)).toBe(false);
+
+    // The launcher needs no plugin set up.
+    await press(stripButton("Launcher"));
+    expect(screen.queryByTestId("plugin-setup-strip")).toBeNull();
+  });
+
   it("names the plugin's panel and marks the region as the empty canvas", () => {
     registerSurfaceKind();
     setClaim(answer("surface"));

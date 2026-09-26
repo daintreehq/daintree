@@ -35,6 +35,7 @@ import type {
   PluginFsWriteOptions,
   PluginMcpCaller,
   PluginMcpJsonSchema,
+  PluginSendToAgentOptions,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -45,6 +46,8 @@ export type PluginHostCallMethod =
   | "getWorktreeStatus"
   | "getAgentState"
   | "sendToActiveAgent"
+  | "agents.list"
+  | "sendToAgent"
   | "showToast"
   | "dispatch"
   | "reloadPanel"
@@ -52,12 +55,19 @@ export type PluginHostCallMethod =
   | "actions.get"
   | "settings.get"
   | "settings.set"
+  | "settings.open"
+  | "settings.missingRequired"
   | "storage.get"
   | "storage.set"
   | "storage.delete"
+  | "db.resolve"
+  | "db.prepareBackup"
   | "fs.readFile"
   | "fs.readFileBytes"
+  | "fs.readFileWithRevision"
   | "fs.writeFile"
+  | "fs.mkdir"
+  | "fs.appendFile"
   | "fs.readdir"
   | "fs.stat"
   | "fs.watch"
@@ -70,6 +80,7 @@ export type PluginHostCallMethod =
   | "clipboard.readText"
   | "system.openPath"
   | "system.showItemInFolder"
+  | "documents.renderPdf"
   | "showQuickPick"
   | "showInputBox"
   | "showConfirm"
@@ -160,7 +171,19 @@ export type PluginHostToWorkerMessage =
   | { type: "dispose" }
   /** Reply to a worker `host-call`. */
   | { type: "host-result"; requestId: string; ok: true; result: unknown }
-  | { type: "host-result"; requestId: string; ok: false; error: string }
+  | {
+      type: "host-result";
+      requestId: string;
+      ok: false;
+      error: string;
+      /**
+       * The host error's own primitive fields (`code`, `currentRevision`, …).
+       * An `Error` loses everything but its message crossing the port, and a
+       * caller branching on `err.code` — a `REVISION_MISMATCH` retry — needs
+       * the same object in the worker that it would get in process.
+       */
+      errorFields?: Record<string, string | number | boolean>;
+    }
   /**
    * Invoke a worker-held callback (action or IPC handler) and await its result
    * via a matching `invoke-result` from the worker.
@@ -431,6 +454,11 @@ export interface SettingsSetParams {
   scope: PluginSettingsScope;
 }
 
+/** Params for `settings.open` (`host-call`). `key` omitted opens the plugin's settings home. */
+export interface SettingsOpenParams {
+  key?: string;
+}
+
 /** Params for `storage.get` (`host-call`). */
 export interface StorageGetParams {
   key: string;
@@ -483,6 +511,12 @@ export interface SendToActiveAgentParams {
   options?: { submit?: boolean };
 }
 
+/** Params for `sendToAgent` (`host-call`). `agents.list` takes none. */
+export interface SendToAgentParams {
+  text: string;
+  options?: PluginSendToAgentOptions;
+}
+
 /** Params for `showQuickPick` (`host-call`). */
 export interface ShowQuickPickParams {
   items: PluginQuickPickItem[];
@@ -499,7 +533,10 @@ export interface ShowConfirmParams {
   options: PluginConfirmOptions;
 }
 
-/** Params for `fs.readFile` / `fs.readFileBytes` / `fs.readdir` / `fs.stat` (`host-call`). */
+/**
+ * Params for `fs.readFile` / `fs.readFileBytes` / `fs.readFileWithRevision` /
+ * `fs.readdir` / `fs.stat` / `fs.mkdir` (`host-call`).
+ */
 export interface FsPathParams {
   path: string;
   /**
@@ -516,6 +553,12 @@ export interface FsWriteFileParams {
   contents: string;
   /** Absent is the same write as `{}` (#12618); forwarded exactly as sent. */
   options?: PluginFsWriteOptions;
+}
+
+/** Params for `fs.appendFile` (`host-call`). */
+export interface FsAppendFileParams {
+  path: string;
+  contents: string;
 }
 
 /** Params for `git.status` / `git.diff` / `git.add` / `git.commit` (`host-call`). */
@@ -544,6 +587,15 @@ export interface ClipboardWriteImageParams {
 /** Params for `system.openPath` / `system.showItemInFolder` (`host-call`). */
 export interface SystemPathParams {
   targetPath: string;
+}
+
+/**
+ * Params for `documents.renderPdf` (`host-call`). The options are forwarded
+ * untouched: the host is the one that validates them, since the worker is the
+ * untrusted side.
+ */
+export interface DocumentsRenderPdfParams {
+  options: unknown;
 }
 
 /** Params for `process.spawn` (`host-call`). */
@@ -596,6 +648,12 @@ export interface ProcessResizeParams {
 export interface FsWatchParams {
   subscriptionId: string;
   paths: string[];
+  /** Absent means a plain, non-recursive watch, so older worker builds keep their behaviour. */
+  recursive?: boolean;
+  /** Applied in main, so a coalesced burst crosses the port as one event. */
+  debounceMs?: number;
+  /** Absent means a missing path rejects the watch, as before. */
+  allowMissing?: boolean;
 }
 
 /**

@@ -38,6 +38,7 @@ const mockSetPluginVisibilityDefault = vi.fn();
 const mockReloadProjectPlugins = vi.fn();
 const mockRestartPluginWorker = vi.fn();
 const mockListPluginRuntimeStatuses = vi.fn();
+const mockGetDataBackupSource = vi.fn();
 
 // plugin:invoke resolves the sender's project/worktree through the registry
 // (#11297). Mocked so a test can register a sender without standing up a real
@@ -104,6 +105,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     reloadProjectPlugins: (...args: unknown[]) => mockReloadProjectPlugins(...args),
     restartPluginWorker: (...args: unknown[]) => mockRestartPluginWorker(...args),
     listPluginRuntimeStatuses: (...args: unknown[]) => mockListPluginRuntimeStatuses(...args),
+    getDataBackupSource: (...args: unknown[]) => mockGetDataBackupSource(...args),
   },
 }));
 
@@ -143,15 +145,21 @@ vi.mock("../../../services/PluginActionAuditService.js", () => ({
 const mockIpcMainHandle = vi.fn();
 const mockIpcMainRemoveHandler = vi.fn();
 const mockShowOpenDialog = vi.fn();
+const mockShowSaveDialog = vi.fn();
+const mockGetPath = vi.fn();
 const mockGetFocusedWindow = vi.fn();
 const mockNetFetch = vi.fn();
 vi.mock("electron", () => ({
+  app: {
+    getPath: (...args: unknown[]) => mockGetPath(...args),
+  },
   ipcMain: {
     handle: (...args: unknown[]) => mockIpcMainHandle(...args),
     removeHandler: (...args: unknown[]) => mockIpcMainRemoveHandler(...args),
   },
   dialog: {
     showOpenDialog: (...args: unknown[]) => mockShowOpenDialog(...args),
+    showSaveDialog: (...args: unknown[]) => mockShowSaveDialog(...args),
   },
   BrowserWindow: {
     getFocusedWindow: (...args: unknown[]) => mockGetFocusedWindow(...args),
@@ -3264,6 +3272,36 @@ describe("cross-project plugin control", () => {
     expect(mockUnregisterPluginAction).not.toHaveBeenCalled();
   });
 
+  it("applies the same ownership rule to a project plugin's settings view", async () => {
+    const settingsKind = `plugin-settings-view:${INSTANCE_A}`;
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, settingsKind)
+    ).rejects.toThrow(/different project/);
+    await expect(
+      getHandler("plugin:activate-for-view")(
+        { sender: { id: 1 } },
+        "plugin-settings-view:project____acme.dashboard"
+      )
+    ).rejects.toThrow(/different project/);
+    expect(mockActivatePluginForView).not.toHaveBeenCalled();
+
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, settingsKind);
+    expect(mockActivatePluginForView).toHaveBeenCalledWith(settingsKind, false);
+  });
+
+  it("reads missing required settings only for the sender's own project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:settings-required-status")({ sender: { id: 1 } }, INSTANCE_A, PROJECT_A)
+    ).rejects.toThrow(/different project/);
+    await expect(
+      getHandler("plugin:settings-required-status")({ sender: { id: 1 } }, "../evil", null)
+    ).rejects.toThrow(/invalid plugin id/);
+  });
+
   it("rejects a malformed project panel kind id rather than skipping the check", async () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
     await expect(
@@ -3342,5 +3380,85 @@ describe("cross-project plugin control", () => {
       `project__${PROJECT_B}__acme.dashboard`,
       "acme.dashboard",
     ]);
+  });
+});
+
+describe("plugin:backup-databases", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+  const INSTANCE_A = `project__${PROJECT_A}__acme.ledger`;
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
+  let root: string;
+
+  function getHandler() {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:backup-databases"
+    )![1] as (...args: unknown[]) => Promise<unknown>;
+  }
+
+  beforeEach(async () => {
+    const { mkdtemp, realpath } = await import("node:fs/promises");
+    root = await realpath(await mkdtemp(join(tmpdir(), "plugin-backup-ipc-")));
+    mockGetPath.mockReturnValue(root);
+    mockGetDataBackupSource.mockReset().mockReturnValue(null);
+    mockShowSaveDialog.mockReset().mockResolvedValue({ canceled: true, filePath: "" });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("refuses a malformed plugin id before looking anything up", async () => {
+    await expect(getHandler()(senderEvent, "../../etc")).rejects.toThrow(/plugin instance id/);
+    expect(mockGetDataBackupSource).not.toHaveBeenCalled();
+    expect(mockShowSaveDialog).not.toHaveBeenCalled();
+  });
+
+  it("refuses another project's plugin", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(getHandler()(senderEvent, INSTANCE_A)).rejects.toThrow(/different project/);
+    expect(mockGetDataBackupSource).not.toHaveBeenCalled();
+  });
+
+  it("says a plugin that isn't loaded isn't running", async () => {
+    await expect(getHandler()(senderEvent, "acme.ledger")).rejects.toThrow(/isn't running/);
+  });
+
+  it("snapshots the plugin's one database through a save dialog parented to the caller", async () => {
+    const window = { id: 7 };
+    mockGetWindowForWebContents.mockReturnValue(window);
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+    const dataDir = join(root, "data");
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(dataDir, "databases"), { recursive: true });
+    const live = new DatabaseSync(join(dataDir, "databases", "ledger.db"));
+    live.exec("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('rent');");
+    live.close();
+    mockGetDataBackupSource.mockReturnValue({
+      manifestId: "acme.ledger",
+      displayName: "Ledger",
+      declarations: [{ id: "ledger", location: "local", journalMode: "delete" }],
+      projectRoot: null,
+      dataDir,
+    });
+    const target = join(root, "copy.db");
+    mockShowSaveDialog.mockResolvedValue({ canceled: false, filePath: target });
+
+    const outcome = await getHandler()(senderEvent, INSTANCE_A);
+
+    expect(mockGetDataBackupSource).toHaveBeenCalledWith(INSTANCE_A);
+    expect(mockShowSaveDialog).toHaveBeenCalledTimes(1);
+    const [parent, options] = mockShowSaveDialog.mock.calls[0]! as [
+      unknown,
+      { title: string; defaultPath: string },
+    ];
+    expect(parent).toBe(window);
+    expect(options.title).toBe("Back up Ledger data");
+    expect(options.defaultPath.startsWith(join(root, "acme.ledger-ledger-"))).toBe(true);
+    expect(outcome).toEqual({ status: "saved", pluginName: "Ledger", paths: [target] });
+    const copy = new DatabaseSync(target, { readOnly: true });
+    expect(copy.prepare("SELECT v FROM t").all()).toEqual([{ v: "rent" }]);
+    copy.close();
   });
 });

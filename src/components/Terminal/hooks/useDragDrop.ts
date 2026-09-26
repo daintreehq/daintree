@@ -12,6 +12,8 @@ import {
   type FileAttachmentEntry,
 } from "../fileAttachments";
 import { usePanelStore } from "@/store/panelStore";
+import { hasAgentContextDrag, readAgentContextDrag } from "@/lib/agentContextDragPayload";
+import { draftAgentContext, getDraftRefusal } from "@/services/agentHandoff/agentDraft";
 
 /**
  * @param onDropSelect Selects the panel that owns this input, invoked only once
@@ -20,29 +22,61 @@ import { usePanelStore } from "@/store/panelStore";
  *   Assistant's input bar has one without being a selectable panel at all. So
  *   panel selection is delegated to the caller and simply absent where there is
  *   no panel to select.
+ * @param terminalId The pane whose draft an agent-context drop lands in. Only a
+ *   grid agent pane that can take a draft accepts one, so the Assistant's bar —
+ *   which is no such pane — refuses it.
  */
 export function useDragDrop(
   editorViewRef: React.RefObject<EditorView | null>,
   cwd: string,
-  onDropSelect?: () => void
+  onDropSelect?: () => void,
+  terminalId?: string
 ) {
   const dragDepthRef = useRef(0);
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
 
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    if (!hasFileDrag(e.dataTransfer.types)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    dragDepthRef.current++;
-    if (dragDepthRef.current === 1) setIsDragOverFiles(true);
-  }, []);
+  // Whether an agent-context drag would draft here. Read live at every
+  // dragenter/dragover: the answer can change mid-drag (a lock, a restart),
+  // and a drop target that lights up only to refuse is false feedback.
+  const acceptsAgentContext = useCallback(
+    () => terminalId !== undefined && getDraftRefusal(terminalId) === null,
+    [terminalId]
+  );
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (!hasFileDrag(e.dataTransfer.types)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = "copy";
-  }, []);
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      const types = e.dataTransfer.types;
+      // The agent-context type wins over files at every stage, as it does at
+      // drop, so the affordance never promises what the drop won't do.
+      const accepted = hasAgentContextDrag(types) ? acceptsAgentContext() : hasFileDrag(types);
+      if (!accepted) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragDepthRef.current++;
+      if (dragDepthRef.current === 1) setIsDragOverFiles(true);
+    },
+    [acceptsAgentContext]
+  );
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      const types = e.dataTransfer.types;
+      if (hasAgentContextDrag(types)) {
+        // The editor is contenteditable, so left alone Chromium would accept
+        // the drag's `text/plain` on its own terms. Refusing here is what makes
+        // a bar that cannot take the draft say so instead of pasting raw text.
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = acceptsAgentContext() ? "copy" : "none";
+        return;
+      }
+      if (!hasFileDrag(types)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    [acceptsAgentContext]
+  );
 
   const resetDragState = useCallback(() => {
     dragDepthRef.current = 0;
@@ -66,6 +100,29 @@ export function useDragDrop(
 
       const view = editorViewRef.current;
       if (!view) return;
+
+      // A handoff from a plugin view. It goes through the same draft path as
+      // `host.sendToAgent` — appended below whatever is typed, never submitted —
+      // so a drag and a "Send to agent…" cannot disagree about what lands.
+      // Checked before files: a drag carrying both is a plugin's, and its paths
+      // (if any) are not what the user dragged.
+      if (hasAgentContextDrag(e.dataTransfer.types)) {
+        if (terminalId === undefined) return;
+        const payload = readAgentContextDrag(e.dataTransfer);
+        if (payload === null) return;
+        const result = draftAgentContext(terminalId, {
+          text: payload.text,
+          title: payload.title,
+          sourceLabel: payload.source?.label,
+        });
+        if (result.status !== "drafted") return;
+        // Same landing as a file drop (#11809): pane selected, keyboard in the
+        // bar. The draft sync parks the caret after the block.
+        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+        onDropSelect?.();
+        view.focus();
+        return;
+      }
 
       // Both provenances reduce to the same entry shape before anything is
       // resolved, so an in-app drag (#11576) and an OS drop cannot disagree
@@ -122,7 +179,7 @@ export function useDragDrop(
 
       await insertFileAttachments(editorViewRef, view, dropped, cwd);
     },
-    [editorViewRef, cwd, onDropSelect, resetDragState]
+    [editorViewRef, cwd, onDropSelect, resetDragState, terminalId]
   );
 
   return {

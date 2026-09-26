@@ -181,6 +181,42 @@ describe("usePluginPanelKinds", () => {
     clearPanelKindRegistry();
   });
 
+  it("re-registers a kind when a push changes only its menu or its databases", async () => {
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation(
+      (cb: (payload: { kinds: PanelKindConfig[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { getPanelKindConfig, clearPanelKindRegistry } =
+      await import("@shared/config/panelKindRegistry");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    const base = pluginKind({ id: "acme.viewer", hasPty: false, componentPath: "./v.js" });
+    const withMenu = { ...base, pluginMenu: [{ actionId: "acme.refresh" }] };
+    act(() => emit!({ kinds: [withMenu] }));
+    expect(getPanelKindConfig(base.id)?.pluginMenu).toEqual([{ actionId: "acme.refresh" }]);
+
+    // A fresh array with only a label changed is a change, not a replay.
+    act(() =>
+      emit!({ kinds: [{ ...base, pluginMenu: [{ actionId: "acme.refresh", label: "Go" }] }] })
+    );
+    expect(getPanelKindConfig(base.id)?.pluginMenu).toEqual([
+      { actionId: "acme.refresh", label: "Go" },
+    ]);
+
+    act(() => emit!({ kinds: [{ ...base, hasPluginDatabases: true }] }));
+    expect(getPanelKindConfig(base.id)?.pluginMenu).toBeUndefined();
+    expect(getPanelKindConfig(base.id)?.hasPluginDatabases).toBe(true);
+
+    clearPanelKindRegistry();
+  });
+
   it("does not register a definition for non-PTY plugin kinds without componentPath", async () => {
     const nonPty = pluginKind({ id: "acme.note", hasPty: false });
     getPanelKindsMock.mockResolvedValue([nonPty]);

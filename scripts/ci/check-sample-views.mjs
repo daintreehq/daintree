@@ -15,9 +15,10 @@
  * come back clean.
  *
  * Also audits the artifact's imports. The bundle must externalize React (and
- * only React): a bundled second copy throws "Invalid hook call" at first
- * render, and an *externalized* SDK specifier would silently stop proving the
- * package boundary, because the host import map does not serve it.
+ * only what the host import map serves: React, the tour and plugin-ui): a
+ * bundled second copy of React throws "Invalid hook call" at first render, and
+ * an *externalized* SDK specifier would silently stop proving the package
+ * boundary, because the host import map does not serve it.
  */
 
 import { execFileSync } from "node:child_process";
@@ -47,6 +48,7 @@ const ALLOWED_EXTERNALS = new Set([
   "@daintreehq/tour/react",
   "@daintreehq/tour/kit",
   "@daintreehq/tour/mock-app",
+  "@daintreehq/plugin-ui",
 ]);
 
 function run(command, args) {
@@ -82,8 +84,8 @@ function auditExternals(artifact) {
     if (specifier.startsWith(".") || specifier.startsWith("/")) continue;
     if (ALLOWED_EXTERNALS.has(specifier)) continue;
     fail(
-      `${artifact} leaves "${specifier}" external. The host import map serves only React and ` +
-        `@daintreehq/tour specifiers, so this would fail to resolve at load time — and an externalized ` +
+      `${artifact} leaves "${specifier}" external. The host import map serves only React, ` +
+        `@daintreehq/tour and @daintreehq/plugin-ui specifiers, so this would fail to resolve at load time — and an externalized ` +
         `@daintreehq/* specifier would also stop the sample proving the package boundary.`
     );
   }
@@ -133,6 +135,6 @@ for (const sample of SAMPLES) {
 
 if (process.exitCode !== 1) {
   console.log(
-    `[check-sample-views] OK — ${SAMPLES.length} sample view bundle(s) rebuilt clean with only React external`
+    `[check-sample-views] OK — ${SAMPLES.length} sample view bundle(s) rebuilt clean with only host import-map specifiers external`
   );
 }

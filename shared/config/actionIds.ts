@@ -301,6 +301,8 @@ export const BUILT_IN_ACTION_IDS = [
   "plugin.reloadProject",
   "plugin.reloadPanel",
   "plugin.reloadWindow",
+  "plugin.openSettings",
+  "plugin.backupDatabases",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
@@ -589,6 +591,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // it authority over its siblings, and self-unloading mid-dispatch is not a
   // capability so much as a way to lose the call (#12214).
   "plugin.reloadProject",
+  // Raises a native save dialog for any plugin's data; only a person asks for that.
+  "plugin.backupDatabases",
   "fleet.accept",
   "fleet.reject",
   "fleet.interrupt",

@@ -1608,6 +1608,16 @@ export interface IpcEventMap {
   };
 
   /**
+   * Plugin agent-pane listing (`host.agents.list()`). Main emits this on the
+   * plugin's project WebContents and awaits a renderer `ipcRenderer.send` reply
+   * on `CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE`, correlated by `requestId`. Same
+   * fire-and-forget response discipline as `plugin:actions-list-request`.
+   */
+  "plugin:agents-list-request": {
+    requestId: string;
+  };
+
+  /**
    * Imperative plugin UI-prompt request (#10522). Main emits this on the active
    * project WebContents when a plugin calls `host.showQuickPick`/`showInputBox`/
    * `showConfirm`, and awaits a renderer `ipcRenderer.send` reply on
@@ -2037,6 +2047,11 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // A plugin's stored settings changed, from the settings form or the plugin's
+  // own `host.settings.set` (main → renderer). Signal-only: receivers re-read
+  // what they derive from it. Project-scoped for a project-local instance.
+  "plugin:settings-changed": { pluginId: string };
+
   // Live health of one plugin instance — worker lifecycle plus dev session
   // (main → renderer, #12277/#12278). Carries the whole per-instance snapshot,
   // so the receiver never has to reconstruct which generation is live from a
@@ -2229,6 +2244,9 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Plugin stored settings changed (global broadcast for an app-global
+  // instance, project-scoped send for a project one)
+  | "plugin:settings-changed"
   // Plugin instance runtime health: worker lifecycle + dev session (global
   // broadcast for an app-global instance, project-scoped send for a project one)
   | "plugin:runtime-status-changed"

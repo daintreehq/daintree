@@ -1,6 +1,6 @@
 # Views: what you get in the DOM
 
-A plugin view is a React component the renderer mounts inside a panel. This page is what that component can rely on, what it can't, and how to make it look like it belongs. It applies equally to a project plugin's hand-written `dist/panel.js` and to a bundled `@daintreehq/plugin-vite` view; the differences are called out where they exist.
+A plugin view is a React component the renderer mounts inside a panel, or in the plugin's settings. This page is what that component can rely on, what it can't, and how to make it look like it belongs. It applies equally to a project plugin's hand-written `dist/panel.js` and to a bundled `@daintreehq/plugin-vite` view; the differences are called out where they exist. The manifest side is [Contribution points → Views](./contribution-points.md#views--shipped).
 
 ## Where you render
 
@@ -8,7 +8,7 @@ Views render **inline** in Daintree's React tree, not in an iframe. Same documen
 
 The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it.
 
-You receive [`PanelViewProps`](./contribution-points.md#views--shipped-panel-surface): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `styleRootAttributes`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
+You receive [`PanelViewProps`](./contribution-points.md#views--shipped): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `styleRootAttributes`, and on a settings view `settingsContext`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
 
 A render error shows the host's diagnostics pane with a Try again that re-imports the module, Close panel, Copy diagnostics and View logs. The rest of Daintree keeps working.
 
@@ -24,6 +24,58 @@ It is a request. The host may refuse it, nothing tells you whether or when the n
 
 The user can reload the panel too, from Reload panel in its menus and dialog header, and an agent can through the host's tools. That reload is the same new attempt, it is never rationed, and it is what lifts a stopped view. It does not ask first, because what you persisted comes back. If your view holds work it has not persisted — an unsaved draft, a half-filled form — call `setHasUnsavedChanges(true)` while it does and `setHasUnsavedChanges(false)` once it is saved or dropped; while it is set, the user is asked to confirm before the view is discarded, whichever way the reload was asked for. Your own `requestReload` is never held up by it. Like `requestReload`, the setter belongs to its attempt, a new attempt starts with nothing unsaved, and it is absent where there is no reload to guard.
 
+## A settings section
+
+A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list editor, a connection test. Declare at most one, with an `id` no panel uses:
+
+```json
+{ "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
+```
+
+The host mounts it in your settings home, below the generated fields, inside a settings group it draws; the section's heading and spacing are the host's. Render **rows**, not a page: no heading, no card, no Save button — apply each change as it is made, like every other settings row.
+
+**Which home, which scope.** It receives `settingsContext: { scope, projectId }`. An installed plugin's section mounts twice — `{ scope: "user", projectId: null }` in the plugin manager, `{ scope: "project", projectId }` in Project settings — so render the rows for the scope you're given; each mount has its own `panelId`. A project plugin's section mounts only in Project settings, with `scope: "project"`.
+
+**What it doesn't get.** There is no panel record behind it, so `initialArgs`, `persistState`, `stateVersion`, `worktreeId`, `requestReload` and `setHasUnsavedChanges` are absent. `pluginId`, `panelId`, `disposeSignal`, `panelRemovedSignal` and `styleRootAttributes` behave as they do in a panel.
+
+**Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float, spreading `styleRootAttributes` onto the portal container.
+
+**Lifecycle.** Mounting the section activates a loaded plugin that hasn't activated yet, as opening a panel does; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as a single row saying it's available once the plugin runs. When the plugin stops, is muted or reloads, the section is unmounted and its `disposeSignal` and `panelRemovedSignal` abort. After a reload an open settings page shows "Reloading…" until the new module is being served, then mounts it — it never runs the retired one. A render error shows the same diagnostics pane with Try again that a panel gets.
+
+**Fields it owns.** Mark a declared setting `editor: "view"` when this section is where it is edited — a credential behind a sign-in button, a table stored as `json`. The generated form then leaves it out, and a deep link to that key (`host.settings.open(key)`, the setup strip's **Open plugin settings**) lands on your section instead of a field. The setting keeps everything else a declaration gives it: `required` still drives the setup strip, and `host.settings.get` still reads it.
+
+```jsx
+// One root whose children are rows; the hairlines match the host's own.
+<div className="divide-y divide-border-subtle">
+  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
+    <div className="min-w-0 flex-1">
+      <div className="text-sm font-medium text-text-primary">Connected account</div>
+      <div className="mt-0.5 text-xs text-text-secondary">Signed in as ada@example.com</div>
+    </div>
+    <button className="rounded-md border border-border-default px-3 py-1.5 text-xs hover:bg-surface-hover">
+      Sign out
+    </button>
+  </div>
+</div>
+```
+
+A view has no `host`, so the section reads and writes through your worker, like any other view:
+
+```js
+// worker. bankToken is a required secret; the section learns only whether one is stored.
+host.registerHandler("connection", async () => ({
+  connected: !(await host.settings.missingRequired()).includes("bankToken"),
+}));
+host.registerHandler("saveToken", async (_ctx, token) => {
+  await host.settings.set("bankToken", token);
+});
+
+// view
+const { connected } = await window.electron.plugin.invoke(pluginId, "connection");
+```
+
+Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database.
+
 ## Styling
 
 **Tailwind utility classes are how you style a plugin view.** Write `className="flex gap-2 p-4 bg-surface-panel"` and it works — in a hand-written `dist/panel.js` exactly as in a bundled view, with no build step and no configuration on your side.
@@ -35,7 +87,7 @@ Daintree compiles the classes your view uses at runtime, in the renderer, agains
 
 Semantic colours resolve to live theme variables, so a panel built on them follows a theme switch with no work on your side. Ordinary layout, spacing, sizing, typography, flexbox, grid, state variants (`hover:`, `focus-visible:`, `disabled:`, `group-hover:`), arbitrary values (`w-[327px]`), dynamic scales (`grid-cols-47`) and container queries all behave exactly as Tailwind documents them.
 
-**Not part of the vocabulary:** stock palette colours (`bg-red-500`, `text-blue-600`); `dark:` — Daintree themes are runtime tokens, not a class, so a semantic token is already theme-aware and `dark:` is never the answer; `prose` (`@tailwindcss/typography` is not in the plugin contract); `@apply`, which needs a build step this path does not have.
+**Not part of the vocabulary:** stock palette colours (`bg-red-500`, `text-blue-600`); `dark:` — Daintree themes are runtime tokens, not a class, so a semantic token is already theme-aware and `dark:` is never the answer; `prose` (`@tailwindcss/typography` is not in the plugin contract; for rendered Markdown use [`Markdown`](#host-ui-components), which brings the host's document styles with it); `@apply`, which needs a build step this path does not have.
 
 Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide.
 
@@ -143,7 +195,152 @@ Nothing reaches a view unless the worker sends it. The bridge is `window.electro
 
 `on` and `onPanel` return an unsubscribe function; return it from your effect. Pushes are not buffered: a push during `activate()` is gone before any view mounts, so the shape that works is pull on mount, then subscribe to pushes for updates. [Patterns](./patterns.md#pull-on-mount-then-push) has the code.
 
-A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` from `@daintreehq/plugin-sdk/react`. A raw `plugin://` view cannot import that subpath — the host import map serves exactly the five React specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`) and the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`), and nothing else — so it uses the bridge directly.
+### Zero-build views and the import map
+
+A view is served exactly as written; nothing compiles it. Its bare imports resolve through the host's import map, which serves exactly the five React specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`), the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`) and [`@daintreehq/plugin-ui`](#host-ui-components), and nothing else. Each resolves to the host's own instance, so your view shares the app's React rather than bringing a second copy. Everything else a raw view imports is a relative module you ship. So a hand-written view uses `createElement` instead of JSX, the `window.electron.plugin` bridge above instead of the SDK hooks, and the [SDK's documented JSON](#handing-work-to-an-agent-by-drag) instead of its helpers.
+
+The worker is the other way round: it is Node, and it can import `@daintreehq/plugin-sdk`, `/files` and `/data` with no install, because the plugin worker serves a copy that ships with Daintree ([data helpers](./data-helpers.md)). The view cannot. Do data work in the worker and hand the view results over a channel.
+
+### Sharing a module between worker and view
+
+Code both halves need — a formatter, a validator, the shape of a record — can live in one `.mjs` file that each imports by relative path. `.mjs` is ES module syntax to Node whatever your `package.json` says, and the host serves it to the renderer as JavaScript:
+
+```js
+// shared/money.mjs — imported by both halves
+export function formatCents(cents, currency) {
+  return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(cents / 100);
+}
+
+// dist/index.mjs (worker)
+import { formatCents } from "../shared/money.mjs";
+
+// dist/panel.js (view)
+import { formatCents } from "../shared/money.mjs";
+```
+
+The module has to run in both places: relative imports with their file extensions only, no bare specifiers (the view cannot resolve an npm package, the worker cannot resolve `react`), no Node built-ins and no DOM. The view's copy resolves inside the same view generation as the view itself, so a plugin reload picks up edits to it along with the view.
+
+### The SDK in a bundled view
+
+A view built with `@daintreehq/plugin-vite` bundles the SDK, so it can import:
+
+| Import | From | What it is |
+| --- | --- | --- |
+| `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` | `@daintreehq/plugin-sdk/react` | The three bridge calls above as hooks. See [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact). |
+| `createViewScope` | `@daintreehq/plugin-sdk/react` | Releases listeners, timers, observers, workers and WebGL contexts with the mount. See [Resources your view owns](#resources-your-view-owns). |
+| `loadDocumentPackage` | `@daintreehq/plugin-sdk/react` | Loads a library the host document keeps across reloads. See [Document packages](./document-packages.md). |
+| `setAgentContextDragData` | `@daintreehq/plugin-sdk` | Writes a drag-to-agent payload. See [Handing work to an agent by drag](#handing-work-to-an-agent-by-drag). |
+| `Markdown` | `@daintreehq/plugin-ui` | Left external by the preset and served by the host. See [Host UI components](#host-ui-components). |
+
+There are no hooks for worktrees, settings or commands. A view reads its own worktree from the `worktreeId` prop and gets everything else from the worker.
+
+## Host UI components
+
+`@daintreehq/plugin-ui` is Daintree's own UI, served to your view through the same import map as React: the host's components running from the host's code, styled with the host's tokens, so they look like the app in every theme without you shipping or styling anything. A zero-build view imports it like `react`; a `@daintreehq/plugin-vite` build leaves it external, because there is no package to bundle — the implementation only exists inside the running app. Nothing of it loads at startup: the module itself, a few hundred bytes, loads when your view imports it, and each component's implementation the first time the component renders.
+
+It exports one component today.
+
+**`Markdown`** is the renderer behind Daintree's file viewer and Markdown panels: GFM (tables, task lists, strikethrough, autolinks), highlighted code fences, and the app's document typography. Raw HTML in the source is dropped, never rendered, so it is safe for text you did not write.
+
+| Prop | Meaning |
+| --- | --- |
+| `source` | The Markdown text. Required. |
+| `basePath` | Absolute path relative links and images resolve against. A path ending in `.md`, `.markdown`, `.mdx` or `.mkd` is read as the document itself and its directory is used; anything else, or a path ending in `/`, is the directory. Omitted, relative references resolve against `rootPath`. |
+| `rootPath` | Absolute directory local images and relative links must stay inside. Defaults to the directory `basePath` resolves to. |
+| `className` | Classes for the document's root element. |
+| `fontSize` | A rung of the type scale: `2xs` `xs` `sm` `base` `lg` `xl` `2xl` `3xl`. Omitted, the document renders at Daintree's default Markdown size. |
+
+Relative images load from disk over `daintree-file://`, contained to `rootPath`; one that climbs out of it is not requested at all. Relative links open in Daintree's file viewer when they stay inside `rootPath` and do nothing otherwise, and the viewer holds its read to `rootPath` on the real path, so a symlinked directory cannot carry a link outside it; `http(s)` and `mailto` links open in the browser. With neither `basePath` nor `rootPath` — or with a relative one, which is ignored rather than resolved against a renderer with no working directory — the text still renders and relative references resolve nowhere. Select All (Cmd/Ctrl+A) selects the block you last clicked or selected in, so several blocks in one view never compete for it. When a note links to images elsewhere in the project, pass the project root as `rootPath`.
+
+```js
+// dist/panel.js — the worker's "note" handler answers { text, path }, where
+// `path` is the absolute path it read the file from.
+import { createElement, useEffect, useState } from "react";
+import { Markdown } from "@daintreehq/plugin-ui";
+
+export default function Notes({ pluginId }) {
+  const [note, setNote] = useState(null);
+  useEffect(() => {
+    let live = true;
+    void window.electron.plugin.invoke(pluginId, "note", { name: "today.md" }).then((next) => {
+      if (live) setNote(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, [pluginId]);
+
+  return createElement(
+    "div",
+    { className: "flex flex-col flex-1 min-h-0 overflow-auto p-4" },
+    note ? createElement(Markdown, { source: note.text, basePath: note.path }) : null
+  );
+}
+```
+
+The first `Markdown` in a session renders nothing while the async renderer loads, then the document; later ones render at once. For TypeScript, `@daintreehq/plugin-sdk` ships the module's declaration: add `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` to `compilerOptions`, and `MarkdownProps` comes with it.
+
+## Handing work to an agent by drag
+
+A card, a message or a row in your view can be dragged onto an agent terminal — its input bar or the terminal itself — and it lands in that agent's draft for the user to instruct it about. Nothing is submitted. The drag carries one app-internal type, `application/x-daintree-agent-context`, holding JSON:
+
+```ts
+{ v: 1, text: string, title?: string, source?: { label?: string } }
+```
+
+`text` is required, non-blank and at most 32,768 characters; `title` at most 120; `source.label` at most 80 (say `"Kanban"`). Set `text/plain` to the same text too, so a drop anywhere else — an editor, another app — still gets something sensible. In a hand-written view, with no build step:
+
+```js
+createElement(
+  "div",
+  {
+    draggable: true,
+    onDragStart: (event) => {
+      const payload = { v: 1, title: card.title, text: card.body, source: { label: "Kanban" } };
+      event.dataTransfer.setData("application/x-daintree-agent-context", JSON.stringify(payload));
+      event.dataTransfer.setData("text/plain", card.body);
+      event.dataTransfer.effectAllowed = "copy";
+    },
+  },
+  card.title
+);
+```
+
+A bundled view can use the SDK helper, which writes all three and throws on a payload the drop would refuse:
+
+```ts
+import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
+
+onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
+```
+
+What lands is the same block `host.sendToAgent` drafts: one fenced block tagged `daintree-context`, holding your `source.label` and `title` as a heading (`Kanban: Fix login redirect`) and then the text, appended after whatever the user already typed and kept literal on submit — `@diff` and the other tokens inside it are never expanded. Control characters other than tab and newline are stripped. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, an exited, docked, locked or restarting agent, one in an armed fleet, or any pane while the input bar is switched off refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — anything can start a drag carrying this type, so the host validates it in full at the drop and drops anything malformed: a wrong `v`, blank or oversized text, an over-long `title` or label, or a non-string where a string belongs. Unknown extra keys are ignored.
+
+## Sending work to an agent from a view
+
+A drag is one route; a **Send to agent…** button or menu entry is the other, and the one keyboard users get. It goes through [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft), which only your worker can call — it is gated on `agent:input` and bound to your plugin's identity, which a view cannot assert. So the view asks the worker over a channel:
+
+```js
+// worker (activate)
+host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId }) =>
+  host.sendToAgent(text, { title, worktreeId })
+);
+
+// view
+const result = await window.electron.plugin.invoke(pluginId, "sendToAgent", {
+  text: card.body,
+  title: card.title,
+  worktreeId, // from PanelViewProps, so the picker opens on this panel's worktree
+});
+if (
+  result.status === "refused" &&
+  ["project-unavailable", "prompt-open", "busy"].includes(result.reason)
+) {
+  // Only these three are reported to you alone; say something in the view.
+}
+```
+
+Without a `terminalId` the user picks the agent — or starts one, here or in a new worktree — and the text lands in its draft as the same block a drop makes, headed with your plugin's display name rather than a label you choose, and never submitted. The call resolves `drafted`, `cancelled` or `refused`; the user already sees why their agent refused, so a view only needs to speak up for the three reasons that concern the plugin. Label the control **Send to agent…**: the ellipsis says a picker comes first. To put it on the panel's ⋯ and right-click menus instead, declare an action in the panel's [`menu`](./contribution-points.md#panel-menu) — it is dispatched with `{ panelId }`, so the worker knows which panel asked.
 
 ## Resources your view owns
 
@@ -306,7 +503,7 @@ A dev preview tool is one registration — `registerDevPreviewTool({ id, pluginI
 
 ## What doesn't work inline
 
-- Bare npm imports in a raw view. Only the five React specifiers above and the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`) resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle. The tour specifiers resolve to the host's own tour instance, so a scene's `useCue` sees the host's player — `@daintreehq/plugin-vite` leaves them external for the same reason. Install `@daintreehq/tour` as a dev dependency for its types; its runtime always comes from the host. The tour module loads when a scene first imports it, not at startup.
+- Bare npm imports in a raw view. Only the five React specifiers above, the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`) and [`@daintreehq/plugin-ui`](#host-ui-components) resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle. The tour specifiers resolve to the host's own tour instance, so a scene's `useCue` sees the host's player — `@daintreehq/plugin-vite` leaves them external for the same reason. Install `@daintreehq/tour` as a dev dependency for its types; its runtime always comes from the host. The tour module loads when a scene first imports it, not at startup.
 - TypeScript, JSX or CSS files without a build. Hand-written views use `createElement` and a `<style>` string.
-- Reaching into Daintree's React components. They are not exported to plugins, and the ones you can find by path are internal and will move.
+- Reaching into Daintree's React components. Only what [`@daintreehq/plugin-ui`](#host-ui-components) exports is served to plugins; the ones you can find by path are internal and will move.
 - Module-scope state surviving a plugin reload. Each full plugin load mints a fresh view generation for the next import; keep anything worth keeping in `persistState` (survives remounts and reloads) or `host.storage` (survives everything). A `daintree-plugin dev` rebuild is a full load, so it drops module-scope state and picks up view edits like any other reload (#12277); see [Contribution points → Worker reload vs. view-module replacement](./contribution-points.md#worker-reload-vs-view-module-replacement) for the mechanism.
