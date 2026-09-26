@@ -175,6 +175,7 @@ export function WorktreePlacementRow({
       <div className="flex min-w-0 items-center gap-2">
         <Select
           value={chosenRow.hostId}
+          disabled={handoff.status === "pending"}
           onValueChange={(hostId) => {
             setChosen(hostId);
             setHandoff({ status: "idle" });
@@ -201,6 +202,7 @@ export function WorktreePlacementRow({
           <Button
             variant="ghost"
             size="sm"
+            disabled={handoff.status === "pending"}
             onClick={() => {
               setChosen(best.hostId);
               setHandoff({ status: "idle" });

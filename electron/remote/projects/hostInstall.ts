@@ -133,8 +133,10 @@ export class ProjectHostGrants {
   offerPlacement(projectId: string): void {
     this.prune();
     const existing = this.placements.get(projectId);
-    if (existing && existing.usedBy === null) {
-      existing.expiresAt = this.now() + GRANT_TTL_MS;
+    if (existing) {
+      // A spent grant stays spent until it expires: opening the project again
+      // doesn't earn another worktree. After that, a driving view is needed.
+      if (existing.usedBy === null) existing.expiresAt = this.now() + GRANT_TTL_MS;
       return;
     }
     this.placements.set(projectId, { expiresAt: this.now() + GRANT_TTL_MS, usedBy: null });

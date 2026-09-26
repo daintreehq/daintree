@@ -60,6 +60,8 @@ export function HostAddProjectDialog({
   const [destinationTouched, setDestinationTouched] = useState(false);
   const [check, setCheck] = useState<DestinationCheck | null>(null);
   const [checkedInput, setCheckedInput] = useState<string | null>(null);
+  // The URL the check was made for: a folder vetted for one repository never clones another.
+  const [checkedUrl, setCheckedUrl] = useState<string | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [depth, setDepth] = useState<HostCloneDepth>("full");
   const [submodules, setSubmodules] = useState(false);
@@ -83,6 +85,7 @@ export function HostAddProjectDialog({
           setDestination(suggested.path);
           setCheck(suggested);
           setCheckedInput(suggested.path);
+          setCheckedUrl(trimmedUrl);
           setCheckError(null);
         })
         .catch(() => {
@@ -116,6 +119,7 @@ export function HostAddProjectDialog({
           if (cancelled) return;
           setCheck(result);
           setCheckedInput(target);
+          setCheckedUrl(trimmedUrl);
         })
         .catch((error: unknown) => {
           if (cancelled) return;
@@ -143,7 +147,10 @@ export function HostAddProjectDialog({
 
   const busy = running !== null;
   const ready =
-    trimmedUrl.length > 0 && check?.status === "free" && checkedInput === destination.trim();
+    trimmedUrl.length > 0 &&
+    check?.status === "free" &&
+    checkedInput === destination.trim() &&
+    checkedUrl === trimmedUrl;
 
   const pickFolder = async () => {
     const picked = await pickHostPaths({
