@@ -2436,6 +2436,9 @@ async function appendToContainedFile(
  * {@link buildScopedFsApi}. Nothing else about the surface changes: it is the
  * same closures, the same gates, and the same watcher registry.
  */
+/** How often an `allowMissing` watch checks whether its paths exist. */
+const PLUGIN_FS_WATCH_PRESENCE_POLL_MS = 1000;
+
 function buildFsApi(
   deps: PluginHostFactoryDeps,
   pluginId: string,
@@ -2984,6 +2987,11 @@ function buildFsApi(
               Math.max(rawDebounce, MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS),
               MAX_PLUGIN_FS_WATCH_DEBOUNCE_MS
             );
+      const rawAllowMissing = options?.allowMissing;
+      if (rawAllowMissing !== undefined && typeof rawAllowMissing !== "boolean") {
+        throw new Error(`Plugin "${pluginId}" fs.watch: allowMissing must be a boolean`);
+      }
+      const allowMissing = rawAllowMissing === true;
       const targets = Array.isArray(paths) ? paths : [];
       if (targets.length === 0) {
         throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
@@ -3046,18 +3054,96 @@ function buildFsApi(
         deps.pluginFsWatchers.get(pluginId)?.delete(dispose);
       };
 
+      // Node's Linux recursive watcher follows static symlink targets, so its
+      // reports are not proof of containment. The path it reports is always
+      // joined onto the watched root; anything that does not stay lexically
+      // inside that root is dropped rather than handed on.
+      const withinRootOf =
+        (resolved: string) =>
+        (changed: string): void => {
+          const rel = path.relative(resolved, changed);
+          if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return;
+          onChange(changed);
+        };
+
+      // `allowMissing`: each target is attached while it exists, and a timer
+      // notices it appearing, disappearing or being replaced. Containment is
+      // proved again at each attach — the path did not exist when it was first
+      // checked, so whatever was created there could be a link leading out.
+      let presenceTimer: ReturnType<typeof setInterval> | null = null;
+      const presence = allowMissing
+        ? targets.map((requested, index) => ({
+            requested,
+            resolved: resolvedTargets[index]!,
+            release: null as (() => void) | null,
+            identity: null as string | null,
+          }))
+        : [];
+      const refreshPresence = async (announce: boolean): Promise<void> => {
+        for (const target of presence) {
+          if (disposed || !deps.plugins.has(pluginId)) return;
+          const stat = await fs.stat(target.resolved).catch(() => null);
+          const identity = stat ? `${stat.dev}:${stat.ino}` : null;
+          if (identity === target.identity) continue;
+          if (target.release) {
+            target.release();
+            target.release = null;
+          }
+          target.identity = null;
+          if (identity !== null) {
+            const recheck = await containWithClass(target.requested).catch(() => null);
+            if (disposed || !deps.plugins.has(pluginId)) return;
+            if (!recheck || recheck.resolved !== target.resolved) continue;
+            // The root that admits the path can differ once it exists (a data
+            // dir created inside a project root), so its class is gated again.
+            try {
+              requireReadCapForClass("watch", recheck.rootClass);
+            } catch {
+              continue;
+            }
+            try {
+              target.release = watchShared(target.resolved, withinRootOf(target.resolved), {
+                recursive,
+              });
+              target.identity = identity;
+            } catch {
+              // Gone again between the stat and the watch; the next tick retries.
+              continue;
+            }
+          }
+          if (announce) onChange(target.resolved);
+        }
+      };
+      if (allowMissing) {
+        releases.push(() => {
+          if (presenceTimer) clearInterval(presenceTimer);
+          presenceTimer = null;
+          for (const target of presence) target.release?.();
+        });
+      }
+
       try {
-        for (const resolved of resolvedTargets) {
-          // Node's Linux recursive watcher follows static symlink targets, so
-          // its reports are not proof of containment. The path it reports is
-          // always joined onto the watched root; anything that does not stay
-          // lexically inside that root is dropped rather than handed on.
-          const withinRoot = (changed: string): void => {
-            const rel = path.relative(resolved, changed);
-            if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return;
-            onChange(changed);
-          };
-          releases.push(watchShared(resolved, withinRoot, { recursive }));
+        if (allowMissing) {
+          await refreshPresence(false);
+          // An unload during that first check found no disposer to call.
+          requireLoaded("watch");
+          // One check at a time: two overlapping checks could both attach and
+          // leave the first shared watcher unreleased.
+          let refreshing = false;
+          presenceTimer = setInterval(() => {
+            if (refreshing) return;
+            refreshing = true;
+            void refreshPresence(true)
+              .catch(() => undefined)
+              .finally(() => {
+                refreshing = false;
+              });
+          }, PLUGIN_FS_WATCH_PRESENCE_POLL_MS);
+          presenceTimer.unref?.();
+        } else {
+          for (const resolved of resolvedTargets) {
+            releases.push(watchShared(resolved, withinRootOf(resolved), { recursive }));
+          }
         }
       } catch (err) {
         // A later path's watch threw (e.g. ENOENT) after earlier subscriptions

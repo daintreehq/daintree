@@ -1795,6 +1795,85 @@ describe("host.fs.watch recursive and debounced", () => {
   });
 });
 
+describe("host.fs.watch allowMissing", () => {
+  async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error("waitFor timed out");
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  it("still rejects a missing path without the option", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(host.fs.watch([join(allowed, "board")], () => undefined)).rejects.toThrow();
+  });
+
+  it("waits for a missing directory, then reports changes inside it", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const board = join(allowed, "board");
+    const realBoard = join(await fs.realpath(allowed), "board");
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([board], (p) => changes.push(p), { allowMissing: true });
+    try {
+      await fs.mkdir(board);
+      await waitFor(() => changes.includes(realBoard));
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(board, "board.json"), "{}");
+      await waitFor(() => changes.includes(join(realBoard, "board.json")));
+    } finally {
+      dispose();
+    }
+  });
+
+  it("keeps watching through a deletion and recreation", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const logs = join(allowed, "logs");
+    await fs.mkdir(logs);
+    const realLogs = await fs.realpath(logs);
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([logs], (p) => changes.push(p), { allowMissing: true });
+    try {
+      const transitions = () => changes.filter((p) => p === realLogs).length;
+      await fs.rm(logs, { recursive: true });
+      await waitFor(() => transitions() >= 1);
+      await fs.mkdir(logs);
+      // The second transition is the reattachment, not a late deletion event.
+      await waitFor(() => transitions() >= 2);
+      await new Promise((r) => setTimeout(r, 100));
+      await fs.writeFile(join(logs, "2026-09.jsonl"), "{}\n");
+      await waitFor(() => changes.includes(join(realLogs, "2026-09.jsonl")));
+    } finally {
+      dispose();
+    }
+  });
+
+  it("refuses to attach when the path is created as a link leading out of scope", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const outside = join(homeDir, "outside");
+    await fs.mkdir(outside, { recursive: true });
+    const link = join(allowed, "linked");
+    const changes: string[] = [];
+    const dispose = await host.fs.watch([link], (p) => changes.push(p), { allowMissing: true });
+    try {
+      await fs.symlink(outside, link);
+      await new Promise((r) => setTimeout(r, 2500));
+      await fs.writeFile(join(outside, "secret.txt"), "x");
+      await new Promise((r) => setTimeout(r, 300));
+      expect(changes).toEqual([]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("rejects a non-boolean allowMissing", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(
+      host.fs.watch([allowed], () => undefined, { allowMissing: "yes" as unknown as boolean })
+    ).rejects.toThrow(/allowMissing must be a boolean/);
+  });
+});
+
 describe("host.fs mutation gating before any directory is created", () => {
   it("creates no data dir when consent to a data-dir mkdir or append is denied", async () => {
     getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");

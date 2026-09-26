@@ -1679,6 +1679,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
             `Plugin "${pluginId}" fs.watch: debounceMs must be a finite, non-negative number`
           );
         }
+        const allowMissing = options?.allowMissing;
+        if (allowMissing !== undefined && typeof allowMissing !== "boolean") {
+          throw new Error(`Plugin "${pluginId}" fs.watch: allowMissing must be a boolean`);
+        }
         if (!Array.isArray(paths) || paths.length === 0) {
           throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
         }

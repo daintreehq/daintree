@@ -635,6 +635,8 @@ export interface FsWatchParams {
   recursive?: boolean;
   /** Applied in main, so a coalesced burst crosses the port as one event. */
   debounceMs?: number;
+  /** Absent means a missing path rejects the watch, as before. */
+  allowMissing?: boolean;
 }
 
 /**

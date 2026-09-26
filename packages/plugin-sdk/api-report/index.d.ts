@@ -3774,6 +3774,16 @@ interface PluginFsWatchOptions extends PluginHostCallOptions {
      * A value that is not a finite, non-negative number rejects the watch.
      */
     debounceMs?: number;
+    /**
+     * Accept a path that does not exist yet, and keep watching through a
+     * deletion. The host checks once a second: when a missing path appears it
+     * re-proves containment (so a symlink created there cannot redirect the
+     * watch), attaches, and calls back with the path; when a watched path
+     * disappears, or is replaced by a new directory, it detaches, calls back,
+     * and waits again. Without it a missing path rejects the watch, and a
+     * deleted directory silently stops reporting.
+     */
+    allowMissing?: boolean;
 }
 /**
  * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.

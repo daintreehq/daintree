@@ -898,6 +898,7 @@ export class PluginDevWorkerMainBridge {
             signal,
             ...(p.recursive === true && { recursive: true }),
             ...(p.debounceMs !== undefined && { debounceMs: p.debounceMs }),
+            ...(p.allowMissing !== undefined && { allowMissing: p.allowMissing }),
           }
         );
         // Disposed or reloaded while the watch was settling — tear it down

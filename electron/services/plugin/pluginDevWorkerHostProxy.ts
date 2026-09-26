@@ -1058,6 +1058,8 @@ export class PluginDevWorkerHostProxy {
                 paths,
                 ...(options?.recursive === true && { recursive: true }),
                 ...(options?.debounceMs !== undefined && { debounceMs: options.debounceMs }),
+                // Forwarded as given so the host rejects a malformed value.
+                ...(options?.allowMissing !== undefined && { allowMissing: options.allowMissing }),
               },
               options?.signal
             );
