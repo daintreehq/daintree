@@ -25,25 +25,6 @@ interface ForgeTokenCalloutState extends ForgeTokenCalloutPersistedState {
   dismiss: (providerId: string, fingerprint: string) => void;
 }
 
-// Every project view writes this key from its own V8 context; merge by the
-// writer's delta so a stale view can't drop a dismissal a sibling just made.
-function mergeDismissals({
-  baseline,
-  onDisk,
-  incoming,
-}: PersistWriteMergeContext<ForgeTokenCalloutPersistedState>) {
-  return {
-    ...incoming,
-    state: {
-      dismissed: mergeRecordByWriterDelta(
-        baseline?.state.dismissed ?? {},
-        incoming.state.dismissed,
-        onDisk?.state.dismissed ?? {}
-      ),
-    },
-  };
-}
-
 function readDismissed(persisted: unknown): Record<string, string> | null {
   if (!persisted || typeof persisted !== "object" || !("dismissed" in persisted)) return null;
   const { dismissed } = persisted;
@@ -53,6 +34,27 @@ function readDismissed(persisted: unknown): Record<string, string> | null {
     if (typeof fp === "string") clean[id] = fp;
   }
   return clean;
+}
+
+// Every project view writes this key from its own V8 context; merge by the
+// writer's delta so a stale view can't drop a dismissal a sibling just made.
+// The stored sides are read defensively: a parseable but malformed blob would
+// otherwise make every later dismissal throw instead of persisting.
+function mergeDismissals({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<ForgeTokenCalloutPersistedState>) {
+  return {
+    ...incoming,
+    state: {
+      dismissed: mergeRecordByWriterDelta(
+        readDismissed(baseline?.state) ?? {},
+        incoming.state.dismissed,
+        readDismissed(onDisk?.state) ?? {}
+      ),
+    },
+  };
 }
 
 export const useForgeTokenCalloutStore = create<ForgeTokenCalloutState>()(

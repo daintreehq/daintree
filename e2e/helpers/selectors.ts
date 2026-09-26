@@ -442,8 +442,8 @@ export const SEL = {
     bulkCreateButton: '[data-testid="bulk-action-create-worktrees-button"]',
     bulkClearButton: '[aria-label="Clear selection"]',
     bulkCreateDialog: '[data-testid="bulk-create-worktree-dialog"]',
-    // Token-health banner (GlobalBannerCoordinator slot forge-token)
-    tokenExpiredBanner: 'text="GitHub token expired"',
+    // Token callout under the forge pill (#12831)
+    tokenCallout: '[data-testid="forge-token-callout"]',
   },
   plugin: {
     manager: '[data-testid="plugin-manager-view"]',

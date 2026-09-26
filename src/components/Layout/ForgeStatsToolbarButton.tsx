@@ -124,6 +124,7 @@ export const ForgeStatsToolbarButton = memo(
       stats,
       loading: statsLoading,
       error: statsError,
+      isValidating: statsValidating,
       errorSeverity,
       isTokenError,
       refresh: refreshStats,
@@ -1364,6 +1365,7 @@ export const ForgeStatsToolbarButton = memo(
             providerId={providerId}
             providerName={providerName}
             errorKind={tokenErrorKind}
+            validating={statsValidating}
             onReconnect={openSettingsForToken}
             onOpenChange={setTokenCalloutOpen}
           />

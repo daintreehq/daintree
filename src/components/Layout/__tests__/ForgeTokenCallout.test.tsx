@@ -16,6 +16,8 @@ import { actionService } from "@/services/ActionService";
 import type { ForgeTokenErrorKind } from "@/lib/forgeErrors";
 
 const PROVIDER_ID = "daintree.github.github";
+// Longer than the callout's anchor re-check tick.
+const ANCHOR_RECHECK_WAIT_MS = 600;
 
 const getCredentialStatus = vi.fn();
 
@@ -37,25 +39,32 @@ beforeAll(() => {
 
 function Harness({
   errorKind,
+  validating = false,
+  overflowed = false,
   onReconnect = () => {},
   onOpenChange,
 }: {
   errorKind: ForgeTokenErrorKind | null;
+  validating?: boolean;
+  overflowed?: boolean;
   onReconnect?: () => void;
   onOpenChange?: ForgeTokenCalloutProps["onOpenChange"];
 }) {
   const anchorRef = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button ref={anchorRef} type="button">
-        issues pill
-      </button>
+      <div aria-hidden={overflowed || undefined}>
+        <button ref={anchorRef} type="button">
+          issues pill
+        </button>
+      </div>
       <ForgeTokenCallout
         id="callout"
         anchorRef={anchorRef}
         providerId={PROVIDER_ID}
         providerName="GitHub"
         errorKind={errorKind}
+        validating={validating}
         onReconnect={onReconnect}
         onOpenChange={onOpenChange}
       />
@@ -158,16 +167,56 @@ describe("ForgeTokenCallout", () => {
     expect(screen.queryByTestId("forge-token-callout")).toBeNull();
   });
 
-  it("re-arms for a failure after the credential is replaced", async () => {
-    render(<Harness errorKind="invalid" />);
+  it("stays quiet when the token is replaced until a request fails with the new one", async () => {
+    const { rerender } = render(<Harness errorKind="invalid" />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss GitHub token warning" }));
 
+    // Token B saved: the old failure is still on screen and must not be
+    // pinned on the replacement.
     getCredentialStatus.mockResolvedValue({ hasCredential: true, fingerprint: "fp-2" });
     setTokenHealth(1);
     await flush();
+    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+
+    // The next request settles, still failing — now on token B.
+    rerender(<Harness errorKind="invalid" validating />);
+    await flush();
+    rerender(<Harness errorKind="invalid" validating={false} />);
+    await flush();
 
     expect(screen.getByText("GitHub token expired")).toBeTruthy();
+  });
+
+  it("asks for the fingerprint again after a failed lookup once a request settles", async () => {
+    getCredentialStatus.mockRejectedValueOnce(new Error("ipc down"));
+    const { rerender } = render(<Harness errorKind="invalid" />);
+    await flush();
+    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+
+    rerender(<Harness errorKind="invalid" validating />);
+    rerender(<Harness errorKind="invalid" validating={false} />);
+    await flush();
+
+    expect(screen.getByTestId("forge-token-callout")).toBeTruthy();
+  });
+
+  it("hides, without dismissing, while the pill sits in the toolbar overflow", async () => {
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <Harness errorKind="invalid" overflowed onOpenChange={onOpenChange} />
+    );
+    await flush();
+
+    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+    expect(onOpenChange).not.toHaveBeenCalledWith(true);
+    expect(useForgeTokenCalloutStore.getState().dismissed[PROVIDER_ID]).toBeUndefined();
+
+    rerender(<Harness errorKind="invalid" onOpenChange={onOpenChange} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ANCHOR_RECHECK_WAIT_MS));
+    });
+    expect(screen.getByTestId("forge-token-callout")).toBeTruthy();
   });
 
   it("dismisses on Escape pressed inside it and hands focus back to the pill", async () => {
@@ -198,10 +247,9 @@ describe("ForgeTokenCallout", () => {
     document.body.appendChild(outside);
     outside.focus();
 
-    act(() => {
-      useForgeTokenCalloutStore.getState().dismiss(PROVIDER_ID, "fp-1");
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss GitHub token warning" }));
 
+    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
     expect(document.activeElement).toBe(outside);
     outside.remove();
   });

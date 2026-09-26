@@ -258,15 +258,15 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(window.locator(SEL.github.searchPrs)).toBeVisible({ timeout: T_MEDIUM });
   });
 
-  test("token-health banner appears on an unhealthy push and clears when healthy", async () => {
+  test("a token-health push alone raises neither a global banner nor the pill callout", async () => {
     const { window } = ctx;
 
+    // The background probe feeds the inbox, not the UI: only a failed request
+    // for this project's stats points the callout at the pill (#12831).
     await pushTokenHealthUnhealthy(ctx.app);
-    await expect(window.locator(SEL.github.tokenExpiredBanner)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.getByText("GitHub token expired")).toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(window.locator(SEL.github.tokenCallout)).toHaveCount(0);
 
     await pushTokenHealthHealthy(ctx.app);
-    await expect(window.locator(SEL.github.tokenExpiredBanner)).not.toBeVisible({
-      timeout: T_MEDIUM,
-    });
   });
 });

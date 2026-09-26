@@ -82,6 +82,16 @@ describe("forgeTokenCalloutStore", () => {
     expect(view.getState().dismissed[PROVIDER]).toBe("fp-1");
   });
 
+  it("still persists a dismissal over a malformed stored blob", async () => {
+    const backing = installLocalStorage({ [STORAGE_KEY]: JSON.stringify({ state: null }) });
+    const store = await loadStore();
+
+    store.getState().dismiss(PROVIDER, "fp-1");
+
+    const stored: unknown = JSON.parse(backing.get(STORAGE_KEY) ?? "null");
+    expect(stored).toMatchObject({ state: { dismissed: { [PROVIDER]: "fp-1" } } });
+  });
+
   it("drops malformed entries on hydration", async () => {
     installLocalStorage({
       [STORAGE_KEY]: JSON.stringify({

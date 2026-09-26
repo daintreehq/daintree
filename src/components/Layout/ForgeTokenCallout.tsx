@@ -16,6 +16,10 @@ const VIEWPORT_GUTTER = 8;
 const ARROW_SIZE = 10;
 const ARROW_INSET = 12;
 const SIDE_OFFSET = 8;
+// Moves that resize nothing — a banner above the toolbar closing, the pill
+// dropping into the toolbar's overflow — reach no observer, so an open
+// callout also re-checks its anchor on a slow tick.
+const ANCHOR_RECHECK_MS = 500;
 // A credential that failed without Daintree holding one (an environment
 // token, say) still gets one dismissal; there is no record to fingerprint.
 const UNSTORED_FINGERPRINT = "unstored";
@@ -38,22 +42,36 @@ export interface ForgeTokenCalloutProps {
   providerId: string;
   providerName: string;
   errorKind: ForgeTokenErrorKind | null;
+  /** The stats request is in flight; each settle is a fresh verdict. */
+  validating: boolean;
   onReconnect: () => void;
   onOpenChange?: (open: boolean) => void;
 }
 
+/** Counts stats requests that have settled since mount. */
+function useSettledRequestCount(validating: boolean): number {
+  const [count, setCount] = useState(0);
+  const wasValidatingRef = useRef(validating);
+  useEffect(() => {
+    if (wasValidatingRef.current && !validating) setCount((c) => c + 1);
+    wasValidatingRef.current = validating;
+  }, [validating]);
+  return count;
+}
+
 /**
  * The stored credential's fingerprint while `active`, or null until it is
- * known. Re-read when the provider reports a new token version, so a token
- * replaced in Settings is judged against its own dismissal even when the next
- * failure carries the same message.
+ * known. Re-read each time a stats request settles, so a failure is judged
+ * against the credential in place when it failed: replacing the token does
+ * not re-arm the callout on the old token's error, and the replacement's own
+ * first failure does, even when it carries the same message.
  */
 function useCredentialFingerprint(
   providerId: string,
   active: boolean,
-  tokenVersion: number | null
+  settledRequests: number
 ): string | null {
-  const key = `${providerId}:${tokenVersion ?? ""}`;
+  const key = `${providerId}:${settledRequests}`;
   const [resolved, setResolved] = useState<{ key: string; fingerprint: string } | null>(null);
 
   useEffect(() => {
@@ -65,7 +83,8 @@ function useCredentialFingerprint(
         setResolved({ key, fingerprint: status.fingerprint ?? UNSTORED_FINGERPRINT });
       },
       () => {
-        // No fingerprint, no callout: the dimmed pill still says it.
+        // No fingerprint, no callout: the dimmed pill still says it, and the
+        // next settled request asks again.
       }
     );
     return () => {
@@ -82,7 +101,10 @@ interface CalloutPosition {
   arrowLeft: number;
 }
 
-function measure(anchor: HTMLElement): CalloutPosition {
+function measure(anchor: HTMLElement): CalloutPosition | null {
+  // The toolbar parks overflowed buttons, still mounted, under an
+  // aria-hidden invisible wrapper; a callout pointing at one points at nothing.
+  if (anchor.closest('[aria-hidden="true"]') !== null) return null;
   const rect = anchor.getBoundingClientRect();
   const maxLeft = Math.max(VIEWPORT_GUTTER, window.innerWidth - CALLOUT_WIDTH - VIEWPORT_GUTTER);
   const left = Math.min(Math.max(rect.right - CALLOUT_WIDTH, VIEWPORT_GUTTER), maxLeft);
@@ -109,10 +131,12 @@ function useAnchorPosition(
       frame = null;
       const next = measure(anchor);
       setPosition((prev) =>
-        prev &&
-        prev.top === next.top &&
-        prev.left === next.left &&
-        prev.arrowLeft === next.arrowLeft
+        prev === next ||
+        (prev !== null &&
+          next !== null &&
+          prev.top === next.top &&
+          prev.left === next.left &&
+          prev.arrowLeft === next.arrowLeft)
           ? prev
           : next
       );
@@ -127,7 +151,9 @@ function useAnchorPosition(
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
     observer?.observe(anchor);
     if (anchor.parentElement) observer?.observe(anchor.parentElement);
+    const recheck = setInterval(schedule, ANCHOR_RECHECK_MS);
     return () => {
+      clearInterval(recheck);
       window.removeEventListener("resize", schedule);
       observer?.disconnect();
       if (frame !== null) cancelAnimationFrame(frame);
@@ -156,20 +182,22 @@ export function ForgeTokenCallout({
   providerId,
   providerName,
   errorKind,
+  validating,
   onReconnect,
   onOpenChange,
 }: ForgeTokenCalloutProps) {
   const reconnectKind = errorKind !== null && errorKind !== "not-configured" ? errorKind : null;
   const health = useForgeProviderHealthStore(selectForgeProviderHealth(providerId));
-  const tokenVersion = health.tokenHealth?.tokenVersion ?? null;
   const reauthUrl = health.tokenHealth?.reauthUrl;
-  const fingerprint = useCredentialFingerprint(providerId, reconnectKind !== null, tokenVersion);
+  const settledRequests = useSettledRequestCount(validating);
+  const fingerprint = useCredentialFingerprint(providerId, reconnectKind !== null, settledRequests);
   const dismissedFingerprint = useForgeTokenCalloutStore((s) => s.dismissed[providerId]);
   const dismiss = useForgeTokenCalloutStore((s) => s.dismiss);
 
-  const open =
+  const armed =
     reconnectKind !== null && fingerprint !== null && dismissedFingerprint !== fingerprint;
-  const position = useAnchorPosition(anchorRef, open);
+  const position = useAnchorPosition(anchorRef, armed);
+  const open = armed && position !== null;
 
   useEffect(() => {
     onOpenChange?.(open);
