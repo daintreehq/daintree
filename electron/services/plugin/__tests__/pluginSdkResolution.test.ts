@@ -49,6 +49,28 @@ describe("createPluginSdkResolveHook", () => {
     expect(result.url).toBe(pathToFileURL(path.join(sdkDir, "data.js")).href);
   });
 
+  it("rethrows a not-found error when an SDK is installed above the importer", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-sdk-installed-"));
+    try {
+      const sdk = path.join(root, "node_modules/@daintreehq/plugin-sdk");
+      await fs.mkdir(sdk, { recursive: true });
+      await fs.writeFile(path.join(sdk, "package.json"), "{}");
+      const parentURL = pathToFileURL(path.join(root, "plugins/acme/dist/index.mjs")).href;
+      for (const code of ["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND"]) {
+        const missingFile = Object.assign(new Error(`Cannot find module '${sdk}/dist/data.js'`), {
+          code,
+        });
+        expect(() =>
+          hook("@daintreehq/plugin-sdk/data", { ...context, parentURL }, () => {
+            throw missingFile;
+          })
+        ).toThrow(missingFile);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces any other resolution failure unchanged", () => {
     const broken = Object.assign(new Error("bad package.json"), {
       code: "ERR_INVALID_PACKAGE_CONFIG",
@@ -201,6 +223,35 @@ describe("a zero-build plugin importing the SDK", () => {
       ].join("\n")
     );
     expect(JSON.parse(out)).toEqual(["plugin", [{ a: 1 }]]);
+  }, 30_000);
+
+  it("surfaces a broken install instead of masking it with the app's copy", async () => {
+    const pluginDir = path.join(tmp, "project/.daintree/plugins/acme.broken");
+    const ownSdk = path.join(pluginDir, "node_modules/@daintreehq/plugin-sdk");
+    await fs.mkdir(ownSdk, { recursive: true });
+    // Exported, but never built: the file the export names does not exist.
+    await fs.writeFile(
+      path.join(ownSdk, "package.json"),
+      JSON.stringify({
+        name: "@daintreehq/plugin-sdk",
+        type: "module",
+        exports: { "./data": "./dist/data.js" },
+      })
+    );
+    const missing = path.join(ownSdk, "dist/data.js");
+
+    const viaImport = runPlugin(
+      pluginDir,
+      'import { parseJsonl } from "@daintreehq/plugin-sdk/data";\nexport const probe = () => typeof parseJsonl;\n'
+    );
+    await expect(viaImport).rejects.toThrow(missing);
+
+    const viaRequire = runPlugin(
+      pluginDir,
+      'const { parseJsonl } = require("@daintreehq/plugin-sdk/data");\nexports.probe = () => typeof parseJsonl;\n',
+      "index.cjs"
+    );
+    await expect(viaRequire).rejects.toThrow(missing);
   }, 30_000);
 
   it("serves require() from a CommonJS worker and from createRequire", async () => {

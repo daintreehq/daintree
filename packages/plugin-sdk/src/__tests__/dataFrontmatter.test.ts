@@ -100,6 +100,28 @@ describe("parseFrontmatter", () => {
     expect((caught as FrontmatterError).message).toMatch(/nobody/);
   });
 
+  it("reports an alias expansion past the limit at the alias that crossed it", () => {
+    const ten = (item: string) => `[${Array(10).fill(item).join(", ")}]`;
+    const text = [
+      "---",
+      `a: &a ${ten("x")}`,
+      `b: &b ${ten("*a")}`,
+      `c: ${ten("*b")}`,
+      "---",
+      "",
+    ].join("\n");
+    let caught: unknown;
+    try {
+      parseFrontmatter(text);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(FrontmatterError);
+    expect((caught as FrontmatterError).message).toMatch(/Excessive alias count/);
+    expect((caught as FrontmatterError).line).toBe(4);
+    expect((caught as FrontmatterError).column).toBeGreaterThan(4);
+  });
+
   it("refuses an unclosed block and a non-mapping block", () => {
     expect(() => parseFrontmatter("---\ntitle: x\nbody\n")).toThrow(FrontmatterError);
     expect(() => parseFrontmatter("---\n- a\n- b\n---\n")).toThrow(/mapping/);
@@ -222,6 +244,29 @@ describe("updateFrontmatter", () => {
     const updated = updateFrontmatter("---\ncount: !!str 1\nother: x\n---\n", { count: 2 });
     expect(updated).toBe("---\ncount: 2\nother: x\n---\n");
     expect(parseFrontmatter(updated).data.count).toBe(2);
+  });
+
+  it("refuses to patch a value whose tag the new value cannot carry", () => {
+    for (const [source, tag] of [
+      ["blob: !!binary SGVsbG8=", "!!binary"],
+      ["when: !!timestamp 2026-09-26", "!!timestamp"],
+      ["pos: !point 3,4", "!point"],
+      ["pos: !point { x: 3 }", "!point"],
+    ] as const) {
+      const text = `---\ntitle: t\n${source}\n---\n`;
+      const key = source.slice(0, source.indexOf(":"));
+      let caught: unknown;
+      try {
+        updateFrontmatter(text, { [key]: "replaced" });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught, source).toBeInstanceOf(FrontmatterError);
+      expect((caught as FrontmatterError).message).toContain(`tagged ${tag}`);
+      expect((caught as FrontmatterError).line).toBe(3);
+      // Deleting it changes no type, so that is still allowed.
+      expect(updateFrontmatter(text, { [key]: undefined })).toBe("---\ntitle: t\n---\n");
+    }
   });
 
   it("keeps an anchor that another key refers to", () => {
