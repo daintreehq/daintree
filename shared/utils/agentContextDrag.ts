@@ -192,7 +192,7 @@ export function setAgentContextDragData(
  * and never fewer than three, so content carrying its own fenced block cannot
  * close the quote early.
  */
-function fenceFor(text: string): string {
+export function backtickFenceFor(text: string): string {
   let longest = 0;
   let run = 0;
   for (const char of text) {
@@ -252,7 +252,7 @@ export function formatAgentContextBlock(payload: {
     .filter(Boolean)
     .join(": ");
   const content = heading ? `${heading}\n\n${text}` : text;
-  const fence = fenceFor(content);
+  const fence = backtickFenceFor(content);
   return `${fence}${AGENT_CONTEXT_FENCE_INFO}\n${content}\n${fence}`;
 }
 
