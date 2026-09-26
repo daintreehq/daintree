@@ -19,6 +19,7 @@ export default defineConfig({
       "@daintreehq/tour/kit": path.resolve(__dirname, "./packages/tour/src/kit.ts"),
       "@daintreehq/tour/mock-app": path.resolve(__dirname, "./packages/tour/src/mock-app.ts"),
       "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
+      "@daintreehq/plugin-ui": path.resolve(__dirname, "./src/pluginUi/index.ts"),
     },
   },
   test: {

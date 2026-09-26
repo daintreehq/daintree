@@ -35,7 +35,7 @@ Daintree compiles the classes your view uses at runtime, in the renderer, agains
 
 Semantic colours resolve to live theme variables, so a panel built on them follows a theme switch with no work on your side. Ordinary layout, spacing, sizing, typography, flexbox, grid, state variants (`hover:`, `focus-visible:`, `disabled:`, `group-hover:`), arbitrary values (`w-[327px]`), dynamic scales (`grid-cols-47`) and container queries all behave exactly as Tailwind documents them.
 
-**Not part of the vocabulary:** stock palette colours (`bg-red-500`, `text-blue-600`); `dark:` — Daintree themes are runtime tokens, not a class, so a semantic token is already theme-aware and `dark:` is never the answer; `prose` (`@tailwindcss/typography` is not in the plugin contract); `@apply`, which needs a build step this path does not have.
+**Not part of the vocabulary:** stock palette colours (`bg-red-500`, `text-blue-600`); `dark:` — Daintree themes are runtime tokens, not a class, so a semantic token is already theme-aware and `dark:` is never the answer; `prose` (`@tailwindcss/typography` is not in the plugin contract; for rendered Markdown use [`Markdown`](#host-ui-components), which brings the host's document styles with it); `@apply`, which needs a build step this path does not have.
 
 Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide.
 
@@ -143,7 +143,53 @@ Nothing reaches a view unless the worker sends it. The bridge is `window.electro
 
 `on` and `onPanel` return an unsubscribe function; return it from your effect. Pushes are not buffered: a push during `activate()` is gone before any view mounts, so the shape that works is pull on mount, then subscribe to pushes for updates. [Patterns](./patterns.md#pull-on-mount-then-push) has the code.
 
-A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` from `@daintreehq/plugin-sdk/react`. A raw `plugin://` view cannot import that subpath — the host import map serves exactly the five React specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`) and the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`), and nothing else — so it uses the bridge directly.
+A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` from `@daintreehq/plugin-sdk/react`. A raw `plugin://` view cannot import that subpath — the host import map serves exactly the five React specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`), the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`) and [`@daintreehq/plugin-ui`](#host-ui-components), and nothing else — so it uses the bridge directly.
+
+## Host UI components
+
+`@daintreehq/plugin-ui` is Daintree's own UI, served to your view through the same import map as React: the host's components running from the host's code, styled with the host's tokens, so they look like the app in every theme without you shipping or styling anything. A zero-build view imports it like `react`; a `@daintreehq/plugin-vite` build leaves it external, because there is no package to bundle — the implementation only exists inside the running app. It loads the first time a view renders one of its components, never at startup.
+
+It exports one component today.
+
+**`Markdown`** is the renderer behind Daintree's file viewer and Markdown panels: GFM (tables, task lists, strikethrough, autolinks), highlighted code fences, and the app's document typography. Raw HTML in the source is dropped, never rendered, so it is safe for text you did not write.
+
+| Prop | Meaning |
+| --- | --- |
+| `source` | The Markdown text. Required. |
+| `basePath` | Absolute path relative links and images resolve against. A path ending in `.md`, `.markdown`, `.mdx` or `.mkd` is read as the document itself and its directory is used; anything else, or a path ending in `/`, is the directory. |
+| `rootPath` | Absolute directory local images and relative links must stay inside. Defaults to the directory `basePath` resolves to. |
+| `className` | Classes for the document's root element. |
+| `fontSize` | A rung of the type scale: `2xs` `xs` `sm` `base` `lg` `xl` `2xl` `3xl`. Omitted, the document renders at Daintree's default Markdown size. |
+
+Relative images load from disk over `daintree-file://`, contained to `rootPath`. Relative links open in Daintree's file viewer when they stay inside `rootPath` and do nothing otherwise; `http(s)` and `mailto` links open in the browser. With neither `basePath` nor `rootPath`, the text still renders and relative references resolve nowhere. When a note links to images elsewhere in the project, pass the project root as `rootPath`.
+
+```js
+// dist/panel.js — the worker's "note" handler answers { text, path }, where
+// `path` is the absolute path it read the file from.
+import { createElement, useEffect, useState } from "react";
+import { Markdown } from "@daintreehq/plugin-ui";
+
+export default function Notes({ pluginId }) {
+  const [note, setNote] = useState(null);
+  useEffect(() => {
+    let live = true;
+    void window.electron.plugin.invoke(pluginId, "note", { name: "today.md" }).then((next) => {
+      if (live) setNote(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, [pluginId]);
+
+  return createElement(
+    "div",
+    { className: "flex flex-col flex-1 min-h-0 overflow-auto p-4" },
+    note ? createElement(Markdown, { source: note.text, basePath: note.path }) : null
+  );
+}
+```
+
+The component renders nothing for the instant its code is loading, then the document. For TypeScript, `@daintreehq/plugin-sdk` ships the module's declaration: add `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` to `compilerOptions`, and `MarkdownProps` comes with it.
 
 ## Resources your view owns
 
@@ -306,7 +352,7 @@ A dev preview tool is one registration — `registerDevPreviewTool({ id, pluginI
 
 ## What doesn't work inline
 
-- Bare npm imports in a raw view. Only the five React specifiers above and the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`) resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle. The tour specifiers resolve to the host's own tour instance, so a scene's `useCue` sees the host's player — `@daintreehq/plugin-vite` leaves them external for the same reason. Install `@daintreehq/tour` as a dev dependency for its types; its runtime always comes from the host. The tour module loads when a scene first imports it, not at startup.
+- Bare npm imports in a raw view. Only the five React specifiers above, the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`) and [`@daintreehq/plugin-ui`](#host-ui-components) resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle. The tour specifiers resolve to the host's own tour instance, so a scene's `useCue` sees the host's player — `@daintreehq/plugin-vite` leaves them external for the same reason. Install `@daintreehq/tour` as a dev dependency for its types; its runtime always comes from the host. The tour module loads when a scene first imports it, not at startup.
 - TypeScript, JSX or CSS files without a build. Hand-written views use `createElement` and a `<style>` string.
-- Reaching into Daintree's React components. They are not exported to plugins, and the ones you can find by path are internal and will move.
+- Reaching into Daintree's React components. Only what [`@daintreehq/plugin-ui`](#host-ui-components) exports is served to plugins; the ones you can find by path are internal and will move.
 - Module-scope state surviving a plugin reload. Each full plugin load mints a fresh view generation for the next import; keep anything worth keeping in `persistState` (survives remounts and reloads) or `host.storage` (survives everything). A `daintree-plugin dev` rebuild is a full load, so it drops module-scope state and picks up view edits like any other reload (#12277); see [Contribution points → Worker reload vs. view-module replacement](./contribution-points.md#worker-reload-vs-view-module-replacement) for the mechanism.

@@ -31,7 +31,8 @@
       "@daintreehq/tour": ["./packages/tour/src/index.ts"],
       "@daintreehq/tour/react": ["./packages/tour/src/react.ts"],
       "@daintreehq/tour/kit": ["./packages/tour/src/kit.ts"],
-      "@daintreehq/tour/mock-app": ["./packages/tour/src/mock-app.ts"]
+      "@daintreehq/tour/mock-app": ["./packages/tour/src/mock-app.ts"],
+      "@daintreehq/plugin-ui": ["./src/pluginUi/index.ts"]
     }
   },
   "include": [

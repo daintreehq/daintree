@@ -46,10 +46,14 @@
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js",
       "default": "./dist/testing.js"
+    },
+    "./plugin-ui": {
+      "types": "./plugin-ui.d.ts"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "plugin-ui.d.ts"
   ],
   "sideEffects": false,
   "engines": {

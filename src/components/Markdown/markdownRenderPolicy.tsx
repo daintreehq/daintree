@@ -164,6 +164,9 @@ export function useMarkdownRenderPolicy({
         // images referenced by specs render with the same containment checks
         // as the file itself.
         if (HTTPish.test(url) || url.startsWith("data:")) return defaultUrlTransform(url);
+        // A plugin can render Markdown with no location on disk, and then no
+        // local path has anything to resolve against or be contained by.
+        if (!rootPath) return null;
         const local = buildDaintreeFileUrl(resolveAgainstFile(filePath, url), rootPath);
         // Undefined-checked rather than truthy, matching FileImagePreview and
         // ZoomableImage: the token is opaque, so only "no host is tracking

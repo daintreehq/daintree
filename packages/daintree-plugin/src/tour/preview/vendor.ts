@@ -3,7 +3,19 @@ import path from "node:path";
 import { build, type Plugin } from "esbuild";
 import { HOST_IMPORTMAP_SPECIFIERS } from "../../../../plugin-vite/src/hostImportMap.js";
 
-export type HostSpecifier = (typeof HOST_IMPORTMAP_SPECIFIERS)[number];
+/**
+ * The host specifiers the preview can serve. `@daintreehq/plugin-ui` is not
+ * among them: it has no package to bundle, only an implementation inside the
+ * running app.
+ */
+export type HostSpecifier = Exclude<
+  (typeof HOST_IMPORTMAP_SPECIFIERS)[number],
+  "@daintreehq/plugin-ui"
+>;
+
+const PREVIEW_SPECIFIERS = HOST_IMPORTMAP_SPECIFIERS.filter(
+  (specifier): specifier is HostSpecifier => specifier !== "@daintreehq/plugin-ui"
+);
 
 /** URL prefix the vendor modules are served under. */
 export const VENDOR_PATH = "/_preview/vendor/";
@@ -89,7 +101,7 @@ export async function buildVendorGraph(pluginDir: string): Promise<VendorGraph> 
   };
 
   const facades = new Map<string, string>();
-  for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
+  for (const specifier of PREVIEW_SPECIFIERS) {
     const resolved = resolveFromPlugin(specifier);
     let names: string[] = [];
     if (!isTourSpecifier(specifier)) {
@@ -142,7 +154,7 @@ export async function buildVendorGraph(pluginDir: string): Promise<VendorGraph> 
   try {
     result = await build({
       absWorkingDir: pluginDir,
-      entryPoints: HOST_IMPORTMAP_SPECIFIERS.map((specifier) => ({
+      entryPoints: PREVIEW_SPECIFIERS.map((specifier) => ({
         in: `${ENTRY_NAMESPACE}:${specifier}`,
         out: entryName(specifier),
       })),
@@ -185,10 +197,7 @@ export async function buildVendorGraph(pluginDir: string): Promise<VendorGraph> 
   }
 
   const imports = Object.fromEntries(
-    HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [
-      specifier,
-      `${VENDOR_PATH}${entryName(specifier)}.js`,
-    ])
+    PREVIEW_SPECIFIERS.map((specifier) => [specifier, `${VENDOR_PATH}${entryName(specifier)}.js`])
   ) as Record<HostSpecifier, string>;
   const tourFiles = Object.keys(result.metafile.inputs)
     .map((input) => path.resolve(pluginDir, input))

@@ -44,7 +44,19 @@ export const reactExternals: readonly RegExp[] = [/^react($|\/)/, /^react-dom($|
  */
 export const tourExternals: readonly RegExp[] = [/^@daintreehq\/tour($|\/)/] as const;
 
-const hostExternals: readonly RegExp[] = [...reactExternals, ...tourExternals];
+/**
+ * External pattern for `@daintreehq/plugin-ui`, the host's own UI components
+ * (the Markdown renderer). There is no npm package behind the specifier — the
+ * implementation only exists inside the running host — so it must stay external,
+ * and a subpath the import map does not serve fails the build like the others.
+ */
+export const pluginUiExternals: readonly RegExp[] = [/^@daintreehq\/plugin-ui($|\/)/] as const;
+
+const hostExternals: readonly RegExp[] = [
+  ...reactExternals,
+  ...tourExternals,
+  ...pluginUiExternals,
+];
 
 function isHostModuleSpecifier(id: string): boolean {
   return hostExternals.some((re) => re.test(id));
@@ -82,8 +94,8 @@ function matchesExternal(pattern: string | RegExp, id: string): boolean {
  * The browser preset's `external`, as a function rather than the regex array:
  * Rolldown never runs `resolveId` for an id an `external` pattern already
  * matched, so a `resolveId` guard alone lets `react-dom/server` through to a
- * bundle that only fails at load. Deciding here is the one place every React
- * or tour import is guaranteed to pass through. Any `external` the author already set
+ * bundle that only fails at load. Deciding here is the one place every React,
+ * tour or plugin-ui import is guaranteed to pass through. Any `external` the author already set
  * is folded in, because Vite's config merge would otherwise concatenate their
  * array with this function into a shape Rolldown rejects.
  */
@@ -256,7 +268,7 @@ export interface DaintreePluginOptions {
    */
   readonly externals?: ReadonlyArray<string | RegExp>;
   /**
-   * Build target. `"browser"` (default) wires the React and tour externals + host
+   * Build target. `"browser"` (default) wires the React, tour and plugin-ui externals + host
    * import-map guard for renderer/panel bundles. `"node"` configures a
    * Node-targeting build for stdio MCP servers: Node built-ins are externalized
    * (not browser-shimmed), node resolve conditions are preferred, and React is

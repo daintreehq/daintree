@@ -140,6 +140,41 @@ describe("findEntryKey", () => {
     expect(findEntryKey(manifest)).toBe("index.html");
   });
 
+  it("skips the plugin-ui facade entry, by name or by file", () => {
+    const facade = {
+      file: "assets/host-daintreehq-plugin-ui-Qr1st2Uv.js",
+      isEntry: true,
+      imports: ["_plugin-ui.js"],
+      dynamicImports: [],
+    };
+    expect(
+      findEntryKey({
+        "\0virtual:daintree-host/@daintreehq/plugin-ui": {
+          ...facade,
+          name: "host-daintreehq-plugin-ui",
+        },
+        ...makeManifest(),
+      })
+    ).toBe("index.html");
+    expect(
+      findEntryKey({ "\0virtual:daintree-host/@daintreehq/plugin-ui": facade, ...makeManifest() })
+    ).toBe("index.html");
+  });
+
+  it("does not treat a lookalike name as a plugin-ui facade", () => {
+    const manifest = {
+      "src/pluginUiExtra.ts": {
+        file: "assets/host-daintreehq-plugin-uikit-Wx3yz4Ab.js",
+        name: "host-daintreehq-plugin-uikit",
+        isEntry: true,
+        imports: [],
+        dynamicImports: [],
+      },
+      ...makeManifest(),
+    };
+    expect(findEntryKey(manifest)).toBe("src/pluginUiExtra.ts");
+  });
+
   it("does not treat a lookalike name as a tour facade", () => {
     const manifest = {
       "src/tourish.ts": {

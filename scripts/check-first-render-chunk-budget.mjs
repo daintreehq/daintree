@@ -166,19 +166,20 @@ export function collectClosure(manifest, seedKeys, { followDynamic = true } = {}
   });
 }
 
-// The facade chunks (`host-react-*`, `host-daintreehq-tour*`) that vite.config.ts
-// emits for the plugin import map (#11208) are entry chunks, but they are NOT the app entry —
+// The facade chunks (`host-react-*`, `host-daintreehq-tour*`, `host-daintreehq-plugin-ui`)
+// that vite.config.ts emits for the plugin import map (#11208) are entry chunks, but they are NOT the app entry —
 // they're re-export shims third-party plugin bundles resolve against. Manifest
 // order is not specified, so without this a facade could be picked as the entry
 // and the gate would silently measure a ~1KB shim instead of the app.
 // Matches on `name` when the manifest carries one and falls back to the emitted
 // `file` path, so the check holds regardless of which field Vite populates.
-// Tour facade names are exact (`host-daintreehq-tour`, `-react`, `-kit`,
-// `-mock-app`) so a real entry that merely shares the prefix is still picked; files carry the
-// 8-character Rolldown hash after the name.
-const HOST_FACADE_NAME = /^host-(?:react-|daintreehq-tour(?:-react|-kit|-mock-app)?$)/;
+// Tour and plugin-ui facade names are exact (`host-daintreehq-tour`, `-react`, `-kit`,
+// `-mock-app`, `host-daintreehq-plugin-ui`) so a real entry that merely shares the prefix
+// is still picked; files carry the 8-character Rolldown hash after the name.
+const HOST_FACADE_NAME =
+  /^host-(?:react-|daintreehq-(?:tour(?:-react|-kit|-mock-app)?|plugin-ui)$)/;
 const HOST_FACADE_FILE =
-  /(^|\/)host-(?:react-|daintreehq-tour(?:-react|-kit|-mock-app)?-[\w-]{8}\.js$)/;
+  /(^|\/)host-(?:react-|daintreehq-(?:tour(?:-react|-kit|-mock-app)?|plugin-ui)-[\w-]{8}\.js$)/;
 
 function isHostFacadeChunk(chunk) {
   const name = typeof chunk?.name === "string" ? chunk.name : "";
