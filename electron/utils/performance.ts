@@ -151,32 +151,86 @@ export function sampleIpcTiming(channel: string, durationMs: number, meta?: IpcS
 const STARTUP_SUPPRESSION_MS = 5_000;
 const WARN_RATE_LIMIT_MS = 10_000;
 
-export function startEventLoopLagMonitor(intervalMs = 1000, thresholdMs = 100): () => void {
+/**
+ * Power transitions, injected by the caller because this module is also
+ * loaded by utility processes that have no powerMonitor.
+ */
+export interface EventLoopLagPowerEvents {
+  onSuspend(callback: () => void): () => void;
+  onResume(callback: () => void): () => void;
+}
+
+/**
+ * performance.now() keeps running through system sleep on macOS, so the first
+ * tick after a wake sees the whole sleep as lag. Resume and that overdue tick
+ * arrive in no guaranteed order, and suspend can be missed entirely, so an
+ * over-threshold sample is held for one interval and dropped if any power
+ * transition lands before it is confirmed.
+ */
+export function startEventLoopLagMonitor(
+  intervalMs = 1000,
+  thresholdMs = 100,
+  powerEvents?: EventLoopLagPowerEvents
+): () => void {
   let expected = performance.now() + intervalMs;
   let lastWarnTime = -Infinity;
+  let suspended = false;
+  let stopped = false;
+  let pending: { lagMs: number; observedAt: number } | null = null;
+
+  const emit = (sample: { lagMs: number; observedAt: number }): void => {
+    const { lagMs, observedAt } = sample;
+    if (
+      observedAt - APP_BOOT_T0 > STARTUP_SUPPRESSION_MS &&
+      observedAt - lastWarnTime >= WARN_RATE_LIMIT_MS
+    ) {
+      lastWarnTime = observedAt;
+      logWarn("Event loop lag detected", { lagMs: Math.round(lagMs), intervalMs });
+    }
+
+    if (CAPTURE_ENABLED) {
+      markPerformance("event_loop_lag", { lagMs, intervalMs });
+    }
+  };
 
   const timer = setInterval(() => {
+    if (suspended) return;
+
     const now = performance.now();
     const lagMs = Math.max(0, now - expected);
     expected = now + intervalMs;
 
-    if (lagMs >= thresholdMs) {
-      const elapsed = now - APP_BOOT_T0;
-      if (elapsed > STARTUP_SUPPRESSION_MS && now - lastWarnTime >= WARN_RATE_LIMIT_MS) {
-        lastWarnTime = now;
-        logWarn("Event loop lag detected", { lagMs: Math.round(lagMs), intervalMs });
-      }
+    if (pending) {
+      emit(pending);
+      pending = null;
+    }
 
-      if (CAPTURE_ENABLED) {
-        markPerformance("event_loop_lag", { lagMs, intervalMs });
-      }
+    if (lagMs >= thresholdMs) {
+      pending = { lagMs, observedAt: now };
     }
   }, intervalMs);
 
   timer.unref?.();
 
+  const unsubscribeSuspend = powerEvents?.onSuspend(() => {
+    if (stopped) return;
+    suspended = true;
+    pending = null;
+  });
+  const unsubscribeResume = powerEvents?.onResume(() => {
+    if (stopped) return;
+    suspended = false;
+    pending = null;
+    expected = performance.now() + intervalMs;
+  });
+
   return () => {
+    if (stopped) return;
+    stopped = true;
+    pending = null;
     clearInterval(timer);
+    unsubscribeSuspend?.();
+    unsubscribeResume?.();
   };
 }
 

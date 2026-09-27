@@ -1,5 +1,5 @@
 // eager-import-allow: reads boot config via store.get synchronously while wiring global services
-import { app, dialog, ipcMain } from "electron";
+import { app, dialog, ipcMain, powerMonitor } from "electron";
 import {
   LATEST_SCHEMA_VERSION,
   MigrationRunner,
@@ -572,7 +572,18 @@ export async function initGlobalServices(
     name: "event-loop-lag-monitor",
     run: () => {
       if (!getStopEventLoopLagMonitor()) {
-        setStopEventLoopLagMonitor(startEventLoopLagMonitor());
+        setStopEventLoopLagMonitor(
+          startEventLoopLagMonitor(undefined, undefined, {
+            onSuspend: (callback) => {
+              powerMonitor.on("suspend", callback);
+              return () => powerMonitor.off("suspend", callback);
+            },
+            onResume: (callback) => {
+              powerMonitor.on("resume", callback);
+              return () => powerMonitor.off("resume", callback);
+            },
+          })
+        );
       }
       if (process.env.DAINTREE_PERF_CAPTURE === "1" && !getStopProcessMemoryMonitor()) {
         setStopProcessMemoryMonitor(startProcessMemoryMonitor());
