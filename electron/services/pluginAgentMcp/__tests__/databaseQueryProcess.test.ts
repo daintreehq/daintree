@@ -144,5 +144,14 @@ describe("runDatabaseToolInProcess", () => {
     // A launch that turns up after all is killed, and its exit frees nothing twice.
     children[0]!.spawn(55);
     expect(d.kill).toHaveBeenCalledWith(55);
+    children[0]!.exit();
+    children[1]!.exit();
+    const held = Array.from({ length: MAX_CONCURRENT_DATABASE_PROCESSES }, () =>
+      runDatabaseToolInProcess(request, new AbortController().signal, d).catch(() => {})
+    );
+    await expect(
+      runDatabaseToolInProcess(request, new AbortController().signal, d)
+    ).rejects.toMatchObject({ code: "DB_BUSY" });
+    for (const child of children.slice(-held.length)) child.exit();
   });
 });
