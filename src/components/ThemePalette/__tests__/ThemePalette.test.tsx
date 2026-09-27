@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { useAppThemeStore } from "@/store/appThemeStore";
+import { flushPendingTheme, useAppThemeStore } from "@/store/appThemeStore";
 
 vi.mock("@/clients/appThemeClient", () => ({
   appThemeClient: {
@@ -110,5 +110,18 @@ describe("ThemePalette", () => {
     fireEvent.keyDown(input(), { key: "ArrowDown" });
     await act(async () => {});
     expect(dialog.textContent).toContain(`Current: ${COMMITTED.name}`);
+  });
+
+  it("goes back to the saved theme when a search hides every row", async () => {
+    renderOpen();
+    await act(async () => {});
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+    await act(async () => {});
+    flushPendingTheme();
+    expect(document.documentElement.dataset.theme).not.toBe(COMMITTED.id);
+    fireEvent.change(input(), { target: { value: "qqxzv" } });
+    await act(async () => {});
+    flushPendingTheme();
+    expect(document.documentElement.dataset.theme).toBe(COMMITTED.id);
   });
 });

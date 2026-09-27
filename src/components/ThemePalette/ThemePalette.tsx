@@ -169,7 +169,15 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   // the seeded selectedIndex has rendered.
   useEffect(() => {
     if (!isOpen) return;
-    if (results.length === 0) return;
+    if (results.length === 0) {
+      // Nothing left to try, so go back to the saved theme rather than keep
+      // painting one the filter has hidden, which no row or footer could name.
+      const originalId = originalSchemeIdRef.current;
+      if (livePreviewReadyRef.current && originalId) {
+        injectSchemeToDOM(resolveAppTheme(originalId, useAppThemeStore.getState().customSchemes));
+      }
+      return;
+    }
     if (!livePreviewReadyRef.current) {
       livePreviewReadyRef.current = true;
       return;
