@@ -108,6 +108,7 @@ import {
   type SectionViewState,
   DEFAULT_SECTION_STATE,
   matchesFilter,
+  REVIEW_HUB_COUNT_CHIP,
   REVIEW_HUB_STICKY_BAND,
   readGitErrorFields,
   resolveBulkScope,
@@ -2138,7 +2139,7 @@ export function ReviewHubContent({
                     <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
                       <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
                         Changed vs {mainBranch}
-                        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
+                        <span className={REVIEW_HUB_COUNT_CHIP}>
                           {sortedBaseBranchFiles.length} file
                           {sortedBaseBranchFiles.length !== 1 ? "s" : ""}
                           {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (

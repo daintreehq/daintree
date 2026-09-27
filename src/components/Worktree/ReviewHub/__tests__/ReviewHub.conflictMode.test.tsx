@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState, Project } from "@shared/types";
@@ -248,6 +248,21 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    "aria-label": ariaLabel,
+  }: {
+    children: ReactNode;
+    onSelect?: () => void;
+    destructive?: boolean;
+    "aria-label"?: string;
+  }) => (
+    <div role="menuitem" tabIndex={-1} aria-label={ariaLabel} onClick={() => onSelect?.()}>
+      {children}
+    </div>
+  ),
+  DropdownMenuMeta: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }));
 
 vi.mock("@/components/ui/EmptyState", () => ({
@@ -301,7 +316,7 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
 async function confirmCheckout(side: "ours" | "theirs"): Promise<void> {
   const dialog = await screen.findByRole("alertdialog");
   const confirmBtn = within(dialog).getByRole("button", {
-    name: side === "ours" ? "Take ours" : "Take theirs",
+    name: side === "ours" ? "Use current branch" : "Use incoming changes",
   });
   fireEvent.click(confirmBtn);
 }
@@ -348,7 +363,12 @@ describe("ReviewHub", () => {
 
     abortRepositoryOperationMock.mockReset().mockResolvedValue(undefined);
     continueRepositoryOperationMock.mockReset().mockResolvedValue(undefined);
-    scanConflictMarkersMock.mockReset().mockResolvedValue([]);
+    // Mirrors the handler's contract: one entry per requested path.
+    scanConflictMarkersMock
+      .mockReset()
+      .mockImplementation(async (_cwd: string, paths: string[]) =>
+        paths.map((path) => ({ path, hunkCount: 0, firstMarkerLine: null }))
+      );
     checkoutOursTheirsMock.mockReset().mockResolvedValue(undefined);
     openInEditorMock.mockReset().mockResolvedValue(undefined);
     // Deliberately unlike the fixture worktree id — a worktree id is not a
@@ -513,9 +533,9 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
-      expect(screen.getByRole("button", { name: /^Continue /i }).hasAttribute("disabled")).toBe(
-        true
-      );
+      expect(
+        screen.getByRole("button", { name: /^Continue /i }).getAttribute("aria-disabled")
+      ).toBe("true");
     });
 
     it("enables Continue when all conflicts are resolved", async () => {
@@ -530,9 +550,9 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
-      expect(screen.getByRole("button", { name: /^Continue /i }).hasAttribute("disabled")).toBe(
-        false
-      );
+      expect(
+        screen.getByRole("button", { name: /^Continue /i }).hasAttribute("aria-disabled")
+      ).toBe(false);
     });
 
     it("renders user-cleared empty state when all conflicts are resolved", async () => {
@@ -621,7 +641,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
@@ -636,7 +656,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeTheirs = screen.getByRole("button", { name: /Take theirs for src\/app\.ts/i });
+      const takeTheirs = screen.getByRole("menuitem", { name: /for src\/app\.ts \(theirs\)/i });
       fireEvent.click(takeTheirs);
       await confirmCheckout("theirs");
 
@@ -651,7 +671,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      fireEvent.click(screen.getByRole("button", { name: /Take ours for src\/app\.ts/i }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i }));
 
       // Dialog is open but unconfirmed — the IPC must not have fired.
       await screen.findByRole("alertdialog");
@@ -681,10 +701,14 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      expect(screen.queryByTestId("conflict-resolved-list")).toBeNull();
+      const toggle = screen.getByTestId("conflict-resolved-toggle");
+      const list = screen.getByTestId("conflict-resolved-list");
+      expect(list.hidden).toBe(true);
+      // The disclosure always names a real element, collapsed or not.
+      expect(toggle.getAttribute("aria-controls")).toBe(list.id);
 
-      fireEvent.click(screen.getByTestId("conflict-resolved-toggle"));
-      await waitFor(() => screen.getByTestId("conflict-resolved-list"));
+      fireEvent.click(toggle);
+      await waitFor(() => expect(list.hidden).toBe(false));
       screen.getByText("done.ts");
     });
 
@@ -729,9 +753,9 @@ describe("ReviewHub", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /Mark src\/app\.ts as resolved/i })).toBeTruthy();
       });
-      expect(screen.getByRole("button", { name: /^Continue /i }).hasAttribute("disabled")).toBe(
-        true
-      );
+      expect(
+        screen.getByRole("button", { name: /^Continue /i }).getAttribute("aria-disabled")
+      ).toBe("true");
     });
 
     it("rolls back optimistic resolution when Take ours fails", async () => {
@@ -741,13 +765,13 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
       await waitFor(() => {
         // The row reappears after rollback — the Take ours button is still rendered.
-        expect(screen.getByRole("button", { name: /Take ours for src\/app\.ts/i })).toBeTruthy();
+        expect(screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i })).toBeTruthy();
       });
     });
 
@@ -770,7 +794,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
@@ -779,7 +803,7 @@ describe("ReviewHub", () => {
       // disabled because the checkout IPC is pending.
       await waitFor(() => {
         const continueBtn = screen.getByRole("button", { name: /^Continue /i });
-        expect(continueBtn.hasAttribute("disabled")).toBe(true);
+        expect(continueBtn.getAttribute("aria-disabled")).toBe("true");
       });
 
       // Cleanup so the pending promise doesn't leak across tests.
@@ -796,7 +820,7 @@ describe("ReviewHub", () => {
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const badge = await screen.findByTestId("conflict-hunk-count-src/app.ts");
-      expect(badge.textContent).toBe("3");
+      expect(badge.textContent).toBe("3 regions");
     });
 
     it("opens confirm dialog before aborting and calls abort on confirm", async () => {
@@ -834,6 +858,255 @@ describe("ReviewHub", () => {
       await waitFor(() => {
         expect(continueRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH);
       });
+    });
+
+    it("does not continue while conflicts remain, even though Continue stays focusable", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      const continueBtn = await screen.findByRole("button", { name: /^Continue /i });
+      expect(continueBtn.hasAttribute("disabled")).toBe(false);
+      fireEvent.click(continueBtn);
+      await act(async () => {});
+      expect(continueRepositoryOperationMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps whole-file overwrites out of the row's direct actions", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      const list = await screen.findByRole("list", { name: "Conflicted files" });
+      const [row] = within(list).getAllByRole("listitem");
+      if (!row) throw new Error("no conflicted row rendered");
+      const directNames = within(row)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label") ?? b.textContent ?? "");
+      expect(directNames.some((name) => /^Open /.test(name))).toBe(true);
+      expect(directNames.some((name) => /\((ours|theirs)\)$/.test(name))).toBe(false);
+      // Each overwrite leads with the source it restores; git's ours/theirs is
+      // only the trailing qualifier, so the rebase swap never has to be
+      // remembered to choose safely.
+      const items = within(row).getAllByRole("menuitem");
+      expect(items).toHaveLength(2);
+      for (const item of items) {
+        expect(item.textContent?.trim().startsWith("Use ")).toBe(true);
+        expect(item.textContent).not.toMatch(/^\s*(ours|theirs)/i);
+      }
+    });
+
+    it("names the rebase sides by what they are, not by git's swapped ours/theirs", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus({ repoState: "REBASING" }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await screen.findByTestId("conflict-panel");
+      const rebaseOurs = screen
+        .getByRole("menuitem", { name: /\(ours\)$/ })
+        .getAttribute("aria-label");
+      cleanup();
+
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await screen.findByTestId("conflict-panel");
+      const mergeOurs = screen
+        .getByRole("menuitem", { name: /\(ours\)$/ })
+        .getAttribute("aria-label");
+
+      expect(rebaseOurs).not.toBe(mergeOurs);
+    });
+
+    it("asks before staging a file that still contains conflict markers", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 2, firstMarkerLine: 4 },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      const dialog = await screen.findByRole("alertdialog");
+      expect(stageFileMock).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Mark resolved" }));
+      await waitFor(() => {
+        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+      });
+    });
+
+    it("asks before staging when the marker re-read fails", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockRejectedValue(new Error("EACCES"));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await screen.findByRole("alertdialog");
+      expect(stageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("asks before staging when the re-read returns nothing for the file", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await screen.findByRole("alertdialog");
+      expect(stageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("stages a deleted-side conflict the scanner had no file to check, without asking", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [{ path: "src/app.ts", xy: "DU", label: "deleted by us" }],
+        })
+      );
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: null, firstMarkerLine: null },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await waitFor(() => {
+        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+      });
+    });
+
+    it("asks before staging a text conflict the scanner skipped (oversized, unreadable)", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: null, firstMarkerLine: null },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await screen.findByRole("alertdialog");
+      expect(stageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("hands focus to the next file when a confirm dialog resolves the row", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [
+            { path: "src/app.ts", xy: "UU", label: "both modified" },
+            { path: "src/other.ts", xy: "UU", label: "both modified" },
+          ],
+          conflicted: ["src/app.ts", "src/other.ts"],
+        })
+      );
+      checkoutOursTheirsMock.mockImplementationOnce(() => new Promise<void>(() => {}));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(await screen.findByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i }));
+      await confirmCheckout("ours");
+
+      await waitFor(() => {
+        expect(document.activeElement?.getAttribute("aria-label")).toBe(
+          "Open src/other.ts in external editor"
+        );
+      });
+    });
+
+    it("stages without asking once the file has no markers left", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 0, firstMarkerLine: null },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await waitFor(() => {
+        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("hands focus to the next file when the focused row is resolved", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [
+            { path: "src/app.ts", xy: "UU", label: "both modified" },
+            { path: "src/other.ts", xy: "UU", label: "both modified" },
+          ],
+          conflicted: ["src/app.ts", "src/other.ts"],
+        })
+      );
+      stageFileMock.mockImplementationOnce(() => new Promise<void>(() => {}));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      const resolveBtn = await screen.findByRole("button", {
+        name: /Mark src\/app\.ts as resolved/i,
+      });
+      resolveBtn.focus();
+      fireEvent.click(resolveBtn);
+
+      await waitFor(() => {
+        expect(document.activeElement?.getAttribute("aria-label")).toBe(
+          "Open src/other.ts in external editor"
+        );
+      });
+    });
+
+    it("marks the current rebase step for assistive technology", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          repoState: "REBASING",
+          rebaseStep: 2,
+          rebaseTotalSteps: 3,
+          rebaseSequence: {
+            backend: "merge",
+            entries: [
+              { action: "pick", sha: "aaa1111", subject: "first", state: "done" },
+              { action: "pick", sha: "bbb2222", subject: "second", state: "current" },
+              { action: "pick", sha: "ccc3333", subject: "third", state: "pending" },
+            ],
+          },
+        })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      const rail = await screen.findByTestId("conflict-rebase-sequence");
+      const current = within(rail)
+        .getAllByRole("listitem")
+        .filter((li) => li.getAttribute("aria-current") === "step");
+      expect(current).toHaveLength(1);
+      expect(current[0]?.textContent).toContain("second");
+    });
+
+    it("names deletion sides in rebase terms, and leaves merge labels alone", async () => {
+      const deletedByUs = [{ path: "src/app.ts", xy: "DU", label: "deleted by us" }];
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({ repoState: "REBASING", conflictedFiles: deletedByUs })
+      );
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      const rebaseList = await screen.findByRole("list", { name: "Conflicted files" });
+      expect(rebaseList.textContent).not.toMatch(/\bus\b/);
+      expect(rebaseList.textContent).toMatch(/deleted by destination/);
+      cleanup();
+
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus({ conflictedFiles: deletedByUs }));
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      const mergeList = await screen.findByRole("list", { name: "Conflicted files" });
+      expect(mergeList.textContent).toMatch(/deleted by us/);
     });
 
     it("renders cherry-pick operation labels", async () => {

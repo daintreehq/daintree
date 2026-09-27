@@ -28,6 +28,7 @@ import {
   countNonDefaultView,
   isDensity,
   matchesFilter,
+  REVIEW_HUB_COUNT_CHIP,
   resolveBulkScope,
   sumChurn,
   truncateFilterQuery,
@@ -353,7 +354,7 @@ export function FileSection({
             {title}
             <span
               data-testid={countTestId}
-              className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal inline-flex items-center gap-1"
+              className={cn(REVIEW_HUB_COUNT_CHIP, "inline-flex items-center gap-1")}
             >
               <span>
                 {totalCount} file{totalCount !== 1 ? "s" : ""}
