@@ -1,6 +1,6 @@
 ## GitHub Issues
 
-Read `docs/issue-guidelines.md` before suggesting or drafting an issue; draft only wishes passing its Green Light test. Search `daintreehq/daintree` issues with `gh` only after docs and live state fail. After a duplicate check, get the exact text approved and have the user file it at `https://github.com/daintreehq/daintree/issues/new`; never file it yourself.
+Read `docs/issue-guidelines.md` before suggesting or drafting an issue; draft only wishes passing its Green Light test, in its format. Search `daintreehq/daintree` issues with `gh` only after docs and live state fail. After a duplicate check, get the exact text approved and have the user file it at `https://github.com/daintreehq/daintree/issues/new`; never file it yourself.
 
 ## When You Cannot Answer
 

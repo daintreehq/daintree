@@ -22,7 +22,7 @@ export function registerDiagnosticsActions(
     id: "diagnostics.openReview",
     title: "Send diagnostics",
     description:
-      "Collect a diagnostics snapshot and open the review dialog, where the user checks, trims and redacts each section before saving the export themselves. The way to hand logs to someone else: nothing leaves the machine from this call.",
+      "Collect a diagnostics snapshot and open the review dialog, where the user picks sections and adds redaction rules before saving the export themselves. The way to hand logs to someone else: nothing leaves the machine from this call.",
     category: "diagnostics",
     kind: "command",
     danger: "safe",
@@ -34,6 +34,10 @@ export function registerDiagnosticsActions(
       // via argsSchema, so this is effectively a typed re-derive.
       const parsed = argsSchema.parse(args);
       await useDiagnosticsReviewStore.getState().openReview(parsed?.scope);
+      // The store keeps a collection failure for the Settings row and resolves;
+      // without this a caller would report a dialog that never opened.
+      const { downloadError } = useDiagnosticsReviewStore.getState();
+      if (downloadError) throw new Error(downloadError);
     },
   }));
 
