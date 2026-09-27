@@ -25,8 +25,17 @@ import {
 } from "../utils/fs.js";
 import { WATCHDOG_KILL_FLAG_NAME } from "../watchdog-host-core.js";
 import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention.js";
+import { stateFilePath } from "./projectStorePaths.js";
+import { PROJECT_STATE_SCHEMA_VERSION } from "./ProjectStateManager.js";
 
 const MAX_CRASH_LOGS = 10;
+const CRASH_LOG_PREFIX = "crash-";
+const RENDERER_GONE_PREFIX = "renderer-gone-";
+const MAX_RENDERER_GONE_LOGS = 20;
+// A view stuck in a crash-reload loop must not turn into a file per second.
+const RENDERER_GONE_COOLDOWN_MS = 60_000;
+const MAX_RENDERER_GONE_PER_SESSION = 20;
+const PROJECTS_DIR = "projects";
 const MARKER_FILENAME = "running.lock";
 const CRASHES_DIR = "crashes";
 const BACKUP_DIR = "backups";
@@ -52,6 +61,49 @@ const HEARTBEAT_STALE_THRESHOLD_MS = 120_000;
 // after sessionStartMs. 5s of grace safely absorbs clock drift and fs jitter
 // without admitting any flag from a prior session.
 const WATCHDOG_GRACE_MS = 5_000;
+
+const CRASH_CAUSES: ReadonlySet<CrashCause> = new Set<CrashCause>([
+  "uncaught-exception",
+  "native-crash",
+  "suspended-then-lost",
+  "power-loss",
+  "external-kill",
+  "unknown",
+]);
+
+export interface RendererGoneDetails {
+  /** `app-view` is the window's initial view; `project-view` any view ProjectViewManager created. */
+  process: "app-view" | "project-view";
+  projectId?: string;
+  webContentsId?: number;
+  reason: string;
+  /** Diagnostic only — its mapping to signals is a Chromium detail, never branch on it. */
+  exitCode: number;
+}
+
+/**
+ * A renderer that died while main kept running. Written beside the fatal
+ * crash logs under its own prefix and never referenced from the marker, so
+ * it cannot surface as a pending crash on the next launch.
+ */
+export interface RendererGoneRecord extends RendererGoneDetails {
+  id: string;
+  event: "renderer-gone";
+  fatal: false;
+  timestamp: number;
+  appVersion: string;
+  platform: string;
+  osVersion: string;
+  arch: string;
+  sessionDurationMs: number;
+  panelCount?: number;
+  panelKinds?: Record<string, number>;
+}
+
+interface CollectedPanel {
+  projectId?: string;
+  panel: Record<string, unknown>;
+}
 
 interface WatchdogKillAnnotation {
   killedAt: number;
@@ -96,6 +148,12 @@ export class CrashRecoveryService {
   // hasn't changed. Explicit scheduleBackup() calls clear this field so
   // change-driven writes always go through.
   private lastWrittenStateJson: string | null = null;
+  // Workspaces whose persisted layouts describe the running session. Supplied
+  // by main because the answer lives in the window registry and PtyClient,
+  // neither of which this early-boot service may import.
+  private liveWorkspaceIdsProvider: (() => Iterable<string>) | null = null;
+  private rendererGoneCount = 0;
+  private rendererGoneLastAt = new Map<string, number>();
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -142,9 +200,9 @@ export class CrashRecoveryService {
     // re-introduce the bleed-into-fresh-boot bug pinned by the test at
     // CrashRecoveryService.test.ts:1346.
     if (this.cachedBackupSnapshot) {
-      const appState = this.cachedBackupSnapshot.appState as Record<string, unknown> | undefined;
-      const terminals = appState?.terminals;
-      return Array.isArray(terminals) ? terminals.length : null;
+      return hasPanelSource(this.cachedBackupSnapshot)
+        ? collectSnapshotPanels(this.cachedBackupSnapshot).length
+        : null;
     }
     if (!allowDiskFallback) return null;
     // Renderer-crash mid-session: no marker was ever consumed, so the cache
@@ -160,9 +218,7 @@ export class CrashRecoveryService {
     // panel count on the current session's recovery page. Mirrors the
     // watchdog freshness check at consumeWatchdogKillFlag (line 637).
     if (snapshot.capturedAt < this.sessionStartMs) return null;
-    const fallbackState = snapshot.appState as Record<string, unknown> | undefined;
-    const terminals = fallbackState?.terminals;
-    return Array.isArray(terminals) ? terminals.length : null;
+    return hasPanelSource(snapshot) ? collectSnapshotPanels(snapshot).length : null;
   }
 
   getConfig(): CrashRecoveryConfig {
@@ -189,22 +245,84 @@ export class CrashRecoveryService {
     return updated;
   }
 
-  recordCrash(error?: Error | unknown): void {
+  setLiveWorkspaceIdsProvider(provider: (() => Iterable<string>) | null): void {
+    this.liveWorkspaceIdsProvider = provider;
+  }
+
+  /**
+   * Record a fatal main-process failure. One-shot per session: the marker is
+   * rewritten to point at the log, so the next launch surfaces recovery.
+   * A renderer dying while main survives is not this — see recordRendererGone.
+   */
+  recordCrash(error?: Error | unknown, cause: CrashCause = "uncaught-exception"): void {
     if (this.crashRecorded) return;
     this.crashRecorded = true;
 
     try {
       const entry = this.buildCrashEntry(error);
-      // The only call site is the uncaughtException handler, so the cause is
-      // always "uncaught-exception" — but the field is additive, default only
-      // when absent so a future caller passing a more specific cause is honored.
-      if (entry.crashCause === undefined) entry.crashCause = "uncaught-exception";
+      entry.crashCause = cause;
       const logPath = this.writeCrashLog(entry);
       this.writeMarker(entry);
       this.pruneOldLogs();
       console.log("[CrashRecovery] Crash recorded:", logPath);
     } catch (err) {
       console.error("[CrashRecovery] Failed to record crash:", err);
+    }
+  }
+
+  /**
+   * Record a renderer death the app survived. Unlike recordCrash it spends no
+   * latch and leaves the marker alone, so a later fatal crash is still
+   * recorded and a normal quit afterwards is still a clean exit.
+   */
+  recordRendererGone(details: RendererGoneDetails): void {
+    try {
+      const now = Date.now();
+      const key = `${details.process}:${details.projectId ?? details.webContentsId ?? ""}`;
+      const lastAt = this.rendererGoneLastAt.get(key);
+      if (lastAt !== undefined && now - lastAt < RENDERER_GONE_COOLDOWN_MS) return;
+      if (this.rendererGoneCount >= MAX_RENDERER_GONE_PER_SESSION) return;
+      // Reserve before any I/O so a failing write can't be retried in a loop.
+      this.rendererGoneLastAt.set(key, now);
+      this.rendererGoneCount++;
+
+      const record: RendererGoneRecord = {
+        id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+        event: "renderer-gone",
+        fatal: false,
+        timestamp: now,
+        appVersion: app.getVersion(),
+        platform: process.platform,
+        osVersion: os.release(),
+        arch: os.arch(),
+        sessionDurationMs: now - this.sessionStartMs,
+        process: details.process,
+        reason: details.reason,
+        exitCode: details.exitCode,
+      };
+      if (details.projectId !== undefined) record.projectId = details.projectId;
+      if (details.webContentsId !== undefined) record.webContentsId = details.webContentsId;
+      if (details.projectId !== undefined) {
+        const layout = this.readProjectLayoutSync(details.projectId);
+        if (layout) {
+          const summary = summarizePanels(
+            layout.map((panel) => ({ projectId: details.projectId, panel }))
+          );
+          record.panelCount = summary.panelCount;
+          record.panelKinds = summary.panelKinds;
+        }
+      }
+
+      fs.mkdirSync(this.crashesDir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+      tightenDirPermissionsSync(this.crashesDir);
+      const logPath = path.join(this.crashesDir, `${RENDERER_GONE_PREFIX}${record.id}.json`);
+      resilientAtomicWriteFileSync(logPath, JSON.stringify(record, null, 2), "utf-8", {
+        mode: OWNER_RW_FILE_MODE,
+      });
+      this.pruneLogs(RENDERER_GONE_PREFIX, MAX_RENDERER_GONE_LOGS);
+      console.log("[CrashRecovery] Renderer gone recorded:", logPath);
+    } catch (err) {
+      console.error("[CrashRecovery] Failed to record renderer gone:", err);
     }
   }
 
@@ -365,6 +483,7 @@ export class CrashRecoveryService {
       const stateJson = JSON.stringify({
         appState: snapshot.appState,
         windowStates: snapshot.windowStates,
+        projectLayouts: snapshot.projectLayouts,
       });
       if (stateJson === this.lastWrittenStateJson) {
         return;
@@ -401,48 +520,96 @@ export class CrashRecoveryService {
     }
   }
 
-  restoreBackup(panelIds?: string[]): boolean {
-    try {
-      // Prefer the snapshot cached by consumeMarker — startBackupTimer can
-      // overwrite the on-disk backup files between marker consumption and
-      // the user clicking restore, and the renamed crashed-* file could be
-      // unlinked concurrently. The cache holds the parsed pre-crash snapshot.
-      // Fall back current → previous on disk for explicit user-driven
-      // restores in a non-crash session (no cache populated).
-      let snapshot: SessionSnapshot | null = this.cachedBackupSnapshot;
-      if (!snapshot) {
-        const sourcePath = this.crashedBackupPath ?? this.backupPath;
-        snapshot = this.readBackupFile(sourcePath);
-        if (!snapshot && sourcePath !== this.previousBackupPath) {
-          const previous = this.readBackupFile(this.previousBackupPath);
-          if (previous) {
-            console.log("[CrashRecovery] Current backup unreadable; using previous generation");
-            snapshot = previous;
-          }
+  private resolveRestoreSnapshot(): SessionSnapshot | null {
+    // Prefer the snapshot cached by consumeMarker — startBackupTimer can
+    // overwrite the on-disk backup files between marker consumption and
+    // the user clicking restore, and the renamed crashed-* file could be
+    // unlinked concurrently. The cache holds the parsed pre-crash snapshot.
+    // Fall back current → previous on disk for explicit user-driven
+    // restores in a non-crash session (no cache populated).
+    let snapshot: SessionSnapshot | null = this.cachedBackupSnapshot;
+    if (!snapshot) {
+      const sourcePath = this.crashedBackupPath ?? this.backupPath;
+      snapshot = this.readBackupFile(sourcePath);
+      if (!snapshot && sourcePath !== this.previousBackupPath) {
+        const previous = this.readBackupFile(this.previousBackupPath);
+        if (previous) {
+          console.log("[CrashRecovery] Current backup unreadable; using previous generation");
+          snapshot = previous;
         }
       }
+    }
+    return snapshot;
+  }
+
+  /**
+   * Panels the user left out of a selective restore, grouped by the workspace
+   * whose persisted layout holds them. Per-project layouts are live files that
+   * a crash leaves intact, so honouring a deselection means removing those
+   * entries from them — restoreBackup only rewrites the global state. Empty
+   * when there is no selection, no snapshot, or the selection matches nothing
+   * (restoreBackup rejects that case, and it must not delete everything).
+   */
+  getDeselectedProjectPanels(panelIds?: string[]): Record<string, string[]> {
+    const deselected: Record<string, string[]> = Object.create(null);
+    if (!panelIds || panelIds.length === 0) return deselected;
+    try {
+      const panels = collectSnapshotPanels(this.resolveRestoreSnapshot());
+      const idSet = new Set(panelIds);
+      if (!panels.some(({ panel }) => idSet.has(panel.id as string))) return deselected;
+      for (const { projectId, panel } of panels) {
+        if (projectId === undefined || typeof panel.id !== "string" || idSet.has(panel.id)) {
+          continue;
+        }
+        (deselected[projectId] ??= []).push(panel.id);
+      }
+    } catch (err) {
+      console.error("[CrashRecovery] Failed to resolve deselected panels:", err);
+    }
+    return deselected;
+  }
+
+  /**
+   * Whether the recoverable panels come from per-project layouts rather than
+   * the legacy global list. Hydration's crash panel filter overrides a
+   * workspace's own state with the global list, which is only right when that
+   * list is what the user chose from.
+   */
+  hasProjectPanelLayouts(): boolean {
+    try {
+      const layouts = this.resolveRestoreSnapshot()?.projectLayouts;
+      return isPlainObject(layouts) && Object.keys(layouts).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  restoreBackup(panelIds?: string[]): boolean {
+    try {
+      let snapshot = this.resolveRestoreSnapshot();
       if (!snapshot) return false;
 
-      if (panelIds !== undefined && panelIds.length > 0 && snapshot.appState) {
-        // Filter onto a shallow copy so we don't mutate the parsed snapshot.
-        // If applySessionSnapshot below throws and the user retries the
-        // restore (with or without a different filter), re-reading from
-        // the crashed-* file gives the full pre-crash terminal list again.
-        const appState = { ...(snapshot.appState as Record<string, unknown>) };
-        if (Array.isArray(appState.terminals)) {
-          const originalTerminals = appState.terminals as Array<{ id: string }>;
-          const idSet = new Set(panelIds);
-          const filtered = originalTerminals.filter((t) => idSet.has(t.id));
-          // Stale or typo'd panel IDs would otherwise empty the filter and
-          // succeed-then-unlink the crashed-* file, dropping the recovery
-          // source the user might still want. Return false so they can
-          // retry with the correct IDs or no filter at all.
-          if (filtered.length === 0 && originalTerminals.length > 0) {
-            return false;
-          }
-          appState.terminals = filtered;
+      if (panelIds !== undefined && panelIds.length > 0) {
+        const idSet = new Set(panelIds);
+        const panels = collectSnapshotPanels(snapshot);
+        // Stale or typo'd panel IDs would otherwise empty the filter and
+        // succeed-then-unlink the crashed-* file, dropping the recovery
+        // source the user might still want. Return false so they can
+        // retry with the correct IDs or no filter at all.
+        if (panels.length > 0 && !panels.some(({ panel }) => idSet.has(panel.id as string))) {
+          return false;
         }
-        snapshot = { ...snapshot, appState };
+        if (isPlainObject(snapshot.appState) && Array.isArray(snapshot.appState.terminals)) {
+          // Filter onto a shallow copy so we don't mutate the parsed snapshot.
+          // If applySessionSnapshot below throws and the user retries the
+          // restore (with or without a different filter), re-reading from
+          // the crashed-* file gives the full pre-crash terminal list again.
+          const appState = { ...snapshot.appState };
+          appState.terminals = (appState.terminals as Array<{ id: string }>).filter((t) =>
+            idSet.has(t.id)
+          );
+          snapshot = { ...snapshot, appState };
+        }
       }
 
       if (!hasRestorableSnapshotContent(snapshot)) {
@@ -618,7 +785,11 @@ export class CrashRecoveryService {
       const entry = logPath
         ? this.readCrashLog(logPath)
         : this.buildCrashEntryFromMarker(marker, crashTimestamp);
-      entry.crashCause = this.classifyCrashCause(marker);
+      // A log states its own cause; only logs from before causes were stored
+      // fall back to the heuristic chain.
+      if (!logPath || !isCrashCause(entry.crashCause)) {
+        entry.crashCause = this.classifyCrashCause(marker);
+      }
       if (watchdogAnnotation) {
         entry.cause = "watchdog-deadlock";
         entry.watchdogKilledAt = watchdogAnnotation.killedAt;
@@ -861,25 +1032,19 @@ export class CrashRecoveryService {
         const raw = fs.readFileSync(sourcePath, "utf8");
         snapshot = JSON.parse(raw) as SessionSnapshot;
       }
-      if (!snapshot.appState) return [];
-
-      const appState = snapshot.appState as Record<string, unknown>;
-      const terminals = appState.terminals;
-      if (!Array.isArray(terminals)) return [];
-
-      // Per-item guard so one malformed entry (null, primitive, missing
-      // fields) cannot drop the entire panel list. Returning fewer
-      // summaries is acceptable; returning none when some were valid is not.
+      // collectSnapshotPanels guards per item, so one malformed entry (null,
+      // primitive, missing fields) cannot drop the entire panel list.
+      // Returning fewer summaries is acceptable; returning none when some
+      // were valid is not.
       const summaries: PanelSummary[] = [];
-      for (const entry of terminals) {
-        if (typeof entry !== "object" || entry === null) continue;
-        const t = entry as Record<string, unknown>;
+      for (const { projectId, panel: t } of collectSnapshotPanels(snapshot)) {
         const isSuspect =
           typeof t.createdAt === "number"
             ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
             : false;
         summaries.push({
           id: String(t.id ?? ""),
+          ...(projectId !== undefined ? { projectId } : {}),
           kind: String(t.kind ?? "terminal"),
           title: String(t.title ?? ""),
           cwd: t.cwd ? String(t.cwd) : undefined,
@@ -989,7 +1154,12 @@ export class CrashRecoveryService {
     }
 
     this.enrichWithEnvironmentMetadata(entry);
-    this.enrichWithPanelData(entry, store.get("appState"));
+    this.enrichWithPanelData(entry, () => {
+      const snapshot: SessionSnapshot = { capturedAt: 0, appState: store.get("appState") };
+      const projectLayouts = this.readLiveProjectLayoutsSync();
+      if (projectLayouts) snapshot.projectLayouts = projectLayouts;
+      return hasPanelSource(snapshot) ? collectSnapshotPanels(snapshot) : null;
+    });
     this.enrichWithRecentActions(entry);
 
     return entry;
@@ -1010,7 +1180,10 @@ export class CrashRecoveryService {
     };
 
     this.enrichWithEnvironmentMetadata(entry);
-    this.enrichWithPanelData(entry, this.readCrashedBackupAppState());
+    this.enrichWithPanelData(entry, () => {
+      const snapshot = this.readPreCrashSnapshot();
+      return snapshot && hasPanelSource(snapshot) ? collectSnapshotPanels(snapshot) : null;
+    });
     this.enrichWithRecentActions(entry);
 
     return entry;
@@ -1056,15 +1229,15 @@ export class CrashRecoveryService {
     return Math.max(marker.sessionStartMs, nowMs);
   }
 
-  private readCrashedBackupAppState(): unknown {
-    if (!this.crashedBackupPath) return undefined;
+  private readPreCrashSnapshot(): SessionSnapshot | null {
+    if (this.cachedBackupSnapshot) return this.cachedBackupSnapshot;
+    if (!this.crashedBackupPath) return null;
     try {
-      if (!fs.existsSync(this.crashedBackupPath)) return undefined;
+      if (!fs.existsSync(this.crashedBackupPath)) return null;
       const raw = fs.readFileSync(this.crashedBackupPath, "utf-8");
-      const snapshot = JSON.parse(raw) as SessionSnapshot;
-      return snapshot.appState;
+      return JSON.parse(raw) as SessionSnapshot;
     } catch {
-      return undefined;
+      return null;
     }
   }
 
@@ -1205,22 +1378,16 @@ export class CrashRecoveryService {
     }
   }
 
-  private enrichWithPanelData(entry: CrashLogEntry, appState: unknown): void {
+  private enrichWithPanelData(
+    entry: CrashLogEntry,
+    readPanels: () => CollectedPanel[] | null
+  ): void {
     try {
-      const state = appState as Record<string, unknown> | undefined;
-      const terminals = state?.terminals;
-      if (!Array.isArray(terminals)) return;
-
-      entry.panelCount = terminals.length;
-      const kinds: Record<string, number> = Object.create(null);
-      for (const t of terminals) {
-        const kind =
-          typeof (t as Record<string, unknown>).kind === "string"
-            ? ((t as Record<string, unknown>).kind as string)
-            : "unknown";
-        kinds[kind] = (kinds[kind] ?? 0) + 1;
-      }
-      entry.panelKinds = kinds;
+      const panels = readPanels();
+      if (!panels) return;
+      const summary = summarizePanels(panels);
+      entry.panelCount = summary.panelCount;
+      entry.panelKinds = summary.panelKinds;
     } catch {
       // best-effort
     }
@@ -1283,11 +1450,66 @@ export class CrashRecoveryService {
   }
 
   private captureSessionSnapshot(): SessionSnapshot {
-    return {
+    const snapshot: SessionSnapshot = {
       capturedAt: Date.now(),
       appState: store.get("appState"),
       windowStates: windowStatesStore.get("windowStates"),
     };
+    const projectLayouts = this.readLiveProjectLayoutsSync();
+    if (projectLayouts) snapshot.projectLayouts = projectLayouts;
+    return snapshot;
+  }
+
+  /**
+   * Persisted panel layouts of every live workspace, keyed by workspace id.
+   * Null when no workspace is live, so callers fall back to the legacy global
+   * list. Read-only and synchronous: it runs from the uncaughtException path,
+   * where nothing async gets to finish. A workspace whose file is missing or
+   * unreadable is left out rather than recorded as empty.
+   */
+  private readLiveProjectLayoutsSync(): Record<string, Record<string, unknown>[]> | null {
+    let ids: string[];
+    try {
+      ids = this.liveWorkspaceIdsProvider ? [...new Set(this.liveWorkspaceIdsProvider())] : [];
+    } catch (err) {
+      console.warn("[CrashRecovery] Failed to enumerate live workspaces:", err);
+      return null;
+    }
+    if (ids.length === 0) return null;
+    const layouts: Record<string, Record<string, unknown>[]> = Object.create(null);
+    let found = false;
+    for (const id of ids.sort()) {
+      const layout = this.readProjectLayoutSync(id);
+      if (layout) {
+        layouts[id] = layout;
+        found = true;
+      }
+    }
+    return found ? layouts : null;
+  }
+
+  private readProjectLayoutSync(projectId: string): Record<string, unknown>[] | null {
+    try {
+      const filePath = stateFilePath(path.join(this.userData, PROJECTS_DIR), projectId);
+      if (!filePath) return null;
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
+      if (!isPlainObject(parsed)) return null;
+      // A newer build's layout is one hydration will refuse to read, so it
+      // must not be counted or offered for restore either.
+      if (
+        typeof parsed._schemaVersion === "number" &&
+        parsed._schemaVersion > PROJECT_STATE_SCHEMA_VERSION
+      ) {
+        return null;
+      }
+      if (parsed.terminals == null) return [];
+      if (!Array.isArray(parsed.terminals)) return null;
+      return parsed.terminals.filter(
+        (t): t is Record<string, unknown> => isPlainObject(t) && typeof t.id === "string"
+      );
+    } catch {
+      return null;
+    }
   }
 
   private applySessionSnapshot(snapshot: SessionSnapshot): void {
@@ -1300,11 +1522,15 @@ export class CrashRecoveryService {
   }
 
   private pruneOldLogs(): void {
+    this.pruneLogs(CRASH_LOG_PREFIX, MAX_CRASH_LOGS);
+  }
+
+  private pruneLogs(prefix: string, keep: number): void {
     try {
       if (!fs.existsSync(this.crashesDir)) return;
       const files = fs
         .readdirSync(this.crashesDir)
-        .filter((f) => f.startsWith("crash-") && f.endsWith(".json"))
+        .filter((f) => f.startsWith(prefix) && f.endsWith(".json"))
         .map((f) => ({ name: f, path: path.join(this.crashesDir, f), mtime: 0 }));
 
       for (const file of files) {
@@ -1317,7 +1543,7 @@ export class CrashRecoveryService {
 
       files.sort((a, b) => b.mtime - a.mtime);
 
-      for (const file of files.slice(MAX_CRASH_LOGS)) {
+      for (const file of files.slice(keep)) {
         try {
           fs.unlinkSync(file.path);
         } catch {
@@ -1355,6 +1581,60 @@ interface SessionSnapshot {
   capturedAt: number;
   appState?: unknown;
   windowStates?: unknown;
+  /**
+   * Terminal entries from each live workspace's persisted `state.json`. The
+   * global `appState.terminals` is only a migration fallback now, so this is
+   * where a modern session's panels are. Absent in legacy snapshots.
+   */
+  projectLayouts?: Record<string, unknown>;
+}
+
+/**
+ * Panels a snapshot describes. Per-project layouts win whenever the snapshot
+ * has any — the global list is only the legacy fallback, and merging the two
+ * would double-count a workspace that still carries a migrated copy.
+ */
+function collectSnapshotPanels(snapshot: SessionSnapshot | null | undefined): CollectedPanel[] {
+  if (!snapshot) return [];
+  return collectPanels(snapshot.appState, snapshot.projectLayouts);
+}
+
+function collectPanels(appState: unknown, projectLayouts: unknown): CollectedPanel[] {
+  const panels: CollectedPanel[] = [];
+  if (isPlainObject(projectLayouts) && Object.keys(projectLayouts).length > 0) {
+    for (const [projectId, layout] of Object.entries(projectLayouts)) {
+      if (!Array.isArray(layout)) continue;
+      for (const panel of layout) {
+        if (isPlainObject(panel)) panels.push({ projectId, panel });
+      }
+    }
+    return panels;
+  }
+  const terminals = isPlainObject(appState) ? appState.terminals : undefined;
+  if (!Array.isArray(terminals)) return panels;
+  for (const panel of terminals) {
+    if (isPlainObject(panel)) panels.push({ panel });
+  }
+  return panels;
+}
+
+function hasPanelSource(snapshot: SessionSnapshot): boolean {
+  if (isPlainObject(snapshot.projectLayouts) && Object.keys(snapshot.projectLayouts).length > 0) {
+    return true;
+  }
+  return isPlainObject(snapshot.appState) && Array.isArray(snapshot.appState.terminals);
+}
+
+function summarizePanels(panels: CollectedPanel[]): {
+  panelCount: number;
+  panelKinds: Record<string, number>;
+} {
+  const panelKinds: Record<string, number> = Object.create(null);
+  for (const { panel } of panels) {
+    const kind = typeof panel.kind === "string" ? panel.kind : "unknown";
+    panelKinds[kind] = (panelKinds[kind] ?? 0) + 1;
+  }
+  return { panelCount: panels.length, panelKinds };
 }
 
 function isValidMarker(value: unknown): value is MarkerFile {
@@ -1366,6 +1646,10 @@ function isValidMarker(value: unknown): value is MarkerFile {
     (value as MarkerFile).sessionStartMs > 0 &&
     typeof (value as MarkerFile).appVersion === "string"
   );
+}
+
+function isCrashCause(value: unknown): value is CrashCause {
+  return typeof value === "string" && CRASH_CAUSES.has(value as CrashCause);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

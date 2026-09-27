@@ -20,6 +20,8 @@ export interface ActionBreadcrumb {
  * Best-effort attribution of why the previous session ended.
  *
  * - "uncaught-exception": JS uncaughtException fired and recordCrash wrote a crash log.
+ *   A crash log carries its cause explicitly; this is inferred from the log's
+ *   presence only for logs written before the cause was stored.
  * - "native-crash": Crashpad minidump newer than sessionStartMs was found in the dumps dir.
  * - "suspended-then-lost": Marker showed an in-flight suspend stamp at next launch.
  * - "power-loss": os.uptime() at next launch is shorter than wall-clock time since
@@ -89,6 +91,8 @@ export type PanelSuspectReason = "crash-window" | "repeated-suspect";
 
 export interface PanelSummary {
   id: string;
+  /** Workspace whose persisted layout held the panel; absent for the legacy global list. */
+  projectId?: string;
   kind: string;
   title: string;
   cwd?: string;

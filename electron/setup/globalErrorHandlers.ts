@@ -73,7 +73,7 @@ export function registerGlobalErrorHandlers(): void {
     }
 
     try {
-      getCrashRecoveryService().recordCrash(error);
+      getCrashRecoveryService().recordCrash(error, "uncaught-exception");
     } catch {
       // silent
     }

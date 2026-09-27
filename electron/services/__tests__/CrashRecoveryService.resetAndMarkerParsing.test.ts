@@ -211,6 +211,19 @@ describe("CrashRecoveryService", () => {
       expect(fs.existsSync(markerPath)).toBe(true);
     });
 
+    it("deletes marker on exit after a renderer death the app survived (#12884)", () => {
+      const svc = makeService();
+      svc.initialize();
+      svc.recordRendererGone({ process: "project-view", reason: "killed", exitCode: 15 });
+
+      svc.cleanupOnExit();
+
+      expect(fs.existsSync(path.join(userData, "running.lock"))).toBe(false);
+      const next = makeService();
+      next.initialize();
+      expect(next.getPendingCrash()).toBeNull();
+    });
+
     it("unlinks crashed-backup file on cleanupOnExit even when crashRecorded skips marker cleanup", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(
@@ -333,7 +346,7 @@ describe("CrashRecoveryService", () => {
       return vi.spyOn(os, "uptime").mockReturnValue(returnValue);
     }
 
-    it("returns 'uncaught-exception' when marker has crashLogPath", () => {
+    it("returns 'uncaught-exception' when marker has a legacy crashLogPath without a cause", () => {
       const crashDir = path.join(userData, "crashes");
       fs.mkdirSync(crashDir, { recursive: true });
       const crashLogPath = path.join(crashDir, "crash-abc.json");
@@ -756,6 +769,43 @@ describe("CrashRecoveryService", () => {
       } finally {
         uptime.mockRestore();
       }
+    });
+  });
+
+  describe("stored crash cause", () => {
+    it("keeps the cause the crash log recorded instead of inferring it (#12884)", () => {
+      const svc = makeService();
+      svc.initialize();
+      svc.recordCrash(new Error("boom"), "native-crash");
+
+      const next = makeService();
+      next.initialize();
+
+      expect(next.getPendingCrash()!.entry.crashCause).toBe("native-crash");
+    });
+
+    it("falls back to classification when the stored cause is not a known value", () => {
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-bad.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({ id: "bad", timestamp: Date.now(), crashCause: "gremlins" })
+      );
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5_000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          crashLogPath,
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()!.entry.crashCause).toBe("uncaught-exception");
     });
   });
 

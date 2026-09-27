@@ -584,12 +584,18 @@ export function setupBrowserWindow(
   appWebContents.on("render-process-gone", (_event, details) => {
     if (details.reason === "clean-exit") return;
     console.error("[MAIN] Renderer process gone:", details.reason, details.exitCode);
-    // Memory eviction is not a crash — skip the one-shot crash log so a
-    // genuine crash in the same session can still be recorded.
+    // Main survives this renderer's death, so it is recorded as a non-fatal
+    // event, never as the session's crash. Memory eviction is routine and not
+    // recorded at all.
     if (details.reason !== "memory-eviction") {
-      getCrashRecoveryService().recordCrash(
-        new Error(`Renderer process gone: ${details.reason} (exit code ${details.exitCode})`)
-      );
+      getCrashRecoveryService().recordRendererGone({
+        process: "app-view",
+        projectId:
+          getProjectViewManagerFor(win)?.getProjectIdForWebContents(appWebContents.id) ?? undefined,
+        webContentsId: appWebContents.id,
+        reason: details.reason,
+        exitCode: details.exitCode,
+      });
     }
 
     if (win.isDestroyed()) return;
