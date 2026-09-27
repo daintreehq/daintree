@@ -1095,6 +1095,24 @@ export const SETTINGS_REGISTRY = [
         ],
       },
       {
+        id: "assistant-daintree-confirmations",
+        section: "Security",
+        title: "Daintree confirmations",
+        description:
+          "Whether Daintree asks before the assistant runs an action, or follows Skip permission prompts",
+        keywords: [
+          "assistant",
+          "confirmations",
+          "confirm",
+          "dialog",
+          "ask",
+          "skip",
+          "permissions",
+          "security",
+          "delete",
+        ],
+      },
+      {
         id: "assistant-audit-retention",
         section: "Privacy",
         title: "Audit log retention",

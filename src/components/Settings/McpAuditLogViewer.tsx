@@ -341,6 +341,12 @@ function DispatchRow({
         {record.result === "unauthorized" && record.tierHint === null && (
           <div className="mt-0.5 text-text-secondary">Not permitted at any tier</div>
         )}
+        {/* Never shown as "confirmed": nobody was asked (#12874). */}
+        {record.authorization === "skip-preference" && (
+          <div className="mt-0.5 text-text-secondary">
+            Ran without asking — Skip permission prompts
+          </div>
+        )}
       </div>
       <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
         <div>

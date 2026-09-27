@@ -223,6 +223,46 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sentPayload?.context).toEqual(boundContext);
   });
 
+  it("tells the renderer why a pinned dispatch is pre-confirmed, and only when it is (#12874)", async () => {
+    const wc = makeWebContents(703);
+    mockWebContentsRegistry.set(703, wc);
+
+    const sent: Array<{ confirmed?: boolean; authorization?: unknown }> = [];
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sent.push(payload as { confirmed?: boolean; authorization?: unknown });
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 703 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    await bridge.dispatchActionForWebContents(
+      703,
+      "worktree.delete",
+      {},
+      true,
+      undefined,
+      "help",
+      "skip-preference"
+    );
+    await bridge.dispatchActionForWebContents(
+      703,
+      "worktree.delete",
+      {},
+      false,
+      undefined,
+      "help",
+      "skip-preference"
+    );
+
+    expect(sent[0]).toMatchObject({ confirmed: true, authorization: "skip-preference" });
+    expect(sent[1]).not.toHaveProperty("authorization");
+  });
+
   it("sends context: undefined when no override is supplied — unpinned path is untouched (#8317)", async () => {
     const wc = makeWebContents(702);
     mockWebContentsRegistry.set(702, wc);

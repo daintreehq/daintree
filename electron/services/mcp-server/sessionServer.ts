@@ -28,6 +28,7 @@ import {
 } from "../../../shared/types/mcpBatch.js";
 import { ASSISTANT_CLOSE_CONFIRM_AGENT_STATES } from "../../../shared/types/agent.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
+import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import {
   readDispatchTerminalCommand,
   readDispatchTerminalCwd,
@@ -3358,28 +3359,35 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         //
         // The skip preference (#12874) is host state too, and is settled here
         // rather than beside the grants above because it hangs on the resolved
-        // `danger`: stamping it on a safe call would put "ran without asking"
-        // on calls that never could ask. A recipe id can raise a safe composite
-        // to confirm, so that counts. It covers what a native grant can cover —
-        // a tool whose dialog is where the user picks its targets still asks.
-        // The assistant's protected close (#12881) is asked above, whatever a
-        // grant says, so the preference never reaches it either.
+        // danger: stamping it on a safe call would put "ran without asking" on
+        // calls that never could ask. The danger is the per-dispatch one the
+        // renderer gates on, so a recipe id or a terminal launch target counts.
+        // It covers what a native grant can cover — a tool whose dialog is where
+        // the user picks its targets still asks — and it wins over a native
+        // grant, which pre-authorizes only the D2 dialog: under the skip there
+        // is no typed-name gate either. The grant's use is still spent. The
+        // assistant's protected close (#12881) is asked above, whatever a grant
+        // says, so the preference never reaches it either.
+        const confirmGated =
+          entry !== undefined &&
+          resolveEffectiveActionDanger(actionId, entry.danger, "agent", args) === "confirm";
         if (
-          dispatchAuthorization === undefined &&
+          (dispatchAuthorization === undefined || dispatchAuthorization === "native-grant") &&
           confirmationsSkipped &&
           isGenericNativeGrantEligible(actionId) &&
-          (entry?.danger === "confirm" || dispatchCarriesRecipeId(args))
+          confirmGated
         ) {
           dispatchAuthorization = "skip-preference";
           dispatchConfirmed = true;
         }
         // A protected close already announced itself before asking (#12881).
         // An agent's close-all always raises the dialog, whatever it declares.
-        // Only a call that can actually wait shows "Awaiting confirmation".
+        // A call under the skip preference never waits. A native grant's still
+        // can: the renderer demotes a D3 force delete back to the dialog.
         if (!toolCallStartedEmitted) {
           emitToolCallStarted(
             (entry?.danger === "confirm" || actionId === "terminal.closeAll") &&
-              dispatchAuthorization === undefined
+              dispatchAuthorization !== "skip-preference"
           );
         }
 

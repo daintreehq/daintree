@@ -166,6 +166,7 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   bypassPermissions: "Bypass",
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
+  daintreeConfirmations: "Daintree confirmations",
 };
 
 interface SaveFailure {
@@ -207,8 +208,8 @@ const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: stri
 ];
 
 const TIER_DETAILS: Record<HelpAssistantTier, string> = {
-  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete a worktree it created, which asks you to confirm. This covers most orchestration and keeps the tool list the model rereads every turn short.",
-  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, and diagnostics. Deletions and teardowns still ask you to confirm. Git and forge writes and file edits aren't available in either tool set.",
+  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete a worktree it created, which asks you to confirm unless Daintree confirmations says otherwise. This covers most orchestration and keeps the tool list the model rereads every turn short.",
+  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, and diagnostics. Deletions and teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
@@ -1291,6 +1292,7 @@ export function DaintreeAssistantSettingsTab() {
           )}
 
           <SettingsSelect
+            id="assistant-daintree-confirmations"
             label="Daintree confirmations"
             description="Whether Daintree asks before the assistant runs an action like deleting a worktree. Following Skip permission prompts, those actions run without asking while it's on and ask while it's off."
             value={settings.daintreeConfirmations}

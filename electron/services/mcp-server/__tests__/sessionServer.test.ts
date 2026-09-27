@@ -8822,6 +8822,58 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(store.resourceOwnership.owns("s-del", "worktree", "/tmp/wt")).toBe(false);
     });
 
+    // The confirmation fires on the delegated call, so that is where the skip
+    // preference has to land — and ownership must still be checked first (#12874).
+    it("carries the skip preference to the delegated worktree.delete for a help session", async () => {
+      const { store, server, dispatchAction } = harness(
+        "s-skip",
+        { "worktree.delete": { result: { ok: true, result: null } } },
+        { readAssistantConfirmationsSkipped: () => true }
+      );
+      store.sessionOriginMap.set("s-skip", "help");
+      store.resourceOwnership.record("s-skip", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "worktree.delete",
+        { worktreeId: "/tmp/wt" },
+        true,
+        "skip-preference"
+      );
+    });
+
+    it("still refuses a worktree the session does not own under the skip preference (#12874)", async () => {
+      const { store, server, dispatchAction } = harness(
+        "s-skip-unowned",
+        { "worktree.delete": { result: { ok: true, result: null } } },
+        { readAssistantConfirmationsSkipped: () => true }
+      );
+      store.sessionOriginMap.set("s-skip-unowned", "help");
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "worktree.delete",
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
+      );
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "worktree.delete",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
     it("strips force, deleteBranch and closeTerminals from the delegated call", async () => {
       // The narrow tool omits them from its schema, but the renderer validates
       // against `worktree.delete`, which still accepts them — so rebuilding the
@@ -11033,6 +11085,63 @@ describe("assistant skip preference (#12874)", () => {
 
     expect(help.dispatchAction.mock.calls.at(-1)?.[2]).toBe(false);
     expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("wins over a native grant, which would leave the typed-name gate in place", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    help.sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1", force: true },
+    });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+    expect(lastAudit(help.appendAuditRecord)).toMatchObject({ authorization: "skip-preference" });
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("keeps a native grant's awaiting state, since the renderer can still demote it", async () => {
+    const help = skipServer({ origin: "help", skipped: false });
+    help.sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true]);
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "worktree.delete", danger: true })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("covers a safe action its arguments raise to confirm, as the renderer does", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [{ ...makeManifestEntry("terminal.new"), kind: "command" }],
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.new", arguments: { command: "npm test" } });
+    await callTool(help.server, { name: "terminal.new", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls[0].slice(2)).toEqual([true, "skip-preference"]);
+    expect(help.dispatchAction.mock.calls[1].slice(2)).toEqual([false]);
     help.sessionStore.grantCache.dispose();
   });
 

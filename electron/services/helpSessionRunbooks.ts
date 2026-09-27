@@ -81,7 +81,7 @@ export function buildConfirmationsAddendum(): string {
   return [
     "## Daintree Confirmations",
     "",
-    "The user has told Daintree not to ask before your actions. Confirm-gated Daintree actions, deleting a worktree included, run as soon as you call them: no dialog, no typed-name check, so don't tell the user to watch for one. This overrides anything above about those actions waiting for the user. Refusals still apply. If a call does wait for a dialog, the user has turned asking back on.",
+    "The user has told Daintree not to ask before your actions. Confirm-gated Daintree actions, deleting a worktree included, run as soon as you call them: no dialog, no typed-name check, so don't tell the user to watch for one. This overrides anything above about those actions waiting for the user. Refusals still apply. The user can turn asking back on at any time, so if a call does wait for a dialog, tell them it is waiting for them.",
     "",
   ].join("\n");
 }
