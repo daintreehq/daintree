@@ -395,6 +395,7 @@ export function ModalHostLayer({
               onSelect={worktreePalette.selectWorktree}
               onConfirm={worktreePalette.confirmSelection}
               onClose={worktreePalette.close}
+              onSelectIndex={worktreePalette.setSelectedIndex}
             />
           </Suspense>
         )}

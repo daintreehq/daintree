@@ -84,14 +84,22 @@ function RecipeListItem({
         // three stacked cards, so the selected one had to out-shout two
         // neighbours instead of being the only lit row. Every other palette in
         // the app rests flat and lets PALETTE_ROW_CLASS's rail carry selection.
-        "hover:bg-overlay-subtle",
-        recipe.shadowedBy && "opacity-60"
+        "hover:bg-overlay-subtle"
       )}
       aria-selected={isSelected}
       role="option"
     >
       <div className="flex items-center justify-between gap-2 text-sm">
-        <span className="font-medium text-text-primary truncate">{recipe.name}</span>
+        {/* Overridden steps the name down the ramp instead of fading the row,
+            which took the "Overridden by Team" reason down with it. */}
+        <span
+          className={cn(
+            "font-medium truncate",
+            recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
+          )}
+        >
+          {recipe.name}
+        </span>
         <div className="flex items-center gap-1 shrink-0">
           {uniqueTypes.map((type) => (
             <span
@@ -148,6 +156,10 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       onConfirm={palette.confirmSelection}
       onClose={handleClose}
       getItemId={(item) => item.id}
+      // Home and End only. Rows don't report hover: the assign-to-me toggle
+      // below the list follows the selected recipe, and reaching it crosses
+      // the Customize row, which would select that and hide the toggle.
+      onHoverIndex={palette.setSelectedIndex}
       renderItem={(item, _index, isSelected) => (
         <RecipeListItem
           key={item.id}

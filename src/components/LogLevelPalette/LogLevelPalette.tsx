@@ -152,6 +152,8 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
         onConfirm={handleLoggerConfirm}
         onClose={onClose}
         getItemId={(item) => item.id}
+        // Home and End route through the shell's hover callback.
+        onHoverIndex={loggerPalette.setSelectedIndex}
         getActionLabel={getLoggerActionLabel}
         label="Set Log Level"
         ariaLabel="Set log level — choose a module"
@@ -194,6 +196,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
       onConfirm={handleLevelConfirm}
       onClose={onClose}
       getItemId={(item) => item.id}
+      onHoverIndex={levelPalette.setSelectedIndex}
       getActionLabel={getLevelActionLabel}
       label={`Level for ${pendingLogger ?? ""}`}
       ariaLabel="Set log level — choose a level"
