@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { usePanelStore, usePreferencesStore } from "@/store";
-import { isPtyPanel, type PanelKind } from "@shared/types/panel";
+import { isPtyPanel, type PanelKind, type PtyPanelData } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -30,19 +30,29 @@ export interface SendToAgentItem {
 // Module-level state for the opener function (object to avoid react-compiler reassignment warning)
 const pendingState = { sourceId: null as string | null, selection: "" };
 
+type PanelRecord = ReturnType<typeof usePanelStore.getState>["panelsById"][string];
+
+/**
+ * A pane the palette lists: a live PTY that is on screen. The one predicate
+ * behind the opener, the list and the send, so a pane that leaves the list
+ * mid-pick can't still be written to.
+ */
+function isListedTarget(t: PanelRecord | undefined): t is Extract<PanelRecord, PtyPanelData> {
+  return (
+    !!t &&
+    t.location !== "trash" &&
+    t.location !== "background" &&
+    t.location !== "overlay" &&
+    isPtyPanel(t) &&
+    t.hasPty !== false
+  );
+}
+
 function hasSendTargets(sourceTerminalId: string | null): boolean {
   const { panelsById, panelIds } = usePanelStore.getState();
   return panelIds.some((id) => {
     const t = panelsById[id];
-    return (
-      t &&
-      t.id !== sourceTerminalId &&
-      t.location !== "trash" &&
-      t.location !== "background" &&
-      t.location !== "overlay" &&
-      isPtyPanel(t) &&
-      t.hasPty !== false
-    );
+    return isListedTarget(t) && t.id !== sourceTerminalId;
   });
 }
 
@@ -83,13 +93,46 @@ const FUSE_OPTIONS: IFuseOptions<SendToAgentItem> = {
     // token past roughly the first 40 characters of one will not match. Turning
     // location scoring off repairs that but reranks the primary field, where an
     // incidental substring ("pre-fix-es") then beats the whole word — too high a
-    // price, and out of scope here. useFleetPicker pays for it with a matching
-    // threshold and minimum match length; this palette has neither.
+    // price. The filter below catches the tail with a plain substring pass
+    // instead, appended after the ranked results.
     { name: "worktreeName", weight: 0.5 },
   ],
   threshold: 0.4,
   includeScore: true,
 };
+
+/** The reason a locked row draws in place of its agent, matching the plugin picker's. */
+export const INPUT_LOCKED_REASON = "Input locked";
+
+/**
+ * The row's second line. The agent label only when the title doesn't already
+ * open with it — "Claude: fix auth tests" over "Claude" spent a line on one
+ * fact — and the worktree only when the targets span more than one. A locked
+ * row says why in place of the agent, so the line that has to be read is the
+ * one that explains why Enter skips it.
+ */
+function subtitleFor(
+  title: string,
+  chromeLabel: string,
+  isInputLocked: boolean,
+  worktreeName: string | undefined
+): string | undefined {
+  const t = title.trim().toLowerCase();
+  const label = chromeLabel.trim();
+  const l = label.toLowerCase();
+  const echoed = !l || t === l || t.startsWith(`${l}:`) || t.startsWith(`${l} `);
+  const lead = isInputLocked ? INPUT_LOCKED_REASON : echoed ? undefined : label;
+  return [lead, worktreeName].filter(Boolean).join(" · ") || undefined;
+}
+
+/**
+ * Whether the pane can take the text right now. Read at send time, not from
+ * the row: a pane can lock, exit or close while the palette sits open.
+ */
+function isSendableTarget(targetId: string): boolean {
+  const t = usePanelStore.getState().panelsById[targetId];
+  return isListedTarget(t) && !t.isInputLocked;
+}
 
 function sendSelectionToTarget(targetId: string): void {
   const text = pendingState.selection;
@@ -146,23 +189,19 @@ export function useSendToAgentPalette() {
 
     for (const id of panelIds) {
       const t = panelsById[id];
-      if (!t) continue;
+      if (!isListedTarget(t)) continue;
       if (sourceId && t.id === sourceId) continue;
-      if (t.location === "trash" || t.location === "background" || t.location === "overlay")
-        continue;
-      if (!isPtyPanel(t)) continue;
-      if (t.hasPty === false) continue;
 
       const chrome = deriveTerminalChrome(t);
-      const subtitle = chrome.label;
       if (t.worktreeId) worktreeIds.add(t.worktreeId);
+      // Full composed display title so rows read (and fuzzy-match) the same
+      // as the live tab: "Claude: fix auth tests".
+      const title = getTerminalDisplayTitle(t, "full", { showTask: showAgentTaskTitles });
 
       result.push({
         id: t.id,
-        // Full composed display title so rows read (and fuzzy-match) the same
-        // as the live tab: "Claude: fix auth tests".
-        title: getTerminalDisplayTitle(t, "full", { showTask: showAgentTaskTitles }),
-        subtitle,
+        title,
+        subtitle: subtitleFor(title, chrome.label, !!t.isInputLocked, undefined),
         terminalKind: t.kind,
         chrome,
         isInputLocked: t.isInputLocked,
@@ -176,7 +215,12 @@ export function useSendToAgentPalette() {
     if (worktreeIds.size > 1) {
       for (const item of result) {
         if (!item.worktreeName) continue;
-        item.subtitle = [item.chrome.label, item.worktreeName].filter(Boolean).join(" · ");
+        item.subtitle = subtitleFor(
+          item.title,
+          item.chrome.label,
+          !!item.isInputLocked,
+          item.worktreeName
+        );
       }
     }
 
@@ -187,8 +231,18 @@ export function useSendToAgentPalette() {
 
   const filterFn = useCallback(
     (allItems: SendToAgentItem[], query: string): SendToAgentItem[] => {
-      if (!query.trim()) return allItems;
-      return fuse.search(query).map((r) => r.item);
+      const q = query.trim().toLowerCase();
+      if (!q) return allItems;
+      const ranked = fuse.search(query).map((r) => r.item);
+      // Fuse scores by position, so the tail of a long worktree name
+      // ("…-exponential-backoff") never matches — see FUSE_OPTIONS. A plain
+      // substring hit there is appended below the ranked results rather than
+      // turning location scoring off, which would rerank the titles.
+      const seen = new Set(ranked);
+      const tails = allItems.filter(
+        (item) => !seen.has(item) && item.worktreeName?.toLowerCase().includes(q)
+      );
+      return tails.length > 0 ? [...ranked, ...tails] : ranked;
     },
     [fuse]
   );
@@ -205,6 +259,9 @@ export function useSendToAgentPalette() {
 
   const selectItem = useCallback(
     (item: SendToAgentItem) => {
+      // Stay open on a refusal: the row redraws with its reason from the same
+      // store change, and the selection is still there to send elsewhere.
+      if (!isSendableTarget(item.id)) return;
       sendSelectionToTarget(item.id);
       palette.close();
     },

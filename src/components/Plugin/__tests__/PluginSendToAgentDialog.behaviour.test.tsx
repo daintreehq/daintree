@@ -215,6 +215,20 @@ describe("PluginSendToAgentDialog", () => {
     expect(draftAgentContext).not.toHaveBeenCalled();
   });
 
+  it("keeps an agent that cannot take a draft legible, and off the cursor", () => {
+    open();
+    const locked = option("feat-locked");
+    // Fading the row faded its reason with it; nothing on it may carry opacity.
+    for (const el of [locked, ...locked.querySelectorAll("*")]) {
+      expect(el.getAttribute("class") ?? "").not.toMatch(/(^|\s)opacity-/);
+    }
+    const before = selectedOption()?.id;
+    act(() => {
+      fireEvent.pointerMove(locked);
+    });
+    expect(selectedOption()?.id).toBe(before);
+  });
+
   it("starts a new agent in the named worktree from New agent here", () => {
     const resolve = open();
     act(() => {
@@ -280,6 +294,20 @@ describe("PluginSendToAgentDialog", () => {
     open();
     expect(document.getElementById("plugin-send-to-agent-new-here")).toBeNull();
     expect(document.getElementById("plugin-send-to-agent-new-worktree")).toBeNull();
+  });
+
+  it("draws no selection when no row can take the draft", () => {
+    // Every agent locked, and the input bar off so there are no creation rows.
+    inputState.hybridInputEnabled = false;
+    setPanels(
+      agentPanel("main-1", { isInputLocked: true }),
+      agentPanel("feat-locked", { worktreeId: "wt-feat", isInputLocked: true })
+    );
+    open();
+    expect(document.querySelectorAll('[role="option"]').length).toBeGreaterThan(0);
+    press("Home");
+    press("End");
+    expect(selectedOption()?.id ?? null).toBeNull();
   });
 
   it("starts New agent here only in a worktree this project has", () => {

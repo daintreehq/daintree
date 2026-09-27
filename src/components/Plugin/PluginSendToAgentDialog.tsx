@@ -250,6 +250,22 @@ export function PluginSendToAgentDialog() {
     [request, answer, setQuery, query]
   );
 
+  // Rows only report hover when they can take the draft, so this scan only
+  // matters for Home and End, which the shell routes through here with index
+  // 0 or the last index: a disabled row at either end hands the cursor on.
+  const handleHoverIndex = useCallback(
+    (index: number) => {
+      const step = index === 0 ? 1 : -1;
+      for (let i = index; i >= 0 && i < results.length; i += step) {
+        if (canSelectSendToAgentRow(results[i]!)) {
+          setSelectedIndex(i);
+          return;
+        }
+      }
+    },
+    [results, setSelectedIndex]
+  );
+
   const handleConfirm = useCallback(() => {
     const row = results[selectedIndex];
     if (row) choose(row);
@@ -343,31 +359,40 @@ export function PluginSendToAgentDialog() {
             type="button"
             tabIndex={-1}
             role="option"
-            aria-selected={isSelected}
+            // The shell can park the index on a disabled row for a frame (an
+            // all-disabled open); the rail must not claim a row Enter refuses.
+            aria-selected={isSelected && enabled}
             aria-disabled={!enabled}
             aria-label={[heading ?? undefined, label, detail].filter(Boolean).join(", ")}
             onPointerDown={(e) => e.preventDefault()}
-            onPointerMove={() => onHoverIndex(index)}
+            // A row that can't take the draft can't hold the cursor either.
+            onPointerMove={enabled ? () => onHoverIndex(index) : undefined}
             onClick={() => {
               if (!enabled) return;
               setSelectedIndex(index);
               choose(row);
             }}
             className={cn(
-              "group relative flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left",
-              enabled
-                ? [
-                    PALETTE_ROW_CLASS,
-                    "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
-                  ]
-                : "cursor-not-allowed border border-transparent opacity-50"
+              PALETTE_ROW_CLASS,
+              "group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left",
+              "text-text-secondary",
+              enabled && "hover:bg-overlay-subtle hover:text-text-primary"
             )}
           >
             <span className="shrink-0 text-text-secondary" aria-hidden="true">
               {icon}
             </span>
             <div className="min-w-0 flex-1 overflow-hidden">
-              <span className="block truncate text-sm font-medium text-text-primary">{label}</span>
+              {/* Unavailable steps the label down the ramp instead of fading the
+                  row, which took the refusal reason beside it down too. */}
+              <span
+                className={cn(
+                  "block truncate text-sm font-medium",
+                  enabled ? "text-text-primary" : "text-text-secondary"
+                )}
+              >
+                {label}
+              </span>
               {detail && (
                 <span className="block truncate text-xs text-text-secondary">{detail}</span>
               )}
@@ -405,7 +430,7 @@ export function PluginSendToAgentDialog() {
         onSelectNext={selectNext}
         onConfirm={handleConfirm}
         onClose={handleClose}
-        onHoverIndex={setSelectedIndex}
+        onHoverIndex={handleHoverIndex}
         onKeyDown={handleKeyDown}
         getItemId={(row) => row.id}
         renderItem={renderItem}

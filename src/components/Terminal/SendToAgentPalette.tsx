@@ -8,7 +8,11 @@ import { Lock } from "lucide-react";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import type { SendToAgentItem } from "@/hooks/useSendToAgentPalette";
 
-const getSendToAgentActionLabel = (_item: SendToAgentItem | null): string => "Send to agent";
+// Names the pane, since Enter writes into another terminal and this is the
+// last look before it does. "Paste", not "send to agent": the text lands in
+// the pane's input unsubmitted, and a plain shell is a valid target too.
+const getSendToAgentActionLabel = (item: SendToAgentItem): string | null =>
+  item.isInputLocked ? null : `Paste into ${item.title}`;
 
 export interface SendToAgentPaletteProps {
   isOpen: boolean;
@@ -22,57 +26,72 @@ export interface SendToAgentPaletteProps {
   selectNext: () => void;
   selectItem: (item: SendToAgentItem) => void;
   confirmSelection: () => void;
+  setSelectedIndex: (index: number) => void;
 }
 
 function SendToAgentItemRow({
   item,
   isSelected,
   onSelect,
+  onHover,
 }: {
   item: SendToAgentItem;
   isSelected: boolean;
   onSelect: (item: SendToAgentItem) => void;
+  onHover: () => void;
 }) {
+  const locked = !!item.isInputLocked;
   return (
     <button
       id={`send-to-agent-option-${item.id}`}
       type="button"
       tabIndex={-1}
       onPointerDown={(e) => e.preventDefault()}
+      // The pointer moves the cursor Enter acts on, so pointing at one row and
+      // pressing Enter can't send to another. A locked row can't hold it, and
+      // pointing at one leaves the cursor where it was rather than moving it
+      // somewhere the pointer isn't.
+      onPointerMove={locked ? undefined : onHover}
       className={cn(
-        "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors",
-        // A locked row is not a selectable target, so it keeps its own inert box
-        // rather than the shared selected treatment.
-        item.isInputLocked
-          ? "opacity-50 cursor-not-allowed border border-transparent"
-          : [
-              PALETTE_ROW_CLASS,
-              "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
-            ]
+        PALETTE_ROW_CLASS,
+        "group w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+        "text-text-secondary",
+        !locked && "hover:bg-overlay-subtle"
       )}
-      onClick={() => !item.isInputLocked && onSelect(item)}
+      onClick={() => !locked && onSelect(item)}
       aria-selected={isSelected}
-      aria-disabled={item.isInputLocked}
-      // The subtitle carries the agent and, when the targets span more than one
-      // worktree, the worktree too — the only thing separating two identically
-      // titled rows, so the accessible name has to carry it as well.
+      aria-disabled={locked}
+      // The subtitle carries the agent, the lock reason and, when the targets
+      // span more than one worktree, the worktree — the only thing separating
+      // two identically titled rows, so the accessible name carries it too.
       aria-label={[item.title, item.subtitle].filter(Boolean).join(", ")}
       role="option"
     >
-      <span className="shrink-0 text-daintree-text/70" aria-hidden="true">
+      <span className="shrink-0 text-text-secondary" aria-hidden="true">
         <TerminalIcon kind={item.terminalKind} chrome={item.chrome} />
       </span>
 
       <div className="flex-1 min-w-0 overflow-hidden">
-        <span className="text-sm font-medium text-text-primary truncate block">{item.title}</span>
+        {/* Locked steps the title down the ramp instead of fading the row, as
+            the rest of the palette family does: opacity took the reason line
+            with it, and the reason is the one line here that has to be read. */}
+        {/* Two lines before it clips: a task title is often the only thing that
+            tells two panes of one agent apart, and cutting it at one line hid
+            the part that differs. */}
+        <span
+          className={cn(
+            "text-sm font-medium line-clamp-2 break-words",
+            locked ? "text-text-secondary" : "text-text-primary"
+          )}
+        >
+          {item.title}
+        </span>
         {item.subtitle && (
           <span className="text-xs text-text-secondary truncate block">{item.subtitle}</span>
         )}
       </div>
 
-      {item.isInputLocked && (
-        <Lock className="w-3.5 h-3.5 text-daintree-text/40 shrink-0" aria-hidden="true" />
-      )}
+      {locked && <Lock className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-hidden="true" />}
     </button>
   );
 }
@@ -89,6 +108,7 @@ export function SendToAgentPalette({
   selectNext,
   selectItem,
   confirmSelection,
+  setSelectedIndex,
 }: SendToAgentPaletteProps) {
   const handleSelect = useCallback(
     (item: SendToAgentItem) => {
@@ -96,6 +116,25 @@ export function SendToAgentPalette({
     },
     [selectItem]
   );
+
+  // The shell routes Home and End through its hover callback with index 0 or
+  // the last index. A locked row at either end hands the cursor to its nearest
+  // open neighbour instead of swallowing the key. Rows report the pointer
+  // straight to `setSelectedIndex`, so none of this scanning applies to hover.
+  const handleEdgeIndex = useCallback(
+    (index: number) => {
+      const step = index === 0 ? 1 : -1;
+      for (let i = index; i >= 0 && i < results.length; i += step) {
+        if (!results[i]!.isInputLocked) {
+          setSelectedIndex(i);
+          return;
+        }
+      }
+    },
+    [results, setSelectedIndex]
+  );
+
+  const allLocked = results.length > 0 && results.every((item) => item.isInputLocked);
 
   const newTerminalShortcut = useEffectiveCombo("terminal.new");
   const sendToAgentShortcut = useEffectiveCombo("terminal.sendToAgent");
@@ -106,25 +145,39 @@ export function SendToAgentPalette({
       isOpen={isOpen}
       query={query}
       results={results}
-      selectedIndex={selectedIndex}
+      // With nothing Enter could act on there is no active option: the index
+      // would otherwise park on locked row 0 and point the combobox at a row
+      // that draws no selection and takes no Enter.
+      selectedIndex={allLocked ? -1 : selectedIndex}
       onQueryChange={setQuery}
       onSelectPrevious={selectPrevious}
       onSelectNext={selectNext}
       onConfirm={confirmSelection}
       onClose={close}
+      onHoverIndex={handleEdgeIndex}
       getItemId={(item) => item.id}
       getActionLabel={getSendToAgentActionLabel}
-      renderItem={(item, _index, isItemSelected) => (
+      renderItem={(item, index, isItemSelected) => (
         <SendToAgentItemRow
           key={item.id}
           item={item}
           isSelected={isItemSelected}
           onSelect={handleSelect}
+          onHover={() => setSelectedIndex(index)}
         />
       )}
-      label="Send selection to"
+      afterList={
+        allLocked ? (
+          <p className="px-3 pt-3 pb-1 text-xs text-text-secondary">
+            Unlock a terminal from its pane menu to send to it
+          </p>
+        ) : undefined
+      }
+      // "Text", not "selection": the agent completion banner opens this with
+      // text nobody selected. "To" a terminal, since plain shells are targets.
+      label="Send text to"
       shortcut={sendToAgentShortcut}
-      ariaLabel="Send selection to agent"
+      ariaLabel="Send text to a terminal"
       searchPlaceholder="Search terminals, agents, and worktrees"
       searchAriaLabel="Search terminals, agents, and worktrees"
       listId="send-to-agent-list"
@@ -135,10 +188,10 @@ export function SendToAgentPalette({
         <p className="mt-2 text-xs text-text-secondary">
           {newTerminalShortcut ? (
             <>
-              Press <KbdChord shortcut={newTerminalShortcut} /> to create a new terminal.
+              Press <KbdChord shortcut={newTerminalShortcut} /> to create a new terminal
             </>
           ) : (
-            "Create another terminal to send selections."
+            "Create another terminal to send selections to"
           )}
         </p>
       }

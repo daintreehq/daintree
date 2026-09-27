@@ -13,9 +13,16 @@ interface WorktreeListItemProps {
   isActive: boolean;
   isSelected: boolean;
   onClick: () => void;
+  onHover: () => void;
 }
 
-function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeListItemProps) {
+function WorktreeListItem({
+  worktree,
+  isActive,
+  isSelected,
+  onClick,
+  onHover,
+}: WorktreeListItemProps) {
   const { ref, isTruncated } = useTruncationDetection();
 
   return (
@@ -25,6 +32,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         tabIndex={-1}
         onPointerDown={(e) => e.preventDefault()}
         id={`worktree-option-${worktree.id}`}
+        onPointerMove={onHover}
         onClick={onClick}
         className={cn(
           // Was a hand-rolled copy of the shared row and drifted out of step
@@ -79,10 +87,11 @@ export interface WorktreePaletteProps {
   onQueryChange: (query: string) => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
-  onSelectIndex?: (index: number) => void;
   onSelect: (worktree: WorktreeState) => void;
   onConfirm: () => void;
   onClose: () => void;
+  /** Moves the cursor Enter acts on; the pointer and Home/End drive it. */
+  onSelectIndex: (index: number) => void;
 }
 
 export function WorktreePalette({
@@ -96,10 +105,10 @@ export function WorktreePalette({
   onQueryChange,
   onSelectPrevious,
   onSelectNext,
-  onSelectIndex,
   onSelect,
   onConfirm,
   onClose,
+  onSelectIndex,
 }: WorktreePaletteProps) {
   const createWorktreeShortcut = useEffectiveCombo("worktree.createDialog.open");
   const worktreePaletteShortcut = useEffectiveCombo("worktree.openPalette");
@@ -118,15 +127,17 @@ export function WorktreePalette({
       onConfirm={onConfirm}
       onClose={onClose}
       getItemId={(worktree) => worktree.id}
+      onHoverIndex={onSelectIndex}
       getActionLabel={getWorktreeActionLabel}
       isFiltering={isStale}
-      renderItem={(worktree, _index, isSelected) => (
+      renderItem={(worktree, index, isSelected, onHoverIndex) => (
         <WorktreeListItem
           key={worktree.id}
           worktree={worktree}
           isActive={worktree.id === activeWorktreeId}
           isSelected={isSelected}
           onClick={() => onSelect(worktree)}
+          onHover={() => onHoverIndex(index)}
         />
       )}
       label="Worktree switcher"
