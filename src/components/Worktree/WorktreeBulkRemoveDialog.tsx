@@ -153,9 +153,7 @@ function FileRows({
               <span className="min-w-0 [overflow-wrap:anywhere]">
                 {row.isOverflow ? row.label : <PathText value={row.label} />}
                 {description && (
-                  <span aria-hidden="true" className="ml-2 font-sans text-text-secondary">
-                    {description}
-                  </span>
+                  <span className="ml-2 font-sans text-text-secondary">{description}</span>
                 )}
               </span>
             </li>
@@ -474,9 +472,12 @@ export function WorktreeBulkRemoveDialog({
   // States the consequence, not generic irreversibility copy: what leaves the
   // disk is the working tree, the dev server goes with it (the run stops it
   // first), and the branch is explicitly what does not.
-  const description = `${
-    titleCount === 1 ? "The worktree's directory is" : "Each worktree directory is"
-  } deleted from disk. Uncommitted and untracked files are discarded, including files inside submodules, and a running dev server is stopped first. Branches are kept.`;
+  // Once nothing can run there is no deletion left to describe, only why.
+  const description = nothingToRun
+    ? "None of the selected worktrees can be removed. Each one below says why."
+    : `${
+        titleCount === 1 ? "The worktree's directory is" : "Each worktree directory is"
+      } deleted from disk. Uncommitted and untracked files are discarded, including files inside submodules, and a running dev server is stopped first. Branches are kept.`;
 
   // A count on the button is a promise, so it only carries one once the
   // previews have settled on it.
@@ -510,10 +511,13 @@ export function WorktreeBulkRemoveDialog({
 
   // One polite line for the whole batch as it settles, so the scope change is
   // heard without walking the list. Row skeletons carry `aria-busy`, so this
-  // sits outside them.
+  // sits outside them. Shown as well as spoken only when the batch is split:
+  // that is when the Excluded group can sit below the fold while the button
+  // names a smaller number than the selection.
   const scopeStatus = isPreviewPending
     ? `Checking ${plural(targets.length, "worktree")}`
-    : `${eligibleCount} will be removed, ${excludedTotal} excluded`;
+    : `${eligibleCount} will be removed · ${excludedTotal} excluded`;
+  const scopeVisible = settled && eligibleCount > 0 && excludedTotal > 0;
 
   return (
     <ConfirmDialog
@@ -544,10 +548,44 @@ export function WorktreeBulkRemoveDialog({
       onConfirm={bulkRemove.handleConfirm}
       isConfirmLoading={isExecuting}
     >
-      <span className="sr-only" role="status" aria-live="polite" data-testid="bulk-remove-scope">
+      <p
+        role="status"
+        aria-live="polite"
+        data-testid="bulk-remove-scope"
+        className={scopeVisible ? "text-sm text-text-primary" : "sr-only"}
+      >
         {scopeStatus}
-      </span>
+      </p>
       <div className="space-y-5 pt-1">
+        {/* Above the groups rather than inside Excluded: a retry moves its
+            rows into Checking, and the banner has to stay put — same place,
+            same node — so the focus the user's own click put on Retry
+            survives the re-run. `isRetryingPreviews` keeps it mounted
+            through that run; its action stays `aria-disabled` (focusable)
+            while it can't run, and the banner hands focus on if it leaves. */}
+        {(hasRetryablePreviews || isRetryingPreviews) && (
+          <InlineStatusBanner
+            // A re-check in flight is progress, not a problem.
+            severity={isRetryingPreviews ? "neutral" : "warning"}
+            role="status"
+            animated={false}
+            className="rounded-[var(--radius-md)]"
+            title={
+              isRetryingPreviews
+                ? "Checking again"
+                : `Couldn't finish checking ${plural(retryableCount, "worktree")}`
+            }
+            action={{
+              id: "retry-previews",
+              label: "Retry",
+              onClick: bulkRemove.handleRetryPreviews,
+              // The handler refuses mid-run anyway; a live button would
+              // report an affordance that silently does nothing.
+              disabled: isExecuting || isPreviewPending,
+              loading: isRetryingPreviews,
+            }}
+          />
+        )}
         {eligible.length > 0 && (
           <Section
             id="bulk-remove-eligible-heading"
@@ -600,41 +638,13 @@ export function WorktreeBulkRemoveDialog({
           </Section>
         )}
 
-        {(excludedTotal > 0 || isRetryingPreviews) && (
+        {excludedTotal > 0 && (
           <Section
             id="bulk-remove-excluded-heading"
             label="Excluded"
             count={excludedTotal}
             testId="bulk-remove-excluded-group"
           >
-            {/* `isRetryingPreviews` keeps this mounted through its own re-run:
-                a retry drops every row to pending, clearing
-                `hasRetryablePreviews`, and unmounting the control under the
-                user's click strands focus inside an open dialog. The banner
-                keeps its action `aria-disabled` (still focusable) while it
-                can't run, and hands focus on if it leaves. */}
-            {(hasRetryablePreviews || isRetryingPreviews) && (
-              <InlineStatusBanner
-                severity="warning"
-                role="status"
-                animated={false}
-                className="mt-2 rounded-[var(--radius-md)]"
-                title={
-                  isRetryingPreviews
-                    ? "Checking again"
-                    : `Couldn't finish checking ${plural(retryableCount, "worktree")}`
-                }
-                action={{
-                  id: "retry-previews",
-                  label: "Retry",
-                  onClick: bulkRemove.handleRetryPreviews,
-                  // The handler refuses mid-run anyway; a live button would
-                  // report an affordance that silently does nothing.
-                  disabled: isExecuting || isPreviewPending,
-                  loading: isRetryingPreviews,
-                }}
-              />
-            )}
             {(excluded.length > 0 || excludedMainCount > 0) && (
               <ul aria-labelledby="bulk-remove-excluded-heading" className={TARGET_LIST}>
                 {excluded.map(({ target, exclusion }) => (
@@ -645,10 +655,14 @@ export function WorktreeBulkRemoveDialog({
                 ))}
                 {excludedMainCount > 0 && (
                   <li className={TARGET_ROW} data-testid="bulk-remove-excluded-main">
-                    <p className="text-sm text-text-primary">
-                      {plural(excludedMainCount, "main worktree")}
-                    </p>
-                    <p className="mt-1 text-xs text-text-secondary">
+                    <div className="flex items-start gap-2 text-sm text-text-primary">
+                      <GitBranch
+                        className="w-3.5 h-3.5 mt-[3px] shrink-0 text-text-secondary"
+                        aria-hidden="true"
+                      />
+                      <span>{plural(excludedMainCount, "main worktree")}</span>
+                    </div>
+                    <p className={cn(DETAIL, "text-xs text-text-secondary")}>
                       Only linked worktrees can be removed here
                     </p>
                   </li>

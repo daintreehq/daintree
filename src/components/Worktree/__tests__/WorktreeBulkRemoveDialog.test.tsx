@@ -609,7 +609,7 @@ describe("WorktreeBulkRemoveDialog — the title and the button agree", () => {
   it("says only what enables the primary when the whole batch is eligible", () => {
     renderDialog({ targets: [target("a"), target("b")] });
     const hint = () => document.querySelector('[data-testid="app-dialog-hint"]');
-    expect(hint()?.textContent).toBe("Type the confirmation above to enable");
+    expect(hint()?.textContent).toBe("Type the confirmation phrase to enable");
     typeTheCount("2 worktrees");
     expect(hint()).toBeNull();
   });
@@ -862,6 +862,40 @@ describe("WorktreeBulkRemoveDialog — outcome groups", () => {
     expect(list.querySelector(".sr-only")?.textContent).toContain("submodule");
   });
 
+  it("never describes a deletion when nothing can run", () => {
+    renderDialog({ targets: [target("a", { status: { state: "gone" } })] });
+    const body = document.body.textContent ?? "";
+    expect(body).not.toContain("deleted from disk");
+    expect(body).toContain("None of the selected worktrees can be removed");
+  });
+
+  it("keeps Retry in one place through its own re-run", () => {
+    renderDialog({
+      targets: [target("a"), target("b", { status: { state: "failed", submodules: null } })],
+    });
+    const before = retryButton();
+    rerenderDialog({
+      targets: [target("a"), target("b", { status: { state: "pending" } })],
+      isPreviewPending: true,
+      isRetryingPreviews: true,
+    });
+    // The same node, not a remount in another group: the focus the click put
+    // there has to survive the rows moving into Checking.
+    expect(retryButton()).toBe(before);
+  });
+
+  it("shows the split visibly only when the batch is split", () => {
+    mixed();
+    rerenderDialog({ targets: [target("a"), target("b")] });
+    expect(document.querySelector('[data-testid="bulk-remove-scope"]')!.className).toContain(
+      "sr-only"
+    );
+    rerenderDialog({ targets: [target("a"), target("b", { status: { state: "gone" } })] });
+    expect(document.querySelector('[data-testid="bulk-remove-scope"]')!.className).not.toContain(
+      "sr-only"
+    );
+  });
+
   it("announces the settled scope in one polite line", () => {
     mixed();
     const status = document.querySelector('[data-testid="bulk-remove-scope"]')!;
@@ -872,7 +906,7 @@ describe("WorktreeBulkRemoveDialog — outcome groups", () => {
       targets: [target("a"), target("b", { status: { state: "gone" } })],
     });
     expect(document.querySelector('[data-testid="bulk-remove-scope"]')!.textContent).toBe(
-      "1 will be removed, 2 excluded"
+      "1 will be removed · 2 excluded"
     );
   });
 });

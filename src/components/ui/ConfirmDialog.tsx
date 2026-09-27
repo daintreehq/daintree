@@ -19,8 +19,12 @@ const ARE_YOU_SURE_TITLE_RE = /^\s*are\s+you\s+sure/i;
 
 const CANNOT_BE_UNDONE_BODY_RE = /cannot be undone|can['’]t be undone/i;
 
-/** No identifier interpolated: the gate right above shows the exact string. */
-const TYPED_GATE_HINT = "Type the confirmation above to enable";
+/**
+ * No identifier interpolated: the gate shows the exact string. No direction
+ * either — in a long body the gate can sit below the fold, where "above" is
+ * a pointer to nothing on screen.
+ */
+const TYPED_GATE_HINT = "Type the confirmation phrase to enable";
 
 const devWarnedKeys = new Set<string>();
 

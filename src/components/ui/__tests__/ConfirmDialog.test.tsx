@@ -435,7 +435,7 @@ describe("ConfirmDialog — typed-name gate", () => {
       />
     );
     const hint = () => document.querySelector('[data-testid="app-dialog-hint"]');
-    expect(hint()?.textContent).toMatch(/above to enable/);
+    expect(hint()?.textContent).toMatch(/to enable$/);
     fireEvent.change(findTypedInput(), { target: { value: "my-repo" } });
     expect(hint()).toBeNull();
   });
