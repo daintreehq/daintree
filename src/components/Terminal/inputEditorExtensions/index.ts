@@ -10,12 +10,13 @@ export {
   createCustomKeymap,
   createPlaceholder,
   createContentAttributes,
+  createComboboxAttributes,
   createPlainPasteKeymap,
   formatFileSize,
   minimalDocChange,
   removeChipRange,
 } from "./base";
-export type { AutoSizeConfig } from "./base";
+export type { AutoSizeConfig, ComboboxAttributes } from "./base";
 
 export {
   createSlashChipField,

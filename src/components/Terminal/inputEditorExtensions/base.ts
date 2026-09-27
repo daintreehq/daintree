@@ -552,6 +552,32 @@ export function createContentAttributes(): Extension {
   });
 }
 
+export interface ComboboxAttributes {
+  listboxId: string;
+  expanded: boolean;
+  activeOptionId: string | null;
+}
+
+/**
+ * The editor as the autocomplete menu's combobox: DOM focus never leaves it, so
+ * this is how assistive tech learns there is a list and which row the arrows
+ * are on. `null` before the composer has a menu to point at.
+ */
+export function createComboboxAttributes(attrs: ComboboxAttributes | null): Extension {
+  if (!attrs) return [];
+  const base: Record<string, string> = {
+    role: "combobox",
+    "aria-autocomplete": "list",
+    "aria-haspopup": "listbox",
+    "aria-expanded": String(attrs.expanded),
+  };
+  if (attrs.expanded) base["aria-controls"] = attrs.listboxId;
+  if (attrs.expanded && attrs.activeOptionId) {
+    base["aria-activedescendant"] = attrs.activeOptionId;
+  }
+  return EditorView.contentAttributes.of(base);
+}
+
 export function createPlainPasteKeymap(): Extension {
   return Prec.highest(
     keymap.of([

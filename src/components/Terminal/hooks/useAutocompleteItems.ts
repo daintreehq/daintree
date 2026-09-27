@@ -17,21 +17,24 @@ interface UseAutocompleteItemsParams {
 const DIFF_ITEMS: AutocompleteItem[] = [
   {
     key: "diff",
-    label: "Working tree diff (@diff)",
+    label: "@diff",
+    description: "Working tree diff",
     insertText: "@diff",
     enterAction: "insert",
     insert: { insert: "resolve", resolverId: "diff" },
   },
   {
     key: "diff:staged",
-    label: "Staged diff (@diff:staged)",
+    label: "@diff:staged",
+    description: "Staged diff",
     insertText: "@diff:staged",
     enterAction: "insert",
     insert: { insert: "resolve", resolverId: "diff" },
   },
   {
     key: "diff:head",
-    label: "HEAD diff (@diff:head)",
+    label: "@diff:head",
+    description: "HEAD diff",
     insertText: "@diff:head",
     enterAction: "insert",
     insert: { insert: "resolve", resolverId: "diff" },
@@ -40,7 +43,8 @@ const DIFF_ITEMS: AutocompleteItem[] = [
 
 const TERMINAL_ITEM: AutocompleteItem = {
   key: "terminal",
-  label: "Terminal output (@terminal)",
+  label: "@terminal",
+  description: "Terminal output",
   insertText: "@terminal",
   enterAction: "insert",
   insert: { insert: "resolve", resolverId: "terminal" },
@@ -48,7 +52,8 @@ const TERMINAL_ITEM: AutocompleteItem = {
 
 const SELECTION_ITEM: AutocompleteItem = {
   key: "selection",
-  label: "Terminal selection (@selection)",
+  label: "@selection",
+  description: "Terminal selection",
   insertText: "@selection",
   enterAction: "insert",
   insert: { insert: "resolve", resolverId: "selection" },
@@ -82,6 +87,7 @@ export function useAutocompleteItems({
           label: base || file,
           insertText: formatAtFileToken(file),
           description: dir || undefined,
+          descriptionKind: "path",
           enterAction: "insert",
           insert: "literal",
         };
