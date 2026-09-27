@@ -282,6 +282,21 @@ describe("projectEnablement", () => {
       expect(rosters(PROJECT_A, LEDGER_A)).toEqual([false, false]);
     });
 
+    it("never lets an answer for an endpoint the plugin has since renamed reach the new one", () => {
+      legacy({ [PROJECT_A]: { [LEDGER]: { old: { decidedAt: 1 } } } });
+
+      expect(isAgentMcpEndpointEnabled(PROJECT_A, LEDGER, "old")).toBe(true);
+      expect(agentMcpScopeFor(PROJECT_A, declared({ hasDatabases: false }))).toBeNull();
+      expect(agentMcpScopeFor(PROJECT_A, declared())).toBeNull();
+      expect(listAgentMcpAccessInstances(PROJECT_A)).toEqual([LEDGER]);
+
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, null);
+
+      expect(isAgentMcpEndpointEnabled(PROJECT_A, LEDGER, "old")).toBe(false);
+      expect(hasLegacyAgentMcpAnswer(PROJECT_A, LEDGER)).toBe(false);
+      expect(listAgentMcpAccessInstances(PROJECT_A)).toEqual([]);
+    });
+
     it("counts only answers that turn something on as possibly on", () => {
       legacy({ [PROJECT_A]: { [LEDGER]: { data: { decidedAt: 1, enabled: false } } } });
       expect(hasAnyAgentMcpEnablement(PROJECT_A)).toBe(false);

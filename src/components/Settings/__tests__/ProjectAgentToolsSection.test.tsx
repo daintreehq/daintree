@@ -466,6 +466,60 @@ describe("ProjectAgentToolsSection", () => {
     await waitFor(() => expect(screen.queryByTestId("project-agent-tools")).toBeNull());
   });
 
+  it("lets a default left on for an unavailable installed plugin be turned off everywhere", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(
+      snapshot([
+        plugin({
+          access: "read-only",
+          source: "all-projects",
+          allProjectsAccess: "read-only",
+          available: false,
+        }),
+        notes({ access: "read-write", source: "all-projects", allProjectsAccess: "read-write" }),
+        plugin({
+          pluginInstanceId: "acme.off",
+          pluginDisplayName: "Dormant",
+          access: "read-only",
+          source: "project",
+          allProjectsAccess: "off",
+          available: false,
+        }),
+        plugin({
+          pluginInstanceId: "acme.repo",
+          pluginDisplayName: "Repo copy",
+          origin: "project",
+          access: "read-only",
+          source: "project",
+          allProjectsAccess: undefined,
+          available: false,
+        }),
+      ])
+    );
+    agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([notes()]));
+    render(<ProjectAgentToolsSection />);
+    await screen.findByTestId("project-agent-tools");
+
+    expect(screen.getAllByTestId("project-agent-tool-clear-default")).toHaveLength(1);
+    expect(within(rowFor("Notes")).queryByTestId("project-agent-tool-clear-default")).toBeNull();
+    expect(within(rowFor("Dormant")).queryByTestId("project-agent-tool-clear-default")).toBeNull();
+    expect(
+      within(rowFor("Repo copy")).queryByTestId("project-agent-tool-clear-default")
+    ).toBeNull();
+
+    const clear = within(rowFor("Ledger")).getByTestId("project-agent-tool-clear-default");
+    expect(clear.textContent).toBe("Turn off in all projects");
+    fireEvent.click(clear);
+
+    expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+      pluginInstanceId: "acme.ledger",
+      access: null,
+      scope: "all-projects",
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId("project-agent-tool-clear-default")).toBeNull()
+    );
+  });
+
   it("offers only Off for an unavailable plugin that is already off", async () => {
     agentMcpApi.listProjectPlugins.mockResolvedValue(
       snapshot([plugin({ access: "off", source: "project", available: false })])
@@ -605,6 +659,27 @@ describe("ProjectAgentToolsSection", () => {
         (r) => !r.disabled
       )
     ).toBe(true);
+  });
+
+  it("hides a row's reset while its change is in flight", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(
+      snapshot([plugin({ access: "read-only", source: "project" })])
+    );
+    render(<ProjectAgentToolsSection />);
+    await screen.findByTestId("project-agent-tools");
+    const resetName = { name: "Use the default access for Ledger" };
+    expect(screen.getByRole("button", resetName)).toBeTruthy();
+
+    const write = deferred<ProjectAgentToolsSnapshot>();
+    agentMcpApi.setPluginAccess.mockReturnValueOnce(write.promise);
+    pick("Ledger", "Read and write");
+
+    expect(screen.queryByRole("button", resetName)).toBeNull();
+
+    await act(async () =>
+      write.resolve(snapshot([plugin({ access: "read-write", source: "project" })]))
+    );
+    expect(screen.getByRole("button", resetName)).toBeTruthy();
   });
 
   it("re-reads once overlapping changes settle", async () => {

@@ -7,6 +7,7 @@ import {
   allProjectsAgentMcpAccess,
   hasLegacyAgentMcpAnswer,
   isAgentMcpEndpointEnabled,
+  isAgentMcpEndpointEnabledByDefault,
   listAgentMcpAccessInstances,
   listLegacyAgentMcpEndpointIds,
   projectAgentMcpAccessAnswer,
@@ -179,6 +180,37 @@ function row(
   };
 }
 
+/** Stands in for the own endpoint of a plugin whose manifest is gone; any id but `@databases`. */
+const UNNAMED_OWN_ENDPOINT = "tools";
+
+/**
+ * The access still on record for a plugin that is not running here, read from
+ * the answers rather than from rosters it may no longer declare, so a row never
+ * shows less than would apply if the plugin came back.
+ */
+function retainedAccess(projectId: string, pluginInstanceId: string): AgentMcpAccess {
+  const answer = projectAgentMcpAccessAnswer(projectId, pluginInstanceId);
+  if (answer !== undefined && answer !== null) return answer;
+  if (answer === undefined && hasLegacyAgentMcpAnswer(projectId, pluginInstanceId)) {
+    // Each roster the old answer names follows it; any it does not name falls
+    // through to the default, exactly as the route would decide.
+    const ownIds = listLegacyAgentMcpEndpointIds(projectId, pluginInstanceId).filter(
+      (endpointId) => endpointId !== DATABASE_ENDPOINT_ID
+    );
+    const own =
+      ownIds.length > 0
+        ? ownIds.some((endpointId) =>
+            isAgentMcpEndpointEnabled(projectId, pluginInstanceId, endpointId)
+          )
+        : isAgentMcpEndpointEnabledByDefault(projectId, pluginInstanceId, UNNAMED_OWN_ENDPOINT);
+    return levelOf(
+      isAgentMcpEndpointEnabled(projectId, pluginInstanceId, DATABASE_ENDPOINT_ID),
+      own
+    );
+  }
+  return allProjectsAgentMcpAccess(pluginInstanceId) ?? "off";
+}
+
 async function buildSnapshot(projectId: string | null): Promise<ProjectAgentToolsSnapshot> {
   const mcpServerEnabled = (await getMcpServerService()).isEnabled();
   if (projectId === null) return { plugins: [], mcpServerEnabled };
@@ -205,21 +237,21 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
   for (const id of listAgentMcpAccessInstances(projectId)) {
     if (declared.some((d) => d.pluginInstanceId === id)) continue;
     const manifest = plugins.find((p) => p.instanceId === id)?.manifest;
-    rows.push(
-      row(
-        projectId,
-        {
-          pluginInstanceId: id,
-          pluginDisplayName: displayName(
-            manifest?.displayName,
-            manifest?.name,
-            pluginManifestIdFromInstanceKey(id)
-          ),
-          ...surfaceOf(projectId, id, manifest),
-        },
-        false
-      )
+    const orphan = row(
+      projectId,
+      {
+        pluginInstanceId: id,
+        pluginDisplayName: displayName(
+          manifest?.displayName,
+          manifest?.name,
+          pluginManifestIdFromInstanceKey(id)
+        ),
+        ...surfaceOf(projectId, id, manifest),
+      },
+      false
     );
+    const { databasesWithheld: _withheld, ...rest } = orphan;
+    rows.push({ ...rest, access: retainedAccess(projectId, id) });
   }
 
   return { plugins: rows, mcpServerEnabled };
@@ -263,10 +295,17 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
         if (scope === "all-projects" && projectIdFromPluginInstanceKey(pluginInstanceId) !== null) {
           throw new Error("agent tools: only an installed plugin has a setting for every project");
         }
-        const write = () =>
-          scope === "project"
-            ? setProjectAgentMcpAccess(projectId, pluginInstanceId, access)
-            : setAllProjectsAgentMcpAccess(pluginInstanceId, access);
+        const write = () => {
+          if (scope === "project") {
+            setProjectAgentMcpAccess(projectId, pluginInstanceId, access);
+            return;
+          }
+          setAllProjectsAgentMcpAccess(pluginInstanceId, access);
+          // Making a level the default from a project means this project
+          // follows it too, rather than keeping its own answer and silently
+          // parting ways the next time the default changes.
+          if (access !== null) setProjectAgentMcpAccess(projectId, pluginInstanceId, null);
+        };
 
         if (access === null || access === "off") {
           // Always allowed — it is how a stale answer is cleared.

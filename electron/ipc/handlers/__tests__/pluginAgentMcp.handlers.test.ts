@@ -341,6 +341,82 @@ describe("plugin agent MCP access IPC", () => {
       });
     });
 
+    it("reports a gone plugin's level from the answer on record", async () => {
+      setProjectAgentMcpAccess(PROJECT, "gone.plugin", "read-write");
+      mocks.listPlugins.mockReturnValue([]);
+
+      const [row] = (await list()).plugins;
+
+      expect(row).toMatchObject({
+        pluginInstanceId: "gone.plugin",
+        hasDatabases: true,
+        access: "read-write",
+        source: "project",
+        available: false,
+      });
+      expect(row.pluginTools).toBeUndefined();
+    });
+
+    it("reports a stopped plugin's retained level even when its manifest no longer declares it", async () => {
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-write");
+      mocks.listPlugins.mockReturnValue([plugin({ databases: false, agentMcp: null })]);
+      mocks.hasPlugin.mockReturnValue(false);
+
+      const [row] = (await list()).plugins;
+
+      expect(row).toMatchObject({
+        pluginInstanceId: "acme.ledger",
+        pluginDisplayName: "Ledger",
+        hasDatabases: false,
+        access: "read-write",
+        source: "project",
+        available: false,
+      });
+      expect(row.pluginTools).toBeUndefined();
+    });
+
+    it("reports a stopped installed plugin following an all-projects answer at that level", async () => {
+      setAllProjectsAgentMcpAccess("acme.ledger", "read-write");
+      mocks.listPlugins.mockReturnValue([plugin({ agentMcp: null })]);
+      mocks.hasPlugin.mockReturnValue(false);
+
+      const [row] = (await list()).plugins;
+
+      expect(row).toMatchObject({
+        pluginInstanceId: "acme.ledger",
+        access: "read-write",
+        source: "all-projects",
+        allProjectsAccess: "read-write",
+        available: false,
+      });
+    });
+
+    it("lets the all-projects answer fill in rosters an old answer never named", async () => {
+      setAllProjectsAgentMcpAccess("acme.ledger", "read-write");
+      storeData.set("projectAgentMcpEnablement", {
+        [PROJECT]: { "acme.ledger": { data: { decidedAt: 1, enabled: false } } },
+      });
+      mocks.hasPlugin.mockReturnValue(false);
+
+      const [row] = (await list()).plugins;
+
+      // The old answer turned `data` off but never named `@databases`, which
+      // follows the all-projects answer when the plugin comes back.
+      expect(row).toMatchObject({ access: "read-only", source: "project", available: false });
+    });
+
+    it("never flags withheld database tools on a plugin that is not running", async () => {
+      storeData.set("projectAgentMcpEnablement", {
+        [PROJECT]: { "acme.ledger": { data: { decidedAt: 1 } } },
+      });
+      mocks.hasPlugin.mockReturnValue(false);
+
+      const [row] = (await list()).plugins;
+
+      expect(row).toMatchObject({ access: "read-write", source: "project", available: false });
+      expect(row.databasesWithheld).toBeUndefined();
+    });
+
     it("lists no orphan row for an answer that turns nothing on", async () => {
       setProjectAgentMcpAccess(PROJECT, "gone.plugin", "off");
       mocks.listPlugins.mockReturnValue([]);
@@ -424,12 +500,63 @@ describe("plugin agent MCP access IPC", () => {
       });
 
       expect(allProjectsAgentMcpAccess("acme.ledger")).toBe("read-only");
-      expect(projectAgentMcpAccessAnswer(PROJECT, "acme.ledger")).toBeUndefined();
+      expect(projectAgentMcpAccessAnswer(PROJECT, "acme.ledger")).toBeNull();
       expect(snapshot.plugins).toEqual([
         expect.objectContaining({
           access: "read-only",
           source: "all-projects",
           allProjectsAccess: "read-only",
+        }),
+      ]);
+    });
+
+    it("makes the sender's project follow a new all-projects answer, leaving other projects' own", async () => {
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "off");
+      setProjectAgentMcpAccess(OTHER_PROJECT, "acme.ledger", "read-only");
+
+      const snapshot = await set({
+        pluginInstanceId: "acme.ledger",
+        access: "read-write",
+        scope: "all-projects",
+      });
+
+      expect(projectAgentMcpAccessAnswer(PROJECT, "acme.ledger")).toBeNull();
+      expect(projectAgentMcpAccessAnswer(OTHER_PROJECT, "acme.ledger")).toBe("read-only");
+      expect(snapshot.plugins).toEqual([
+        expect.objectContaining({
+          access: "read-write",
+          source: "all-projects",
+          allProjectsAccess: "read-write",
+        }),
+      ]);
+
+      mocks.getProjectForWebContents.mockReturnValue(OTHER_PROJECT);
+      expect((await list()).plugins).toEqual([
+        expect.objectContaining({
+          access: "read-only",
+          source: "project",
+          allProjectsAccess: "read-write",
+        }),
+      ]);
+    });
+
+    it("leaves the project's own answer alone when the all-projects answer is removed", async () => {
+      setAllProjectsAgentMcpAccess("acme.ledger", "read-write");
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only");
+
+      const snapshot = await set({
+        pluginInstanceId: "acme.ledger",
+        access: null,
+        scope: "all-projects",
+      });
+
+      expect(allProjectsAgentMcpAccess("acme.ledger")).toBeNull();
+      expect(projectAgentMcpAccessAnswer(PROJECT, "acme.ledger")).toBe("read-only");
+      expect(snapshot.plugins).toEqual([
+        expect.objectContaining({
+          access: "read-only",
+          source: "project",
+          allProjectsAccess: "off",
         }),
       ]);
     });

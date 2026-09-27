@@ -309,6 +309,12 @@ export function ProjectAgentToolsSection() {
               plugin.allProjectsAccess !== undefined &&
               plugin.available &&
               plugin.access !== plugin.allProjectsAccess;
+            // A default left on for a plugin that went away would apply in every
+            // project the moment it came back, so it stays clearable from here.
+            const canClearDefault =
+              plugin.allProjectsAccess !== undefined &&
+              plugin.allProjectsAccess !== "off" &&
+              !plugin.available;
             return (
               <div key={key} data-testid="project-agent-tool-row">
                 <SettingsRow
@@ -337,9 +343,28 @@ export function ProjectAgentToolsSection() {
                           </Button>
                         </span>
                       )}
+                      {canClearDefault && (
+                        <span className="mt-1.5 block">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() =>
+                              void setAccess(plugin, {
+                                pluginInstanceId: key,
+                                access: null,
+                                scope: "all-projects",
+                              })
+                            }
+                            data-testid="project-agent-tool-clear-default"
+                          >
+                            Turn off in all projects
+                          </Button>
+                        </span>
+                      )}
                     </>
                   }
-                  isModified={plugin.source === "project"}
+                  isModified={plugin.source === "project" && !busy}
                   onReset={() =>
                     void setAccess(plugin, {
                       pluginInstanceId: key,
