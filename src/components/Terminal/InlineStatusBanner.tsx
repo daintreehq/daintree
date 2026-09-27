@@ -112,6 +112,7 @@ interface BaseInlineStatusBannerProps {
    * this forces the multi-line layout even without a `description`.
    */
   descriptionExtras?: React.ReactNode;
+  "data-testid"?: string;
 }
 
 /**
@@ -257,6 +258,7 @@ export function InlineStatusBanner({
   trailingSlot,
   descriptionExtras,
   autoDismissAfter,
+  "data-testid": testId,
 }: InlineStatusBannerProps) {
   // Non-null only in the global banner host, where this banner owns the
   // window's title-bar band: it has to supply the drag region and top-edge
@@ -579,6 +581,7 @@ export function InlineStatusBanner({
         ...windowControlsInset,
       }}
       role={role}
+      data-testid={testId}
       onFocusCapture={handleFocusCapture}
       onBlurCapture={handleBlurCapture}
       aria-live={ariaLive}

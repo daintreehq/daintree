@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Clock, ShieldAlert, ShieldCheck, X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Clock, ShieldCheck } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import type {
   ActiveGrantState,
   GrantEndReason,
@@ -11,12 +12,12 @@ import type {
   TierMismatchState,
 } from "@/controllers/HelpSessionController";
 
-// Body copy keyed off how the grant ended (#10042). The tool id is the
-// sentence subject, prepended by the caller — kept jargon-free per the
-// microcopy rules (no "MCP" / "grant" / "tier").
-const GRANT_ENDED_BODY: Record<GrantEndReason, string> = {
-  expired: "access expired. The next call will ask to approve it again.",
-  "grant-ceiling": "hit its 30-minute limit. The next call will ask to approve it again.",
+// Title keyed off how the grant ended (#10042). The tool id is the sentence
+// subject, prepended by the caller — kept jargon-free per the microcopy rules
+// (no "MCP" / "grant" / "tier").
+const GRANT_ENDED_TITLE: Record<GrantEndReason, string> = {
+  expired: "access expired",
+  "grant-ceiling": "hit its 30-minute limit",
 };
 
 // The countdown re-derives from `expiresAt` once a second — the tick only
@@ -32,6 +33,10 @@ function formatRemaining(totalSeconds: number): string {
 
 function computeRemainingSeconds(expiresAt: number): number {
   return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+}
+
+function ToolId({ id }: { id: string }) {
+  return <span className="font-mono text-text-primary wrap-anywhere">{id}</span>;
 }
 
 /**
@@ -65,82 +70,35 @@ function GrantActiveBanner({
   }, [grant.expiresAt]);
 
   return (
-    <div
+    <InlineStatusBanner
+      severity="neutral"
+      layout="inline"
+      animated={false}
+      icon={ShieldCheck}
       role="status"
-      aria-live="polite"
-      className={cn(
-        "flex items-center gap-2 px-3 py-2 mx-3 mt-3 mb-1",
-        "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
-        "text-xs text-text-primary"
-      )}
+      ariaLive="polite"
       data-testid="help-grant-active-banner"
-    >
-      <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-daintree-text/60" aria-hidden="true" />
-      <span className="flex-1 min-w-0 select-text">
-        <span className="font-mono text-text-primary">{grant.toolId}</span> approved ·{" "}
-        {/* The countdown re-derives every second; keep it out of the parent's
-            polite live region (`aria-live="off"`) so screen readers announce
-            the "<tool> approved" message once instead of the ticking time. */}
-        <span aria-live="off" className="tabular-nums">
-          {formatRemaining(remainingSeconds)}
-        </span>{" "}
-        left
-      </span>
-      <button
-        type="button"
-        onClick={onRevoke}
-        disabled={isRevoking}
-        className={cn(
-          "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-          "text-text-secondary hover:text-text-primary",
-          "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        )}
-      >
-        Revoke access
-      </button>
-    </div>
-  );
-}
-
-/**
- * Brief notice that a watched grant lapsed (#10042). Neutral ambient surface,
- * not an error tint — nothing failed; the user's approval simply timed out and
- * the next call re-prompts. Auto-dismisses on a controller timer; also
- * manually dismissible.
- */
-function GrantEndedBanner({
-  grantEnded,
-  onDismiss,
-}: {
-  grantEnded: GrantEndedState;
-  onDismiss: () => void;
-}) {
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className={cn(
-        "flex items-start gap-2 px-3 py-2 mx-3 mt-3 mb-1",
-        "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
-        "text-xs text-text-primary"
-      )}
-      data-testid="help-grant-ended-banner"
-    >
-      <Clock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-daintree-text/60" aria-hidden="true" />
-      <span className="flex-1 min-w-0 select-text">
-        <span className="font-mono text-text-primary">{grantEnded.toolId}</span>{" "}
-        {GRANT_ENDED_BODY[grantEnded.reason]}
-      </span>
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label="Dismiss approval notice"
-        className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-      >
-        <X className="w-3 h-3" />
-      </button>
-    </div>
+      title={
+        <>
+          <ToolId id={grant.toolId} /> approved
+        </>
+      }
+      description={
+        // The countdown re-derives every second; keep it out of the banner's
+        // polite live region (`aria-live="off"`) so screen readers announce
+        // the "<tool> approved" message once instead of the ticking time.
+        <span aria-live="off">
+          <span className="tabular-nums">{formatRemaining(remainingSeconds)}</span> left
+        </span>
+      }
+      action={{
+        id: "revoke",
+        label: "Revoke access",
+        variant: "primary",
+        onClick: onRevoke,
+        loading: isRevoking,
+      }}
+    />
   );
 }
 
@@ -161,46 +119,47 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
     "Daintree's bundled assistant files are missing. Reinstall Daintree or check the logs.",
 };
 
-// Per-kind recovery surface. `folder-unavailable` is non-retryable: the
-// resolver's module-scope cache returns the same null on retry, so the only
-// honest affordances are the installer page and the error log. `Retry` is
-// kept for the transient kinds (spawn/probe/server). `skills-sync-failed`
-// pairs both: some causes clear on retry, but a corrupt manifest or an
-// unremovable stale file fails identically forever, so the log — which names
-// the session dir to clear — is the only way out. `mixed-agent-lanes` carries
-// no CTA at all: the one way out is stopping the sibling session, which lives
-// in another lane's tab, and every button this banner can offer would either
-// fail identically (Retry) or point somewhere irrelevant. The body names the
-// action; the dismiss × is the only control. The CTA handler is
-// resolved in the component from this discriminator — no callbacks in the
-// data, so the data stays serializable and easy to assert against.
+// Per-kind recovery surface: one primary recovery (the banner's `action`) and
+// at most one demoted affordance beside it. `folder-unavailable` is
+// non-retryable: the resolver's module-scope cache returns the same null on
+// retry, so the only honest affordances are the installer page and the error
+// log. `Retry` is kept for the transient kinds (spawn/probe/server).
+// `skills-sync-failed` pairs both: some causes clear on retry, but a corrupt
+// manifest or an unremovable stale file fails identically forever, so the log
+// — which names the session dir to clear — is the only way out.
+// `mixed-agent-lanes` carries no CTA at all: the one way out is stopping the
+// sibling session, which lives in another lane's tab, and every button this
+// banner can offer would either fail identically (Retry) or point somewhere
+// irrelevant. The body names the action; the dismiss × is the only control.
+// The CTA handler is resolved in the component from this discriminator — no
+// callbacks in the data, so the data stays serializable and easy to assert
+// against.
 type LaunchErrorCtaHandler = "retry" | "settings" | "logs" | "installer";
 
 interface LaunchErrorCta {
   label: string;
   handler: LaunchErrorCtaHandler;
-  variant: "primary" | "secondary";
 }
 
-const LAUNCH_ERROR_CTAS: Record<LaunchErrorKind, LaunchErrorCta[]> = {
-  "mcp-server-not-started": [
-    { label: "Retry", handler: "retry", variant: "primary" },
-    { label: "Open settings", handler: "settings", variant: "secondary" },
-  ],
-  "mcp-probe-failed": [
-    { label: "Retry", handler: "retry", variant: "primary" },
-    { label: "Open settings", handler: "settings", variant: "secondary" },
-  ],
-  "skills-sync-failed": [
-    { label: "Retry", handler: "retry", variant: "primary" },
-    { label: "Open logs", handler: "logs", variant: "secondary" },
-  ],
-  "spawn-failed": [{ label: "Retry", handler: "retry", variant: "primary" }],
-  "mixed-agent-lanes": [],
-  "folder-unavailable": [
-    { label: "Open logs", handler: "logs", variant: "secondary" },
-    { label: "Open installer page", handler: "installer", variant: "primary" },
-  ],
+interface LaunchErrorCtas {
+  primary?: LaunchErrorCta;
+  secondary?: LaunchErrorCta;
+}
+
+const RETRY: LaunchErrorCta = { label: "Retry", handler: "retry" };
+const OPEN_SETTINGS: LaunchErrorCta = { label: "Open settings", handler: "settings" };
+const OPEN_LOGS: LaunchErrorCta = { label: "Open logs", handler: "logs" };
+
+const LAUNCH_ERROR_CTAS: Record<LaunchErrorKind, LaunchErrorCtas> = {
+  "mcp-server-not-started": { primary: RETRY, secondary: OPEN_SETTINGS },
+  "mcp-probe-failed": { primary: RETRY, secondary: OPEN_SETTINGS },
+  "skills-sync-failed": { primary: RETRY, secondary: OPEN_LOGS },
+  "spawn-failed": { primary: RETRY },
+  "mixed-agent-lanes": {},
+  "folder-unavailable": {
+    primary: { label: "Open installer page", handler: "installer" },
+    secondary: OPEN_LOGS,
+  },
 };
 
 interface HelpPanelBannersProps {
@@ -227,6 +186,12 @@ interface HelpPanelBannersProps {
   onDismissSessionRevoked: () => void;
 }
 
+/**
+ * The banners stack most-urgent first — a stopped session or a failed launch,
+ * then a tool call waiting on the user, then the ambient grant state and the
+ * advisories — so the first Tab stop into the stack is the thing that is
+ * blocking the agent.
+ */
 export function HelpPanelBanners({
   showResumeBanner,
   tierMismatch,
@@ -250,29 +215,141 @@ export function HelpPanelBanners({
   onStartNewSession,
   onDismissSessionRevoked,
 }: HelpPanelBannersProps) {
+  // `isApprovingTier` says a request is in flight but not which button sent
+  // it; remember the click so only that one shows the spinner.
+  const [approvalSource, setApprovalSource] = useState<"tool" | "project">("tool");
+
+  const ctaHandler = (handler: LaunchErrorCtaHandler) =>
+    handler === "retry"
+      ? onRetryLaunch
+      : handler === "settings"
+        ? onOpenAssistantSettings
+        : handler === "logs"
+          ? onOpenLogs
+          : onOpenInstallerPage;
+
+  const launchCtas = launchError ? LAUNCH_ERROR_CTAS[launchError.kind] : {};
+
+  // Labels name the scope; the body carries the windows. These read "Approve
+  // once" and "Always allow for this project" before #12119 and both
+  // overstated their mechanism. `onApproveOnce` mints a *reusable* per-tool
+  // grant (15min sliding, 30min ceiling), so it was never once. `onAlwaysAllow`
+  // does persist a project default for the project's own agent panes — never
+  // for new help sessions, which provision from the global settings tier — but
+  // lifts *this* session for only 30min of awake time, so it was never always.
+  // Handler names and the main-process comments keep the original spelling as
+  // the flow names (#8442, #10042); this is the anchor that maps them to the
+  // shipped labels. The narrower grant leads; the project write is demoted.
+  const tierActions: BannerAction[] = [
+    {
+      id: "allow-tool",
+      label: "Allow this tool",
+      variant: "primary",
+      onClick: () => {
+        setApprovalSource("tool");
+        onApproveOnce();
+      },
+      loading: isApprovingTier && approvalSource === "tool",
+      disabled: isApprovingTier,
+    },
+    {
+      id: "project-default",
+      label: "Set project default",
+      variant: "dismiss",
+      onClick: () => {
+        setApprovalSource("project");
+        onAlwaysAllow();
+      },
+      loading: isApprovingTier && approvalSource === "project",
+      disabled: isApprovingTier,
+    },
+    {
+      id: "cancel",
+      label: "Cancel",
+      variant: "dismiss",
+      onClick: onDismissTierMismatch,
+      disabled: isApprovingTier,
+    },
+  ];
+
   return (
     <>
-      {showResumeBanner && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "flex items-start gap-2 px-3 py-2 mx-3 mt-3 mb-1",
-            "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
-            "text-xs text-text-primary"
-          )}
-          data-testid="help-resume-banner"
-        >
-          <span className="flex-1 select-text">Resumed your previous session.</span>
-          <button
-            type="button"
-            onClick={onDismissResume}
-            aria-label="Dismiss resume notice"
-            className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
+      {sessionRevoked && (
+        <InlineStatusBanner
+          severity="error"
+          animated={false}
+          data-testid="help-session-revoked-banner"
+          title="Session ended"
+          description="This assistant session was stopped after too many blocked requests. Start a new session to continue."
+          action={{
+            id: "start-new-session",
+            label: "Start new session",
+            variant: "primary",
+            onClick: onStartNewSession,
+          }}
+          onClose={onDismissSessionRevoked}
+          closeAriaLabel="Dismiss session ended notice"
+        />
+      )}
+      {launchError && (
+        <InlineStatusBanner
+          severity="error"
+          animated={false}
+          data-testid="help-launch-error-banner"
+          title="Assistant couldn't start"
+          description={LAUNCH_ERROR_BODY[launchError.kind]}
+          action={
+            launchCtas.primary && {
+              id: launchCtas.primary.handler,
+              label: launchCtas.primary.label,
+              variant: "primary",
+              onClick: ctaHandler(launchCtas.primary.handler),
+            }
+          }
+          trailingSlot={
+            launchCtas.secondary && (
+              <Button variant="ghost" size="sm" onClick={ctaHandler(launchCtas.secondary.handler)}>
+                {launchCtas.secondary.label}
+              </Button>
+            )
+          }
+          onClose={onDismissLaunchError}
+          closeAriaLabel="Dismiss launch error"
+        />
+      )}
+      {tierMismatch && (
+        <InlineStatusBanner
+          severity="warning"
+          animated={false}
+          data-testid="help-tier-mismatch-banner"
+          title="Tool not permitted"
+          description={
+            tierMismatch.targetTier ? (
+              <>
+                <ToolId id={tierMismatch.toolId} /> needs the {tierMismatch.targetTier} tool set.
+              </>
+            ) : (
+              <>
+                <ToolId id={tierMismatch.toolId} /> isn't in either tool set.
+              </>
+            )
+          }
+          descriptionExtras={
+            tierMismatch.targetTier && (
+              <p className="text-xs mt-1 text-text-secondary">
+                Allowing the tool covers repeat calls for 15 minutes after the last one, 30 at most.
+                The project default applies to Claude Code and Daintree Assistant panes launched in
+                this project, and raises this session for 30 minutes.
+              </p>
+            )
+          }
+          actions={tierMismatch.targetTier ? tierActions : undefined}
+          onClose={onDismissTierMismatch}
+          // Dismissing mid-flight would strand the in-flight grant with no
+          // banner to report its outcome — the same reason Cancel goes inert.
+          closeDisabled={isApprovingTier}
+          closeAriaLabel="Dismiss tier mismatch notice"
+        />
       )}
       {activeGrant && (
         <GrantActiveBanner
@@ -281,211 +358,40 @@ export function HelpPanelBanners({
           onRevoke={onRevokeGrant}
         />
       )}
-      {grantEnded && <GrantEndedBanner grantEnded={grantEnded} onDismiss={onDismissGrantEnded} />}
-      {tierMismatch && (
-        <div
-          role="alert"
-          className={cn(
-            "flex flex-col gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
-            "rounded-[var(--radius-md)]",
-            "bg-status-warning/10 border border-status-warning/20",
-            "text-xs text-text-primary"
-          )}
-          data-testid="help-tier-mismatch-banner"
-        >
-          <div className="flex items-start gap-2">
-            <ShieldAlert
-              className="w-3.5 h-3.5 shrink-0 mt-0.5 text-status-warning"
-              aria-hidden="true"
-            />
-            <div className="flex-1 select-text">
-              <p className="font-medium text-text-primary">Tool not permitted</p>
-              <p className="mt-0.5 text-text-secondary">
-                {tierMismatch.targetTier
-                  ? `${tierMismatch.toolId} needs the ${tierMismatch.targetTier} tool set.`
-                  : `${tierMismatch.toolId} isn't in either tool set.`}
-              </p>
-              {tierMismatch.targetTier && (
-                <p className="mt-1 text-text-secondary">
-                  Allowing the tool covers repeat calls for 15 minutes after the last one, 30 at
-                  most. The project default applies to Claude Code and Daintree Assistant panes
-                  launched in this project, and raises this session for 30 minutes.
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={onDismissTierMismatch}
-              aria-label="Dismiss tier mismatch notice"
-              className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-          {tierMismatch.targetTier && (
-            // Labels name the scope; the body above carries the windows. These
-            // read "Approve once" and "Always allow for this project" before
-            // #12119 and both overstated their mechanism. `onApproveOnce` mints
-            // a *reusable* per-tool grant (15min sliding, 30min ceiling), so it
-            // was never once. `onAlwaysAllow` does persist a project default for
-            // the project's own agent panes — never for new help sessions, which
-            // provision from the global settings tier — but lifts *this* session
-            // for only 30min of awake time, so it was never always. Handler names and the main-process
-            // comments keep the original spelling as the flow names (#8442,
-            // #10042); this is the anchor that maps them to the shipped labels.
-            <div className="flex items-center gap-2 flex-wrap pl-5">
-              <button
-                type="button"
-                onClick={onApproveOnce}
-                disabled={isApprovingTier}
-                className={cn(
-                  "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
-                  "bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary",
-                  "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                )}
-              >
-                Allow this tool
-              </button>
-              <button
-                type="button"
-                onClick={onAlwaysAllow}
-                disabled={isApprovingTier}
-                className={cn(
-                  "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
-                  "bg-daintree-text/5 hover:bg-daintree-text/10 text-text-primary",
-                  "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                )}
-              >
-                Set project default
-              </button>
-              <button
-                type="button"
-                onClick={onDismissTierMismatch}
-                disabled={isApprovingTier}
-                className={cn(
-                  "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-                  "text-text-secondary hover:text-text-primary",
-                  "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                )}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-        </div>
+      {grantEnded && (
+        // Neutral, not an error tint — nothing failed; the user's approval
+        // simply timed out and the next call re-prompts. Auto-dismisses on a
+        // controller timer; also manually dismissible.
+        <InlineStatusBanner
+          severity="neutral"
+          layout="inline"
+          animated={false}
+          icon={Clock}
+          role="status"
+          ariaLive="polite"
+          data-testid="help-grant-ended-banner"
+          title={
+            <>
+              <ToolId id={grantEnded.toolId} /> {GRANT_ENDED_TITLE[grantEnded.reason]}
+            </>
+          }
+          description="The next call will ask to approve it again."
+          onClose={onDismissGrantEnded}
+          closeAriaLabel="Dismiss approval notice"
+        />
       )}
-      {launchError && (
-        <div
-          role="alert"
-          className={cn(
-            "flex flex-col gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
-            "rounded-[var(--radius-md)]",
-            "bg-status-error/10 border border-status-error/20",
-            "text-xs text-text-primary"
-          )}
-          data-testid="help-launch-error-banner"
-        >
-          <div className="flex items-start gap-2">
-            <AlertCircle
-              className="w-3.5 h-3.5 shrink-0 mt-0.5 text-status-error"
-              aria-hidden="true"
-            />
-            <div className="flex-1 select-text">
-              <p className="font-medium text-text-primary">Assistant couldn't start</p>
-              <p className="mt-0.5 text-text-secondary">{LAUNCH_ERROR_BODY[launchError.kind]}</p>
-            </div>
-            <button
-              type="button"
-              onClick={onDismissLaunchError}
-              aria-label="Dismiss launch error"
-              className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-          {LAUNCH_ERROR_CTAS[launchError.kind].length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap pl-5">
-              {LAUNCH_ERROR_CTAS[launchError.kind].map((cta) => {
-                const onClick =
-                  cta.handler === "retry"
-                    ? onRetryLaunch
-                    : cta.handler === "settings"
-                      ? onOpenAssistantSettings
-                      : cta.handler === "logs"
-                        ? onOpenLogs
-                        : onOpenInstallerPage;
-                return (
-                  <button
-                    key={cta.label}
-                    type="button"
-                    onClick={onClick}
-                    className={cn(
-                      "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-                      cta.variant === "primary"
-                        ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary"
-                        : "text-text-secondary hover:text-text-primary",
-                      "transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                    )}
-                  >
-                    {cta.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-      {sessionRevoked && (
-        <div
-          role="alert"
-          className={cn(
-            "flex flex-col gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
-            "rounded-[var(--radius-md)]",
-            "bg-status-error/10 border border-status-error/20",
-            "text-xs text-text-primary"
-          )}
-          data-testid="help-session-revoked-banner"
-        >
-          <div className="flex items-start gap-2">
-            <ShieldAlert
-              className="w-3.5 h-3.5 shrink-0 mt-0.5 text-status-error"
-              aria-hidden="true"
-            />
-            <div className="flex-1 select-text">
-              <p className="font-medium text-text-primary">Session ended</p>
-              <p className="mt-0.5 text-text-secondary">
-                This assistant session was stopped after too many blocked requests. Start a new
-                session to continue.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onDismissSessionRevoked}
-              aria-label="Dismiss session ended notice"
-              className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap pl-5">
-            <button
-              type="button"
-              onClick={onStartNewSession}
-              className={cn(
-                "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
-                "bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary",
-                "transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-              )}
-            >
-              Start new session
-            </button>
-          </div>
-        </div>
+      {showResumeBanner && (
+        <InlineStatusBanner
+          severity="neutral"
+          layout="inline"
+          animated={false}
+          role="status"
+          ariaLive="polite"
+          data-testid="help-resume-banner"
+          title="Resumed your previous session"
+          onClose={onDismissResume}
+          closeAriaLabel="Dismiss resume notice"
+        />
       )}
     </>
   );
