@@ -79,8 +79,8 @@ describe("describeImageFacts", () => {
         dims,
       }
     );
-    expect(resized).toContain("640×400");
-    expect(resized).toContain("760×360");
+    expect(resized).toContain("640 × 400");
+    expect(resized).toContain("760 × 360");
     const same = describeImageFacts(ok(10), dims, { side: ok(10), dims });
     expect(same.match(/×/g)).toHaveLength(1);
   });
@@ -238,17 +238,34 @@ describe("ImageDiffViewer comparison", () => {
 
         expect(renderedWidth("HEAD version of logo.png")).toBe(NATURAL[HEAD_URL]!.w);
         expect(renderedWidth("Working tree version of logo.png")).toBe(NATURAL[WORKING_URL]!.w);
-        fireEvent.click(screen.getByRole("button", { name: "Fit to pane" }));
+        fireEvent.click(screen.getByRole("button", { name: "Fit to screen" }));
         expect(renderedWidth("Working tree version of logo.png")).toBeLessThanOrEqual(300);
       }
     );
+
+    it("gives both two-up panes the same canvas, so differently sized versions line up", async () => {
+      mockReadFileVersions.mockResolvedValue(versions());
+      render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
+      await screen.findByRole("button", { name: "Swipe" });
+
+      const canvasOf = (alt: string) => screen.getByAltText(alt).parentElement!;
+      for (const zoom of ["Fit to screen", "Actual size"]) {
+        fireEvent.click(screen.getByRole("button", { name: zoom }));
+        const head = canvasOf("HEAD version of logo.png");
+        const working = canvasOf("Working tree version of logo.png");
+        expect(head.style.width).not.toBe("");
+        expect(head.style.width).toBe(working.style.width);
+        expect(head.style.height).toBe(working.style.height);
+      }
+    });
 
     it("keeps both two-up panes on the same region when one scrolls at 100%", async () => {
       mockReadFileVersions.mockResolvedValue(versions());
       render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
       fireEvent.click(await screen.findByRole("button", { name: "Actual size" }));
 
-      const frameOf = (alt: string) => screen.getByAltText(alt).parentElement!;
+      const frameOf = (alt: string) =>
+        screen.getByAltText(alt).closest<HTMLElement>("[data-image-frame]")!;
       const head = frameOf("HEAD version of logo.png");
       const working = frameOf("Working tree version of logo.png");
       head.scrollLeft = 120;

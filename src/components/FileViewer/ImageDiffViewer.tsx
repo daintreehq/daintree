@@ -41,7 +41,7 @@ interface ZoomControl {
 }
 
 const ZOOM_OPTIONS: Array<{ value: ImageZoom; label: string; ariaLabel: string }> = [
-  { value: "fit", label: "Fit", ariaLabel: "Fit to pane" },
+  { value: "fit", label: "Fit", ariaLabel: "Fit to screen" },
   { value: "actual", label: "100%", ariaLabel: "Actual size" },
 ];
 
@@ -123,9 +123,9 @@ export function imageFactParts(
   if (dims) {
     const was =
       baseline?.dims && (baseline.dims.width !== dims.width || baseline.dims.height !== dims.height)
-        ? ` (was ${baseline.dims.width}×${baseline.dims.height})`
+        ? ` (was ${baseline.dims.width} × ${baseline.dims.height})`
         : "";
-    parts.push(`${dims.width}×${dims.height} px${was}`);
+    parts.push(`${dims.width} × ${dims.height}${was}`);
   }
   const byteDelta = baseline ? side.byteSize - baseline.side.byteSize : 0;
   parts.push(
@@ -212,7 +212,9 @@ function FactsLine({ parts, className }: { parts?: string[]; className?: string 
             // Non-breaking inside a fact, breakable between them; `anywhere`
             // only fires when one fact alone is wider than the pane.
             <span key={part}>
-              {index > 0 ? " · " : null}
+              {/* The break falls before the dot, so it opens the next line
+                  rather than dangling at the end of this one. */}
+              {index > 0 ? " \u00b7\u00a0" : null}
               {part.replaceAll(" ", "\u00a0")}
             </span>
           ))
@@ -376,6 +378,7 @@ function ImagePane({
   const [frameRef, scale] = useFitScale(fitBox, zoom);
   const dims = knownDims ?? loadedDims;
   const showImage = side.ok && !decodeFailed;
+  const exact = scale !== null && knownDims !== null && fitBox !== null;
 
   return (
     // A subgrid of the caller's three rows (label, frame, facts), so a facts
@@ -392,23 +395,33 @@ function ImagePane({
           return scrollSync?.register(el);
         }}
         onScroll={scrollSync?.onScroll}
+        data-image-frame=""
         className={cn(
           PANE_FRAME_CLASS,
           zoom.level === "actual" ? "overflow-auto" : "overflow-hidden"
         )}
       >
-        {showImage ? (
+        {showImage && exact ? (
+          // Every pane gets the same union-sized canvas with its image at the
+          // top-left, so two-up lines up exactly as the overlay modes do and
+          // both panes scroll over the same extent at 100%.
+          <div className="relative shrink-0" style={scaledSize(fitBox, scale)}>
+            <img
+              src={side.dataUrl}
+              alt={`${label} version of ${relPath}`}
+              draggable={false}
+              className="absolute left-0 top-0 max-w-none"
+              style={{ ...CHECKERBOARD_STYLE, ...scaledSize(knownDims, scale) }}
+              onError={() => setDecodeFailed(true)}
+            />
+          </div>
+        ) : showImage ? (
           <img
             src={side.dataUrl}
             alt={`${label} version of ${relPath}`}
             draggable={false}
-            className={
-              scale !== null && knownDims ? "max-w-none" : "max-h-full max-w-full object-contain"
-            }
-            style={{
-              ...CHECKERBOARD_STYLE,
-              ...(scale !== null && knownDims ? scaledSize(knownDims, scale) : null),
-            }}
+            className="max-h-full max-w-full object-contain"
+            style={CHECKERBOARD_STYLE}
             onLoad={(event) =>
               setLoadedDims({
                 width: event.currentTarget.naturalWidth,
@@ -520,6 +533,7 @@ function overlayScrollerClass(zoom: ZoomControl): string {
 
 function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
   const stageRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(50);
   const draggingRef = useRef(false);
   const { frameRef, stageStyle, layerImg } = useOverlayGeometry(dims, zoom);
@@ -600,6 +614,7 @@ function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
               be findable; the pseudo-element widens its hit area to 24px.
               Colour on the wrapper: forced colours keep an SVG's own colour. */}
             <div
+              ref={handleRef}
               role="slider"
               tabIndex={0}
               aria-label="Swipe divider"
@@ -615,6 +630,11 @@ function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
                 if (next === null) return;
                 event.preventDefault();
                 setPosition(next);
+                // At 100% a key can carry the handle past the scrolled view;
+                // follow it once it has moved so focus never goes off-screen.
+                requestAnimationFrame(() =>
+                  handleRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" })
+                );
               }}
             >
               <GripVertical className="h-3 w-3" />
@@ -886,7 +906,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
         // Wraps rather than squeezes: in a narrow pane the opacity control
         // drops to its own row instead of breaking its label over two lines.
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 pt-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {showModes ? (
               <SegmentedToggle options={MODE_OPTIONS} value={effectiveMode} onChange={setMode} />
             ) : null}
@@ -900,7 +920,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
             ) : null}
           </div>
           {effectiveMode === "onion" ? (
-            <label className="flex items-center gap-2 whitespace-nowrap text-2xs text-text-secondary">
+            <label className="flex min-w-0 items-center gap-2 whitespace-nowrap text-2xs text-text-secondary">
               Working tree opacity
               <input
                 type="range"
@@ -910,7 +930,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
                 aria-label="Working tree opacity"
                 aria-valuetext={`Working tree at ${onionOpacity}% over HEAD`}
                 onChange={(event) => setOnionOpacity(Number(event.currentTarget.value))}
-                className="w-36 cursor-pointer accent-[var(--color-text-primary)]"
+                className="w-36 min-w-16 shrink cursor-pointer accent-[var(--color-text-primary)]"
               />
               <span className="w-7 text-right font-mono tabular-nums" aria-hidden="true">
                 {onionOpacity}%
