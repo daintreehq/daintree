@@ -10,7 +10,7 @@ The household ledger is a SQLite database this project owns. You can read and wr
 
 ## Tools
 
-Daintree may give you two sets of tools for this ledger, each turned on separately for the project. Use them when you have them:
+Daintree may give you tools for this ledger on one MCP server, `daintree-ledger`: the read-only database tools with read-only access, and the ledger tools as well with read and write access. Use them when you have them:
 
 - **Databases (read-only)**: `database_schema` shows the schema, and `database_query` runs one read-only `SELECT`, `WITH` or pragma with `databaseId` `ledger`, binding values with `?` and `params`. It always reads the project root's file, whichever worktree you are in, and it cannot write.
 - **Household ledger**: `list_transactions` and `summarize_by_category` to read, `add_transaction` and `add_split_transaction` to write. They apply every rule below for you.

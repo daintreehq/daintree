@@ -2112,7 +2112,6 @@ export class PluginService {
         boundProjectId: binding.projectId,
         boundProjectRoot: binding.projectRoot,
         dataDir: this.pluginDataDir(pluginId),
-        resolveProjectRoot: (projectId) => projectStore.getProjectById(projectId)?.path ?? null,
         isCurrent: () => this.plugins.get(pluginId) === plugin,
       });
     }

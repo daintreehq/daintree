@@ -7,7 +7,11 @@ import {
 } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { compileAgentMcpSchema, type AgentMcpSchemaCheck } from "./schemaValidation.js";
-import type { AgentMcpRegisteredTool, AgentMcpToolDescriptor } from "./types.js";
+import {
+  RESERVED_AGENT_MCP_TOOL_NAMES,
+  type AgentMcpRegisteredTool,
+  type AgentMcpToolDescriptor,
+} from "./types.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -138,6 +142,11 @@ export function validateAgentMcpTools(tools: unknown): readonly AgentMcpRegister
     if (!AGENT_MCP_TOOL_NAME_PATTERN.test(name)) {
       throw new Error(
         `tool name "${name}" must match ${String(AGENT_MCP_TOOL_NAME_PATTERN)} (lowercase letters, digits and underscores, starting with a letter)`
+      );
+    }
+    if (RESERVED_AGENT_MCP_TOOL_NAMES.has(name)) {
+      throw new Error(
+        `tool name "${name}" is reserved for the host's database tools, which share this plugin's MCP server`
       );
     }
     const definition = tools[name];

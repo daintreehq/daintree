@@ -69,7 +69,8 @@ async function loadTwoInstances() {
     });
     grants[key] = pluginMcpGrantRegistry.issue({
       pluginInstanceId: key,
-      endpointId: "data",
+      scope: { databases: false, pluginEndpointId: "data" },
+      serverName: "daintree-ledger",
       projectId,
       terminalId: `term-${projectId.slice(0, 1)}`,
     }).grant.credentialId;

@@ -885,18 +885,18 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   agentMcp: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
-      note: "Keys per-project enablement, the grant, and the endpoint's route path.",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpPlugins" }],
+      note: "Names the plugin's own roster within its one MCP server, and in its grant's scope.",
     },
     name: {
       mode: "verbatim",
-      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
-      note: "Shown in the per-project enablement UI.",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpPlugins" }],
+      note: "Shown in the plugin's agent access row.",
     },
     description: {
       mode: "verbatim",
-      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
-      note: "Shown beneath the endpoint name in the per-project enablement UI.",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpPlugins" }],
+      note: "Shown beneath the tools' name in the plugin's agent access row.",
     },
     mode: {
       mode: "intentional-metadata",

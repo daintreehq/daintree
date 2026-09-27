@@ -1,10 +1,11 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
+import type { AgentMcpToolScope } from "./types.js";
 
 /**
- * One credential for one plugin endpoint, issued to one terminal launch in one
- * project. The bearer itself is never stored — only its digest — so nothing in
+ * One credential for one plugin's MCP server, issued to one terminal launch in
+ * one project. The bearer itself is never stored — only its digest — so nothing in
  * this registry can be replayed if it is ever logged or dumped.
  */
 export interface PluginMcpGrant {
@@ -12,7 +13,10 @@ export interface PluginMcpGrant {
   readonly credentialId: string;
   readonly bearerSha256: string;
   readonly pluginInstanceId: string;
-  readonly endpointId: string;
+  /** The rosters this credential reaches, fixed when it is minted. */
+  readonly scope: AgentMcpToolScope;
+  /** The server key the launch handed the agent; the session reports it as its name. */
+  readonly serverName: string;
   readonly projectId: string;
   readonly terminalId: string;
   readonly launchAgentIdHint?: string;
@@ -21,14 +25,15 @@ export interface PluginMcpGrant {
 
 export interface IssuePluginMcpGrantParams {
   pluginInstanceId: string;
-  endpointId: string;
+  scope: AgentMcpToolScope;
+  serverName: string;
   projectId: string;
   terminalId: string;
   launchAgentIdHint?: string;
 }
 
 export type PluginMcpGrantRevokeReason =
-  "terminal-exited" | "plugin-unloaded" | "endpoint-disabled" | "server-stopped";
+  "terminal-exited" | "plugin-unloaded" | "access-reduced" | "server-stopped";
 
 type RevokeListener = (
   grants: readonly PluginMcpGrant[],
@@ -70,15 +75,23 @@ export class PluginMcpGrantRegistry {
     if (boundProjectId !== null && boundProjectId !== params.projectId) {
       throw new Error("plugin MCP grant: project plugin instance belongs to a different project");
     }
-    if (!params.endpointId || !params.terminalId) {
-      throw new Error("plugin MCP grant: endpoint and terminal ids are required");
+    if (!params.terminalId) {
+      throw new Error("plugin MCP grant: terminal id is required");
+    }
+    const { databases, pluginEndpointId } = params.scope;
+    if (!databases && !pluginEndpointId) {
+      throw new Error("plugin MCP grant: the scope reaches no tools");
     }
     const token = randomBytes(32).toString("base64url");
     const grant: PluginMcpGrant = Object.freeze({
       credentialId: randomUUID(),
       bearerSha256: digest(token),
       pluginInstanceId: params.pluginInstanceId,
-      endpointId: params.endpointId,
+      scope: Object.freeze({
+        databases,
+        ...(pluginEndpointId ? { pluginEndpointId } : {}),
+      }),
+      serverName: params.serverName,
       projectId: params.projectId,
       terminalId: params.terminalId,
       ...(params.launchAgentIdHint !== undefined
@@ -120,29 +133,25 @@ export class PluginMcpGrantRegistry {
     );
   }
 
-  /** Revoke every grant for one endpoint of one plugin instance in one project. */
-  revokeEndpoint(
+  /** Revoke every grant in a project that `isAllowed` no longer covers. */
+  revokeDisabledInProject(
     projectId: string,
-    pluginInstanceId: string,
-    endpointId: string
+    isAllowed: (grant: PluginMcpGrant) => boolean
   ): PluginMcpGrant[] {
     return this.revokeWhere(
-      (grant) =>
-        grant.projectId === projectId &&
-        grant.pluginInstanceId === pluginInstanceId &&
-        grant.endpointId === endpointId,
-      "endpoint-disabled"
+      (grant) => grant.projectId === projectId && !isAllowed(grant),
+      "access-reduced"
     );
   }
 
-  /** Revoke every grant in a project whose endpoint `isEnabled` no longer allows. */
-  revokeDisabledInProject(
-    projectId: string,
-    isEnabled: (grant: PluginMcpGrant) => boolean
+  /** Revoke every grant for one plugin instance, in any project, that `isAllowed` no longer covers. */
+  revokeDisallowedForPlugin(
+    pluginInstanceId: string,
+    isAllowed: (grant: PluginMcpGrant) => boolean
   ): PluginMcpGrant[] {
     return this.revokeWhere(
-      (grant) => grant.projectId === projectId && !isEnabled(grant),
-      "endpoint-disabled"
+      (grant) => grant.pluginInstanceId === pluginInstanceId && !isAllowed(grant),
+      "access-reduced"
     );
   }
 

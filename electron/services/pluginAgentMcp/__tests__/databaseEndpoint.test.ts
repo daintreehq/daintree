@@ -64,12 +64,10 @@ function register(overrides: Partial<PluginDatabaseEndpointOptions> = {}) {
     manifestId: INSTANCE,
     declarations: [
       { id: "ledger", location: "local", journalMode: "delete", description: "Household ledger" },
-      { id: "shared", location: "project", journalMode: "delete" },
     ],
     boundProjectId: null,
     boundProjectRoot: null,
     dataDir,
-    resolveProjectRoot: (projectId) => (projectId === PROJECT_A ? projectRoot : null),
     isCurrent: () => true,
     run: inline,
     registry,
@@ -87,11 +85,8 @@ describe("registerPluginDatabaseEndpoint", () => {
     expect(registration.tools.map((t) => t.name)).toEqual(["database_schema", "database_query"]);
   });
 
-  it("reads a local database and resolves an installed plugin's project database against the caller's project", async () => {
+  it("reads an installed plugin's local database", async () => {
     seedLocal("ledger", "CREATE TABLE entries (amount REAL); INSERT INTO entries VALUES (12.5);");
-    const shared = path.join(projectRoot, ".daintree/data", INSTANCE, "shared.db");
-    fs.mkdirSync(path.dirname(shared), { recursive: true });
-    new DatabaseSync(shared).close();
     const { invoke } = register();
 
     const schema = (await invoke("database_schema", {}, caller(), signal())) as {
@@ -99,7 +94,6 @@ describe("registerPluginDatabaseEndpoint", () => {
     };
     expect(schema.databases).toMatchObject([
       { id: "ledger", exists: true, description: "Household ledger" },
-      { id: "shared", exists: true },
     ]);
 
     await expect(
@@ -139,6 +133,21 @@ describe("registerPluginDatabaseEndpoint", () => {
     ).rejects.toMatchObject({ code: "DB_NOT_DECLARED" });
   });
 
+  it("resolves a project plugin's project database against its own root", async () => {
+    const shared = path.join(projectRoot, ".daintree/data", INSTANCE, "shared.db");
+    fs.mkdirSync(path.dirname(shared), { recursive: true });
+    new DatabaseSync(shared).close();
+    const { invoke } = register({
+      declarations: [{ id: "shared", location: "project", journalMode: "delete" }],
+      boundProjectId: PROJECT_A,
+      boundProjectRoot: projectRoot,
+    });
+    const schema = (await invoke("database_schema", {}, caller(), signal())) as {
+      databases: Array<{ id: string; exists: boolean }>;
+    };
+    expect(schema.databases).toMatchObject([{ id: "shared", exists: true }]);
+  });
+
   it("keeps a project plugin's databases inside its own project", async () => {
     const { invoke } = register({ boundProjectId: PROJECT_A, boundProjectRoot: projectRoot });
     await expect(
@@ -162,7 +171,8 @@ describe("the database endpoint behind a plugin session", () => {
     const session = new AbortController();
     const server = createPluginSessionServer({
       pluginInstanceId: INSTANCE,
-      endpointId: DATABASE_ENDPOINT_ID,
+      scope: { databases: true },
+      serverName: "daintree-ledger",
       caller: caller(),
       sessionSignal: session.signal,
       activatePlugin,
@@ -177,6 +187,7 @@ describe("the database endpoint behind a plugin session", () => {
       await server.close().catch(() => {});
     });
 
+    expect(client.getServerVersion()?.name).toBe("daintree-ledger");
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toEqual(["database_schema", "database_query"]);
     // Read-only, and said so: a client like Codex runs such a call without an

@@ -6,18 +6,34 @@ import type { AgentMcpSchemaCheck } from "./schemaValidation.js";
 export const PLUGIN_MCP_ROUTE_PREFIX = "/mcp/plugin/";
 
 /**
- * The endpoint the host serves for every plugin that declares databases. `@`
- * is outside the manifest's id grammar, so no plugin-declared `agentMcp`
- * endpoint can take this id, and its per-project consent is its own.
+ * The roster the host serves for every plugin that declares databases. `@` is
+ * outside the manifest's id grammar, so no plugin-declared `agentMcp` endpoint
+ * can take this id.
  */
 export const DATABASE_ENDPOINT_ID = "@databases";
-export const DATABASE_ENDPOINT_NAME = "Databases (read-only)";
-export const DATABASE_ENDPOINT_DESCRIPTION =
-  "Lets agents see the schema of this plugin's declared databases and run read-only queries against them.";
 
-/** The agent-facing URL path for one endpoint of one plugin instance. */
-export function pluginMcpRoutePath(pluginInstanceId: string, endpointId: string): string {
-  return `${PLUGIN_MCP_ROUTE_PREFIX}${encodeURIComponent(pluginInstanceId)}/${encodeURIComponent(endpointId)}`;
+/**
+ * The host's database tools share a plugin's MCP server with the plugin's own,
+ * so no plugin roster may use these names.
+ */
+export const RESERVED_AGENT_MCP_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "database_schema",
+  "database_query",
+]);
+
+/** The agent-facing URL path for one plugin instance's MCP server. */
+export function pluginMcpRoutePath(pluginInstanceId: string): string {
+  return `${PLUGIN_MCP_ROUTE_PREFIX}${encodeURIComponent(pluginInstanceId)}`;
+}
+
+/**
+ * Which of a plugin's rosters one grant reaches: the host's read-only database
+ * tools, the plugin's own `agentMcp` endpoint, or both. Fixed when the grant is
+ * minted; a later change in access can take it away but never widen it.
+ */
+export interface AgentMcpToolScope {
+  readonly databases: boolean;
+  readonly pluginEndpointId?: string;
 }
 
 /** The part of a registered tool an agent is shown. The implementation stays behind {@link AgentMcpToolInvoker}. */
@@ -67,18 +83,24 @@ export interface AgentMcpEndpointRegistration {
 }
 
 /**
- * An `agentMcp` endpoint a loaded plugin instance declares and may serve to one
- * project. Declared is not enabled — see `projectEnablement.ts`.
+ * A loaded plugin instance that could serve agent tools to one project: its
+ * declared databases, its own `agentMcp` endpoint, or both. Declared is not
+ * allowed — see `projectEnablement.ts`.
  */
-export interface DeclaredAgentMcpEndpoint {
-  /** What per-project enablement and grants are keyed by. */
+export interface DeclaredAgentMcpPlugin {
+  /** What access and grants are keyed by. */
   readonly pluginInstanceId: string;
-  /** Bare manifest id, for display and diagnostics. */
+  /** Bare manifest id, for display, naming and diagnostics. */
   readonly pluginManifestId: string;
   readonly pluginDisplayName: string;
-  readonly endpointId: string;
-  readonly name: string;
-  readonly description?: string;
+  readonly origin: "global" | "project";
+  readonly mcpName?: string;
+  readonly hasDatabases: boolean;
+  readonly pluginEndpoint?: {
+    readonly id: string;
+    readonly name: string;
+    readonly description?: string;
+  };
 }
 
 /**

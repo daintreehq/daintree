@@ -1953,6 +1953,8 @@ export function describeManifestIssues(
   return `${where}${first?.message ?? "manifest failed validation"}`;
 }
 
+const PLUGIN_MCP_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,15}$/;
+
 function buildPluginManifestSchema(origin: PluginOrigin) {
   return z
     .strictObject({
@@ -1972,6 +1974,15 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           message: "version must be a valid semver (e.g. 1.2.3)",
         }),
       displayName: z.string().optional(),
+      // Agents see the plugin's MCP server as `daintree-<mcpName>`, which must
+      // fit Claude's 25-character server key and be a bare TOML key for Codex.
+      mcpName: z
+        .string()
+        .regex(PLUGIN_MCP_NAME_PATTERN, {
+          error:
+            "mcpName must be 1-16 lowercase letters, digits or hyphens, starting with a letter or digit",
+        })
+        .optional(),
       description: z.string().optional(),
       tagline: z.string().trim().min(1).max(120).optional(),
       authors: z.array(PluginAuthorSchema).max(MANIFEST_AUTHORS_CAP).optional(),

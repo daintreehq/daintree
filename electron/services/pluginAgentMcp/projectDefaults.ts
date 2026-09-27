@@ -2,14 +2,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import {
+  AGENT_MCP_ACCESS_LEVELS,
+  type AgentMcpAccess,
+} from "../../../shared/types/ipc/pluginAgentMcp.js";
+import { DATABASE_ENDPOINT_ID } from "./types.js";
 
 /**
- * A repository's own defaults for which of ITS plugins' agent endpoints are on,
- * read from `.daintree/mcp.json`:
+ * A repository's own defaults for how much of ITS plugins' agent tools its
+ * agents get, read from `.daintree/mcp.json`:
  *
  * ```json
- * { "plugins": { "acme.ledger": ["@databases", "entries"], "acme.crm": "*" } }
+ * { "plugins": { "acme.ledger": "read-write", "acme.crm": "read-only" } }
  * ```
+ *
+ * The list form from before access levels (`["@databases", "entries"]`, `"*"`,
+ * `true`) still reads, one endpoint id at a time, exactly as it always did.
  *
  * Keyed by manifest id, so the file is portable across clones. A default only
  * ever reaches a project plugin of the same project: those load only after the
@@ -24,11 +32,19 @@ export const PROJECT_MCP_DEFAULTS_FILE = [".daintree", "mcp.json"] as const;
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_ID_LENGTH = 128;
 
-type EndpointSelection = "*" | ReadonlySet<string>;
+type EndpointSelection = AgentMcpAccess | "*" | ReadonlySet<string>;
 
 export interface ProjectMcpDefaults {
-  /** manifest id → the endpoint ids on by default, or `"*"` for every endpoint it declares. */
+  /**
+   * manifest id → an access level, or (the list form) the endpoint ids on by
+   * default, or `"*"` for everything it declares.
+   */
   plugins: ReadonlyMap<string, EndpointSelection>;
+}
+
+/** Whether an access level lets agents reach one of a plugin's rosters. */
+export function accessAllowsEndpoint(access: AgentMcpAccess, endpointId: string): boolean {
+  return access === "read-write" || (access === "read-only" && endpointId === DATABASE_ENDPOINT_ID);
 }
 
 const EMPTY: ProjectMcpDefaults = { plugins: new Map() };
@@ -50,7 +66,9 @@ export function parseProjectMcpDefaults(raw: unknown): ProjectMcpDefaults {
   const result = new Map<string, EndpointSelection>();
   for (const [manifestId, selection] of Object.entries(plugins)) {
     if (!isId(manifestId)) continue;
-    if (selection === "*" || selection === true) {
+    if ((AGENT_MCP_ACCESS_LEVELS as readonly unknown[]).includes(selection)) {
+      result.set(manifestId, selection as AgentMcpAccess);
+    } else if (selection === "*" || selection === true) {
       result.set(manifestId, "*");
     } else if (Array.isArray(selection)) {
       const ids = new Set(selection.filter(isId));
@@ -108,17 +126,31 @@ export function getProjectMcpDefaults(projectId: string): ProjectMcpDefaults {
   return cache.get(projectId) ?? EMPTY;
 }
 
-/** Whether the project's own file turns this endpoint on. Never true for an installed plugin. */
+/**
+ * Whether the project's own file turns this roster on, or null when the file
+ * says nothing about the plugin. Never answers for an installed plugin.
+ */
+export function projectDefaultForEndpoint(
+  projectId: string,
+  pluginInstanceId: string,
+  endpointId: string
+): boolean | null {
+  const parsed = parseProjectPluginInstanceKey(pluginInstanceId);
+  if (parsed === null || parsed.projectId !== projectId) return null;
+  const selection = getProjectMcpDefaults(projectId).plugins.get(parsed.manifestId);
+  if (selection === undefined) return null;
+  if (selection === "*") return true;
+  if (typeof selection === "string") return accessAllowsEndpoint(selection, endpointId);
+  return selection.has(endpointId);
+}
+
+/** Whether the project's own file turns this roster on. Never true for an installed plugin. */
 export function isProjectDefaultEndpoint(
   projectId: string,
   pluginInstanceId: string,
   endpointId: string
 ): boolean {
-  const parsed = parseProjectPluginInstanceKey(pluginInstanceId);
-  if (parsed === null || parsed.projectId !== projectId) return false;
-  const selection = getProjectMcpDefaults(projectId).plugins.get(parsed.manifestId);
-  if (selection === undefined) return false;
-  return selection === "*" || selection.has(endpointId);
+  return projectDefaultForEndpoint(projectId, pluginInstanceId, endpointId) === true;
 }
 
 export function hasProjectMcpDefaults(projectId: string): boolean {

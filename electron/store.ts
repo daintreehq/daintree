@@ -637,13 +637,26 @@ export interface StoreSchema {
   projectSurfaceChoices?: Record<string, ProjectSurfaceChoices>;
 
   /**
-   * Plugin MCP endpoints the user turned on per project, keyed
-   * `projectId → pluginInstanceId → endpointId → { decidedAt }`; presence means on.
-   * Read and written only through `services/pluginAgentMcp/projectEnablement.ts`.
-   * Out of the repository for the same reason as `projectPluginVisibility`.
-   * Same additive-key convention as `projectPluginTrust` above.
+   * Plugin agent-tool access, read and written only through
+   * `services/pluginAgentMcp/projectEnablement.ts`: the per-endpoint answers
+   * given before access levels (`projectAgentMcpEnablement`, read-only now),
+   * the per-project access level, and an installed plugin's level for every
+   * project. Out of the repository for the same reason as
+   * `projectPluginVisibility`. Same additive-key convention as
+   * `projectPluginTrust` above.
    */
-  projectAgentMcpEnablement?: Record<string, Record<string, Record<string, { decidedAt: number }>>>;
+  projectAgentMcpEnablement?: Record<
+    string,
+    Record<string, Record<string, { decidedAt: number; enabled?: boolean }>>
+  >;
+  projectAgentMcpAccess?: Record<
+    string,
+    Record<string, { decidedAt: number; access: "off" | "read-only" | "read-write" | null }>
+  >;
+  pluginAgentMcpAccess?: Record<
+    string,
+    { decidedAt: number; access: "off" | "read-only" | "read-write" | null }
+  >;
 
   /**
    * Workspaces the user asked to keep resident in the project-view cache
@@ -883,6 +896,8 @@ const storeOptions = {
     projectPluginTrust: {},
     projectSurfaceChoices: {},
     projectAgentMcpEnablement: {},
+    projectAgentMcpAccess: {},
+    pluginAgentMcpAccess: {},
     workspaceKeepResident: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,

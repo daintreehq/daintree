@@ -31,16 +31,13 @@ export interface PluginDatabaseEndpointOptions {
   pluginInstanceId: string;
   manifestId: string;
   declarations: readonly (PluginDatabaseDeclaration & { description?: string })[];
-  /** The project a project plugin is bound to; null for an installed plugin. */
+  /**
+   * The project a project plugin is bound to; null for an installed plugin,
+   * which the manifest never lets declare a `project` database.
+   */
   boundProjectId: string | null;
   boundProjectRoot: string | null;
   dataDir: string;
-  /**
-   * The root of the caller's project, for an installed plugin's `project`
-   * database: such a plugin has no project of its own, but the agent's grant
-   * names exactly one.
-   */
-  resolveProjectRoot: (projectId: string) => string | null;
   /** False once this plugin instance has unloaded or been replaced. */
   isCurrent: () => boolean;
   run?: (request: DatabaseToolRequest, signal: AbortSignal) => Promise<unknown>;
@@ -68,22 +65,19 @@ export function registerPluginDatabaseEndpoint(options: PluginDatabaseEndpointOp
     boundProjectId,
     boundProjectRoot,
     dataDir,
-    resolveProjectRoot,
     isCurrent,
     run = runDatabaseToolInProcess,
     registry = agentMcpEndpointRegistry,
   } = options;
 
   const projectRootFor = (caller: PluginMcpCaller): string | null => {
-    if (boundProjectId !== null) {
-      // Grants are per project already; this keeps a project plugin's files
-      // out of reach of any other project even if one were minted wrongly.
-      if (caller.projectId !== boundProjectId) {
-        throw codedError("PROJECT_MISMATCH", "this plugin belongs to a different project");
-      }
-      return boundProjectRoot;
+    if (boundProjectId === null) return null;
+    // Grants are per project already; this keeps a project plugin's files out
+    // of reach of any other project even if one were minted wrongly.
+    if (caller.projectId !== boundProjectId) {
+      throw codedError("PROJECT_MISMATCH", "this plugin belongs to a different project");
     }
-    return resolveProjectRoot(caller.projectId);
+    return boundProjectRoot;
   };
 
   const target = async (

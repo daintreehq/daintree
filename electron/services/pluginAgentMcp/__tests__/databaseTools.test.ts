@@ -13,6 +13,7 @@ import {
   type DatabaseTarget,
 } from "../databaseTools.js";
 import { validateAgentMcpTools } from "../validateTools.js";
+import { RESERVED_AGENT_MCP_TOOL_NAMES } from "../types.js";
 
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
 
@@ -65,12 +66,26 @@ function query(
 }
 
 describe("database tool descriptors", () => {
-  it("pass the same roster validation plugin tools do", () => {
+  it("are the names no plugin roster may take", () => {
+    expect([...RESERVED_AGENT_MCP_TOOL_NAMES]).toEqual(
+      DATABASE_TOOL_DESCRIPTORS.map((d) => d.name)
+    );
     const roster = Object.fromEntries(
       DATABASE_TOOL_DESCRIPTORS.map((d) => [d.name, { ...d, execute: () => null }])
     );
+    expect(() => validateAgentMcpTools(roster)).toThrow(/reserved/);
+  });
+
+  it("pass the same roster validation plugin tools do", () => {
+    // Renamed, since the real names are reserved for the host.
+    const roster = Object.fromEntries(
+      DATABASE_TOOL_DESCRIPTORS.map((d) => [`host_${d.name}`, { ...d, execute: () => null }])
+    );
     const tools = validateAgentMcpTools(roster);
-    expect(tools.map((t) => t.name)).toEqual([DATABASE_SCHEMA_TOOL, DATABASE_QUERY_TOOL]);
+    expect(tools.map((t) => t.name)).toEqual([
+      `host_${DATABASE_SCHEMA_TOOL}`,
+      `host_${DATABASE_QUERY_TOOL}`,
+    ]);
     const queryTool = tools[1]!;
     expect(queryTool.checkInput({ databaseId: "ledger", sql: "SELECT 1" })).toBeNull();
     expect(queryTool.checkInput({ databaseId: "ledger", sql: "SELECT ?", params: [1] })).toBeNull();

@@ -701,12 +701,12 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["plugin:validate-manifest"]["result"]>;
   };
   pluginAgentMcp: {
-    listProjectEndpoints(
-      ...args: IpcInvokeMap["plugin-agent-mcp:list-project-endpoints"]["args"]
-    ): Promise<IpcInvokeMap["plugin-agent-mcp:list-project-endpoints"]["result"]>;
-    setProjectEndpointEnabled(
-      ...args: IpcInvokeMap["plugin-agent-mcp:set-project-endpoint-enabled"]["args"]
-    ): Promise<IpcInvokeMap["plugin-agent-mcp:set-project-endpoint-enabled"]["result"]>;
+    listProjectPlugins(
+      ...args: IpcInvokeMap["plugin-agent-mcp:list-project-plugins"]["args"]
+    ): Promise<IpcInvokeMap["plugin-agent-mcp:list-project-plugins"]["result"]>;
+    setPluginAccess(
+      ...args: IpcInvokeMap["plugin-agent-mcp:set-plugin-access"]["args"]
+    ): Promise<IpcInvokeMap["plugin-agent-mcp:set-plugin-access"]["result"]>;
   };
   pluginCapability: {
     acknowledgeConsent(

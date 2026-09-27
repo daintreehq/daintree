@@ -1,14 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { PluginMcpCaller } from "../../../../shared/types/plugin.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { createPluginSessionServer } from "../pluginSessionServer.js";
-import type { AgentMcpRegisteredTool, AgentMcpToolInvoker } from "../types.js";
+import {
+  DATABASE_ENDPOINT_ID,
+  type AgentMcpRegisteredTool,
+  type AgentMcpToolInvoker,
+  type AgentMcpToolScope,
+} from "../types.js";
 import { compileAgentMcpTool } from "../validateTools.js";
 
 const INSTANCE = "acme.ledger";
 const ENDPOINT = "data";
+const SERVER_NAME = "daintree-ledger";
+const PLUGIN_ONLY: AgentMcpToolScope = { databases: false, pluginEndpointId: ENDPOINT };
+const DATABASES_ONLY: AgentMcpToolScope = { databases: true };
+const READ_WRITE: AgentMcpToolScope = { databases: true, pluginEndpointId: ENDPOINT };
 
 const CALLER: PluginMcpCaller = Object.freeze({
   credentialId: "cred-1",
@@ -30,11 +40,26 @@ const STRUCTURED = compileAgentMcpTool({
   outputSchema: { type: "object", properties: { total: { type: "number" } } },
 });
 
+const DATABASE_SCHEMA = compileAgentMcpTool({
+  name: "database_schema",
+  description: "Describe the plugin's databases.",
+  inputSchema: { type: "object" },
+  readOnly: true,
+});
+
+const DATABASE_QUERY = compileAgentMcpTool({
+  name: "database_query",
+  description: "Run a read-only query.",
+  inputSchema: { type: "object", properties: { sql: { type: "string" } } },
+  readOnly: true,
+});
+
 interface Harness {
   client: Client;
   registry: AgentMcpEndpointRegistry;
   session: AbortController;
   activatePlugin: ReturnType<typeof vi.fn>;
+  registerDatabases: (invoke?: AgentMcpToolInvoker) => void;
   close: () => Promise<void>;
 }
 
@@ -50,7 +75,13 @@ async function connect(
     tools?: AgentMcpRegisteredTool[];
     callTimeoutMs?: number;
     maxResultBytes?: number;
+    rosterWaitMs?: number;
     register?: boolean;
+    scope?: AgentMcpToolScope;
+    serverName?: string;
+    /** Registers the host's database roster with this invoker. */
+    databaseInvoke?: AgentMcpToolInvoker;
+    activation?: "fails" | "registers-nothing";
   } = {}
 ): Promise<Harness> {
   const registry = new AgentMcpEndpointRegistry();
@@ -62,21 +93,34 @@ async function connect(
       invoke,
     });
   };
-  if (options.register !== false) register();
+  const registerDatabases = (databaseInvoke: AgentMcpToolInvoker = vi.fn()): void => {
+    registry.register({
+      pluginInstanceId: INSTANCE,
+      endpointId: DATABASE_ENDPOINT_ID,
+      tools: [DATABASE_SCHEMA, DATABASE_QUERY],
+      invoke: databaseInvoke,
+    });
+  };
+  if (options.register !== false && options.activation === undefined) register();
+  if (options.databaseInvoke) registerDatabases(options.databaseInvoke);
   const session = new AbortController();
   // Mirrors a lazy worker: the roster appears only once activation runs.
   const activatePlugin = vi.fn(async () => {
+    if (options.activation === "fails") throw new Error("worker crashed");
+    if (options.activation === "registers-nothing") return;
     if (options.register === false && !registry.get(INSTANCE, ENDPOINT)) register();
   });
   const server = createPluginSessionServer({
     pluginInstanceId: INSTANCE,
-    endpointId: ENDPOINT,
+    scope: options.scope ?? PLUGIN_ONLY,
+    serverName: options.serverName ?? SERVER_NAME,
     caller: CALLER,
     sessionSignal: session.signal,
     activatePlugin,
     endpointRegistry: registry,
     ...(options.callTimeoutMs !== undefined ? { callTimeoutMs: options.callTimeoutMs } : {}),
     ...(options.maxResultBytes !== undefined ? { maxResultBytes: options.maxResultBytes } : {}),
+    ...(options.rosterWaitMs !== undefined ? { rosterWaitMs: options.rosterWaitMs } : {}),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -87,6 +131,7 @@ async function connect(
     registry,
     session,
     activatePlugin,
+    registerDatabases,
     close: async () => {
       await client.close().catch(() => {});
       await server.close().catch(() => {});
@@ -151,22 +196,12 @@ describe("createPluginSessionServer", () => {
   });
 
   it("lists nothing when the plugin registered no roster", async () => {
-    const registry = new AgentMcpEndpointRegistry();
-    const server = createPluginSessionServer({
-      pluginInstanceId: INSTANCE,
-      endpointId: ENDPOINT,
-      caller: CALLER,
-      sessionSignal: new AbortController().signal,
-      activatePlugin: async () => {},
-      endpointRegistry: registry,
+    const { client, activatePlugin } = await connect(vi.fn(), {
+      activation: "registers-nothing",
+      rosterWaitMs: 20,
     });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "test-client", version: "1.0.0" });
-    await server.connect(serverTransport);
-    await client.connect(clientTransport);
     expect((await client.listTools()).tools).toEqual([]);
-    await client.close();
-    await server.close();
+    expect(activatePlugin).toHaveBeenCalledWith(INSTANCE);
   });
 
   it("rejects a tool that is not in the current roster without dispatching it", async () => {
@@ -354,7 +389,8 @@ describe("createPluginSessionServer", () => {
     });
     const server = createPluginSessionServer({
       pluginInstanceId: INSTANCE,
-      endpointId: ENDPOINT,
+      scope: PLUGIN_ONLY,
+      serverName: SERVER_NAME,
       caller: CALLER,
       sessionSignal: new AbortController().signal,
       activatePlugin: () => new Promise(() => {}),
@@ -457,5 +493,266 @@ describe("createPluginSessionServer", () => {
     cancel.abort();
     await expect(call).rejects.toThrow();
     await waitFor(() => seen?.aborted === true);
+  });
+
+  it("reports the server key the agent was handed as its server name", async () => {
+    const { client } = await connect(vi.fn(), { serverName: "daintree-ledger-1a2b3c4d" });
+    expect(client.getServerVersion()?.name).toBe("daintree-ledger-1a2b3c4d");
+  });
+
+  describe("scope", () => {
+    it("lists the database tools first, then the plugin's own, on a read-write session", async () => {
+      const { client } = await connect(vi.fn(), {
+        scope: READ_WRITE,
+        tools: [LOOKUP, STRUCTURED],
+        databaseInvoke: vi.fn(),
+      });
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual([
+        "database_schema",
+        "database_query",
+        "lookup",
+        "structured",
+      ]);
+      expect(tools.map((tool) => tool.annotations)).toEqual([
+        { readOnlyHint: true },
+        { readOnlyHint: true },
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it("never lists a plugin tool under a reserved name, and routes that name to the host", async () => {
+      const shadow = compileAgentMcpTool({ ...DATABASE_QUERY, readOnly: undefined });
+      const pluginInvoke = vi.fn<AgentMcpToolInvoker>(async () => "plugin");
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => "host");
+      const { client } = await connect(pluginInvoke, {
+        scope: READ_WRITE,
+        tools: [shadow, LOOKUP],
+        databaseInvoke,
+      });
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual([
+        "database_schema",
+        "database_query",
+        "lookup",
+      ]);
+      const result = await client.callTool({ name: "database_query", arguments: {} });
+      expect(JSON.parse(textOf(result))).toBe("host");
+      expect(pluginInvoke).not.toHaveBeenCalled();
+    });
+
+    it("lists and calls a databases-only session without ever activating the plugin", async () => {
+      const pluginInvoke = vi.fn<AgentMcpToolInvoker>(async () => null);
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => ({ rows: [[1]] }));
+      const { client, activatePlugin } = await connect(pluginInvoke, {
+        scope: DATABASES_ONLY,
+        databaseInvoke,
+      });
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual(["database_schema", "database_query"]);
+
+      const result = await client.callTool({
+        name: "database_query",
+        arguments: { sql: "SELECT 1" },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(textOf(result))).toEqual({ rows: [[1]] });
+      expect(databaseInvoke.mock.calls[0][2]).toBe(CALLER);
+
+      // The plugin's roster is registered, but out of this session's scope.
+      await expect(client.callTool({ name: "lookup", arguments: {} })).rejects.toThrow(
+        /Unknown tool/
+      );
+      expect(pluginInvoke).not.toHaveBeenCalled();
+      expect(activatePlugin).not.toHaveBeenCalled();
+    });
+
+    it("calls a database tool on a read-write session without activating the plugin", async () => {
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => ({ databases: [] }));
+      const { client, activatePlugin } = await connect(vi.fn(), {
+        scope: READ_WRITE,
+        databaseInvoke,
+      });
+      const result = await client.callTool({ name: "database_schema", arguments: {} });
+      expect(result.isError).toBeUndefined();
+      expect(databaseInvoke).toHaveBeenCalledTimes(1);
+      expect(activatePlugin).not.toHaveBeenCalled();
+    });
+
+    it("answers a database tool as unknown on a session whose scope has no databases", async () => {
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => null);
+      const { client, activatePlugin } = await connect(vi.fn(), {
+        scope: PLUGIN_ONLY,
+        databaseInvoke,
+      });
+      await expect(client.callTool({ name: "database_query", arguments: {} })).rejects.toThrow(
+        /Unknown tool/
+      );
+      expect(databaseInvoke).not.toHaveBeenCalled();
+      expect(activatePlugin).not.toHaveBeenCalled();
+    });
+
+    it("lists only the plugin's own tools on a plugin-only session", async () => {
+      const { client } = await connect(vi.fn(), {
+        scope: PLUGIN_ONLY,
+        databaseInvoke: vi.fn(),
+      });
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual(["lookup"]);
+    });
+
+    it.each([
+      ["fails to activate", "fails" as const],
+      ["activates without a roster", "registers-nothing" as const],
+    ])("still lists the database tools when the plugin %s", async (_label, activation) => {
+      const { client, activatePlugin } = await connect(vi.fn(), {
+        scope: READ_WRITE,
+        databaseInvoke: vi.fn(),
+        activation,
+        rosterWaitMs: 20,
+      });
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual(["database_schema", "database_query"]);
+      expect(activatePlugin).toHaveBeenCalledWith(INSTANCE);
+    });
+  });
+
+  describe("list_changed", () => {
+    async function watch(harness: Harness): Promise<{ count: () => number }> {
+      let count = 0;
+      harness.client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+        count += 1;
+      });
+      return { count: () => count };
+    }
+
+    const otherEndpoint = (registry: AgentMcpEndpointRegistry): void => {
+      registry.register({
+        pluginInstanceId: INSTANCE,
+        endpointId: "other",
+        tools: [LOOKUP],
+        invoke: vi.fn(),
+      });
+    };
+
+    it("fires when either roster of a read-write session changes", async () => {
+      const harness = await connect(vi.fn(), { scope: READ_WRITE, databaseInvoke: vi.fn() });
+      const seen = await watch(harness);
+      harness.registerDatabases();
+      await waitFor(() => seen.count() === 1);
+      harness.registry.register({
+        pluginInstanceId: INSTANCE,
+        endpointId: ENDPOINT,
+        tools: [STRUCTURED],
+        invoke: vi.fn(),
+      });
+      await waitFor(() => seen.count() === 2);
+    });
+
+    it("does not fire for an endpoint outside the session's scope", async () => {
+      const harness = await connect(vi.fn(), { scope: DATABASES_ONLY, databaseInvoke: vi.fn() });
+      const seen = await watch(harness);
+      // Out of scope: the plugin's own roster, another endpoint, another instance.
+      harness.registry.register({
+        pluginInstanceId: INSTANCE,
+        endpointId: ENDPOINT,
+        tools: [STRUCTURED],
+        invoke: vi.fn(),
+      });
+      otherEndpoint(harness.registry);
+      harness.registry.register({
+        pluginInstanceId: "other.plugin",
+        endpointId: DATABASE_ENDPOINT_ID,
+        tools: [DATABASE_SCHEMA],
+        invoke: vi.fn(),
+      });
+      // Then an in-scope change, whose notification arrives after any stray one.
+      harness.registerDatabases();
+      await waitFor(() => seen.count() >= 1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(seen.count()).toBe(1);
+    });
+
+    it("does not fire for the database roster on a plugin-only session", async () => {
+      const harness = await connect(vi.fn(), { scope: PLUGIN_ONLY });
+      const seen = await watch(harness);
+      harness.registerDatabases();
+      otherEndpoint(harness.registry);
+      harness.registry.register({
+        pluginInstanceId: INSTANCE,
+        endpointId: ENDPOINT,
+        tools: [STRUCTURED],
+        invoke: vi.fn(),
+      });
+      await waitFor(() => seen.count() >= 1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(seen.count()).toBe(1);
+    });
+  });
+
+  describe("roster changes during a call", () => {
+    it("keeps an in-flight database call when the plugin's own roster is replaced", async () => {
+      const pending = deferred<unknown>();
+      let seen: AbortSignal | undefined;
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>((_name, _args, _caller, signal) => {
+        seen = signal;
+        return pending.promise;
+      });
+      const { client, registry } = await connect(vi.fn(), {
+        scope: READ_WRITE,
+        databaseInvoke,
+      });
+      const call = client.callTool({ name: "database_query", arguments: {} });
+      await waitFor(() => seen !== undefined);
+
+      registry.register({
+        pluginInstanceId: INSTANCE,
+        endpointId: ENDPOINT,
+        tools: [STRUCTURED],
+        invoke: vi.fn(),
+      });
+      expect(seen?.aborted).toBe(false);
+      pending.resolve({ rows: [] });
+      const result = await call;
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(textOf(result))).toEqual({ rows: [] });
+    });
+
+    it("aborts an in-flight database call when the database roster is replaced", async () => {
+      const pending = deferred<unknown>();
+      let seen: AbortSignal | undefined;
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>((_name, _args, _caller, signal) => {
+        seen = signal;
+        return pending.promise;
+      });
+      const harness = await connect(vi.fn(), { scope: READ_WRITE, databaseInvoke });
+      const call = harness.client.callTool({ name: "database_query", arguments: {} });
+      await waitFor(() => seen !== undefined);
+
+      harness.registerDatabases();
+      expect(seen?.aborted).toBe(true);
+      pending.resolve({ rows: [] });
+      const result = await call;
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatch(/tools changed/);
+    });
+
+    it("keeps an in-flight plugin call when the database roster is replaced", async () => {
+      const pending = deferred<unknown>();
+      let seen: AbortSignal | undefined;
+      const invoke = vi.fn<AgentMcpToolInvoker>((_name, _args, _caller, signal) => {
+        seen = signal;
+        return pending.promise;
+      });
+      const harness = await connect(invoke, { scope: READ_WRITE, databaseInvoke: vi.fn() });
+      const call = harness.client.callTool({ name: "lookup", arguments: {} });
+      await waitFor(() => seen !== undefined);
+
+      harness.registerDatabases();
+      expect(seen?.aborted).toBe(false);
+      pending.resolve({ value: 1 });
+      expect((await call).isError).toBeUndefined();
+    });
   });
 });

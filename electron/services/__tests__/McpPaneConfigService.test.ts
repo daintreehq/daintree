@@ -53,11 +53,10 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-import { McpPaneConfigService, pluginServerKeysFor } from "../McpPaneConfigService.js";
+import { McpPaneConfigService, type PanePluginServer } from "../McpPaneConfigService.js";
 import { PluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { pluginMcpRoutePath } from "../pluginAgentMcp/types.js";
 import { makeProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
-import { createHash } from "node:crypto";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -638,7 +637,7 @@ describe("McpPaneConfigService", () => {
     await expect(fs.stat(b.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  describe("plugin MCP endpoints", () => {
+  describe("plugin MCP servers", () => {
     let grants: PluginMcpGrantRegistry;
 
     beforeEach(() => {
@@ -646,7 +645,11 @@ describe("McpPaneConfigService", () => {
       service = new McpPaneConfigService(grants);
     });
 
-    const ledger = { pluginInstanceId: "acme.ledger", endpointId: "data" };
+    const ledger: PanePluginServer = {
+      pluginInstanceId: "acme.ledger",
+      serverKey: "daintree-ledger",
+      scope: { databases: true, pluginEndpointId: "data" },
+    };
 
     async function readServers(configPath: string) {
       const parsed = JSON.parse(await fs.readFile(configPath, "utf-8"));
@@ -661,7 +664,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-off",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger], launchAgentIdHint: "claude" },
+        plugin: { projectId: PROJECT_A, servers: [ledger], launchAgentIdHint: "claude" },
       });
 
       expect(prepared).not.toBeNull();
@@ -682,7 +685,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-codex",
         port: 45454,
         tier: "core",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger], launchAgentIdHint: "codex" },
+        plugin: { projectId: PROJECT_A, servers: [ledger], launchAgentIdHint: "codex" },
         injection: { format: "codex-config-overrides" },
       });
 
@@ -697,14 +700,14 @@ describe("McpPaneConfigService", () => {
         "-c",
         'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
         "-c",
-        `mcp_servers.${key}.url="http://127.0.0.1:45454${pluginMcpRoutePath("acme.ledger", "data")}"`,
+        `mcp_servers.${key}.url="http://127.0.0.1:45454${pluginMcpRoutePath("acme.ledger")}"`,
         "-c",
         `mcp_servers.${key}.bearer_token_env_var="DAINTREE_PLUGIN_MCP_TOKEN_1"`,
       ]);
       expect(prepared!.env.DAINTREE_MCP_TOKEN).toBe(prepared!.token);
       expect(service.isValidPaneToken(prepared!.env.DAINTREE_MCP_TOKEN)).toBe(true);
-      expect(grants.authenticate(prepared!.env.DAINTREE_PLUGIN_MCP_TOKEN_1)?.endpointId).toBe(
-        "data"
+      expect(grants.authenticate(prepared!.env.DAINTREE_PLUGIN_MCP_TOKEN_1)?.scope).toEqual(
+        ledger.scope
       );
 
       await service.revokePaneConfig("pane-codex");
@@ -717,7 +720,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-switch",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       const claudeBearer = bearerOf(Object.values(await readServers(claude!.configPath!))[0]);
 
@@ -725,19 +728,19 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-switch",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
         injection: { format: "codex-config-overrides" },
       });
       expect(grants.authenticate(claudeBearer)).toBeNull();
       await expect(fs.stat(claude!.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
       const codexBearer = codex!.env.DAINTREE_PLUGIN_MCP_TOKEN_1;
-      expect(grants.authenticate(codexBearer)?.endpointId).toBe("data");
+      expect(grants.authenticate(codexBearer)?.scope).toEqual(ledger.scope);
 
       const again = await service.preparePaneConfig({
         paneId: "pane-switch",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       expect(grants.authenticate(codexBearer)).toBeNull();
       expect(grants.listForTerminal("pane-switch")).toHaveLength(1);
@@ -754,7 +757,7 @@ describe("McpPaneConfigService", () => {
           paneId: "pane-broken-base",
           port: 45454,
           tier: "core",
-          plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+          plugin: { projectId: PROJECT_A, servers: [ledger] },
           injection: {
             format: "gemini-system-defaults",
             envVar: "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
@@ -775,7 +778,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-gemini",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
         injection: { format: "gemini-system-defaults", envVar: "GEMINI_CLI_SYSTEM_DEFAULTS_PATH" },
         inheritedEnv: { GEMINI_CLI_SYSTEM_DEFAULTS_PATH: adminDefaults },
       });
@@ -786,7 +789,7 @@ describe("McpPaneConfigService", () => {
       expect(written.general).toEqual({ vimMode: true });
       const entry = written.mcpServers[prepared!.pluginServerKeys[0]];
       expect(entry.type).toBe("http");
-      expect(grants.authenticate(bearerOf(entry))?.endpointId).toBe("data");
+      expect(grants.authenticate(bearerOf(entry))?.scope).toEqual(ledger.scope);
       // Windows does not report POSIX file mode bits; the dedicated mode test
       // covers this guarantee on platforms that support it.
       if (process.platform !== "win32") {
@@ -799,7 +802,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-core",
         port: 45454,
         tier: "core",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
       const servers = await readServers(prepared!.configPath!);
@@ -812,22 +815,24 @@ describe("McpPaneConfigService", () => {
       );
     });
 
-    it("writes a Streamable HTTP entry at the endpoint's route with a literal bearer the registry accepts", async () => {
+    it("writes a Streamable HTTP entry under its server key at the plugin's route with a literal bearer the registry accepts", async () => {
       const prepared = await service.preparePaneConfig({
         paneId: "pane-plugin-entry",
         port: 45460,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
-      const entry = (await readServers(prepared!.configPath!))[prepared!.pluginServerKeys[0]];
+      expect(prepared!.pluginServerKeys).toEqual(["daintree-ledger"]);
+      const entry = (await readServers(prepared!.configPath!))["daintree-ledger"];
       expect(entry.type).toBe("http");
-      expect(entry.url).toBe(`http://127.0.0.1:45460${pluginMcpRoutePath("acme.ledger", "data")}`);
+      expect(entry.url).toBe("http://127.0.0.1:45460/mcp/plugin/acme.ledger");
       expect(entry.headers.Authorization).not.toContain("${");
       const grant = grants.authenticate(bearerOf(entry));
       expect(grant).toMatchObject({
         pluginInstanceId: "acme.ledger",
-        endpointId: "data",
+        scope: { databases: true, pluginEndpointId: "data" },
+        serverName: "daintree-ledger",
         projectId: PROJECT_A,
         terminalId: "pane-plugin-entry",
       });
@@ -840,23 +845,24 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-mode",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       const stat = await fs.stat(prepared!.configPath!);
       expect(stat.mode & 0o777).toBe(0o600);
     });
 
-    it("skips an endpoint the registry refuses and returns null when nothing is left to write", async () => {
-      const foreign = {
+    it("skips a plugin the registry refuses and returns null when nothing is left to write", async () => {
+      const foreign: PanePluginServer = {
+        ...ledger,
         pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_B, "acme.ledger"),
-        endpointId: "data",
+        serverKey: "daintree-ledger-1a2b3c4d",
       };
 
       const skipped = await service.preparePaneConfig({
         paneId: "pane-plugin-foreign",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [foreign] },
+        plugin: { projectId: PROJECT_A, servers: [foreign] },
       });
       expect(skipped).toBeNull();
       await expect(
@@ -867,7 +873,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-mixed",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [foreign, ledger] },
+        plugin: { projectId: PROJECT_A, servers: [foreign, ledger] },
       });
       expect(mixed!.pluginServerKeys).toHaveLength(1);
       expect(grants.listForTerminal("pane-plugin-mixed").map((g) => g.pluginInstanceId)).toEqual([
@@ -875,12 +881,97 @@ describe("McpPaneConfigService", () => {
       ]);
     });
 
+    it("mints one grant per plugin, each reaching only its own scope", async () => {
+      const crm: PanePluginServer = {
+        pluginInstanceId: "acme.crm",
+        serverKey: "daintree-crm",
+        scope: { databases: true },
+      };
+      const tasks: PanePluginServer = {
+        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.tasks"),
+        serverKey: "daintree-tasks",
+        scope: { databases: false, pluginEndpointId: "board" },
+      };
+
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-many",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger, crm, tasks] },
+      });
+
+      expect(prepared!.pluginServerKeys).toEqual([
+        "daintree-ledger",
+        "daintree-crm",
+        "daintree-tasks",
+      ]);
+      const servers = await readServers(prepared!.configPath!);
+      expect(servers["daintree-tasks"].url).toBe(
+        `http://127.0.0.1:45454/mcp/plugin/${encodeURIComponent(tasks.pluginInstanceId)}`
+      );
+      for (const server of [ledger, crm, tasks]) {
+        const grant = grants.authenticate(bearerOf(servers[server.serverKey]));
+        expect(grant).toMatchObject({
+          pluginInstanceId: server.pluginInstanceId,
+          scope: server.scope,
+          serverName: server.serverKey,
+        });
+      }
+      expect(grants.listForTerminal("pane-plugin-many")).toHaveLength(3);
+    });
+
+    it("skips a second server for the same plugin, a key already taken, and the Daintree key", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-dupes",
+        port: 45454,
+        tier: "core",
+        plugin: {
+          projectId: PROJECT_A,
+          servers: [
+            ledger,
+            { ...ledger, serverKey: "daintree-ledger-2" },
+            {
+              pluginInstanceId: "acme.crm",
+              serverKey: "daintree-ledger",
+              scope: { databases: true },
+            },
+            { pluginInstanceId: "acme.tasks", serverKey: "daintree", scope: { databases: true } },
+          ],
+        },
+      });
+
+      expect(prepared!.pluginServerKeys).toEqual(["daintree-ledger"]);
+      const servers = await readServers(prepared!.configPath!);
+      expect(Object.keys(servers).sort()).toEqual(["daintree", "daintree-ledger"]);
+      expect(servers.daintree.headers.Authorization).toBe(`Bearer ${prepared!.token}`);
+      expect(grants.listForTerminal("pane-plugin-dupes").map((g) => g.pluginInstanceId)).toEqual([
+        "acme.ledger",
+      ]);
+    });
+
+    it("mints nothing for a server whose scope reaches no tools", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-empty-scope",
+        port: 45454,
+        tier: "core",
+        plugin: {
+          projectId: PROJECT_A,
+          servers: [{ ...ledger, scope: { databases: false } }],
+        },
+      });
+      warn.mockRestore();
+
+      expect(prepared!.pluginServerKeys).toEqual([]);
+      expect(grants.listForTerminal("pane-plugin-empty-scope")).toEqual([]);
+    });
+
     it("revokePaneConfig revokes the pane's grants", async () => {
       const prepared = await service.preparePaneConfig({
         paneId: "pane-plugin-revoke",
         port: 45454,
         tier: "core",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       const bearer = bearerOf(
         (await readServers(prepared!.configPath!))[prepared!.pluginServerKeys[0]]
@@ -895,7 +986,8 @@ describe("McpPaneConfigService", () => {
     it("revokePaneConfig revokes a terminal's grants even when the pane has no record", async () => {
       grants.issue({
         pluginInstanceId: "acme.ledger",
-        endpointId: "data",
+        scope: ledger.scope,
+        serverName: ledger.serverKey,
         projectId: PROJECT_A,
         terminalId: "pane-without-record",
       });
@@ -910,7 +1002,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-restart",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       const firstBearer = bearerOf(
         (await readServers(first!.configPath!))[first!.pluginServerKeys[0]]
@@ -920,7 +1012,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-restart",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
       expect(grants.authenticate(firstBearer)).toBeNull();
@@ -932,13 +1024,13 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-all-a",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       await service.preparePaneConfig({
         paneId: "pane-plugin-all-b",
         port: 45454,
         tier: "full",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
       await service.revokeAll();
@@ -954,7 +1046,7 @@ describe("McpPaneConfigService", () => {
           paneId: "pane-plugin-blocked",
           port: 45454,
           tier: "off",
-          plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+          plugin: { projectId: PROJECT_A, servers: [ledger] },
         })
       ).rejects.toThrow("disk full");
 
@@ -973,7 +1065,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-late-exit",
         port: 45454,
         tier: "core",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       await vi.waitFor(() => expect(writeStarted).toBe(true));
       // The previous launch's exit lands while the file is being written.
@@ -1021,14 +1113,14 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-overlap",
         port: 45454,
         tier: "core",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       await vi.waitFor(() => expect(olderWriteStarted).toBe(true));
       const newerPending = service.preparePaneConfig({
         paneId: "pane-plugin-overlap",
         port: 45454,
         tier: "core",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
       // The older one finishes its write after the newer was requested; the
@@ -1061,108 +1153,46 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-ineligible",
         port: 45454,
         tier: "core",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger], isEligible: () => false },
+        plugin: { projectId: PROJECT_A, servers: [ledger], isEligible: () => false },
       });
 
       expect(prepared!.pluginServerKeys).toEqual([]);
       expect(grants.listForTerminal("pane-plugin-ineligible")).toEqual([]);
     });
 
-    it('still rejects tier "off" with no plugin endpoints', async () => {
+    it("asks about each server on its own, minting the eligible ones", async () => {
+      const crm: PanePluginServer = {
+        pluginInstanceId: "acme.crm",
+        serverKey: "daintree-crm",
+        scope: { databases: true },
+      };
+      const isEligible = vi.fn(
+        (server: PanePluginServer) => server.pluginInstanceId === "acme.crm"
+      );
+
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-partly-eligible",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger, crm], isEligible },
+      });
+
+      expect(isEligible.mock.calls.map(([server]) => server)).toEqual([ledger, crm]);
+      expect(prepared!.pluginServerKeys).toEqual(["daintree-crm"]);
+      expect(grants.listForTerminal("pane-plugin-partly-eligible")).toEqual([
+        expect.objectContaining({ pluginInstanceId: "acme.crm", scope: { databases: true } }),
+      ]);
+    });
+
+    it('still rejects tier "off" with no plugin servers', async () => {
       await expect(
         service.preparePaneConfig({
           paneId: "pane-plugin-empty",
           port: 45454,
           tier: "off",
-          plugin: { projectId: PROJECT_A, endpoints: [] },
+          plugin: { projectId: PROJECT_A, servers: [] },
         })
       ).rejects.toThrow(/should not be called with tier "off"/);
-    });
-  });
-
-  describe("pluginServerKeysFor", () => {
-    const KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
-
-    it("derives a key from the manifest id and endpoint, restricted to safe characters", () => {
-      const [key] = pluginServerKeysFor([{ pluginInstanceId: "acme.ledger", endpointId: "d.v2" }]);
-      expect(key).toMatch(KEY_PATTERN);
-      expect(key).toContain("acme_ledger");
-      expect(key).toContain("d_v2");
-      expect(key).not.toBe("daintree");
-    });
-
-    it("leaves room for a 32-character tool name inside Claude's 64-character limit", () => {
-      const keys = pluginServerKeysFor([
-        { pluginInstanceId: "acme.an-extremely-long-plugin-manifest-name", endpointId: "data" },
-        { pluginInstanceId: "acme.ledger", endpointId: "data" },
-      ]);
-      const longestTool = "t".repeat(32);
-      for (const key of keys) {
-        expect(`mcp__${key}__${longestTool}`.length).toBeLessThanOrEqual(64);
-      }
-    });
-
-    it("keeps a project plugin's key free of its 64-hex project id", () => {
-      const [key] = pluginServerKeysFor([
-        {
-          pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
-          endpointId: "data",
-        },
-      ]);
-      expect(key).not.toContain(PROJECT_A);
-      expect(key).toContain("acme_ledger");
-    });
-
-    it("disambiguates endpoints that sanitise to the same key, independent of order", () => {
-      const installed = { pluginInstanceId: "acme.ledger", endpointId: "data" };
-      const project = {
-        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
-        endpointId: "data",
-      };
-      const folded = { pluginInstanceId: "acme_ledger", endpointId: "data" };
-
-      const keys = pluginServerKeysFor([installed, project, folded]);
-      expect(new Set(keys).size).toBe(3);
-      for (const key of keys) expect(key).toMatch(KEY_PATTERN);
-
-      const reversed = pluginServerKeysFor([folded, project, installed]);
-      expect(reversed).toEqual([...keys].reverse());
-    });
-
-    it("stays order-independent when a hashed key lands on another endpoint's plain key", () => {
-      const installed = { pluginInstanceId: "acme.ledger", endpointId: "data" };
-      const project = {
-        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
-        endpointId: "data",
-      };
-      // An endpoint whose plain key is exactly the installed copy's hashed key.
-      const hash = createHash("sha256")
-        .update(`acme.ledger\0data`, "utf8")
-        .digest("hex")
-        .slice(0, 8);
-      const lookalike = { pluginInstanceId: "acme.ledger", endpointId: `data-${hash}` };
-
-      const keys = pluginServerKeysFor([installed, project, lookalike]);
-      expect(new Set(keys).size).toBe(3);
-      expect(pluginServerKeysFor([lookalike, project, installed])).toEqual([...keys].reverse());
-      expect(pluginServerKeysFor([project, lookalike, installed])).toEqual([
-        keys[1],
-        keys[2],
-        keys[0],
-      ]);
-    });
-
-    it("bounds the key length for long ids without losing uniqueness", () => {
-      const longId = `com.example.${"very-long-plugin-name-".repeat(4)}`;
-      const keys = pluginServerKeysFor([
-        { pluginInstanceId: `${longId}a`, endpointId: "data" },
-        { pluginInstanceId: `${longId}b`, endpointId: "data" },
-      ]);
-      expect(new Set(keys).size).toBe(2);
-      for (const key of keys) {
-        expect(key).toMatch(KEY_PATTERN);
-        expect(key.length).toBeLessThanOrEqual(48);
-      }
     });
   });
 });

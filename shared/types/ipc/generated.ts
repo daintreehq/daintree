@@ -1126,12 +1126,18 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
-  "plugin-agent-mcp:list-project-endpoints": {
+  "plugin-agent-mcp:list-project-plugins": {
     args: [];
     result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
   };
-  "plugin-agent-mcp:set-project-endpoint-enabled": {
-    args: [payload: { pluginInstanceId: string; endpointId: string; enabled: boolean }];
+  "plugin-agent-mcp:set-plugin-access": {
+    args: [
+      payload: {
+        pluginInstanceId: string;
+        access: "off" | "read-only" | "read-write" | null;
+        scope: "project" | "all-projects";
+      },
+    ];
     result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
   };
   "plugin-capability:acknowledge-consent": {

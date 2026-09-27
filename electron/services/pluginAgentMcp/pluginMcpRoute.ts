@@ -17,7 +17,7 @@ import {
   type PluginMcpGrant,
   type PluginMcpGrantRegistry,
 } from "./grantRegistry.js";
-import { isAgentMcpEndpointEnabled } from "./projectEnablement.js";
+import { isPluginMcpGrantAllowed } from "./projectEnablement.js";
 import { createPluginSessionServer } from "./pluginSessionServer.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "./types.js";
 
@@ -41,7 +41,8 @@ export interface PluginMcpRouteDeps {
   isPluginLoaded: (pluginInstanceId: string) => boolean | Promise<boolean>;
   /** Idempotent lazy activation (`PluginService.activatePlugin`). */
   activatePlugin: (pluginInstanceId: string) => Promise<void>;
-  isEndpointEnabled?: (projectId: string, pluginInstanceId: string, endpointId: string) => boolean;
+  /** Whether the project's current access still covers what the grant reaches. */
+  isGrantAllowed?: (grant: PluginMcpGrant) => boolean;
   grantRegistry?: PluginMcpGrantRegistry;
   endpointRegistry?: AgentMcpEndpointRegistry;
   idleTimeoutMs?: number;
@@ -55,7 +56,6 @@ interface PluginMcpSession {
   server: Server;
   credentialId: string;
   pluginInstanceId: string;
-  endpointId: string;
   idleTimer: ReturnType<typeof setTimeout>;
   /** Aborted on teardown; every in-flight call of the session listens to it. */
   lifetime: AbortController;
@@ -70,21 +70,17 @@ interface PendingHandshake {
 }
 
 /**
- * Invert {@link pluginMcpRoutePath}: exactly two non-empty segments after the
- * prefix, each decoded once. Anything else — a trailing slash, an extra
- * segment, malformed escapes — names no endpoint.
+ * Invert {@link pluginMcpRoutePath}: exactly one non-empty segment after the
+ * prefix, decoded once. Anything else — a trailing slash, an extra segment,
+ * malformed escapes — names no plugin.
  */
-export function parsePluginMcpRoute(
-  pathname: string
-): { pluginInstanceId: string; endpointId: string } | null {
+export function parsePluginMcpRoute(pathname: string): { pluginInstanceId: string } | null {
   if (!pathname.startsWith(PLUGIN_MCP_ROUTE_PREFIX)) return null;
   const segments = pathname.slice(PLUGIN_MCP_ROUTE_PREFIX.length).split("/");
-  if (segments.length !== 2 || segments[0] === "" || segments[1] === "") return null;
+  if (segments.length !== 1 || segments[0] === "") return null;
   try {
     const pluginInstanceId = decodeURIComponent(segments[0]);
-    const endpointId = decodeURIComponent(segments[1]);
-    if (pluginInstanceId === "" || endpointId === "") return null;
-    return { pluginInstanceId, endpointId };
+    return pluginInstanceId === "" ? null : { pluginInstanceId };
   } catch {
     return null;
   }
@@ -127,7 +123,7 @@ function writeWorkspaceRejected(res: http.ServerResponse, code: string, message:
 }
 
 /**
- * The plugin-only MCP surface: `/mcp/plugin/<pluginInstanceId>/<endpointId>`.
+ * The plugin-only MCP surface: `/mcp/plugin/<pluginInstanceId>`, one server per plugin.
  *
  * Authenticates plugin grants and nothing else. Orchestration bearers (api key,
  * pane, help) are simply not grants here and get a 401, and nothing on this
@@ -143,7 +139,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly pendingByCredential = new Map<string, Map<string, PendingHandshake>>();
   private readonly isPluginLoaded: PluginMcpRouteDeps["isPluginLoaded"];
   private readonly activatePlugin: PluginMcpRouteDeps["activatePlugin"];
-  private readonly isEndpointEnabled: NonNullable<PluginMcpRouteDeps["isEndpointEnabled"]>;
+  private readonly isGrantAllowed: NonNullable<PluginMcpRouteDeps["isGrantAllowed"]>;
   private readonly grants: PluginMcpGrantRegistry;
   private readonly endpoints: AgentMcpEndpointRegistry;
   private readonly idleTimeoutMs: number;
@@ -161,7 +157,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   constructor(deps: PluginMcpRouteDeps) {
     this.isPluginLoaded = deps.isPluginLoaded;
     this.activatePlugin = deps.activatePlugin;
-    this.isEndpointEnabled = deps.isEndpointEnabled ?? isAgentMcpEndpointEnabled;
+    this.isGrantAllowed = deps.isGrantAllowed ?? isPluginMcpGrantAllowed;
     this.grants = deps.grantRegistry ?? pluginMcpGrantRegistry;
     this.endpoints = deps.endpointRegistry ?? agentMcpEndpointRegistry;
     this.idleTimeoutMs = deps.idleTimeoutMs ?? MCP_SSE_IDLE_TIMEOUT_MS;
@@ -230,14 +226,10 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       return;
     }
 
-    // A grant names exactly one endpoint of one plugin instance; the path must
-    // agree, so a credential can never be pointed at a sibling endpoint.
+    // A grant names exactly one plugin instance; the path must agree, so a
+    // credential can never be pointed at another plugin.
     const target = parsePluginMcpRoute(url.pathname);
-    if (
-      target === null ||
-      target.pluginInstanceId !== grant.pluginInstanceId ||
-      target.endpointId !== grant.endpointId
-    ) {
+    if (target === null || target.pluginInstanceId !== grant.pluginInstanceId) {
       writeText(res, 403, "Forbidden");
       return;
     }
@@ -256,10 +248,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       });
       return;
     }
-    if (
-      !loaded ||
-      !this.isEndpointEnabled(grant.projectId, grant.pluginInstanceId, grant.endpointId)
-    ) {
+    if (!loaded || !this.isGrantAllowed(grant)) {
       writeText(res, 403, "Forbidden");
       return;
     }
@@ -278,7 +267,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       writeWorkspaceRejected(
         res,
         "WORKSPACE_SELECTOR_MISMATCH",
-        "This plugin endpoint credential is bound to a different workspace than the one requested."
+        "This plugin MCP credential is bound to a different workspace than the one requested."
       );
       return;
     }
@@ -291,8 +280,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       if (
         !session ||
         session.credentialId !== grant.credentialId ||
-        session.pluginInstanceId !== grant.pluginInstanceId ||
-        session.endpointId !== grant.endpointId
+        session.pluginInstanceId !== grant.pluginInstanceId
       ) {
         writeSessionNotFound(res);
         return;
@@ -364,7 +352,8 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     const lifetime = new AbortController();
     const server = createPluginSessionServer({
       pluginInstanceId: grant.pluginInstanceId,
-      endpointId: grant.endpointId,
+      scope: grant.scope,
+      serverName: grant.serverName,
       caller,
       sessionSignal: lifetime.signal,
       activatePlugin: this.activatePlugin,
@@ -391,7 +380,6 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
           server,
           credentialId: grant.credentialId,
           pluginInstanceId: grant.pluginInstanceId,
-          endpointId: grant.endpointId,
           idleTimer,
           lifetime,
           openResponses: new Set(),

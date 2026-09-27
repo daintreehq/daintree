@@ -20,14 +20,20 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 import type { PluginMcpCaller } from "../../../../shared/types/plugin.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
-import { setAgentMcpEndpointEnabled } from "../projectEnablement.js";
+import { setProjectAgentMcpAccess } from "../projectEnablement.js";
 import {
   MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL,
   PluginMcpRoute,
   parsePluginMcpRoute,
   type PluginMcpRouteDeps,
 } from "../pluginMcpRoute.js";
-import { PLUGIN_MCP_ROUTE_PREFIX, pluginMcpRoutePath, type AgentMcpToolInvoker } from "../types.js";
+import {
+  DATABASE_ENDPOINT_ID,
+  PLUGIN_MCP_ROUTE_PREFIX,
+  pluginMcpRoutePath,
+  type AgentMcpToolInvoker,
+  type AgentMcpToolScope,
+} from "../types.js";
 import { compileAgentMcpTool } from "../validateTools.js";
 
 const PROJECT_A = "a".repeat(64);
@@ -35,6 +41,8 @@ const PROJECT_B = "b".repeat(64);
 const INSTANCE = "acme.ledger";
 const OTHER_INSTANCE = "acme.crm";
 const ENDPOINT = "data";
+const SERVER_NAME = "daintree-ledger";
+const PLUGIN_ONLY: AgentMcpToolScope = { databases: false, pluginEndpointId: ENDPOINT };
 
 const LOOKUP = compileAgentMcpTool({
   name: "lookup",
@@ -45,6 +53,12 @@ const SUMMARY = compileAgentMcpTool({
   name: "summary",
   description: "Summarise the ledger.",
   inputSchema: { type: "object" },
+});
+const DATABASE_QUERY = compileAgentMcpTool({
+  name: "database_query",
+  description: "Run a read-only query.",
+  inputSchema: { type: "object" },
+  readOnly: true,
 });
 
 const INIT_BODY = {
@@ -112,14 +126,16 @@ function makeRoute(overrides: Partial<PluginMcpRouteDeps> = {}): PluginMcpRoute 
 function issue(
   overrides: Partial<{
     pluginInstanceId: string;
-    endpointId: string;
+    scope: AgentMcpToolScope;
+    serverName: string;
     projectId: string;
     terminalId: string;
   }> = {}
 ) {
   return pluginMcpGrantRegistry.issue({
     pluginInstanceId: INSTANCE,
-    endpointId: ENDPOINT,
+    scope: PLUGIN_ONLY,
+    serverName: SERVER_NAME,
     projectId: PROJECT_A,
     terminalId: "term-1",
     launchAgentIdHint: "claude",
@@ -127,8 +143,8 @@ function issue(
   });
 }
 
-function routeUrl(instance = INSTANCE, endpoint = ENDPOINT): string {
-  return `http://127.0.0.1:${listener.port}${pluginMcpRoutePath(instance, endpoint)}`;
+function routeUrl(instance = INSTANCE): string {
+  return `http://127.0.0.1:${listener.port}${pluginMcpRoutePath(instance)}`;
 }
 
 async function connect(
@@ -245,7 +261,7 @@ beforeEach(async () => {
     tools: [LOOKUP, SUMMARY],
     invoke,
   });
-  setAgentMcpEndpointEnabled(PROJECT_A, INSTANCE, ENDPOINT, true);
+  setProjectAgentMcpAccess(PROJECT_A, INSTANCE, "read-write");
   route = makeRoute();
   listener = await startListener(route);
 });
@@ -258,22 +274,27 @@ afterEach(async () => {
 
 describe("parsePluginMcpRoute", () => {
   it("inverts pluginMcpRoutePath, including ids that need escaping", () => {
-    const instance = "project__" + PROJECT_A + "__acme/ledger%v2";
-    const endpoint = "data set";
-    expect(parsePluginMcpRoute(pluginMcpRoutePath(instance, endpoint))).toEqual({
+    const instance = "project__" + PROJECT_A + "__acme/ledger%v2 x";
+    expect(pluginMcpRoutePath(instance)).not.toContain("/acme/");
+    expect(parsePluginMcpRoute(pluginMcpRoutePath(instance))).toEqual({
       pluginInstanceId: instance,
-      endpointId: endpoint,
+    });
+    expect(parsePluginMcpRoute("/mcp/plugin/acme.ledger")).toEqual({
+      pluginInstanceId: "acme.ledger",
     });
   });
 
-  it("names no endpoint for a wrong segment count, empty segments or malformed escapes", () => {
+  it("names no plugin for a wrong segment count, empty segments or malformed escapes", () => {
     for (const path of [
-      "/mcp/plugin/acme.ledger",
+      "/mcp/plugin/",
       "/mcp/plugin/acme.ledger/",
+      "/mcp/plugin/acme.ledger/data",
+      "/mcp/plugin/acme.ledger/%40databases",
       "/mcp/plugin/acme.ledger/data/",
-      "/mcp/plugin/acme.ledger/data/extra",
       "/mcp/plugin//data",
-      "/mcp/plugin/acme.ledger/%E0%A4%A",
+      "/mcp/plugin/%E0%A4%A",
+      "/mcp/plugins/acme.ledger",
+      "/mcp/acme.ledger",
     ]) {
       expect(parsePluginMcpRoute(path)).toBeNull();
     }
@@ -290,6 +311,42 @@ describe("PluginMcpRoute", () => {
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual(["lookup", "summary"]);
     expect(tools[0].description).toBe(LOOKUP.description);
+  });
+
+  it("serves the grant's rosters on one server named after the grant's server key", async () => {
+    const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => ({ rows: [] }));
+    endpoints.register({
+      pluginInstanceId: INSTANCE,
+      endpointId: DATABASE_ENDPOINT_ID,
+      tools: [DATABASE_QUERY],
+      invoke: databaseInvoke,
+    });
+    const activatePlugin = vi.fn(async () => {});
+    route.dispose();
+    await listener.close();
+    route = makeRoute({ activatePlugin });
+    listener = await startListener(route);
+
+    const { token } = issue({
+      scope: { databases: true, pluginEndpointId: ENDPOINT },
+      serverName: "daintree-ledger-1a2b3c4d",
+    });
+    const { client } = await connect(token);
+    expect(client.getServerVersion()?.name).toBe("daintree-ledger-1a2b3c4d");
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(["database_query", "lookup", "summary"]);
+
+    const { token: readOnly } = issue({ scope: { databases: true }, terminalId: "term-2" });
+    const { client: narrow } = await connect(readOnly);
+    activatePlugin.mockClear();
+    expect((await narrow.listTools()).tools.map((tool) => tool.name)).toEqual(["database_query"]);
+    const result = await narrow.callTool({ name: "database_query", arguments: {} });
+    expect(result.isError).toBeUndefined();
+    await expect(narrow.callTool({ name: "lookup", arguments: {} })).rejects.toThrow(
+      /Unknown tool/
+    );
+    expect(activatePlugin).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("dispatches a listed tool with a frozen caller built from the grant", async () => {
@@ -335,19 +392,21 @@ describe("PluginMcpRoute", () => {
 
   it("rejects a credential presented on another plugin's route", async () => {
     const { token } = issue();
-    const response = await rawRequest({ token, url: routeUrl(OTHER_INSTANCE, ENDPOINT) });
+    const response = await rawRequest({ token, url: routeUrl(OTHER_INSTANCE) });
     expect(response.status).toBe(403);
     expect(route.sessionCount).toBe(0);
   });
 
-  it("rejects a credential presented on another endpoint of its own plugin", async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, INSTANCE, "notes", true);
+  it("rejects a credential presented on a pre-merge per-endpoint path of its own plugin", async () => {
     const { token } = issue();
-    const response = await rawRequest({ token, url: routeUrl(INSTANCE, "notes") });
-    expect(response.status).toBe(403);
+    for (const suffix of [`/${ENDPOINT}`, `/${encodeURIComponent(DATABASE_ENDPOINT_ID)}`, "/"]) {
+      const response = await rawRequest({ token, url: `${routeUrl()}${suffix}` });
+      expect(response.status).toBe(403);
+    }
+    expect(route.sessionCount).toBe(0);
   });
 
-  it("rejects a grant whose project has not enabled the endpoint", async () => {
+  it("rejects a grant whose project has not given the plugin access", async () => {
     const { token } = issue({ projectId: PROJECT_B });
     const response = await rawRequest({ token });
     expect(response.status).toBe(403);
@@ -359,18 +418,64 @@ describe("PluginMcpRoute", () => {
     const { client } = await connect(token);
     // The file is user-editable; a record removed behind the setter's back
     // must still stop the next request even though no revocation fired.
-    storeMock.data.set("projectAgentMcpEnablement", {});
+    storeMock.data.set("projectAgentMcpAccess", {});
     await expect(client.listTools()).rejects.toMatchObject({ code: 403 });
   });
 
-  it("closes the session when the endpoint is disabled for the project", async () => {
+  it("closes the session when the plugin is switched off for the project", async () => {
     const { token } = issue();
     const { client } = await connect(token);
     expect(route.sessionCount).toBe(1);
 
-    setAgentMcpEndpointEnabled(PROJECT_A, INSTANCE, ENDPOINT, false);
+    setProjectAgentMcpAccess(PROJECT_A, INSTANCE, "off");
     expect(route.sessionCount).toBe(0);
     await expect(client.listTools()).rejects.toMatchObject({ code: 401 });
+  });
+
+  it("closes only the sessions whose scope a lowered access no longer covers", async () => {
+    const { token: readWrite } = issue({
+      scope: { databases: true, pluginEndpointId: ENDPOINT },
+      terminalId: "term-rw",
+    });
+    const { token: readOnly } = issue({ scope: { databases: true }, terminalId: "term-ro" });
+    const { client: wide } = await connect(readWrite);
+    const { client: narrow } = await connect(readOnly);
+    expect(route.sessionCount).toBe(2);
+
+    setProjectAgentMcpAccess(PROJECT_A, INSTANCE, "read-only");
+    expect(route.sessionCount).toBe(1);
+    await expect(wide.listTools()).rejects.toMatchObject({ code: 401 });
+    await expect(narrow.listTools()).resolves.toBeDefined();
+  });
+
+  it("rejects a grant whose scope reaches past the project's current access", async () => {
+    storeMock.data.set("projectAgentMcpAccess", {
+      [PROJECT_A]: { [INSTANCE]: { decidedAt: 1, access: "read-only" } },
+    });
+    const { token } = issue({ scope: { databases: true, pluginEndpointId: ENDPOINT } });
+    expect((await rawRequest({ token })).status).toBe(403);
+    const { token: narrow } = issue({ scope: { databases: true }, terminalId: "term-2" });
+    const allowed = await rawRequest({ token: narrow });
+    expect(allowed.status).toBe(200);
+    await allowed.body?.cancel();
+  });
+
+  it("asks the isGrantAllowed dependency with the presented grant on every request", async () => {
+    route.dispose();
+    await listener.close();
+    let allowed = true;
+    const isGrantAllowed = vi.fn(() => allowed);
+    route = makeRoute({ isGrantAllowed });
+    listener = await startListener(route);
+
+    // No project answer at all: only the dependency decides.
+    storeMock.data.clear();
+    const { grant, token } = issue();
+    const { client } = await connect(token);
+    expect(isGrantAllowed).toHaveBeenCalledWith(grant);
+    await client.listTools();
+    allowed = false;
+    await expect(client.listTools()).rejects.toMatchObject({ code: 403 });
   });
 
   it("rejects a request when the plugin instance is not loaded", async () => {
@@ -603,7 +708,7 @@ describe("PluginMcpRoute", () => {
     // Read what arrives: a paused socket never reports the server's close.
     socket.resume();
     const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
-    const path = pluginMcpRoutePath(INSTANCE, ENDPOINT);
+    const path = pluginMcpRoutePath(INSTANCE);
     const common = `Host: 127.0.0.1:${listener.port}\r\nAuthorization: Bearer ${token}\r\n`;
     const body = JSON.stringify(INIT_BODY);
     // The standalone SSE stream holds the connection's response slot, so the

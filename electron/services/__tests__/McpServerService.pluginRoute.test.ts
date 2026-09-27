@@ -81,7 +81,7 @@ vi.mock("../PluginService.js", () => ({
 import { McpServerService } from "../McpServerService.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
-import { setAgentMcpEndpointEnabled } from "../pluginAgentMcp/projectEnablement.js";
+import { setProjectAgentMcpAccess } from "../pluginAgentMcp/projectEnablement.js";
 import { pluginMcpRoutePath, type AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
 import { compileAgentMcpTool } from "../pluginAgentMcp/validateTools.js";
 
@@ -156,7 +156,7 @@ describe("McpServerService plugin route", () => {
       ],
       invoke,
     });
-    setAgentMcpEndpointEnabled(PROJECT, INSTANCE, ENDPOINT, true);
+    setProjectAgentMcpAccess(PROJECT, INSTANCE, "read-write");
     await fs.mkdir(testHomeDir, { recursive: true });
     vi.spyOn(console, "log").mockImplementation(() => {});
     service = new McpServerService();
@@ -178,7 +178,8 @@ describe("McpServerService plugin route", () => {
   function issue() {
     return pluginMcpGrantRegistry.issue({
       pluginInstanceId: INSTANCE,
-      endpointId: ENDPOINT,
+      scope: { databases: false, pluginEndpointId: ENDPOINT },
+      serverName: "daintree-ledger",
       projectId: PROJECT,
       terminalId: "term-1",
     });
@@ -187,7 +188,7 @@ describe("McpServerService plugin route", () => {
   async function connectPlugin(token: string): Promise<Client> {
     const port = service.currentPort!;
     const transport = new StreamableHTTPClientTransport(
-      new URL(`http://127.0.0.1:${port}${pluginMcpRoutePath(INSTANCE, ENDPOINT)}`),
+      new URL(`http://127.0.0.1:${port}${pluginMcpRoutePath(INSTANCE)}`),
       { requestInit: { headers: { Authorization: `Bearer ${token}` } } }
     );
     const client = new Client({ name: "plugin-test", version: "1.0.0" });
@@ -200,6 +201,7 @@ describe("McpServerService plugin route", () => {
     const { token } = issue();
     const client = await connectPlugin(token);
     expect(Object.keys(client.getServerCapabilities() ?? {})).toEqual(["tools"]);
+    expect(client.getServerVersion()?.name).toBe("daintree-ledger");
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual(["lookup"]);
     expect(pluginHost.activatePlugin).toHaveBeenCalledWith(INSTANCE);
@@ -219,7 +221,7 @@ describe("McpServerService plugin route", () => {
 
   it("refuses orchestration bearers on the plugin route", async () => {
     const port = service.currentPort!;
-    const path = pluginMcpRoutePath(INSTANCE, ENDPOINT);
+    const path = pluginMcpRoutePath(INSTANCE);
     for (const token of [API_KEY, PANE_TOKEN]) {
       // Each is accepted by the orchestration gate — the contrast is the point.
       const orchestration = await post(port, "/mcp", token);
@@ -236,11 +238,7 @@ describe("McpServerService plugin route", () => {
   it("rejects a plugin route request when the plugin instance is not loaded", async () => {
     pluginHost.loaded.clear();
     const { token } = issue();
-    const response = await post(
-      service.currentPort!,
-      pluginMcpRoutePath(INSTANCE, ENDPOINT),
-      token
-    );
+    const response = await post(service.currentPort!, pluginMcpRoutePath(INSTANCE), token);
     expect(response.status).toBe(403);
   });
 

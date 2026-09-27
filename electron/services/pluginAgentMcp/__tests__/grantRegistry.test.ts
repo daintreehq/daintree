@@ -11,7 +11,8 @@ function issue(
 ) {
   return registry.issue({
     pluginInstanceId: "acme.ledger",
-    endpointId: "data",
+    scope: { databases: false, pluginEndpointId: "data" },
+    serverName: "daintree-ledger",
     projectId: PROJECT_A,
     terminalId: "term-1",
     ...overrides,
@@ -71,21 +72,89 @@ describe("PluginMcpGrantRegistry", () => {
     expect(registry.authenticate(b.token)).toBe(b.grant);
   });
 
-  it("revokes one instance's endpoint in one project, not a same-named copy or another project", () => {
+  it("revokes grants in one project that the check no longer allows, as access-reduced", () => {
     const registry = new PluginMcpGrantRegistry();
+    const listener = vi.fn();
+    registry.onRevoked(listener);
     const installed = issue(registry, { pluginInstanceId: "acme.ledger" });
     const projectCopy = issue(registry, {
       pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
     });
     const otherProject = issue(registry, { projectId: PROJECT_B });
-    const otherEndpoint = issue(registry, { endpointId: "reports" });
 
-    const revoked = registry.revokeEndpoint(PROJECT_A, "acme.ledger", "data");
+    const revoked = registry.revokeDisabledInProject(
+      PROJECT_A,
+      (grant) => grant.pluginInstanceId !== "acme.ledger"
+    );
 
     expect(revoked.map((g) => g.credentialId)).toEqual([installed.grant.credentialId]);
+    expect(listener).toHaveBeenCalledWith([installed.grant], "access-reduced");
     expect(registry.authenticate(projectCopy.token)).toBe(projectCopy.grant);
     expect(registry.authenticate(otherProject.token)).toBe(otherProject.grant);
-    expect(registry.authenticate(otherEndpoint.token)).toBe(otherEndpoint.grant);
+  });
+
+  it("revokes one plugin's disallowed grants across projects, leaving other plugins alone", () => {
+    const registry = new PluginMcpGrantRegistry();
+    const listener = vi.fn();
+    registry.onRevoked(listener);
+    const inA = issue(registry, { projectId: PROJECT_A });
+    const inB = issue(registry, { projectId: PROJECT_B });
+    const kept = issue(registry, { projectId: PROJECT_B, terminalId: "term-keep" });
+    const otherPlugin = issue(registry, { pluginInstanceId: "acme.crm" });
+
+    const revoked = registry.revokeDisallowedForPlugin(
+      "acme.ledger",
+      (grant) => grant.terminalId === "term-keep"
+    );
+
+    expect(revoked.map((g) => g.credentialId).sort()).toEqual(
+      [inA.grant.credentialId, inB.grant.credentialId].sort()
+    );
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener.mock.calls[0][1]).toBe("access-reduced");
+    expect(registry.authenticate(kept.token)).toBe(kept.grant);
+    expect(registry.authenticate(otherPlugin.token)).toBe(otherPlugin.grant);
+  });
+
+  it("freezes the grant and its scope, dropping an absent plugin endpoint", () => {
+    const registry = new PluginMcpGrantRegistry();
+    const scope = { databases: true, pluginEndpointId: "data" };
+    const { grant } = issue(registry, { scope, launchAgentIdHint: "claude" });
+
+    scope.databases = false;
+    expect(grant.scope).toEqual({ databases: true, pluginEndpointId: "data" });
+    expect(Object.isFrozen(grant)).toBe(true);
+    expect(Object.isFrozen(grant.scope)).toBe(true);
+    expect(grant.serverName).toBe("daintree-ledger");
+    expect(grant.launchAgentIdHint).toBe("claude");
+
+    const { grant: dbOnly } = issue(registry, { scope: { databases: true } });
+    expect(dbOnly.scope).toEqual({ databases: true });
+    expect(dbOnly.scope).not.toHaveProperty("pluginEndpointId");
+    expect(dbOnly).not.toHaveProperty("launchAgentIdHint");
+  });
+
+  it("refuses a scope that reaches no tools, and a launch without a terminal", () => {
+    const registry = new PluginMcpGrantRegistry();
+
+    expect(() => issue(registry, { scope: { databases: false } })).toThrow(/reaches no tools/);
+    expect(() => issue(registry, { scope: { databases: false, pluginEndpointId: "" } })).toThrow(
+      /reaches no tools/
+    );
+    expect(() => issue(registry, { terminalId: "" })).toThrow(/terminal id/);
+  });
+
+  it("lists a terminal's grants", () => {
+    const registry = new PluginMcpGrantRegistry();
+    const mine = issue(registry, { terminalId: "term-1" });
+    issue(registry, { terminalId: "term-2" });
+
+    expect(registry.listForTerminal("term-1")).toEqual([mine.grant]);
+    expect(registry.get(mine.grant.credentialId)).toBe(mine.grant);
+    expect(registry.isLive(mine.grant.credentialId)).toBe(true);
+    registry.revokeTerminal("term-1");
+    expect(registry.isLive(mine.grant.credentialId)).toBe(false);
+    expect(registry.get(mine.grant.credentialId)).toBeNull();
   });
 
   it("refuses to pair a project plugin instance with another project", () => {

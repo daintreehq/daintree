@@ -200,8 +200,8 @@ beforeEach(() => {
     value: {
       plugin: pluginApi,
       pluginAgentMcp: {
-        listProjectEndpoints: vi.fn().mockResolvedValue({ endpoints: [], mcpServerEnabled: true }),
-        setProjectEndpointEnabled: vi.fn(),
+        listProjectPlugins: vi.fn().mockResolvedValue({ plugins: [], mcpServerEnabled: true }),
+        setPluginAccess: vi.fn(),
       },
     },
   });

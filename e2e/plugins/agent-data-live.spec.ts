@@ -21,7 +21,7 @@ import {
 
 /**
  * Real agent CLIs, on the user's own subscriptions, reading and changing a
- * project plugin's data through the MCP endpoints Daintree hands them at
+ * project plugin's data through the plugin's MCP server Daintree hands them at
  * launch. Nothing in a prompt names a tool, a server or a file: each agent has
  * only the project's AGENTS.md and the servers it was launched with, and must
  * find the data, answer from it, write through the plugin's tools, and then
@@ -118,12 +118,17 @@ test.describe("Plugin agent data: real agents", () => {
     await expect
       .poll(
         async () =>
-          (
-            await page.evaluate(() => window.electron.pluginAgentMcp.listProjectEndpoints())
-          ).endpoints.filter((e) => e.enabled && e.available).length,
+          (await page.evaluate(() => window.electron.pluginAgentMcp.listProjectPlugins())).plugins
+            .filter(
+              (p) =>
+                p.pluginInstanceId.endsWith(`__${EXPENSES_PLUGIN_ID}`) &&
+                p.access === "read-write" &&
+                p.available
+            )
+            .map((p) => p.pluginInstanceId),
         { timeout: 60_000 }
       )
-      .toBe(2);
+      .toHaveLength(1);
 
     const agents = new LiveAgents(page, log, TURN_TIMEOUT);
     await agents.skipPermissions(SELECTED);

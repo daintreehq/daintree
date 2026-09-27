@@ -81,6 +81,21 @@ describe("validateAgentMcpTools", () => {
     }
   );
 
+  it.each(["database_schema", "database_query"])(
+    "rejects %j, which the host's database tools use on the same server",
+    (name) => {
+      expect(() => validateAgentMcpTools({ list: tool(), [name]: tool() })).toThrow(/reserved/);
+    }
+  );
+
+  it("accepts names that only resemble the reserved ones", () => {
+    expect(
+      validateAgentMcpTools({ database_schemas: tool(), my_database_query: tool() }).map(
+        (d) => d.name
+      )
+    ).toEqual(["database_schemas", "my_database_query"]);
+  });
+
   it("never serves an inherited key as a tool", () => {
     const inherited = Object.create({ inherited_tool: tool() }) as Record<string, unknown>;
     inherited.own_tool = tool();
