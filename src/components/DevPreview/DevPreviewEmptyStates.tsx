@@ -112,7 +112,7 @@ function CommandChip({ label, command }: { label?: string; command: string }) {
   return (
     <div className="inline-flex min-w-0 max-w-full items-baseline gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel px-3 py-1.5 text-left">
       {label && <span className="shrink-0 text-xs text-text-secondary">{label}</span>}
-      <code className="min-w-0 font-mono text-xs text-text-primary break-all">{command}</code>
+      <code className="min-w-0 font-mono text-xs text-text-primary break-words">{command}</code>
     </div>
   );
 }
@@ -277,7 +277,7 @@ export function DevPreviewEmptyStates({
                 <DropdownMenuContent align="center" sideOffset={4} className="w-72 p-1">
                   {candidates.map((c) => (
                     <DropdownMenuItem key={c.id} onSelect={() => handlePickCandidate(c)}>
-                      <code className="min-w-0 flex-1 font-mono text-xs break-all">
+                      <code className="min-w-0 flex-1 font-mono text-xs break-words">
                         {c.command}
                       </code>
                     </DropdownMenuItem>
