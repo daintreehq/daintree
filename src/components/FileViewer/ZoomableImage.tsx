@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
-import { TRANSPARENCY_CHECKERBOARD_STYLE } from "./transparencyCheckerboard";
+import { transparencyCheckerboardUnderScale } from "./transparencyCheckerboard";
 import { cn } from "@/lib/utils";
 import { Minus, Plus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -190,7 +190,6 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
         tabIndex={0}
         role="group"
         aria-label={`${alt}. Arrow keys pan, plus and minus zoom, 0 fits to screen.`}
-        style={TRANSPARENCY_CHECKERBOARD_STYLE}
         className={cn(
           // select-none so drag-panning never starts a text/image selection that
           // would paint the selection highlight over the image (#11325).
@@ -218,6 +217,7 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
             })
           }
           style={{
+            ...transparencyCheckerboardUnderScale(zoom),
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
           }}
           className="max-h-full max-w-full object-contain"
