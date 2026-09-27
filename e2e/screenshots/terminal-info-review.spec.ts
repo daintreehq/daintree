@@ -478,6 +478,9 @@ test("terminal info review — diagnostic states", async () => {
     await step("agent-full-tail", async () => {
       await openInfo(page, ids.agentFull);
       await page.locator(TID.body).first().waitFor({ state: "visible", timeout: 10_000 });
+      // The dialog focuses its overview heading a frame after opening, and that focus
+      // scrolls the body back to the top — scrolling before it lands captures the top.
+      await settle(page, 400);
       // ScrollShadow renders the scroll box as `flex-1 overflow-y-auto` inside the card
       // (src/components/ui/ScrollShadow.tsx:59) — AppDialog.Body's own element.
       const scrolled = await page.evaluate(() => {

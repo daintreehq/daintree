@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalInfoDialog } from "../TerminalInfoDialog";
 import type { TerminalInfoPayload } from "@/types/electron";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -411,6 +412,150 @@ describe("TerminalInfoDialog", () => {
       // The body renders before `terminal.info.get` resolves, so wait for the
       // fetched value itself rather than the container.
       expect(await screen.findByText("Agent has exited")).toBeTruthy();
+    });
+  });
+
+  describe("between openings", () => {
+    // The rule: an opening never inherits another opening's disclosure state. The
+    // flags used to outlive the dialog, so one look at a terminal's internals left
+    // them expanded on every terminal inspected afterwards.
+    it("starts every opening and every terminal with the disclosures collapsed", async () => {
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      const onClose = vi.fn();
+      const view = render(<TerminalInfoDialog isOpen={true} onClose={onClose} terminalId="a" />);
+      await screen.findByTestId("terminal-info-body");
+      const expandAll = () => {
+        for (const toggle of screen.getAllByRole("button", { expanded: false })) {
+          fireEvent.click(toggle);
+        }
+      };
+      const expandedCount = () => screen.queryAllByRole("button", { expanded: true }).length;
+
+      expandAll();
+      expect(expandedCount()).toBeGreaterThan(0);
+
+      view.rerender(<TerminalInfoDialog isOpen={true} onClose={onClose} terminalId="b" />);
+      await waitFor(() => expect(expandedCount()).toBe(0));
+
+      expandAll();
+      view.rerender(<TerminalInfoDialog isOpen={false} onClose={onClose} terminalId="b" />);
+      view.rerender(<TerminalInfoDialog isOpen={true} onClose={onClose} terminalId="b" />);
+      await screen.findByTestId("terminal-info-body");
+      await waitFor(() => expect(expandedCount()).toBe(0));
+    });
+  });
+
+  describe("absent values", () => {
+    // Whatever the vocabulary becomes, an absence is prose and never set in the code
+    // face — in mono the same dash rendered as a different glyph on each row.
+    it("never sets a fallback in monospace", async () => {
+      dispatchMock.mockResolvedValue({
+        ok: false,
+        error: { message: "Terminal test-id not found" },
+      });
+      renderDialog();
+      await screen.findByTestId("terminal-info-error");
+      for (const toggle of screen.getAllByRole("button", { expanded: false })) {
+        if (toggle.getAttribute("aria-controls")) fireEvent.click(toggle);
+      }
+
+      const absences = new Set(["—", "Unknown", "Unavailable"]);
+      const body = screen.getByTestId("terminal-info-body");
+      const absent = Array.from(body.querySelectorAll("dd span")).filter((el) =>
+        absences.has((el.textContent ?? "").trim())
+      );
+      expect(absent.length).toBeGreaterThan(0);
+      for (const el of absent) expect(el.className).not.toContain("font-mono");
+    });
+
+    // A failed read cannot tell us argv was empty, so it must not say "not applicable".
+    it("reports arguments it could not read as unavailable", async () => {
+      dispatchMock.mockResolvedValue({ ok: false, error: { message: "not found" } });
+      renderDialog();
+      await screen.findByTestId("terminal-info-error");
+
+      const argsLabel = within(screen.getByTestId("terminal-info-body")).getByText("Arguments");
+      expect(argsLabel.nextElementSibling?.textContent).toBe("Unavailable");
+    });
+
+    // Rows the panel store owns are already final; a skeleton on one promises a value
+    // the host read can never deliver.
+    it("never skeletons a row the host read cannot fill", async () => {
+      mockPanelsById = {
+        "test-id": { id: "test-id", kind: "terminal", title: "t", cwd: "/r", location: "grid" },
+      };
+      dispatchMock.mockReturnValue(new Promise(() => {}));
+      renderDialog();
+      const body = await screen.findByTestId("terminal-info-body");
+
+      for (const label of ["Spawn source", "Started via MCP", "Created"]) {
+        const dd = within(body).getByText(label).nextElementSibling as HTMLElement;
+        expect(dd.querySelector('[data-testid="terminal-info-pending"]')).toBeNull();
+      }
+      expect(screen.getByTestId("terminal-info-loading-status").textContent).not.toBe("");
+    });
+  });
+
+  describe("an agent that left a live shell", () => {
+    // The terminal is alive; the agent is not. The process row must name what is in
+    // the foreground now, not only the agent that left.
+    it("names the foreground process, not just the departed agent", async () => {
+      mockPanelsById = {
+        "test-id": {
+          id: "test-id",
+          kind: "terminal",
+          title: "Claude",
+          cwd: "/r",
+          location: "grid",
+          launchAgentId: "claude",
+          runtimeStatus: "running",
+        },
+      };
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({
+          launchAgentId: "claude",
+          agentState: "exited",
+          ptyForegroundProcess: "zsh",
+        }),
+      });
+      renderDialog();
+      const overview = await screen.findByTestId("terminal-info-overview");
+      const processCell = await waitFor(() => {
+        const dd = within(overview).getByText("Process").nextElementSibling;
+        expect(dd?.textContent).toContain("zsh");
+        return dd!;
+      });
+      expect(screen.getByTestId("terminal-info-liveness").textContent).toBe("Running");
+      expect(processCell.textContent).toMatch(/exited/);
+    });
+  });
+
+  describe("the copied payload, beyond what is on screen", () => {
+    // The synchronised-output row lives in a disclosure that polls only while open;
+    // the payload must read it regardless, or a collapsed copy reports it unknowable.
+    it("reads synchronized output even while Performance is collapsed", async () => {
+      const spy = vi
+        .spyOn(terminalInstanceService, "getSynchronizedOutputMode")
+        .mockReturnValue(true);
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      renderDialog();
+      await screen.findByText("vim");
+
+      expect(await copyPayload()).toMatch(/Synchronized output \(DEC 2026\): On/);
+      spy.mockRestore();
+    });
+
+    // argv boundaries survive the copy: two arguments are never one string.
+    it("serializes argv without losing argument boundaries", async () => {
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({ spawnArgs: ["-c", "echo a b"] }),
+      });
+      renderDialog();
+      await screen.findByText("echo a b");
+
+      expect(await copyPayload()).toContain('Args: ["-c","echo a b"]');
     });
   });
 });
