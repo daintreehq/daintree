@@ -19,7 +19,7 @@ const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof impor
 let dir: string;
 
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-db-tools-"));
+  dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-db-tools-")));
 });
 
 afterEach(() => {
@@ -74,6 +74,12 @@ describe("database tool descriptors", () => {
     const queryTool = tools[1]!;
     expect(queryTool.checkInput({ databaseId: "ledger", sql: "SELECT 1" })).toBeNull();
     expect(queryTool.checkInput({ databaseId: "ledger", sql: "SELECT ?", params: [1] })).toBeNull();
+    for (const params of [{ ":a": 1 }, { a: 1 }, { $a: "x" }]) {
+      expect(queryTool.checkInput({ databaseId: "ledger", sql: "SELECT :a", params })).toBeNull();
+    }
+    expect(
+      queryTool.checkInput({ databaseId: "ledger", sql: "x", params: { "a-b": 1 } })
+    ).not.toBeNull();
     expect(queryTool.checkInput({ databaseId: "../x", sql: "SELECT 1" })).not.toBeNull();
     expect(queryTool.checkInput({ databaseId: "ledger", sql: "x", rowLimit: 5000 })).not.toBeNull();
   });
@@ -197,5 +203,65 @@ describe("runDatabaseQuery", () => {
     const raw = new DatabaseSync(t.resolved!.path);
     expect(raw.prepare("SELECT count(*) AS n FROM t").get()).toEqual({ n: 3 });
     raw.close();
+  });
+
+  it("binds bare named params and stops before a single value that cannot fit", () => {
+    const t = target("ledger", "CREATE TABLE t (s TEXT); INSERT INTO t VALUES ('small');");
+    expect(
+      runDatabaseQuery({
+        tool: DATABASE_QUERY_TOOL,
+        target: t,
+        sql: "SELECT s FROM t WHERE s = :s",
+        params: { s: "small" },
+      }).rows
+    ).toEqual([["small"]]);
+    const huge = runDatabaseQuery(
+      {
+        tool: DATABASE_QUERY_TOOL,
+        target: t,
+        sql: "SELECT s FROM t UNION ALL SELECT zeroblob(4096)",
+      },
+      1_000
+    );
+    expect(huge).toMatchObject({ rows: [["small"]], truncated: true });
+  });
+
+  it("names a missing database once, not twice", () => {
+    expect(
+      runDatabaseTool({ tool: DATABASE_QUERY_TOOL, target: missing("cache"), sql: "SELECT 1" })
+    ).toEqual({
+      ok: false,
+      error: { code: "DB_NOT_FOUND", message: 'DB_NOT_FOUND: database "cache" does not exist yet' },
+    });
+  });
+});
+
+describe("runDatabaseTool schema", () => {
+  it("fails a schema request for one named database that cannot be read", () => {
+    const corrupt = target("ledger");
+    fs.writeFileSync(corrupt.resolved!.path, "not a database, just some text that is long enough");
+    const selected = runDatabaseTool({
+      tool: DATABASE_SCHEMA_TOOL,
+      targets: [corrupt],
+      selected: true,
+    });
+    expect(selected).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/not a database/) },
+    });
+    expect(runDatabaseTool({ tool: DATABASE_SCHEMA_TOOL, targets: [corrupt] })).toMatchObject({
+      ok: true,
+      value: { databases: [{ id: "ledger", exists: null, error: { code: expect.any(String) } }] },
+    });
+  });
+
+  it("stops only the database that reached the object cap", () => {
+    const many = Array.from({ length: 1001 }, (_, i) => `CREATE TABLE t${i} (a);`).join("");
+    const result = runDatabaseSchema([target("a", many), target("b", "CREATE TABLE only (a);")]);
+    expect(result.truncated).toBe(true);
+    expect(result.databases[0]).toMatchObject({ truncated: true });
+    expect(result.databases[0]!.objects).toHaveLength(1000);
+    expect(result.databases[1]).toMatchObject({ truncated: false });
+    expect(result.databases[1]!.objects.map((o) => o.name)).toEqual(["only"]);
   });
 });

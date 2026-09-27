@@ -61,6 +61,8 @@ interface SqliteDatabase {
   close(): void;
   /** Node 24.10+; feature-detected. */
   setAuthorizer?(callback: SqliteAuthorizer | null): void;
+  /** Node 24.x; feature-detected. */
+  limits?: { length: number };
 }
 type DatabaseSyncCtor = new (
   path: string,
@@ -456,6 +458,9 @@ export interface OpenPluginDatabaseOptions extends PluginDatabaseOpenOptions {
   prepareBackup?: (destPath: string) => Promise<string>;
 }
 
+/** Largest string or blob a {@link readPluginDatabaseRows} statement may produce. */
+export const READ_MAX_VALUE_BYTES = 16 * 1024 * 1024;
+
 /**
  * Run one row-returning statement on a fresh readonly connection and hand each
  * row to `onRow` as an array aligned with the returned column names, until the
@@ -486,11 +491,23 @@ export function readPluginDatabaseRows(
   if (!leaf) {
     throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
   }
+  // The resolver hands over a path whose directory is already canonical. A
+  // directory swapped for a link since then would canonicalise elsewhere.
+  const dir = path.dirname(location.path);
+  if (fs.realpathSync(dir) !== dir) {
+    throw databaseError(
+      "PATH_NOT_ALLOWED",
+      `database "${location.id}" moved after it was resolved`
+    );
+  }
   const connection = new sqlite.DatabaseSync(location.path, { readOnly: true });
   try {
     if (sqlite.constants && typeof connection.setAuthorizer === "function") {
       connection.setAuthorizer(fileAccessAuthorizer(sqlite.constants));
     }
+    // A caller's row budget is checked only after SQLite has built a value, so
+    // cap what it may build: `zeroblob(1e9)` fails instead of allocating.
+    if (connection.limits) connection.limits.length = READ_MAX_VALUE_BYTES;
     connection.exec("PRAGMA busy_timeout = 5000");
     const statement = connection.prepare(sql);
     assertSingleStatement(sql, statement, location.id);

@@ -772,6 +772,11 @@ describe("openPluginDatabase backup destinations", () => {
 });
 
 describe("readPluginDatabaseRows", () => {
+  // The resolver hands over canonical directories; so does this fixture.
+  beforeEach(() => {
+    location = { ...location, path: path.join(fs.realpathSync(dir), "ledger.db") };
+  });
+
   function codeOf(fn: () => unknown): unknown {
     try {
       fn();
@@ -842,6 +847,35 @@ describe("readPluginDatabaseRows", () => {
     );
     expect(codeOf(() => readAll("SELECT 1; SELECT 2"))).toBe("DB_MULTIPLE_STATEMENTS");
     expect(fs.existsSync(outside)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a directory that no longer canonicalises to where it was resolved",
+    () => {
+      const real = path.join(fs.realpathSync(dir), "real");
+      fs.mkdirSync(real);
+      new DatabaseSync(path.join(real, "ledger.db")).close();
+      fs.symlinkSync(real, path.join(fs.realpathSync(dir), "link"));
+      location = { ...location, path: path.join(fs.realpathSync(dir), "link", "ledger.db") };
+      expect(codeOf(() => readAll("SELECT 1"))).toBe("PATH_NOT_ALLOWED");
+    }
+  );
+
+  const probe = new DatabaseSync(":memory:");
+  const HAS_LIMITS = "limits" in probe;
+  probe.close();
+
+  it.skipIf(!HAS_LIMITS)("caps the size of any value a statement builds", () => {
+    seed("CREATE TABLE t (a);");
+    expect(() => readAll("SELECT zeroblob(64 * 1024 * 1024)")).toThrow(/too big/);
+  });
+
+  it("reads a WAL database's uncheckpointed rows", () => {
+    const raw = new DatabaseSync(location.path);
+    raw.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+    raw.exec("CREATE TABLE t (a); INSERT INTO t VALUES (1), (2);");
+    expect(readAll("SELECT count(*) AS n FROM t").rows).toEqual([[2n]]);
+    raw.close();
   });
 
   it("refuses a missing file without creating it, and a symlinked one", () => {

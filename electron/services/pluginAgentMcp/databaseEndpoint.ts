@@ -135,7 +135,7 @@ export function registerPluginDatabaseEndpoint(options: PluginDatabaseEndpointOp
     if (toolName === DATABASE_SCHEMA_TOOL) {
       const selected = args.databaseId === undefined ? declarations : [declared(args.databaseId)];
       const targets = await Promise.all(selected.map((d) => target(d, projectRoot)));
-      request = { tool: DATABASE_SCHEMA_TOOL, targets };
+      request = { tool: DATABASE_SCHEMA_TOOL, targets, selected: args.databaseId !== undefined };
     } else if (toolName === DATABASE_QUERY_TOOL) {
       const resolved = await target(declared(args.databaseId), projectRoot);
       // Nothing to open, so no process to start.

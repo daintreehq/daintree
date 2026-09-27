@@ -13,6 +13,13 @@ export const MAX_CONCURRENT_DATABASE_PROCESSES = 2;
 const EXIT_GRACE_MS = 2_000;
 
 /**
+ * How long a launch may take to report `spawn`. A launch that fails before it
+ * starts may never report `exit` either, and would otherwise hold its slot for
+ * good; past this the slot is given back and a late spawn is killed.
+ */
+export const SPAWN_DEADLINE_MS = 10_000;
+
+/**
  * Resolves the compiled worker on disk. esbuild may emit this module into a
  * shared chunk under `dist-electron/electron/chunks/`, so step up to the
  * electron root first. Mirrors `resolveVadWorkerPath()`.
@@ -98,8 +105,15 @@ export function runDatabaseToolInProcess(
   return new Promise<unknown>((resolve, reject) => {
     let settled = false;
     let exited = false;
+    let released = false;
     let killDue = false;
     let graceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      alive -= 1;
+    };
 
     const kill = (): void => {
       if (exited) return;
@@ -121,7 +135,17 @@ export function runDatabaseToolInProcess(
       kill();
     };
 
+    const spawnTimer = setTimeout(() => {
+      settle(() =>
+        reject(codedError("DB_PROCESS_START_FAILED", "The database query process did not start."))
+      );
+      kill();
+      release();
+    }, SPAWN_DEADLINE_MS);
+    spawnTimer.unref?.();
+
     child.on("spawn", () => {
+      clearTimeout(spawnTimer);
       if (killDue) kill();
     });
     child.on("message", (message) => {
@@ -140,7 +164,8 @@ export function runDatabaseToolInProcess(
     child.on("exit", (code) => {
       if (exited) return;
       exited = true;
-      alive -= 1;
+      release();
+      clearTimeout(spawnTimer);
       if (graceTimer) clearTimeout(graceTimer);
       settle(() =>
         reject(codedError("DB_PROCESS_EXITED", `The database query process exited (code ${code}).`))

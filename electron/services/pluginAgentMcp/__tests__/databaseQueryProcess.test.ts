@@ -5,6 +5,7 @@ vi.mock("electron", () => ({ utilityProcess: { fork: vi.fn() } }));
 
 import {
   MAX_CONCURRENT_DATABASE_PROCESSES,
+  SPAWN_DEADLINE_MS,
   runDatabaseToolInProcess,
   type DatabaseChildProcess,
   type DatabaseProcessDeps,
@@ -119,5 +120,29 @@ describe("runDatabaseToolInProcess", () => {
     await result;
     vi.advanceTimersByTime(2_000);
     expect(d.kill).toHaveBeenCalledWith(7);
+  });
+
+  it("gives the slot back when a launch never reports spawn or exit", async () => {
+    vi.useFakeTimers();
+    const d = deps();
+    const stuck = Array.from({ length: MAX_CONCURRENT_DATABASE_PROCESSES }, () =>
+      runDatabaseToolInProcess(request, new AbortController().signal, d)
+    );
+    const outcomes = Promise.allSettled(stuck);
+    vi.advanceTimersByTime(SPAWN_DEADLINE_MS);
+    for (const outcome of await outcomes) {
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        reason: { code: "DB_PROCESS_START_FAILED" },
+      });
+    }
+
+    const next = runDatabaseToolInProcess(request, new AbortController().signal, d);
+    d.child().emit("message", { ok: true, value: 2 });
+    await expect(next).resolves.toBe(2);
+
+    // A launch that turns up after all is killed, and its exit frees nothing twice.
+    children[0]!.spawn(55);
+    expect(d.kill).toHaveBeenCalledWith(55);
   });
 });

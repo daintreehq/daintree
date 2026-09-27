@@ -51,7 +51,7 @@ export const DATABASE_TOOL_DESCRIPTORS: ReadonlyArray<{
   {
     name: DATABASE_QUERY_TOOL,
     description:
-      "Run one read-only SQL statement that returns rows (SELECT, WITH, or a PRAGMA such as table_info) against a declared database. Bind values with ? and a params array, or :name and a params object. Rows are arrays aligned with columns; blobs are base64. truncated is true when rows were cut off.",
+      "Run one read-only SQL statement that returns rows (SELECT, WITH, or a PRAGMA such as table_info) against a declared database. Bind values with ? and a params array, or :name and a params object keyed name or :name. Rows are arrays aligned with columns; blobs are base64. truncated is true when rows were cut off.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -65,7 +65,7 @@ export const DATABASE_TOOL_DESCRIPTORS: ReadonlyArray<{
             {
               type: "object",
               maxProperties: 128,
-              propertyNames: { pattern: "^[:@$][A-Za-z_][A-Za-z0-9_]*$" },
+              propertyNames: { pattern: "^[:@$]?[A-Za-z_][A-Za-z0-9_]*$" },
               additionalProperties: PARAMETER_SCHEMA,
             },
           ],
@@ -93,7 +93,7 @@ type DatabaseQueryParam = string | number | null;
 export type DatabaseQueryParams = DatabaseQueryParam[] | Record<string, DatabaseQueryParam>;
 
 export type DatabaseToolRequest =
-  | { tool: typeof DATABASE_SCHEMA_TOOL; targets: DatabaseTarget[] }
+  | { tool: typeof DATABASE_SCHEMA_TOOL; targets: DatabaseTarget[]; selected?: boolean }
   | {
       tool: typeof DATABASE_QUERY_TOOL;
       target: DatabaseTarget;
@@ -162,14 +162,40 @@ export function encodeCell(value: unknown): DatabaseCell {
   return String(value);
 }
 
-function unavailable(target: DatabaseTarget): Error {
-  const problem = target.problem ?? {
-    code: "DB_UNAVAILABLE",
-    message: `database "${target.id}" is unavailable`,
+const MAX_DETAIL_CHARS = 512;
+
+/**
+ * A diagnostic bounded for the result: its message without the `CODE: ` the
+ * database errors already carry, and cut short, since a filesystem error can
+ * quote an arbitrarily long path.
+ */
+function detail(code: string, message: string): { code: string; message: string } {
+  const bare = message.startsWith(`${code}: `) ? message.slice(code.length + 2) : message;
+  return {
+    code,
+    message: bare.length > MAX_DETAIL_CHARS ? `${bare.slice(0, MAX_DETAIL_CHARS)}…` : bare,
   };
+}
+
+function codedError(problem: { code: string; message: string }): Error {
   const error = new Error(`${problem.code}: ${problem.message}`) as Error & { code: string };
   error.code = problem.code;
   return error;
+}
+
+function unavailable(target: DatabaseTarget): Error {
+  return codedError(
+    target.problem
+      ? detail(target.problem.code, target.problem.message)
+      : { code: "DB_UNAVAILABLE", message: `database "${target.id}" is unavailable` }
+  );
+}
+
+/** A value that alone would overflow the budget, measured before it is copied. */
+function oversized(value: unknown, budgetBytes: number): boolean {
+  if (typeof value === "string") return value.length > budgetBytes;
+  if (value instanceof Uint8Array) return Math.ceil(value.byteLength / 3) * 4 > budgetBytes;
+  return false;
 }
 
 const SCHEMA_SQL =
@@ -186,16 +212,20 @@ export function runDatabaseSchema(
     exists: target.resolved ? true : target.problem?.code === "DB_NOT_FOUND" ? false : null,
     objects: [],
     truncated: false,
-    error: target.resolved || target.problem?.code === "DB_NOT_FOUND" ? null : target.problem,
+    error:
+      target.resolved || !target.problem || target.problem.code === "DB_NOT_FOUND"
+        ? null
+        : detail(target.problem.code, target.problem.message),
   }));
   // Every database's entry is paid for first, so running out of budget drops
   // DDL, never the fact that a database exists.
   let used = jsonBytes({ databases, truncated: false });
   let truncated = false;
+  let exhausted = false;
   targets.forEach((target, index) => {
     const entry = databases[index]!;
     if (!target.resolved) return;
-    if (truncated) {
+    if (exhausted) {
       entry.truncated = true;
       return;
     }
@@ -209,7 +239,10 @@ export function runDatabaseSchema(
           sql: typeof sql === "string" ? sql : null,
         };
         const cost = jsonBytes(object) + 1;
-        if (entry.objects.length >= DATABASE_SCHEMA_MAX_OBJECTS || used + cost > budgetBytes) {
+        const overBudget = used + cost > budgetBytes;
+        if (overBudget || entry.objects.length >= DATABASE_SCHEMA_MAX_OBJECTS) {
+          // The object cap ends this database only; the byte budget ends them all.
+          exhausted ||= overBudget;
           entry.truncated = true;
           truncated = true;
           return false;
@@ -224,17 +257,24 @@ export function runDatabaseSchema(
         return;
       }
       entry.exists = null;
-      const detail = { code: errorCode(error) ?? "DB_ERROR", message: errorMessage(error) };
-      const cost = jsonBytes(detail);
+      const failure = detail(errorCode(error) ?? "DB_ERROR", errorMessage(error));
+      const cost = jsonBytes(failure);
       if (used + cost <= budgetBytes) {
-        entry.error = detail;
+        entry.error = failure;
         used += cost;
       } else {
-        entry.error = { code: detail.code, message: "" };
+        entry.error = { code: failure.code, message: "" };
       }
     }
   });
-  return { databases, truncated };
+  const result = { databases, truncated };
+  if (jsonBytes(result) > budgetBytes) {
+    throw codedError({
+      code: "DB_RESULT_TOO_LARGE",
+      message: "the declared databases alone are over the result limit",
+    });
+  }
+  return result;
 }
 
 export function runDatabaseQuery(
@@ -251,7 +291,7 @@ export function runDatabaseQuery(
   let truncated = false;
   let used = 0;
   const { columns } = readPluginDatabaseRows(target.resolved, sql, params, (row) => {
-    if (rows.length >= rowLimit) {
+    if (rows.length >= rowLimit || row.some((value) => oversized(value, budgetBytes))) {
       truncated = true;
       return false;
     }
@@ -273,21 +313,22 @@ export function runDatabaseQuery(
     result.truncated = true;
   }
   if (jsonBytes(result) > budgetBytes) {
-    const error = new Error(
-      "DB_RESULT_TOO_LARGE: the statement's column list alone is over the result limit"
-    ) as Error & { code: string };
-    error.code = "DB_RESULT_TOO_LARGE";
-    throw error;
+    throw codedError({
+      code: "DB_RESULT_TOO_LARGE",
+      message: "the statement's column list alone is over the result limit",
+    });
   }
   return result;
 }
 
 export function runDatabaseTool(request: DatabaseToolRequest): DatabaseToolResponse {
   try {
-    const value =
-      request.tool === DATABASE_SCHEMA_TOOL
-        ? runDatabaseSchema(request.targets)
-        : runDatabaseQuery(request);
+    if (request.tool === DATABASE_QUERY_TOOL) return { ok: true, value: runDatabaseQuery(request) };
+    const value = runDatabaseSchema(request.targets);
+    // Asked for one database by name, its failure is the answer, not a detail
+    // inside a successful listing.
+    const failure = request.selected ? value.databases[0]?.error : null;
+    if (failure) throw codedError(failure);
     return { ok: true, value };
   } catch (error) {
     return { ok: false, error: { code: errorCode(error), message: errorMessage(error) } };
