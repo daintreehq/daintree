@@ -36,8 +36,7 @@ const DEFAULT_WIDTH = 380;
 const MIN_WIDTH = 320;
 
 const OUT_DIR = path.resolve(
-  process.env.DESIGN_CAPTURE_DIR ??
-    path.join(process.cwd(), "artifacts", "assistant-banners-shots")
+  process.env.DESIGN_CAPTURE_DIR ?? path.join(process.cwd(), "artifacts", "assistant-banners-shots")
 );
 
 const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
