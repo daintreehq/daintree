@@ -89,17 +89,24 @@ function isSameFile(a: CrossWorktreeFile, b: CrossWorktreeFile): boolean {
 interface CrossWorktreeFileRowProps {
   file: CrossWorktreeFile;
   isSelected: boolean;
+  /** The directory band above is shortened or clipped, so the path is not on screen. */
+  directoryHidden: boolean;
   onClick: () => void;
 }
 
-function CrossWorktreeFileRow({ file, isSelected, onClick }: CrossWorktreeFileRowProps) {
+function CrossWorktreeFileRow({
+  file,
+  isSelected,
+  directoryHidden,
+  onClick,
+}: CrossWorktreeFileRowProps) {
   const { ref, isTruncated } = useTruncationDetection();
   const status = statusDisplay(file.status);
   const insertions = file.insertions ?? 0;
   const deletions = file.deletions ?? 0;
 
   return (
-    <TruncatedTooltip content={file.path} isTruncated={isTruncated}>
+    <TruncatedTooltip content={file.path} isTruncated={isTruncated || directoryHidden}>
       <button
         type="button"
         onClick={onClick}
@@ -132,6 +139,41 @@ function CrossWorktreeFileRow({ file, isSelected, onClick }: CrossWorktreeFileRo
         </span>
       </button>
     </TruncatedTooltip>
+  );
+}
+
+function FileGroupSection({
+  group,
+  selectedFile,
+  onOpen,
+}: {
+  group: FileGroup;
+  selectedFile: CrossWorktreeFile | null;
+  onOpen: (file: CrossWorktreeFile) => void;
+}) {
+  const { ref, isTruncated } = useTruncationDetection();
+  const label = formatDiffDir(group.dir);
+  const directoryHidden = isTruncated || (group.dir !== "" && label !== group.dir);
+  return (
+    <div className="mb-1.5">
+      <div className="flex items-center gap-1.5 px-1.5 py-1 text-2xs text-text-secondary">
+        <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <span ref={ref} className="truncate font-mono">
+          {label}
+        </span>
+      </div>
+      <div className="flex flex-col gap-px">
+        {group.files.map((file) => (
+          <CrossWorktreeFileRow
+            key={`${file.status}:${file.path}`}
+            file={file}
+            isSelected={selectedFile !== null && isSameFile(selectedFile, file)}
+            directoryHidden={directoryHidden}
+            onClick={() => onOpen(file)}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -269,8 +311,10 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           ignoreWhitespace
         );
         if (token !== fileDiffTokenRef.current) return; // stale response
-        setFileDiff(typeof diff === "string" ? diff : null);
-        setFileDiffError(false);
+        // Anything but diff text is a failure the user can retry, not a blank pane.
+        const ok = typeof diff === "string";
+        setFileDiff(ok ? diff : null);
+        setFileDiffError(!ok);
       } catch {
         if (token !== fileDiffTokenRef.current) return;
         setFileDiff(null);
@@ -493,22 +537,12 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             )}
             {listReady &&
               groups?.map((group) => (
-                <div key={group.dir || "(root)"} className="mb-1.5">
-                  <div className="flex items-center gap-1.5 px-1.5 py-1 text-2xs text-text-secondary">
-                    <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
-                    <span className="truncate font-mono">{formatDiffDir(group.dir)}</span>
-                  </div>
-                  <div className="flex flex-col gap-px">
-                    {group.files.map((file) => (
-                      <CrossWorktreeFileRow
-                        key={`${file.status}:${file.path}`}
-                        file={file}
-                        isSelected={selectedFile !== null && isSameFile(selectedFile, file)}
-                        onClick={() => void fetchFileDiff(file)}
-                      />
-                    ))}
-                  </div>
-                </div>
+                <FileGroupSection
+                  key={group.dir || "(root)"}
+                  group={group}
+                  selectedFile={selectedFile}
+                  onOpen={(file) => void fetchFileDiff(file)}
+                />
               ))}
           </div>
         </div>

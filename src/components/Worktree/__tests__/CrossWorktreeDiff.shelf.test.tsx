@@ -141,4 +141,25 @@ describe("CrossWorktreeDiff file shelf", () => {
     expect(screen.queryByText(/pick a changed file/i)).toBeNull();
     expect(fileRows()).toHaveLength(0);
   });
+
+  it("turns a diff response that isn't text into a retryable failure", async () => {
+    renderComparison(COLLIDING);
+    await waitFor(() => expect(fileRows()).toHaveLength(COLLIDING.length));
+    mockCompareWorktrees.mockImplementation(() =>
+      Promise.resolve({ branch1: "main", branch2: "feature", files: [] })
+    );
+    fireEvent.click(fileRows()[0]!);
+    await waitFor(() => expect(screen.getByRole("button", { name: /retry/i })).toBeTruthy());
+    expect(screen.queryByTestId("diff-viewer")).toBeNull();
+  });
+
+  it("offers the full path on focus when the directory band is shortened", async () => {
+    const deep = "packages/telemetry-exporter/src/internal/strategy.ts";
+    renderComparison([{ path: deep, status: "A", insertions: 1, deletions: 0 }]);
+    await waitFor(() => expect(fileRows()).toHaveLength(1));
+    fireEvent.focus(fileRows()[0]!);
+    await waitFor(() =>
+      expect(screen.getAllByRole("tooltip").some((t) => t.textContent?.includes(deep))).toBe(true)
+    );
+  });
 });
