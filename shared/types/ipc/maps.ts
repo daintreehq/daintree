@@ -1561,9 +1561,10 @@ export interface IpcEventMap {
     confirmed: boolean;
     context?: import("../actions.js").ActionContext;
     callerInfo?: import("./mcpServer.js").McpBearerIdentity;
-    /** Agent-pane approval controls (#12692); both set only by main. */
+    /** Approval controls (#12692, #12881); all set only by main. */
     offerSessionApproval?: boolean;
     approvalOnly?: boolean;
+    approvalReason?: import("./mcpServer.js").McpApprovalReason;
   };
 
   /**

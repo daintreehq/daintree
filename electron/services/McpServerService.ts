@@ -292,7 +292,8 @@ export class McpServerService {
         args,
         confirmed,
         contextOverride,
-        sessionOrigin
+        sessionOrigin,
+        approval
       ) =>
         this.bridge.dispatchActionForWebContents(
           id,
@@ -300,7 +301,8 @@ export class McpServerService {
           args,
           confirmed,
           contextOverride,
-          sessionOrigin
+          sessionOrigin,
+          approval
         ),
       requestManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
         this.bridge.requestManifestForWorkspace(workspaceId, preferredWebContentsId),

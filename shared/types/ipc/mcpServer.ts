@@ -68,6 +68,15 @@ export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
 export type McpApprovalScope = "once" | "session";
 
 /**
+ * Why main is asking the user about a call it has not run (#12692, #12881).
+ * `above-tier` is an agent pane reaching past its project's MCP tier.
+ * `protected-close` is Daintree's own assistant closing panels it did not open,
+ * or whose agent was last seen working or waiting: the question is whether to
+ * lose those panels, so the dialog lists them.
+ */
+export type McpApprovalReason = "above-tier" | "protected-close";
+
+/**
  * What authorized an agent pane's dispatch past the ordinary confirmation
  * (#12692), stamped on its audit record so an automatic run can be told apart
  * from one a person approved.

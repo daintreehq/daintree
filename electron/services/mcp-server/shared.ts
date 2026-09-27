@@ -7,6 +7,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import type {
   McpAuditRecord,
+  McpApprovalReason,
   McpApprovalScope,
   McpAuditResult,
   McpConfirmationDecision,
@@ -168,6 +169,11 @@ export interface WorkspaceDispatchOptions {
    * renderer.
    */
   approvalOnly?: boolean;
+  /**
+   * Why an `approvalOnly` request is asking, so the dialog words the question
+   * truthfully. Absent reads as `above-tier`, the only reason a pane asks.
+   */
+  approvalReason?: McpApprovalReason;
 }
 export type { HelpAssistantTier };
 

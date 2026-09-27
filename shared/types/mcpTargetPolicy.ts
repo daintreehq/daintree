@@ -101,7 +101,10 @@ export interface McpTargetPolicy {
    * targets accepting a `recipeId`: an agent-sourced call carrying one spawns
    * the recipe's terminals, so the host elevates it per-dispatch (#11860). Also
    * true for `terminal.new` while it accepts `command` or `cwd`, whose launch
-   * arguments start a shell the same way (#12216). A client reading only
+   * arguments start a shell the same way (#12216), and for the assistant's
+   * `terminal.close` and `terminal.closeMany`, which ask before closing a panel
+   * the session did not create or whose agent is mid-task (#12881). A client
+   * reading only
    * {@link danger} would call such a target expecting no dialog and get
    * `CONFIRMATION_REQUIRED` instead.
    */

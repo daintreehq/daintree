@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ActionSource } from "@shared/types/actions";
 import {
+  CLOSE_ALL_DISPATCH_DANGER_RATIONALE,
+  RECIPE_DISPATCH_DANGER_RATIONALE,
   TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE,
   TERMINAL_CWD_DISPATCH_DANGER_RATIONALE,
   dispatchCarriesRecipeId,
   dispatchCarriesTerminalCommand,
   dispatchCarriesTerminalCwd,
+  elevatedDangerRationale,
   readDispatchRecipeId,
   readDispatchTerminalCommand,
   resolveEffectiveActionDanger,
@@ -186,5 +189,36 @@ describe("readDispatchRecipeId / dispatchCarriesRecipeId", () => {
     const proto: Record<string, unknown> = { recipeId: "inherited" };
     const args: unknown = Object.create(proto);
     expect(dispatchCarriesRecipeId(args)).toBe(true);
+  });
+});
+
+describe("terminal.closeAll from an agent (#12881)", () => {
+  it("is confirm-gated for an agent and untouched for everyone else", () => {
+    expect(resolveEffectiveActionDanger("terminal.closeAll", "safe", "agent", undefined)).toBe(
+      "confirm"
+    );
+    for (const source of ["user", "keybinding", "menu", "context-menu"] as ActionSource[]) {
+      expect(resolveEffectiveActionDanger("terminal.closeAll", "safe", source, undefined)).toBe(
+        "safe"
+      );
+    }
+  });
+
+  it("leaves a single agent close to main, which knows what the session opened", () => {
+    expect(
+      resolveEffectiveActionDanger("terminal.close", "safe", "agent", { terminalId: "t-1" })
+    ).toBe("safe");
+  });
+
+  it("explains the sweep rather than borrowing the recipe rationale", () => {
+    expect(elevatedDangerRationale("terminal.closeAll", undefined)).toBe(
+      CLOSE_ALL_DISPATCH_DANGER_RATIONALE
+    );
+    expect(elevatedDangerRationale("worktree.createWithRecipe", { recipeId: "r1" })).toBe(
+      RECIPE_DISPATCH_DANGER_RATIONALE
+    );
+    expect(elevatedDangerRationale("terminal.new", { command: "ls" })).toBe(
+      TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE
+    );
   });
 });

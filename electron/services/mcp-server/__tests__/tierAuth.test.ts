@@ -1820,6 +1820,38 @@ describe("filterIntrospectionResultForSession", () => {
         expect(policy.confirmationMayEscalate).toBe(false);
       });
 
+      // #12881: the assistant's unscoped closes ask when a named panel is not
+      // the session's or is mid-task, and an agent's closeAll always asks.
+      it("reports the assistant's close gates", () => {
+        const closes = {
+          permittedActionIds: new Set([
+            ...permitted,
+            "terminal.close",
+            "terminal.closeMany",
+            "terminal.closeAll",
+          ]),
+          policySnapshot: snapshot({ tier: "full" }),
+        };
+        for (const id of ["terminal.close", "terminal.closeMany"]) {
+          const policy = policyOf(lookup(makeEntry({ id }), closes));
+          expect(policy.danger).toBe("safe");
+          expect(policy.confirmationMayEscalate).toBe(true);
+        }
+        const closeAll = policyOf(lookup(makeEntry({ id: "terminal.closeAll" }), closes));
+        expect(closeAll.danger).toBe("safe");
+        expect(closeAll.requiresConfirmation).toBe(true);
+
+        // An agent pane's closeMany runs the owned form, which refuses instead
+        // of asking.
+        const pane = policyOf(
+          lookup(makeEntry({ id: "terminal.closeMany" }), {
+            ...closes,
+            policySnapshot: snapshot({ rendererOwnedOrigin: false }),
+          })
+        );
+        expect(pane.confirmationMayEscalate).toBe(false);
+      });
+
       it("never reports escalation for a target already declared confirm", () => {
         const policy = policyOf(
           lookup(

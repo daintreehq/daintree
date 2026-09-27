@@ -24,7 +24,9 @@ import {
   TerminalCloseManyArgsSchema,
   TerminalSendCommandManyArgsSchema,
   type BatchItemOutcome,
+  type TerminalCloseManyArgs,
 } from "../../../shared/types/mcpBatch.js";
+import { ASSISTANT_CLOSE_CONFIRM_AGENT_STATES } from "../../../shared/types/agent.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
 import {
   readDispatchTerminalCommand,
@@ -877,6 +879,15 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * not an agent pane never skips a confirmation on it.
    */
   paneSkipConfirmations?: boolean;
+  /**
+   * Put a close by Daintree's own assistant to the user without running it
+   * (#12881): one naming panels the session did not create, or whose agent
+   * was last seen working or waiting. Resolves with the dialog's decision and,
+   * once approved, the ids the user left checked in
+   * `result.result.selectedTargetIds`. Rejects when no window can ask, and the
+   * close is then refused. Consulted only for a renderer-owned origin.
+   */
+  requestCloseApproval?: (actionId: string, args: unknown) => Promise<DispatchEnvelope>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -1139,6 +1150,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     replyWaiter,
     resolveOwnPane,
     requestApproval,
+    requestCloseApproval,
   } = deps;
 
   /**
@@ -1310,7 +1322,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     request: CallToolRequest,
     extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
     // A batch item whose reply the batch waits for: its notice holds on this.
-    batchItem?: { noticeHold: NoticeHold }
+    // `closeApproved` marks a close the batch already put to the user (#12881),
+    // so the item does not ask a second time. Never reachable from a client.
+    batchItem?: { noticeHold?: NoticeHold; closeApproved?: boolean }
   ): Promise<CallToolResult> => {
     const actionId = request.params.name;
     const { args, requestKey } = parseToolArguments(request.params.arguments);
@@ -1410,6 +1424,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const drivesTerminal = (terminalId: string): boolean =>
       ownedRecordFor("terminal", terminalId) !== undefined ||
       adoptedRecordFor("terminal", terminalId) !== undefined;
+    /**
+     * Whether Daintree's own assistant must ask before closing this panel
+     * (#12881): this session did not create it, or its agent was last seen
+     * working or waiting. #12407 kept the unscoped close so the assistant can
+     * tidy up what it launched; closing what the user opened, or an agent
+     * still mid-task, is a different authority and needs the user.
+     *
+     * A hand-over does not count as creation: it lends the right to drive an
+     * agent, not to discard it. No ownership record reads as "not created",
+     * so a missing record asks rather than closes.
+     */
+    const closeNeedsApproval = (terminalId: string): boolean => {
+      if (ownedRecordFor("terminal", terminalId) === undefined) return true;
+      const state = getAgentAvailabilityStore().getTerminalSnapshot(terminalId)?.state;
+      return state !== undefined && ASSISTANT_CLOSE_CONFIRM_AGENT_STATES.has(state);
+    };
 
     const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
     const listPaging = actionId === ACTIONS_LIST_TOOL_ID ? readListPaging(args) : null;
@@ -2354,6 +2384,85 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       return undefined;
     };
 
+    /**
+     * Put a close by Daintree's own assistant to the user, once for every
+     * panel it names (#12881). Resolves with the ids the user left checked, or
+     * with the tool error to hand back when nothing may close: a decline, a
+     * missed dialog, or no window to ask in. A refusal is final for the call,
+     * so a batch that was turned down never falls back to asking per panel.
+     */
+    const askToClose = async (
+      terminalIds: readonly string[]
+    ): Promise<{ approved: ReadonlySet<string> } | { refusal: CallToolResultLike }> => {
+      const refuse = (
+        error: import("../../../shared/types/actions.js").ActionError
+      ): { refusal: CallToolResultLike } => {
+        outcome = { kind: "result", value: { ok: false, error } };
+        return {
+          refusal: buildToolError({
+            code: error.code,
+            message: error.message,
+            ...(error.details !== undefined ? { details: error.details } : {}),
+          }),
+        };
+      };
+      if (requestCloseApproval === undefined) {
+        return refuse({
+          code: CONFIRMATION_REQUIRED_CODE,
+          message: `Closing these panels needs the user's approval, and this session has no way to ask. Nothing was closed.`,
+          details: { confirmationChannel: "unavailable" },
+        });
+      }
+      let approval: DispatchEnvelope;
+      try {
+        approval = await requestCloseApproval(actionId, { terminalIds: [...terminalIds] });
+      } catch (err) {
+        if (err instanceof McpRouteBindingError) {
+          outcome = { kind: "throw", error: err };
+          return {
+            refusal: buildToolError({
+              code: SESSION_BINDING_GONE,
+              message: err.message,
+              retriable: err.retriable,
+            }),
+          };
+        }
+        return refuse({
+          code: CONFIRMATION_REQUIRED_CODE,
+          message: formatErrorMessage(
+            err,
+            "Closing these panels needs the user's approval, and no Daintree window could ask"
+          ).concat(" Nothing was closed."),
+          details: { confirmationChannel: "unavailable" },
+        });
+      }
+      confirmationDecision = approval.confirmationDecision;
+      if (approval.confirmationDecision !== "approved") {
+        return refuse(
+          approval.result.ok
+            ? {
+                code: USER_REJECTED_CODE,
+                message: `The user did not approve closing these panels. Nothing was closed; do not retry them one at a time.`,
+              }
+            : approval.result.error
+        );
+      }
+      if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
+      // Only ids this call asked about. Anything else the renderer reported is
+      // not consent about this close; nothing reported means nothing approved.
+      const requested = new Set(terminalIds);
+      const selected = approval.result.ok
+        ? (approval.result.result as { selectedTargetIds?: unknown } | null | undefined)
+            ?.selectedTargetIds
+        : undefined;
+      const approved = new Set(
+        Array.isArray(selected)
+          ? selected.filter((id): id is string => typeof id === "string" && requested.has(id))
+          : []
+      );
+      return { approved };
+    };
+
     // Wrapped in an inner IIFE so the dedup guard below can register this
     // Promise in `dedupInFlight` (singleflight) and attach a `.then()` cache
     // hook that fires before any other awaiter sees the resolved result.
@@ -2421,6 +2530,30 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (approvalRequired) {
           const refusal = await askForApproval();
           if (refusal !== undefined) return refusal;
+        }
+
+        // The assistant closing a panel it did not open, or one whose agent is
+        // mid-task (#12881). Asked before anything reaches the renderer, like
+        // the ownership gate above; a batch has already asked about the whole
+        // set and marks its items so they do not ask again.
+        if (
+          rendererOwnedOrigin &&
+          actionId === "terminal.close" &&
+          batchItem?.closeApproved !== true
+        ) {
+          const terminalId = readStringArg(args, "terminalId");
+          if (terminalId !== undefined && terminalId.length > 0 && closeNeedsApproval(terminalId)) {
+            const asked = await askToClose([terminalId]);
+            if ("refusal" in asked) return asked.refusal;
+            if (!asked.approved.has(terminalId)) {
+              const message = `The user did not approve closing '${terminalId}'. Nothing was closed.`;
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: USER_REJECTED_CODE, message } },
+              };
+              return buildToolError({ code: USER_REJECTED_CODE, message });
+            }
+          }
         }
 
         // A main-executed owned tool (#12479) runs straight after the gate
@@ -2540,7 +2673,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               }.`
             );
           }
-          emitToolCallStarted(false);
+          // One question for the whole set (#12881), asked before any item
+          // runs: a decline closes nothing, and the items the user approved
+          // carry that approval so none of them asks again.
+          let closeApproved: ReadonlySet<string> | undefined;
+          const closeIds =
+            actionId === "terminal.closeMany" && rendererOwnedOrigin
+              ? [...new Set((parsed.data as TerminalCloseManyArgs).terminalIds)]
+              : [];
+          const closeNeedsAsking = closeIds.some(closeNeedsApproval);
+          emitToolCallStarted(closeNeedsAsking);
+          if (closeNeedsAsking) {
+            const asked = await askToClose(closeIds);
+            if ("refusal" in asked) return asked.refusal;
+            closeApproved = asked.approved;
+          }
           const results: BatchItemOutcome[] = [];
           const batchArgs = parsed.data as {
             waitForReply?: boolean;
@@ -2559,6 +2706,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           for (const item of batch.expand(parsed.data, rendererOwnedOrigin)) {
             // A cancelled call starts nothing more; what already went out stands.
             if (extra.signal.aborted) break;
+            if (closeApproved !== undefined && !closeApproved.has(item.target)) {
+              waits.push(undefined);
+              results.push({
+                target: item.target,
+                ok: false,
+                error: {
+                  code: USER_REJECTED_CODE,
+                  message:
+                    "The user unchecked this panel, so it was not closed. Do not retry it or ask again on its behalf.",
+                },
+              });
+              continue;
+            }
             const wait =
               batchArgs.waitForReply === true && replyWaiter !== undefined
                 ? replyWaiter.wait({
@@ -2585,7 +2745,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               itemResult = await handleCallTool(
                 { method: "tools/call", params: { name: item.tool, arguments: item.args } },
                 extra,
-                noticeHold !== undefined ? { noticeHold } : undefined
+                noticeHold !== undefined || closeApproved !== undefined
+                  ? {
+                      ...(noticeHold !== undefined ? { noticeHold } : {}),
+                      ...(closeApproved !== undefined ? { closeApproved: true } : {}),
+                    }
+                  : undefined
               );
             } catch (error) {
               // One item's refusal is its own outcome, not the batch's.
@@ -2694,7 +2859,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             throw err;
           }
           // A batch settles its items' holds itself, as each item's wait ends.
-          if (hold !== undefined && batchItem === undefined) {
+          if (hold !== undefined && batchItem?.noticeHold === undefined) {
             releaseNotice = (answered) => terminalNotify.releaseHold(pane, hold, answered);
           }
         }

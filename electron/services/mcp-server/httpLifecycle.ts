@@ -108,7 +108,8 @@ export interface HttpLifecycleDeps {
     args: unknown,
     confirmed?: boolean,
     contextOverride?: import("../../../shared/types/actions.js").ActionContext,
-    sessionOrigin?: McpSessionOrigin
+    sessionOrigin?: McpSessionOrigin,
+    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason">
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
   // at handshake (#11789) and for agent panes bound to their launch workspace
@@ -1943,6 +1944,32 @@ export class HttpLifecycle {
               : Promise.reject(missingWorkspaceRoute())
         : undefined;
 
+    /**
+     * Ask the user whether Daintree's own assistant may close panels it did not
+     * open, or whose agent is busy, without closing anything yet (#12881).
+     * Routed to the window the session is pinned to, where the close would
+     * land. With no pin there is nobody to ask, so this rejects and the session
+     * server refuses the close rather than running it unasked.
+     */
+    const requestCloseApproval: import("./sessionServer.js").SessionServerDeps["requestCloseApproval"] =
+      (actionId, args) => {
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
+        if (id === undefined || !pinnedDispatch) {
+          return Promise.reject(
+            new Error("No Daintree window is pinned to this session to ask the user.")
+          );
+        }
+        return pinnedDispatch(
+          id,
+          actionId,
+          args,
+          false,
+          this.deps.sessionStore.sessionContextMap.get(sessionId),
+          sessionOrigin,
+          { approvalOnly: true, approvalReason: "protected-close" }
+        );
+      };
+
     const getCachedManifest: import("./sessionServer.js").SessionServerDeps["getCachedManifest"] =
       () => {
         // Pinned sessions never read the shared manifest cache (it could serve
@@ -2140,6 +2167,7 @@ export class HttpLifecycle {
       ...(requestApproval !== undefined && paneBinding?.skipConfirmations === true
         ? { paneSkipConfirmations: true }
         : {}),
+      requestCloseApproval,
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
       handleSkillsSearch: this.deps.handleSkillsSearch,

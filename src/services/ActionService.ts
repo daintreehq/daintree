@@ -26,12 +26,7 @@ import {
   toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
-import {
-  RECIPE_DISPATCH_DANGER_RATIONALE,
-  dispatchCarriesRecipeId,
-  resolveEffectiveActionDanger,
-  terminalLaunchDangerRationale,
-} from "./actions/effectiveDanger";
+import { elevatedDangerRationale, resolveEffectiveActionDanger } from "./actions/effectiveDanger";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
@@ -406,12 +401,7 @@ export class ActionService {
       ...(definition.dangerRationale
         ? { dangerRationale: definition.dangerRationale }
         : elevated && dispatch
-          ? {
-              dangerRationale: dispatchCarriesRecipeId(dispatch.args)
-                ? RECIPE_DISPATCH_DANGER_RATIONALE
-                : (terminalLaunchDangerRationale(dispatch.args) ??
-                  RECIPE_DISPATCH_DANGER_RATIONALE),
-            }
+          ? { dangerRationale: elevatedDangerRationale(id, dispatch.args) }
           : {}),
     };
   }
