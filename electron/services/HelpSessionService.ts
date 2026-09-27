@@ -341,8 +341,11 @@ function isSameOrInside(parent: string, child: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
-/** `p` and its realpath, or null when resolving it stalls (a dead mount). */
-async function aliasesWithin(p: string, timeoutMs: number): Promise<string[] | null> {
+/**
+ * `p` and its realpath. When resolving stalls (a dead mount) the lexical path
+ * alone still gets a deny rather than none.
+ */
+async function aliasesWithin(p: string, timeoutMs: number): Promise<string[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const real = await Promise.race([
@@ -352,7 +355,12 @@ async function aliasesWithin(p: string, timeoutMs: number): Promise<string[] | n
         timer.unref?.();
       }),
     ]);
-    if (real === null) return null;
+    if (real === null) {
+      console.warn(
+        "[HelpSessionService] Timed out resolving a project root; denying its path as given"
+      );
+      return [p];
+    }
     return real !== p ? [p, real] : [p];
   } finally {
     if (timer) clearTimeout(timer);
@@ -382,7 +390,7 @@ async function resolvedEvenIfMissing(p: string): Promise<string> {
  * `protectedPaths`. Deny beats allow in Claude Code, so a project containing
  * the scratch or session folders would otherwise lock the assistant out of the
  * only place it may write. Each root resolves on its own deadline, so one dead
- * mount drops only itself.
+ * mount can't hold up the rest.
  */
 export async function editDenyRuleRoots(
   roots: readonly string[],
@@ -396,12 +404,6 @@ export async function editDenyRuleRoots(
   const perRoot = await Promise.all(
     [...new Set(roots)].map(async (root) => {
       const aliases = await aliasesWithin(root, timeoutMs);
-      if (!aliases) {
-        console.warn(
-          "[HelpSessionService] Timed out resolving a project root; no edit deny for it"
-        );
-        return [];
-      }
       if (aliases.some((alias) => guarded.some((p) => isSameOrInside(alias, p)))) {
         console.warn(
           "[HelpSessionService] Skipping an edit deny that would cover the assistant's own folders"

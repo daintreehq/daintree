@@ -853,6 +853,23 @@ describe("HelpSessionService", () => {
     ).resolves.toEqual(["//data/app-sibling", "//elsewhere"]);
   });
 
+  it("still denies a root by its given path when resolving it stalls", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const realpath = vi.spyOn(fs, "realpath");
+    try {
+      realpath.mockImplementation(((p: string) =>
+        p === "/stalled/mount"
+          ? new Promise(() => {})
+          : Promise.reject(new Error("ENOENT"))) as never);
+      const pending = editDenyRuleRoots(["/stalled/mount", "/elsewhere"], ["/data/app"], "darwin");
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(pending).resolves.toEqual(["//stalled/mount", "//elsewhere"]);
+    } finally {
+      realpath.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("sees a protected folder through a symlinked parent before it exists", async () => {
     const real = path.join(tmpRoot, "real");
     const link = path.join(tmpRoot, "link");
