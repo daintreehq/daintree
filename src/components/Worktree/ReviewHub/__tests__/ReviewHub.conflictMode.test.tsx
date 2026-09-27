@@ -447,7 +447,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByTestId("conflict-panel"));
       screen.getByText(/Resolve Merge Conflicts/i);
       expect(screen.queryByText(/^Staged$/i)).toBeNull();
-      expect(screen.queryByPlaceholderText("Commit message…")).toBeNull();
+      expect(screen.queryByLabelText("Commit message")).toBeNull();
     });
 
     it("shows rebase step progress in the banner", async () => {

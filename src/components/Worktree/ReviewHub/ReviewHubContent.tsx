@@ -223,6 +223,12 @@ export function ReviewHubContent({
   const showPushBanner = pushError !== null && !pushBannerDismissed;
   const [pushProgress, setPushProgress] = useState<Map<string, PushProgressEvent>>(new Map());
   const [pushTargetBranch, setPushTargetBranch] = useState<string | null>(null);
+  // A commit that empties the tree would otherwise unmount the composer before
+  // its push starts, taking the push target and progress with it.
+  const [isCommitPushInFlight, setIsCommitPushInFlight] = useState(false);
+  // Spoken once when a push lands. The composer that showed its progress may
+  // already be gone (a clean tree unmounts it), so the result lives here.
+  const [pushAnnouncement, setPushAnnouncement] = useState("");
   const [isPushing, setIsPushing] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
@@ -1302,10 +1308,13 @@ export function ReviewHubContent({
     setPushError(null);
     setPushProgress(new Map());
     setPushTargetBranch(null);
+    setPushAnnouncement("");
+    let announcedTarget: string | null = null;
 
     const cleanup = window.electron.git.onPushProgress((event) => {
       if (event.cwd !== worktreePath) return;
       if (event.stage === "target") {
+        announcedTarget = event.targetBranch ?? null;
         setPushTargetBranch(event.targetBranch ?? null);
         return;
       }
@@ -1325,6 +1334,7 @@ export function ReviewHubContent({
     try {
       await window.electron.git.push(worktreePath);
       setPushError(null);
+      setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
     } catch (err) {
       // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
       // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
@@ -1364,19 +1374,24 @@ export function ReviewHubContent({
       setActionError(null);
       setPushError(null);
       debouncedBgRefreshRef.current?.cancel();
+      setIsCommitPushInFlight(true);
       try {
-        await window.electron.git.commit(worktreePath, message);
-      } catch (err) {
-        setActionError({
-          title: "Couldn't commit changes",
-          detail: formatErrorMessage(err, "Failed to commit changes"),
-        });
-        throw err;
+        try {
+          await window.electron.git.commit(worktreePath, message);
+        } catch (err) {
+          setActionError({
+            title: "Couldn't commit changes",
+            detail: formatErrorMessage(err, "Failed to commit changes"),
+          });
+          throw err;
+        }
+        // Same review reset as handleCommit — the changeset starts over.
+        useDiffViewedStore.getState().clearWorktree(worktreePath);
+        await refresh();
+        await runPush();
+      } finally {
+        setIsCommitPushInFlight(false);
       }
-      // Same review reset as handleCommit — the changeset starts over.
-      useDiffViewedStore.getState().clearWorktree(worktreePath);
-      await refresh();
-      await runPush();
     },
     [worktreePath, refresh, runPush]
   );
@@ -1989,6 +2004,9 @@ export function ReviewHubContent({
             }}
           />
         )}
+        <span role="status" className="sr-only" data-testid="review-hub-push-announcement">
+          {pushAnnouncement}
+        </span>
         {pushError && showPushBanner && (
           <PushErrorBanner
             pushError={pushError}
@@ -2232,7 +2250,9 @@ export function ReviewHubContent({
                         title={
                           pushError
                             ? `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} not pushed`
-                            : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
+                            : isPushing
+                              ? `Pushing ${aheadCount} commit${aheadCount !== 1 ? "s" : ""}`
+                              : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
                         }
                         // "Ready to push" is a readiness claim, so it must not
                         // survive a rejection: after a push fails, `pushReady`
@@ -2328,10 +2348,13 @@ export function ReviewHubContent({
                             tabIndex={-1}
                             /* Focusable because `handleFocusBlocker` sends focus
                              here from the readiness rail's "conflicts" CTA, so
-                             it keeps its own ring. The banner inside carries the
-                             shared failure grammar; this wrapper only owns
+                             it keeps its own ring — on `focus:`, since a
+                             scripted focus after a pointer click never matches
+                             `:focus-visible`, and inset so the unpadded
+                             scrollport cannot clip it. The banner inside carries
+                             the shared failure grammar; this wrapper only owns
                              focus. */
-                            className="outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+                            className="rounded-[var(--radius-md)] focus:outline focus:outline-2 focus:outline-accent-primary focus:-outline-offset-2"
                           >
                             <InlineStatusBanner
                               severity="warning"
@@ -2430,8 +2453,12 @@ export function ReviewHubContent({
             scroll Skeleton above owns the role="status" announcement. */}
         {diffMode === "working-tree" && showWorkingTreeSkeleton && (
           <div className="border-t border-divider p-3 space-y-2" aria-hidden="true">
+            <div className="flex items-center justify-between">
+              <SkeletonBone immediate className="h-3 w-24" />
+              <SkeletonBone immediate className="h-2.5 w-8" />
+            </div>
             <SkeletonBone immediate className="h-14 w-full" />
-            <SkeletonBone immediate className="h-2.5 w-8 ml-auto" />
+            <SkeletonBone immediate className="h-3 w-48" />
             <div className="flex items-center gap-2">
               <SkeletonBone immediate className="h-7 flex-1" />
               <SkeletonBone immediate className="h-7 w-7 shrink-0" />
@@ -2442,7 +2469,7 @@ export function ReviewHubContent({
         {/* Commit panel — only in working-tree mode, and never during a conflict op */}
         {diffMode === "working-tree" &&
           status &&
-          totalChanges > 0 &&
+          (totalChanges > 0 || isCommitPushInFlight) &&
           !loadError &&
           !isOperationState && (
             <CommitPanel

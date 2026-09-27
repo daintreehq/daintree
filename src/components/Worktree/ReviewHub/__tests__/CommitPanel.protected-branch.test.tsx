@@ -145,21 +145,21 @@ describe("CommitPanel — push confirm", () => {
 
   it("on a feature branch, opens the ConfirmDialog instead of pushing immediately", () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "feature/x" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(onCommitAndPush).not.toHaveBeenCalled();
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
   });
 
   it("on a protected branch ('main'), opens the ConfirmDialog instead of pushing", () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "main" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(onCommitAndPush).not.toHaveBeenCalled();
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
   });
 
   it("confirming the dialog calls onCommitAndPush", () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "develop" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(onCommitAndPush).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: /Push to origin\/develop/ }));
@@ -168,7 +168,7 @@ describe("CommitPanel — push confirm", () => {
 
   it("cancelling the dialog does not call onCommitAndPush", () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "main" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCommitAndPush).not.toHaveBeenCalled();
     expect(screen.queryByTestId("push-confirm-dialog")).toBeNull();
@@ -176,7 +176,7 @@ describe("CommitPanel — push confirm", () => {
 
   it("shows the commit message preview inside the confirm dialog body", () => {
     renderPanel({ currentBranch: "main", commitMessage: "chore: bump deps\n\nBody line" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const message = screen.getByTestId("commit-panel-push-confirm-message");
     expect(message.textContent).toContain("chore: bump deps");
     expect(message.textContent).toContain("Body line");
@@ -184,7 +184,7 @@ describe("CommitPanel — push confirm", () => {
 
   it("shows the target-branch pill with the current branch name", () => {
     renderPanel({ currentBranch: "feature/my-thing" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const pill = screen.getByTestId("commit-panel-push-confirm-branch");
     // The pill names the full destination, not just the branch: which
     // repository the push lands in is the fact a fork workflow hides (#11746).
@@ -193,14 +193,14 @@ describe("CommitPanel — push confirm", () => {
 
   it("warns about protected branches in the description copy", () => {
     renderPanel({ currentBranch: "main" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const description = screen.getByTestId("confirm-description");
     expect(description.textContent).toContain("protected branch");
   });
 
   it("uses a simpler description for non-protected branches", () => {
     renderPanel({ currentBranch: "feature/x" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const description = screen.getByTestId("confirm-description");
     expect(description.textContent).not.toContain("protected branch");
     expect(description.textContent).toContain("Review your commit message");
@@ -211,7 +211,7 @@ describe("CommitPanel — push confirm", () => {
       currentBranch: "feature/x",
       skipPushConfirm: true,
     });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
     expect(screen.queryByTestId("push-confirm-dialog")).toBeNull();
     expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
@@ -219,7 +219,7 @@ describe("CommitPanel — push confirm", () => {
 
   it("confirming with the 'don't ask again' checkbox checked calls onSetSkipPushConfirm(true)", () => {
     const { onCommitAndPush, onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const checkbox = screen.getByTestId("commit-panel-push-confirm-dont-ask") as HTMLInputElement;
     fireEvent.click(checkbox);
     expect(checkbox.checked).toBe(true);
@@ -230,14 +230,14 @@ describe("CommitPanel — push confirm", () => {
 
   it("confirming without checking the box calls onSetSkipPushConfirm(false)", () => {
     const { onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(false);
   });
 
   it("cancelling after checking the box does NOT call onSetSkipPushConfirm", () => {
     const { onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
@@ -245,33 +245,33 @@ describe("CommitPanel — push confirm", () => {
 
   it("resets the 'don't ask again' checkbox after the dialog closes via cancel", () => {
     renderPanel({ currentBranch: "feature/x" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const checkbox = screen.getByTestId("commit-panel-push-confirm-dont-ask") as HTMLInputElement;
     expect(checkbox.checked).toBe(false);
   });
 
   it("normalizes mixed-case protected branch names ('Main', 'DEVELOP') for the warning copy", () => {
     renderPanel({ currentBranch: "Main" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(screen.getByTestId("confirm-description").textContent).toContain("protected branch");
     cleanup();
 
     renderPanel({ currentBranch: "DEVELOP" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(screen.getByTestId("confirm-description").textContent).toContain("protected branch");
   });
 
   it("treats 'master' and 'development' as protected for the warning copy", () => {
     renderPanel({ currentBranch: "master" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(screen.getByTestId("confirm-description").textContent).toContain("protected branch");
     cleanup();
 
     renderPanel({ currentBranch: "development" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(screen.getByTestId("confirm-description").textContent).toContain("protected branch");
   });
 
@@ -298,7 +298,7 @@ describe("CommitPanel — push confirm", () => {
         onSetSkipPushConfirm={vi.fn()}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: /Commit \(/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Commit$/ }));
     expect(onCommit).toHaveBeenCalledWith("fix: bug");
     expect(onCommitAndPush).not.toHaveBeenCalled();
     expect(screen.queryByTestId("push-confirm-dialog")).toBeNull();
@@ -306,7 +306,7 @@ describe("CommitPanel — push confirm", () => {
 
   it("Cmd+Enter on the textarea routes through the confirm gate", () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "feature/x" });
-    const textarea = screen.getByPlaceholderText(/Commit message/);
+    const textarea = screen.getByLabelText("Commit message");
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
     expect(onCommitAndPush).not.toHaveBeenCalled();
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
@@ -316,7 +316,7 @@ describe("CommitPanel — push confirm", () => {
     // A null branch is a detached HEAD, which has no push destination to
     // resolve — the confirm opens to explain that rather than pushing (#11746).
     const { onCommitAndPush } = renderPanel({ currentBranch: null });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
     expect(screen.getByTestId("commit-panel-push-no-destination")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: /Push to branch/ }));
@@ -328,7 +328,7 @@ describe("CommitPanel — push confirm", () => {
       currentBranch: null,
       pushDestination: { remote: "origin", branch: "main" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: /Push to origin\/main/ }));
     expect(onCommitAndPush).toHaveBeenCalledTimes(1);
@@ -341,7 +341,7 @@ describe("CommitPanel — push confirm", () => {
       currentBranch: "feature/x",
       onCommitAndPush,
     });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
     fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
@@ -356,7 +356,7 @@ describe("CommitPanel — unresolved push destination (#11746)", () => {
       currentBranch: "topic",
       pushDestination: { remote: "fork", branch: "release/topic" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(screen.getByTestId("commit-panel-push-confirm-branch").textContent).toBe(
       "fork/release/topic"
     );
@@ -365,7 +365,7 @@ describe("CommitPanel — unresolved push destination (#11746)", () => {
   it("blocks the push confirm when no destination resolved", () => {
     const onCommitAndPush = vi.fn().mockResolvedValue(undefined);
     renderPanel({ currentBranch: "topic", pushDestination: null, onCommitAndPush });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
 
     expect(screen.getByTestId("commit-panel-push-no-destination")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: /Push to topic/ }));
@@ -382,7 +382,7 @@ describe("CommitPanel — unresolved push destination (#11746)", () => {
       skipPushConfirm: true,
       onCommitAndPush,
     });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
 
     expect(screen.getByTestId("commit-panel-push-no-destination")).toBeDefined();
     expect(onCommitAndPush).not.toHaveBeenCalled();

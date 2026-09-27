@@ -52,7 +52,7 @@ const DIFF_ROW: Record<DiffKind, string> = {
 const REVIEW_BUTTON = { x: 134, y: 243 };
 const PANE_INPUT = { anchor: "claude-input", dx: -154, dy: 6 };
 const COMMIT_BUTTON = { anchor: "review-commit-push", dx: 13, dy: 5 };
-// The message is written before the pointer reaches Commit & Push.
+// The message is written before the pointer reaches Commit & push.
 const COMMIT_TYPED = { cue: "commit", offset: 1.6 } as const;
 const FILES_CUE = { cue: "files", offset: -0.3 } as const;
 
@@ -169,7 +169,7 @@ function ReviewSurface({
           data-tour-anchor="review-commit-push"
           className="flex h-6 items-center gap-1 rounded-md bg-text-primary px-2.5 text-3xs font-medium text-text-inverse"
         >
-          Commit &amp; Push
+          Commit &amp; push
         </span>
       </div>
     </div>

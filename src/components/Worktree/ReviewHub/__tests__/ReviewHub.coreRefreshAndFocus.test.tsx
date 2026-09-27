@@ -491,9 +491,9 @@ describe("ReviewHub", () => {
 
   it("preserves commit message during a background resync", async () => {
     render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-    await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+    await waitFor(() => screen.getByLabelText("Commit message"));
 
-    const textarea = screen.getByPlaceholderText("Commit message…");
+    const textarea = screen.getByLabelText("Commit message");
     fireEvent.change(textarea, { target: { value: "My commit message" } });
     expect((textarea as HTMLTextAreaElement).value).toBe("My commit message");
 
@@ -566,9 +566,9 @@ describe("ReviewHub", () => {
     const { rerender } = render(
       <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
     );
-    await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+    await waitFor(() => screen.getByLabelText("Commit message"));
 
-    const textarea = screen.getByPlaceholderText("Commit message…");
+    const textarea = screen.getByLabelText("Commit message");
     fireEvent.change(textarea, { target: { value: "draft message" } });
     expect((textarea as HTMLTextAreaElement).value).toBe("draft message");
 
@@ -576,7 +576,7 @@ describe("ReviewHub", () => {
     rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
     await waitFor(() => {
-      const ta = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const ta = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
       expect(ta.value).toBe("");
     });
   });
@@ -860,14 +860,14 @@ describe("ReviewHub", () => {
 
     it("does not show commit panel in base-branch mode", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
       const toggle = screen.getByRole("button", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
 
-      expect(screen.queryByPlaceholderText("Commit message…")).toBeNull();
+      expect(screen.queryByLabelText("Commit message")).toBeNull();
     });
 
     it("resets to working-tree mode when closed and reopened", async () => {
@@ -936,10 +936,10 @@ describe("ReviewHub", () => {
     it("commit textarea retains focus during background resync", async () => {
       const onClose = vi.fn();
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
       await act(async () => {});
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
       act(() => textarea.focus());
       expect(document.activeElement).toBe(textarea);
 

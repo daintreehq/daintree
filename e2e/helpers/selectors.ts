@@ -212,8 +212,11 @@ export const SEL = {
     // renders only in the grid presentation.
     close:
       '[data-testid="panel-dialog"]:has([data-testid="review-hub-content"]) [aria-label="Close dialog"]',
-    commitMessageInput: 'textarea[placeholder="Commit message…"]',
-    commitButton: (count: number) => `button:has-text("Commit (${count})")`,
+    commitMessageInput: '[data-testid="review-hub-commit-message"]',
+    // The staged count lives in the composer's status line, not the label; the
+    // primary carries it as data so a count assertion still pins the state.
+    commitButton: (count: number) =>
+      `[data-testid="review-hub-commit-primary"][data-staged-count="${count}"]:has-text("Commit")`,
     cleanState: 'text="Working tree clean"',
     stageButton: (path: string) => `[aria-label="Stage ${path}"]`,
     unstageButton: (path: string) => `[aria-label="Unstage ${path}"]`,
@@ -222,7 +225,8 @@ export const SEL = {
     fileListToggle: '[data-testid="review-hub-file-list-toggle"]',
     noStagedFiles: 'text="Nothing staged"',
     noUnstagedChanges: 'text="All changes staged"',
-    commitAndPushButton: (count: number) => `button:has-text("Commit & Push (${count})")`,
+    commitAndPushButton: (count: number) =>
+      `[data-testid="review-hub-commit-primary"][data-staged-count="${count}"]:has-text("Commit & push")`,
     fileDiffButton: (path: string) => `[aria-label="View diff: ${path}"]`,
     // CommitPanel push confirm dialog (rendered in a portal, locate on `window`).
     pushConfirmMessage: '[data-testid="commit-panel-push-confirm-message"]',

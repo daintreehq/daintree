@@ -13,14 +13,23 @@ const CHANGELOG_URL = "https://daintree.org/changelog";
 type UpdateStage = { version: string; downloaded: boolean };
 
 function DownloadProgress({ percent }: { percent: number }) {
-  const pct = Math.round(percent);
+  // The updater can overshoot 100 on its last tick; one clamped value feeds the
+  // label, the width and the ARIA range alike.
+  const pct = Number.isFinite(percent) ? Math.min(100, Math.max(0, Math.round(percent))) : 0;
   return (
     <div className="space-y-1">
       <span>{pct}% complete</span>
-      <div className="h-1 w-full rounded-full bg-tint/10 overflow-hidden">
+      <div
+        role="progressbar"
+        aria-label="Update download"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+        className="h-1 w-full rounded-full bg-tint/10 overflow-hidden"
+      >
         <div
           className="h-full rounded-full bg-text-secondary transition-[width] duration-300 ease-out"
-          style={{ width: `${percent}%` }}
+          style={{ width: `${pct}%` }}
         />
       </div>
     </div>

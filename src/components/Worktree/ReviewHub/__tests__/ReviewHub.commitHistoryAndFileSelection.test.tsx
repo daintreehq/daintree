@@ -517,9 +517,9 @@ describe("ReviewHub", () => {
   describe("commit message subject counter", () => {
     it("shows subject line length counter", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…");
+      const textarea = screen.getByLabelText("Commit message");
       fireEvent.change(textarea, {
         target: { value: "fix: resolve bug" },
       });
@@ -529,9 +529,9 @@ describe("ReviewHub", () => {
 
     it("counter reflects subject length past the 72-char limit", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…");
+      const textarea = screen.getByLabelText("Commit message");
       const longSubject = "x".repeat(85);
       fireEvent.change(textarea, { target: { value: longSubject } });
 
@@ -575,10 +575,9 @@ describe("ReviewHub", () => {
       });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const getTextarea = () =>
-        screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const getTextarea = () => screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       // Position cursor at 0 (empty textarea)
       focusTextareaAt(getTextarea(), 0);
@@ -638,10 +637,9 @@ describe("ReviewHub", () => {
       });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const getTextarea = () =>
-        screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const getTextarea = () => screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       focusTextareaAt(getTextarea(), 0);
       fireEvent.keyDown(getTextarea(), { key: "ArrowUp" });
@@ -673,9 +671,9 @@ describe("ReviewHub", () => {
       });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       // Type a draft first
       fireEvent.change(textarea, { target: { value: "my draft message" } });
@@ -694,9 +692,9 @@ describe("ReviewHub", () => {
 
     it("does not intercept ArrowUp when caret is not at position 0", async () => {
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       fireEvent.change(textarea, { target: { value: "some text" } });
       // Caret in middle of text
@@ -729,9 +727,9 @@ describe("ReviewHub", () => {
       });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       focusTextareaAt(textarea, 0);
       fireEvent.keyDown(textarea, { key: "ArrowUp" });
@@ -754,9 +752,9 @@ describe("ReviewHub", () => {
       listCommitsMock.mockResolvedValue({ items: [], hasMore: false, total: 0 });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       focusTextareaAt(textarea, 0);
       fireEvent.keyDown(textarea, { key: "ArrowUp" });
@@ -769,9 +767,9 @@ describe("ReviewHub", () => {
 
     it("ArrowDown does nothing when not in history mode", async () => {
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       fireEvent.change(textarea, { target: { value: "no history here" } });
       focusTextareaAt(textarea, 0);
@@ -783,9 +781,9 @@ describe("ReviewHub", () => {
 
     it("does not intercept ArrowUp with modifier keys", async () => {
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       focusTextareaAt(textarea, 0);
 

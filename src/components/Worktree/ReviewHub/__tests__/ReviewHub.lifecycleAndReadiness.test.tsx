@@ -557,8 +557,8 @@ describe("ReviewHub", () => {
           initialCommitMessage="fix(scope): from AI note"
         />
       );
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
       expect(textarea.value).toBe("fix(scope): from AI note");
     });
 
@@ -571,8 +571,8 @@ describe("ReviewHub", () => {
           initialCommitMessage="from AI"
         />
       );
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
       fireEvent.change(textarea, { target: { value: "human override" } });
       rerender(
         <ReviewHubContent

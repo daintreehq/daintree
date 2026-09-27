@@ -688,7 +688,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               >
                 {currentStage && (
                   <div
-                    className="h-full rounded-full bg-daintree-text/60 transition-[width] duration-150 ease-out"
+                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                     style={{ width: `${stagePercent(currentStage)}%` }}
                   />
                 )}

@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-27",
-  "total": 90,
-  "files": 41,
+  "total": 89,
+  "files": 40,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -1009,21 +1009,6 @@
       "evidence": "<Settings2> is an icon — the colour is an affordance, not prose"
     },
     {
-      "file": "src/components/Worktree/ReviewHub/CommitPanel.tsx",
-      "ordinal": 0,
-      "line": 383,
-      "start": 13803,
-      "end": 13824,
-      "token": "text-daintree-text/40",
-      "variants": "",
-      "step": 40,
-      "group": "src/components/Worktree/ReviewHub/CommitPanel.tsx#13757",
-      "branch": "13769F",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
       "file": "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
       "ordinal": 0,
       "line": 118,
@@ -1221,13 +1206,13 @@
     {
       "file": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
       "ordinal": 0,
-      "line": 1926,
-      "start": 79048,
-      "end": 79069,
+      "line": 1941,
+      "start": 79853,
+      "end": 79874,
       "token": "text-daintree-text/60",
       "variants": "",
       "step": 60,
-      "group": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx#78944",
+      "group": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx#79749",
       "branch": "",
       "decision": "keep",
       "category": "icon-affordance",
@@ -1236,13 +1221,13 @@
     {
       "file": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
       "ordinal": 1,
-      "line": 1945,
-      "start": 79830,
-      "end": 79851,
+      "line": 1960,
+      "start": 80635,
+      "end": 80656,
       "token": "text-daintree-text/60",
       "variants": "",
       "step": 60,
-      "group": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx#79726",
+      "group": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx#80531",
       "branch": "",
       "decision": "keep",
       "category": "icon-affordance",

@@ -129,6 +129,7 @@ vi.mock("@/components/ui/button", () => ({
     disabled,
     "aria-disabled": ariaDisabled,
     "aria-label": ariaLabel,
+    "aria-describedby": ariaDescribedBy,
     "data-testid": testId,
   }: {
     children: ReactNode;
@@ -139,6 +140,7 @@ vi.mock("@/components/ui/button", () => ({
     size?: string;
     className?: string;
     "aria-label"?: string;
+    "aria-describedby"?: string;
     "data-testid"?: string;
   }) => (
     <button
@@ -147,6 +149,7 @@ vi.mock("@/components/ui/button", () => ({
       disabled={disabled}
       aria-disabled={ariaDisabled}
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       data-testid={testId}
     >
       {children}
@@ -426,27 +429,27 @@ describe("ReviewHub", () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
       expect(screen.getByRole("button", { name: /^Commit$/i })).toBeDefined();
-      expect(screen.getByRole("button", { name: /Commit & Push \(1\)/i })).toBeDefined();
+      expect(screen.getByRole("button", { name: /^Commit & push$/i })).toBeDefined();
     });
 
     it("renders single Commit button when hasRemote is false", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      expect(screen.queryByRole("button", { name: /Commit & Push/i })).toBeNull();
-      expect(screen.getByRole("button", { name: /Commit \(1\)/i })).toBeDefined();
+      expect(screen.queryByRole("button", { name: /Commit & push/i })).toBeNull();
+      expect(screen.getByRole("button", { name: /^Commit$/i })).toBeDefined();
     });
 
     it("uses aria-disabled instead of native disabled on commit button when blocked", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: false }));
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const btn = screen.getByRole("button", { name: /Commit \(0\)/i });
+      const btn = screen.getByRole("button", { name: /^Commit$/i });
       expect(btn.getAttribute("aria-disabled")).toBe("true");
       expect(btn.hasAttribute("disabled")).toBe(false);
     });
@@ -455,44 +458,47 @@ describe("ReviewHub", () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: true }));
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
       const commitBtn = screen.getByRole("button", { name: /^Commit$/i });
-      const pushBtn = screen.getByRole("button", { name: /Commit & Push \(0\)/i });
+      const pushBtn = screen.getByRole("button", { name: /^Commit & push$/i });
       expect(commitBtn.getAttribute("aria-disabled")).toBe("true");
       expect(pushBtn.getAttribute("aria-disabled")).toBe("true");
     });
 
-    it("shows tooltip content when blocked and hasRemote is false", async () => {
-      getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: false }));
+    // The blocker has to be reachable without hovering: every action names the
+    // visible status line as its description, and that line says what is missing.
+    it.each([
+      { hasRemote: false, staged: [] as StagingStatus["staged"] },
+      { hasRemote: true, staged: [] as StagingStatus["staged"] },
+    ])(
+      "describes every blocked action with the visible blocker (hasRemote=$hasRemote)",
+      async ({ hasRemote, staged }) => {
+        getStagingStatusMock.mockResolvedValue(makeStatus({ staged, hasRemote }));
 
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByLabelText("Commit message"));
 
-      // The TooltipContent is mocked but the blocker list renders as ReactNode
-      // Since our Tooltip mock renders children, the tooltip content reveals via DOM
-      expect(screen.getByText("Cannot commit")).toBeDefined();
-    });
-
-    it("shows tooltip content when blocked and hasRemote is true", async () => {
-      getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: true }));
-
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
-
-      expect(screen.getAllByText("Cannot commit").length).toBeGreaterThan(0);
-    });
+        const status = screen.getByTestId("review-hub-commit-status");
+        expect(status.textContent).toMatch(/stage files/i);
+        const actions = screen.getAllByRole("button", { name: /^Commit( & push)?$/i });
+        expect(actions.length).toBe(hasRemote ? 2 : 1);
+        for (const action of actions) {
+          expect(action.getAttribute("aria-describedby")).toBe(status.id);
+        }
+      }
+    );
 
     it("reentrancy guard prevents double-commit via rapid clicks", async () => {
       commitMock.mockResolvedValue({ hash: "abc", summary: "ok" });
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…");
+      const textarea = screen.getByLabelText("Commit message");
       fireEvent.change(textarea, { target: { value: "feat: test double click" } });
 
-      const btn = screen.getByRole("button", { name: /Commit \(1\)/i });
+      const btn = screen.getByRole("button", { name: /^Commit$/i });
       fireEvent.click(btn);
       fireEvent.click(btn);
 
@@ -503,9 +509,9 @@ describe("ReviewHub", () => {
       commitMock.mockResolvedValue({ hash: "abc", summary: "ok" });
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…");
+      const textarea = screen.getByLabelText("Commit message");
       fireEvent.change(textarea, { target: { value: "feat: keyboard shortcut" } });
       fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
@@ -517,9 +523,9 @@ describe("ReviewHub", () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…");
+      const textarea = screen.getByLabelText("Commit message");
       fireEvent.change(textarea, { target: { value: "feat: shift shortcut" } });
       fireEvent.keyDown(textarea, { key: "Enter", metaKey: true, shiftKey: true });
 
@@ -538,12 +544,12 @@ describe("ReviewHub", () => {
 
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…");
+      const textarea = screen.getByLabelText("Commit message");
       fireEvent.change(textarea, { target: { value: "feat: do the thing" } });
 
-      const commitPushBtn = screen.getByRole("button", { name: /Commit & Push/i });
+      const commitPushBtn = screen.getByRole("button", { name: /Commit & push/i });
       await act(async () => {
         fireEvent.click(commitPushBtn);
         await Promise.resolve();
@@ -1072,13 +1078,13 @@ describe("ReviewHub", () => {
       const { rerender } = render(
         <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      fireEvent.change(screen.getByPlaceholderText("Commit message…"), {
+      fireEvent.change(screen.getByLabelText("Commit message"), {
         target: { value: "feat: thing" },
       });
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: /Commit & Push/i }));
+        fireEvent.click(screen.getByRole("button", { name: /Commit & push/i }));
         await Promise.resolve();
       });
       await screen.findByTestId("review-hub-push-error");
@@ -1089,6 +1095,59 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
     });
 
+    it("keeps the composer on screen through a push after the commit empties the tree", async () => {
+      let finishPush: () => void = () => {};
+      pushMock.mockImplementation(() => new Promise<void>((resolve) => (finishPush = resolve)));
+      usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      fireEvent.change(screen.getByLabelText("Commit message"), {
+        target: { value: "feat: thing" },
+      });
+
+      // The commit leaves nothing behind: the refresh that precedes the push reads
+      // a clean tree.
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ hasRemote: true, staged: [], unstaged: [] })
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Commit & push/i }));
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(pushMock).toHaveBeenCalled());
+
+      expect(screen.getByTestId("review-hub-commit-panel")).toBeTruthy();
+      await act(async () => finishPush());
+      await waitFor(() => expect(screen.queryByTestId("review-hub-commit-panel")).toBeNull());
+    });
+
+    it("announces a completed push even after the composer has gone", async () => {
+      usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      fireEvent.change(screen.getByLabelText("Commit message"), {
+        target: { value: "feat: thing" },
+      });
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ hasRemote: true, staged: [], unstaged: [] })
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Commit & push/i }));
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-push-announcement").textContent).toMatch(/^Push/)
+      );
+      expect(screen.getByTestId("review-hub-push-announcement").getAttribute("role")).toBe(
+        "status"
+      );
+    });
+
     it("does not call push when commit itself fails", async () => {
       commitMock.mockRejectedValueOnce(new Error("nothing to commit"));
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
@@ -1097,14 +1156,14 @@ describe("ReviewHub", () => {
       usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      fireEvent.change(screen.getByPlaceholderText("Commit message…"), {
+      fireEvent.change(screen.getByLabelText("Commit message"), {
         target: { value: "feat: thing" },
       });
 
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: /Commit & Push/i }));
+        fireEvent.click(screen.getByRole("button", { name: /Commit & push/i }));
         await Promise.resolve();
       });
 

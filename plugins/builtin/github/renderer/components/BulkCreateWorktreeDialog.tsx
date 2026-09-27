@@ -1334,9 +1334,16 @@ export function BulkCreateWorktreeDialog({
 
             {/* Progress bar + summary */}
             <div className="space-y-2">
-              <div className="h-2 rounded-full bg-overlay-soft overflow-hidden">
+              <div
+                role="progressbar"
+                aria-label="Creating worktrees"
+                aria-valuemin={0}
+                aria-valuemax={progress.items.size}
+                aria-valuenow={processedCount}
+                className="h-2 rounded-full bg-overlay-soft overflow-hidden"
+              >
                 <div
-                  className="h-full rounded-full bg-status-info transition-[width] duration-300"
+                  className="h-full rounded-full bg-text-secondary transition-[width] duration-300"
                   style={{
                     width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
                   }}
