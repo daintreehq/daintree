@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-27",
-  "total": 115,
-  "files": 49,
+  "total": 113,
+  "files": 48,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -163,36 +163,6 @@
       "variants": "",
       "step": 40,
       "group": "src/components/Commands/CommandPickerHost.tsx#3798",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<Spinner> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/DevPreview/DevPreviewLoadingState.tsx",
-      "ordinal": 0,
-      "line": 41,
-      "start": 1294,
-      "end": 1315,
-      "token": "text-daintree-text/45",
-      "variants": "",
-      "step": 45,
-      "group": "src/components/DevPreview/DevPreviewLoadingState.tsx#1282",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<Spinner> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/DevPreview/DevPreviewLoadingState.tsx",
-      "ordinal": 1,
-      "line": 83,
-      "start": 2434,
-      "end": 2455,
-      "token": "text-daintree-text/45",
-      "variants": "",
-      "step": 45,
-      "group": "src/components/DevPreview/DevPreviewLoadingState.tsx#2422",
       "branch": "",
       "decision": "keep",
       "category": "icon-affordance",

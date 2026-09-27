@@ -68,6 +68,20 @@ export const EMPTY_STATE_FIXTURES = {
     candidates: RUNNERS,
     width: 340,
   },
+  "detected-long-command": {
+    status: "stopped",
+    isUnconfigured: true,
+    width: 340,
+    candidates: [
+      {
+        id: "turbo-dev",
+        name: "dev",
+        command: "pnpm --filter @acme/storefront exec next dev --turbopack --port 4310",
+        icon: "pnpm",
+      },
+      ...RUNNERS,
+    ],
+  },
   "manual-empty": { status: "stopped", isUnconfigured: true },
   "manual-typed": { status: "stopped", isUnconfigured: true, drive: "type-command" },
   "manual-saving": {

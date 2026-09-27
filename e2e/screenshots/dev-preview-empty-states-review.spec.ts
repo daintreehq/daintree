@@ -69,7 +69,10 @@ const FREEZE_CSS = `
 function sentinel(spec: EmptyStateFixture): RegExp | null {
   if (spec.error) return new RegExp(spec.error.module ?? spec.error.port ?? "");
   if (spec.status === "restored-stopped") return /pnpm dev --port 5174/;
-  if (spec.isUnconfigured && spec.candidates?.length) return /npm run dev/;
+  const first = spec.candidates?.[0];
+  if (spec.isUnconfigured && first) {
+    return new RegExp(first.command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  }
   return null;
 }
 

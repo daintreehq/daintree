@@ -126,7 +126,7 @@ describe("DevPreviewEmptyStates", () => {
         {...baseProps({ status: "restored-stopped", currentUrl: "", devCommand: "npm run dev" })}
       />
     );
-    expect(screen.getByText("Dev server was running")).toBeTruthy();
+    expect(screen.getByText("Restart the dev server")).toBeTruthy();
     expect(screen.getByText("npm run dev")).toBeTruthy();
     expect(screen.getByRole("button", { name: /restart dev server/i })).toBeTruthy();
   });
@@ -268,6 +268,28 @@ describe("DevPreviewEmptyStates — interaction contract", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /retry/i }));
     expect(handleSaveCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces Run with the failure's Retry, so a failed save has one commit action", () => {
+    const failures = [
+      { ...unconfiguredDetected, autoDetectFailedCommand: "npm run dev" },
+      {
+        isUnconfigured: true,
+        currentUrl: "",
+        status: "stopped" as const,
+        commandInput: "npm run dev",
+        saveCommandFailed: true,
+      },
+    ];
+    for (const state of failures) {
+      const { unmount } = render(<DevPreviewEmptyStates {...baseProps(state)} />);
+      expect(
+        screen.queryByRole("button", { name: /^run( npm run dev)?$/i }),
+        JSON.stringify(state)
+      ).toBeNull();
+      expect(screen.getAllByRole("button", { name: /retry/i })).toHaveLength(1);
+      unmount();
+    }
   });
 
   it("shows the command that failed, not the first candidate, beside the retry", () => {

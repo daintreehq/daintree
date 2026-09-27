@@ -57,10 +57,17 @@ export function useDevPreviewCommandConfig({
   const activeCandidate = candidates.find((c) => c.command.trim() === devCommand.trim());
   const headerLabel = activeCandidate?.name || devCommand;
 
-  const [commandInput, setCommandInput] = useState("");
+  const [commandInput, setCommandInputState] = useState("");
   const savingRef = useRef(false);
   const [isSavingCommand, setIsSavingCommand] = useState(false);
   const [saveCommandFailed, setSaveCommandFailed] = useState(false);
+
+  // A failure belongs to the command that failed; editing the field makes it a
+  // different command, so the Retry for the old one goes away with it.
+  const setCommandInput = useCallback((value: string) => {
+    setCommandInputState(value);
+    setSaveCommandFailed(false);
+  }, []);
 
   const handleAutoDetect = useCallback(
     async (candidateCommand?: string): Promise<boolean> => {

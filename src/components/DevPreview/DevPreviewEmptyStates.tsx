@@ -106,13 +106,13 @@ function PaneState({
 }
 
 /** A command exactly as it will run, with an optional quieter label before it. */
+// Wraps rather than truncates: the point of showing the command is that all of
+// it can be read before it runs.
 function CommandChip({ label, command }: { label?: string; command: string }) {
   return (
-    <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel px-3 py-1.5">
+    <div className="inline-flex min-w-0 max-w-full items-baseline gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel px-3 py-1.5 text-left">
       {label && <span className="shrink-0 text-xs text-text-secondary">{label}</span>}
-      <code className="min-w-0 truncate font-mono text-xs text-text-primary" title={command}>
-        {command}
-      </code>
+      <code className="min-w-0 font-mono text-xs text-text-primary break-all">{command}</code>
     </div>
   );
 }
@@ -277,7 +277,9 @@ export function DevPreviewEmptyStates({
                 <DropdownMenuContent align="center" sideOffset={4} className="w-72 p-1">
                   {candidates.map((c) => (
                     <DropdownMenuItem key={c.id} onSelect={() => handlePickCandidate(c)}>
-                      <code className="min-w-0 flex-1 truncate font-mono text-xs">{c.command}</code>
+                      <code className="min-w-0 flex-1 font-mono text-xs break-all">
+                        {c.command}
+                      </code>
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -315,17 +317,7 @@ export function DevPreviewEmptyStates({
               />
               {showInputError && <FieldError>{commandInputError}</FieldError>}
             </Field>
-            <Button
-              type="submit"
-              variant="contrast"
-              className="self-center"
-              loading={isSavingCommand}
-              disabled={!commandInput.trim() || commandInputError !== null}
-            >
-              <Play />
-              Run
-            </Button>
-            {saveCommandFailed && (
+            {saveCommandFailed ? (
               <InlineStatusBanner
                 icon={XCircle}
                 severity="error"
@@ -340,6 +332,17 @@ export function DevPreviewEmptyStates({
                   onClick: () => void handleSaveCommand(),
                 }}
               />
+            ) : (
+              <Button
+                type="submit"
+                variant="contrast"
+                className="self-center"
+                loading={isSavingCommand}
+                disabled={!commandInput.trim() || commandInputError !== null}
+              >
+                <Play />
+                Run
+              </Button>
             )}
           </form>
           <SettingsButton onClick={handleOpenSettings} />
@@ -350,8 +353,8 @@ export function DevPreviewEmptyStates({
     if (status === "restored-stopped") {
       return (
         <PaneState
-          title="Dev server was running"
-          description="Daintree closed while it was running, so it wasn't reattached."
+          title="Restart the dev server"
+          description="It was running when Daintree closed, and wasn't reattached."
         >
           {devCommand && <CommandChip command={devCommand} />}
           <Button onClick={handleStartFromRestored} variant="contrast">
@@ -368,8 +371,8 @@ export function DevPreviewEmptyStates({
       }
       return (
         <PaneState
-          title="Dev server isn't running"
-          description="Start it to preview your site here."
+          title="Start the dev server"
+          description="It isn't running. Start it to preview your site here."
         >
           <CommandChip command={devCommand} />
           <Button onClick={handleRetry} variant="contrast">
