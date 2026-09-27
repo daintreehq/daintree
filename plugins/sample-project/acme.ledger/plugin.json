@@ -7,10 +7,16 @@
   "authors": [{ "name": "Daintree", "role": "Maintainer" }],
   "main": "dist/index.mjs",
   "engines": {
-    "daintree": ">=0.36.1"
+    "daintree": ">=0.39.0"
   },
   "capabilities": ["mcp:expose", "fs:project-write"],
   "contributes": {
+    "databases": [
+      {
+        "id": "ledger",
+        "description": "Household transactions, amounts in integer cents. Agents may query and write it with sqlite3; see AGENTS.md."
+      }
+    ],
     "agentMcp": [
       {
         "id": "data",

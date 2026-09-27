@@ -160,7 +160,7 @@ export async function activate(host: PluginHostApi) {
 }
 ```
 
-`plugins/sample-project/acme.ledger` is a working project plugin built on this surface. Copy its roster and argument checks; its storage opens `node:sqlite` by hand because it predates [`host.db`](./host-api.md#db--host-managed-sqlite), which a new plugin should use instead.
+`plugins/sample-project/acme.ledger` is a working project plugin built on this surface: a roster over a database declared in `contributes.databases` and opened with [`host.db`](./host-api.md#db--host-managed-sqlite), with an `AGENTS.md` data contract and a tool for the one write rule the schema cannot hold. Copy its roster, argument checks and storage.
 
 What the host does with the roster:
 
