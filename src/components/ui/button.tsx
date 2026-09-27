@@ -98,7 +98,7 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
   /**
-   * When true, overlays a centered spinner and dims the label without swapping
+   * When true, overlays a centered spinner and hides the label without swapping
    * it (preserving width + accessible name). Sets `aria-busy`/`aria-disabled`
    * and blocks clicks/keyboard activation without using the native `disabled`
    * attribute, so focus is preserved.
@@ -173,7 +173,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       >
         {spinner}
         {/* asChild + loading: overlay renders alongside the slotted child;
-            label dimming is intentionally not applied to the asChild path
+            label hiding is intentionally not applied to the asChild path
             (would require cloning the consumer's element). No call site
             combines asChild with loading. */}
         {asChild ? (
@@ -182,8 +182,10 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
           // `display: contents` when not loading so the wrapper is transparent
           // to layout — children are flex items of the <button> directly, which
           // restores caller patterns like `w-full justify-between` + `truncate`.
-          // When loading, the wrapper becomes a real flex box so `opacity-30`
-          // can dim the label uniformly behind the absolute spinner overlay.
+          // When loading, the wrapper becomes a real flex box so `opacity-0` can
+          // hide the label behind the absolute spinner overlay while it still
+          // holds the width. A dimmed label under the spinner collided with it
+          // on short labels ("Run" read as a spinner over its first letter).
           <span
             data-slot="button-content"
             className={
@@ -191,7 +193,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
                 ? cn(
                     "inline-flex items-center justify-center",
                     GAP_CLASS_MAP[resolvedSize],
-                    "opacity-30 transition-opacity duration-150 ease-out"
+                    "opacity-0 transition-opacity duration-150 ease-out"
                   )
                 : "contents"
             }

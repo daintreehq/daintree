@@ -22,7 +22,7 @@ describe("Button loading state", () => {
     expect(button.hasAttribute("data-loading")).toBe(false);
     expect(container.querySelector('[data-slot="button-spinner"]')).toBeNull();
     const content = container.querySelector('[data-slot="button-content"]')!;
-    expect(content.className).not.toContain("opacity-30");
+    expect(content.className).not.toContain("opacity-0");
   });
 
   // Regression: #8843 — the content wrapper must be transparent to layout when
@@ -58,7 +58,8 @@ describe("Button loading state", () => {
     expect(spinner.querySelector("svg")).toBeTruthy();
 
     const content = container.querySelector('[data-slot="button-content"]')!;
-    expect(content.className).toContain("opacity-30");
+    // Hidden, not removed: the label keeps the button's width and its name.
+    expect(content.className).toContain("opacity-0");
     expect(content.textContent).toBe("Save");
   });
 
@@ -147,7 +148,7 @@ describe("Button loading state", () => {
     expect(button.hasAttribute("aria-disabled")).toBe(false);
     expect(button.hasAttribute("data-loading")).toBe(false);
     const content = container.querySelector('[data-slot="button-content"]')!;
-    expect(content.className).not.toContain("opacity-30");
+    expect(content.className).not.toContain("opacity-0");
     // Wrapper must return to display:contents so caller layout (truncate,
     // justify-between) keeps working after loading resolves.
     expect(content.className).toBe("contents");
