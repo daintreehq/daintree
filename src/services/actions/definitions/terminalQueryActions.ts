@@ -803,7 +803,7 @@ export function registerTerminalQueryActions(
     id: "terminal.readLastMessageOwned",
     title: "Read owned agent's last message",
     description:
-      "Read the last reply an agent wrote to its transcript, plus unanswered tool calls such as a question and its options. Agents this connection launched or was handed; for Daintree's assistant, any in its project. Claude Code only. Not proof the agent is waiting; permission prompts show only on screen.",
+      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed; Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
     category: "terminal",
     kind: "query",
     danger: "safe",
