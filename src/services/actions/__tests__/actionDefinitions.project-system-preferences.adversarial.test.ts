@@ -657,9 +657,9 @@ describe("project action hardening", () => {
     );
 
     expect(result).toEqual({ ok: true, result: undefined });
-    const saved = mocks.projectClient.saveSettings.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(saved.daintreeMcpSkipConfirmations).toBeUndefined();
-    expect(saved.devServerCommand).toBe("vite");
+    const saved: unknown = mocks.projectClient.saveSettings.mock.calls[0]?.[1];
+    expect(saved).not.toHaveProperty("daintreeMcpSkipConfirmations");
+    expect(saved).toHaveProperty("devServerCommand", "vite");
   });
 
   it("project.saveSettings cannot clear a user's daintreeMcpSkipConfirmations and keeps it through unrelated writes", async () => {
@@ -681,9 +681,9 @@ describe("project action hardening", () => {
     );
 
     expect(result).toEqual({ ok: true, result: undefined });
-    const saved = mocks.projectClient.saveSettings.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(saved.daintreeMcpSkipConfirmations).toBe(true);
-    expect(saved.devServerCommand).toBe("vite");
+    const saved: unknown = mocks.projectClient.saveSettings.mock.calls[0]?.[1];
+    expect(saved).toHaveProperty("daintreeMcpSkipConfirmations", true);
+    expect(saved).toHaveProperty("devServerCommand", "vite");
   });
 
   it("project.muteNotifications surfaces saveSettings failures as { ok: false }", async () => {

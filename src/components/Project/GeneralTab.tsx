@@ -729,9 +729,7 @@ export function GeneralTab({
               title="Skip confirmations"
               subtitle="Agents run everything Full allows without asking you first, deletes and teardowns included. A force delete that would discard changes still asks you to type its name."
               isEnabled={daintreeMcpSkipConfirmations}
-              onChange={() =>
-                onDaintreeMcpSkipConfirmationsChange(!daintreeMcpSkipConfirmations)
-              }
+              onChange={() => onDaintreeMcpSkipConfirmationsChange(!daintreeMcpSkipConfirmations)}
             />
           </SettingsDependents>
         </SettingsGroup>

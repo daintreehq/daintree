@@ -2054,8 +2054,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       );
 
       const binding = mockRegisterPaneWorkspaceBinding.mock.calls.at(-1)?.[1] as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       expect(binding).toBeDefined();
       expect(binding?.skipConfirmations === true).toBe(expected);
     }

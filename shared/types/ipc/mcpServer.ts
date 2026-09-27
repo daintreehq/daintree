@@ -81,11 +81,7 @@ export type McpApprovalScope = "once" | "session";
  * - `native-grant`: a native automation grant covered it (#10648).
  */
 export type McpDispatchAuthorization =
-  | "tier"
-  | "project-setting"
-  | "user"
-  | "session-grant"
-  | "native-grant";
+  "tier" | "project-setting" | "user" | "session-grant" | "native-grant";
 
 /**
  * Audit-record severity tier. Derived from the dispatch result at record-write

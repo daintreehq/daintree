@@ -2819,9 +2819,9 @@ describe("pane skip-confirmations setting (#12876)", () => {
     expect(
       buildTargetPolicy(teardown, snapshot("full", { paneSkipConfirmations: false }))
     ).toMatchObject({ requiresConfirmation: true });
-    expect(
-      buildTargetPolicy(teardown, snapshot("full", { paneApproval: false }))
-    ).toMatchObject({ requiresConfirmation: true });
+    expect(buildTargetPolicy(teardown, snapshot("full", { paneApproval: false }))).toMatchObject({
+      requiresConfirmation: true,
+    });
   });
 
   it("never lets an above-tier call skip its approval", () => {
