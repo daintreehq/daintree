@@ -252,6 +252,15 @@ describe("help prompt outputs", () => {
   });
 
   describe("Claude-only content stays in CLAUDE.md", () => {
+    // The deny list covers only the roots Daintree knows about, so the prompt
+    // states the rule instead of claiming a blanket deny (#12879).
+    it("CLAUDE.md states the write rule instead of claiming every edit is denied", () => {
+      const tools = section(CLAUDE, "## Local Tools");
+      expect(tools).toMatch(/Write only in the scratch folder/);
+      expect(tools).toMatch(/leave repository changes to launched agents/);
+      expect(CLAUDE).not.toMatch(/forge writes are denied/);
+    });
+
     it("CLAUDE.md contains the Tier Model and terminal.getStatus recipe", () => {
       expect(CLAUDE).toContain("## Tier Model");
       expect(CLAUDE).toContain("## Watching Agent Terminals");

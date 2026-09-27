@@ -143,7 +143,12 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
   };
 });
 
-import { HelpSessionService, codexTrustArgs, projectRuleRoots } from "../HelpSessionService.js";
+import {
+  HelpSessionService,
+  codexTrustArgs,
+  projectRuleRoots,
+  withoutProtectedAncestors,
+} from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
@@ -762,6 +767,77 @@ describe("HelpSessionService", () => {
     expect(settings.permissions.deny).toContain("Edit(**)");
   });
 
+  it("denies edits in every known project and worktree without granting reads there (#12879)", async () => {
+    const reader = vi.fn(async () => [
+      "/tmp/project",
+      "/work/other-project",
+      "/work/project-worktrees/fix",
+    ]);
+    service.setKnownProjectRootsReader(reader);
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(reader).toHaveBeenCalledWith("/tmp/project");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    expect(deny).toContain("Edit(**)");
+    expect(deny).toContain("Edit(//work/other-project/**)");
+    expect(deny).toContain("Edit(//work/project-worktrees/fix/**)");
+    expect(deny.filter((rule) => rule === "Edit(//tmp/project/**)")).toHaveLength(1);
+    expect(settings.permissions.allow).not.toContain("Read(//work/other-project/**)");
+    expect(settings.permissions.additionalDirectories).toEqual(["/tmp/project"]);
+  });
+
+  it("never denies edits over the assistant's own scratch and session folders", async () => {
+    service.setKnownProjectRootsReader(async () => [tmpRoot, userData, "/work/other-project"]);
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    expect(deny).toContain("Edit(//work/other-project/**)");
+    for (const covering of [tmpRoot, userData, await fs.realpath(tmpRoot)]) {
+      expect(deny).not.toContain(`Edit(/${covering}/**)`);
+    }
+  });
+
+  it("keeps the served project's deny when the known-roots reader fails", async () => {
+    service.setKnownProjectRootsReader(async () => {
+      throw new Error("sqlite is gone");
+    });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    expect(settings.permissions.deny).toContain("Edit(//tmp/project/**)");
+  });
+
+  it("only gathers known roots for Claude sessions", async () => {
+    const reader = vi.fn(async () => ["/work/other-project"]);
+    service.setKnownProjectRootsReader(reader);
+
+    await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it("drops roots that equal or contain a protected folder, but not prefix neighbours", async () => {
+    await expect(
+      withoutProtectedAncestors(
+        ["/data", "/data/app", "/data/app-sibling", "/data/app/help-sessions/x", "/elsewhere"],
+        ["/data/app/help-sessions"]
+      )
+    ).resolves.toEqual(["/data/app-sibling", "/data/app/help-sessions/x", "/elsewhere"]);
+  });
+
   it("writes project rules as literal paths, escaping glob characters", async () => {
     await expect(projectRuleRoots("/work/repo[1]/*", "darwin")).resolves.toEqual([
       "//work/repo\\[1\\]/\\*",
@@ -798,8 +874,8 @@ describe("HelpSessionService", () => {
     expect(settings.permissions.allow).toContain("Bash(gh *)");
     expect(settings.permissions.allow).toContain("Bash(glab *)");
     expect(settings.permissions.allow).toContain("Bash(tea *)");
-    // All destructive write paths stay hard-blocked — a partial drop of
-    // this list must fail the test, not slip through.
+    // The bundled forge creates, merges and repo deletes stay denied — a
+    // partial drop of this list must fail the test, not slip through.
     for (const denied of [
       "Bash(gh issue create*)",
       "Bash(gh pr create*)",

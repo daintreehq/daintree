@@ -1196,6 +1196,11 @@ export async function initGlobalServices(
         () => getCliAvailabilityServiceRef()?.getAvailability() ?? null
       );
     });
+    helpSessionService.setKnownProjectRootsReader(async (projectPath) => {
+      const { readHelpSessionKnownRoots } =
+        await import("../services/helpSessionProjectMetadataReader.js");
+      return readHelpSessionKnownRoots(projectPath);
+    });
 
     // Arm the periodic orphan-bearer sweep (#10698): a defense-in-depth bound
     // that revokes provisional session tokens minted by a launch that hung and
