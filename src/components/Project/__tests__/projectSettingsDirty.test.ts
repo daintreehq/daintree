@@ -191,6 +191,43 @@ describe("projectSettingsDirty", () => {
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(true);
     });
 
+    it("should detect a flag-only daintreeMcpSkipConfirmations change", () => {
+      const args = [
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+      ] as const;
+      const make = (skip: boolean) =>
+        createProjectSettingsSnapshot(
+          ...args,
+          "none",
+          "",
+          undefined,
+          undefined,
+          "",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          true,
+          "full",
+          null,
+          skip
+        );
+      expect(make(true).daintreeMcpSkipConfirmations).toBe(true);
+      expect(areSnapshotsEqual(make(false), make(true))).toBe(false);
+      expect(areSnapshotsEqual(make(true), make(true))).toBe(true);
+    });
+
     it("should detect changed name", () => {
       const snapshot2 = createProjectSettingsSnapshot(
         "Different Project",

@@ -723,11 +723,11 @@ export function GeneralTab({
           </fieldset>
           <SettingsDependents
             disabled={daintreeMcpTier !== "full"}
-            reason="Select Full to skip confirmations"
+            reason="Applies only at Full. Select Full to use it."
           >
             <SettingsSwitchCard
               title="Skip confirmations"
-              subtitle="Agents run the deletes and teardowns Full allows without asking you. A force delete that would discard changes still asks you to type its name."
+              subtitle="Agents run everything Full allows without asking you first, deletes and teardowns included. A force delete that would discard changes still asks you to type its name."
               isEnabled={daintreeMcpSkipConfirmations}
               onChange={() =>
                 onDaintreeMcpSkipConfirmationsChange(!daintreeMcpSkipConfirmations)

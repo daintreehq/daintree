@@ -157,6 +157,20 @@ describe("decode", () => {
     expect(second.settings.daintreeMcpSkipConfirmations).toBe(true);
   });
 
+  it("round-trips an explicit daintreeMcpSkipConfirmations: true through encode", () => {
+    const first = decode({
+      runCommands: [],
+      daintreeMcpTier: "core",
+      daintreeMcpSkipConfirmations: true,
+    });
+    if (!first.ok) throw new Error("expected ok");
+    const envelope = encodeEnvelope(first.settings);
+    expect(envelope.daintreeMcpSkipConfirmations).toBe(true);
+    const second = decode(JSON.parse(JSON.stringify(envelope)));
+    if (!second.ok) throw new Error("expected ok");
+    expect(second.settings.daintreeMcpSkipConfirmations).toBe(true);
+  });
+
   it("stays off after a system project's opt-out is saved", () => {
     const first = decode({ runCommands: [], daintreeMcpTier: "system" });
     if (!first.ok) throw new Error("expected ok");
