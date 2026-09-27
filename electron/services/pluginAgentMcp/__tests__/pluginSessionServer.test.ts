@@ -82,6 +82,7 @@ async function connect(
     /** Registers the host's database roster with this invoker. */
     databaseInvoke?: AgentMcpToolInvoker;
     activation?: "fails" | "registers-nothing";
+    isCallerServable?: () => boolean;
   } = {}
 ): Promise<Harness> {
   const registry = new AgentMcpEndpointRegistry();
@@ -121,6 +122,9 @@ async function connect(
     ...(options.callTimeoutMs !== undefined ? { callTimeoutMs: options.callTimeoutMs } : {}),
     ...(options.maxResultBytes !== undefined ? { maxResultBytes: options.maxResultBytes } : {}),
     ...(options.rosterWaitMs !== undefined ? { rosterWaitMs: options.rosterWaitMs } : {}),
+    ...(options.isCallerServable !== undefined
+      ? { isCallerServable: options.isCallerServable }
+      : {}),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -169,6 +173,22 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe("createPluginSessionServer", () => {
+  it("refuses to dispatch while the session's credential is not servable", async () => {
+    const invoke = vi.fn(async () => "ok");
+    let servable = false;
+    const { client } = await connect(invoke, { isCallerServable: () => servable });
+
+    const refused = await client.callTool({ name: "lookup", arguments: {} });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/reloading/);
+    expect(invoke).not.toHaveBeenCalled();
+
+    servable = true;
+    const served = await client.callTool({ name: "lookup", arguments: {} });
+    expect(served.isError).toBeUndefined();
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
   it("advertises tools only, with no instructions", async () => {
     const { client } = await connect(vi.fn());
     expect(Object.keys(client.getServerCapabilities() ?? {})).toEqual(["tools"]);

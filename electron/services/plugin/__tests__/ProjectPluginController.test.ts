@@ -73,6 +73,7 @@ function makeHarness(): Harness {
     })),
     loadProjectPlugin: vi.fn(async () => true),
     unloadProjectPlugin: vi.fn(),
+    settleProjectPluginReload: vi.fn(),
     purgeConsentForInstance: vi.fn(),
     listGlobalPluginIds: vi.fn(() => new Set<string>(["daintree.github"])),
     getPluginLoadError: vi.fn((_instanceKey: string) => loadErrors.get(_instanceKey)),
@@ -950,8 +951,94 @@ describe("hot-reload hook", () => {
     await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
 
     const instanceKey = makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard");
-    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(instanceKey);
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(instanceKey, { reload: true });
     expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(2);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
+    // Settled once, after the reload's own load ran, as kept.
+    expect(h.deps.settleProjectPluginReload).toHaveBeenCalledExactlyOnceWith(instanceKey, true);
+    expect(h.deps.settleProjectPluginReload.mock.invocationCallOrder[0]).toBeGreaterThan(
+      h.deps.loadProjectPlugin.mock.invocationCallOrder[1]!
+    );
+  });
+
+  it("settles a reload whose plugin never comes back, and one whose open pass throws", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    const instanceKey = makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard");
+
+    h.setDiscovery(ROOT_A, []);
+    await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
+    expect(h.deps.settleProjectPluginReload).toHaveBeenCalledExactlyOnceWith(instanceKey, false);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.deps.discover.mockRejectedValueOnce(new Error("scan failed"));
+    await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
+    expect(h.deps.settleProjectPluginReload).toHaveBeenCalledTimes(2);
+    expect(h.deps.settleProjectPluginReload).toHaveBeenLastCalledWith(instanceKey, false);
+  });
+
+  it("settles as not kept when a close overtakes the reload, even though the load ran", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    const instanceKey = makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard");
+
+    let releaseLoad!: () => void;
+    h.deps.loadProjectPlugin.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseLoad = () => resolve(true);
+        })
+    );
+    const reloading = h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
+    await vi.waitFor(() => expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(2));
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    releaseLoad();
+    await reloading;
+    await closing;
+
+    expect(h.deps.settleProjectPluginReload).toHaveBeenCalledExactlyOnceWith(instanceKey, false);
+  });
+
+  it("settles nothing for an id that was not loaded", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.missing"]);
+
+    expect(h.deps.settleProjectPluginReload).not.toHaveBeenCalled();
+  });
+
+  it("whenSettled waits for queued work, including work queued while waiting", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    let releaseScan!: () => void;
+    h.deps.discover.mockImplementationOnce(
+      async () =>
+        new Promise<ProjectPluginDiscoveryResult>((resolve) => {
+          releaseScan = () => resolve({ root: "/x", plugins: [discovered("acme.dashboard")] });
+        })
+    );
+
+    await h.controller.whenSettled(PROJECT_B);
+    expect(h.controller.hasQueuedWork(PROJECT_A)).toBe(false);
+    const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    let settled = false;
+    const waiting = h.controller.whenSettled(PROJECT_A).then(() => {
+      settled = true;
+    });
+    const reopening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.hasQueuedWork(PROJECT_A)).toBe(true);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseScan();
+    await waiting;
+    await opening;
+    await reopening;
     expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
   });
 
@@ -965,7 +1052,8 @@ describe("hot-reload hook", () => {
 
     expect(h.deps.unloadProjectPlugin).toHaveBeenCalledTimes(1);
     expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(
-      makeProjectPluginInstanceKey(PROJECT_A, "acme.deploy")
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.deploy"),
+      { reload: true }
     );
     expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(3);
   });

@@ -225,6 +225,7 @@ import { buildCommandLaunchShell } from "./commandLaunch.js";
 // store read and one small file, and an empty answer — every project with no
 // plugin tools on — keeps the launch off the lazy PluginService load entirely.
 const PLUGIN_INIT_WAIT_MS = 5000;
+const PROJECT_PLUGINS_WAIT_MS = 5000;
 
 async function resolvePluginMcpServers(
   projectId: string,
@@ -249,6 +250,24 @@ async function resolvePluginMcpServers(
       `[TerminalSpawn] Plugin service not ready after ${PLUGIN_INIT_WAIT_MS}ms; launching without plugin MCP servers`
     );
     return [];
+  }
+  // Project plugins load on their own fire-and-forget path from the project
+  // switch, so a pane restored at startup can get here while its project's
+  // plugins are still loading, or before they have started. A timeout still
+  // launches, with whatever has loaded by then.
+  let projectPluginsReady = false;
+  try {
+    projectPluginsReady = await pluginService.waitForProjectPlugins(
+      projectId,
+      PROJECT_PLUGINS_WAIT_MS
+    );
+  } catch (err) {
+    console.warn("[TerminalSpawn] Waiting for project plugins failed:", err);
+  }
+  if (!projectPluginsReady) {
+    console.warn(
+      `[TerminalSpawn] Project plugins not settled after ${PROJECT_PLUGINS_WAIT_MS}ms; launching with the plugin MCP servers loaded so far`
+    );
   }
   const declared = listDeclaredAgentMcpPlugins(pluginService.listPlugins(), projectId, (id) =>
     pluginService.hasPlugin(id)

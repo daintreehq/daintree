@@ -478,6 +478,65 @@ describe("PluginMcpRoute", () => {
     await expect(client.listTools()).rejects.toMatchObject({ code: 403 });
   });
 
+  it("parks a held credential's requests through a matching reload, on the same session", async () => {
+    const { token } = issue();
+    const { client } = await connect(token);
+    expect(route.sessionCount).toBe(1);
+
+    pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
+    loaded.delete(INSTANCE);
+    endpoints.unregisterPlugin(INSTANCE);
+    let listed: string[] | undefined;
+    const listing = client.listTools().then(({ tools }) => {
+      listed = tools.map((tool) => tool.name);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(listed).toBeUndefined();
+    expect(route.sessionCount).toBe(1);
+
+    loaded.add(INSTANCE);
+    endpoints.register({
+      pluginInstanceId: INSTANCE,
+      endpointId: ENDPOINT,
+      tools: [LOOKUP],
+      invoke,
+    });
+    pluginMcpGrantRegistry.releasePlugin(INSTANCE, "surface-1");
+    await listing;
+    expect(listed).toEqual(["lookup"]);
+    expect(route.sessionCount).toBe(1);
+  });
+
+  it("wakes a parked request to a 401 when the reload changes the declared surface", async () => {
+    const { token } = issue();
+    await connect(token);
+
+    pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
+    const parked = rawRequest({ token });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    pluginMcpGrantRegistry.releasePlugin(INSTANCE, "surface-2");
+
+    expect((await parked).status).toBe(401);
+    expect(route.sessionCount).toBe(0);
+  });
+
+  it("answers a retryable 503 when the reload outlasts the wait", async () => {
+    route.dispose();
+    await listener.close();
+    route = makeRoute({ reloadWaitMs: 20 });
+    listener = await startListener(route);
+    const { token } = issue();
+
+    pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
+    const response = await rawRequest({ token });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(
+      pluginMcpGrantRegistry.isLive(pluginMcpGrantRegistry.authenticate(token)!.credentialId)
+    ).toBe(true);
+  });
+
   it("rejects a request when the plugin instance is not loaded", async () => {
     loaded.delete(INSTANCE);
     const { token } = issue();

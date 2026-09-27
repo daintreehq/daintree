@@ -1,4 +1,4 @@
-import type { LoadedPluginInfo } from "../../../shared/types/plugin.js";
+import type { LoadedPluginInfo, PluginManifest } from "../../../shared/types/plugin.js";
 import { pluginManifestIdFromInstanceKey } from "../../../shared/types/plugin.js";
 import type { DeclaredAgentMcpPlugin } from "./types.js";
 
@@ -55,4 +55,19 @@ export function listDeclaredAgentMcpPlugins(
     });
   }
   return declared;
+}
+
+/**
+ * Everything a manifest declares that decides what an agent credential for it
+ * can reach: its capabilities, its `agentMcp` endpoints and its databases. Two
+ * generations of a plugin with the same surface expose the same authority, so
+ * a credential issued against one may keep working against the other; any
+ * difference, including a reordering, reads as a change.
+ */
+export function agentMcpSurfaceOf(manifest: Readonly<PluginManifest>): string {
+  return JSON.stringify({
+    capabilities: [...(manifest.capabilities ?? [])].sort(),
+    agentMcp: manifest.contributes.agentMcp ?? [],
+    databases: manifest.contributes.databases ?? [],
+  });
 }

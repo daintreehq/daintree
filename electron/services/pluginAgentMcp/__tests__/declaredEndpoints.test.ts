@@ -4,7 +4,7 @@ import {
   type LoadedPluginInfo,
   type PluginManifest,
 } from "../../../../shared/types/plugin.js";
-import { listDeclaredAgentMcpPlugins } from "../declaredEndpoints.js";
+import { agentMcpSurfaceOf, listDeclaredAgentMcpPlugins } from "../declaredEndpoints.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -196,5 +196,26 @@ describe("listDeclaredAgentMcpPlugins", () => {
       databases: DATABASES,
     });
     expect(listDeclaredAgentMcpPlugins([foreign], PROJECT_A, loaded)).toEqual([]);
+  });
+});
+
+describe("agentMcpSurfaceOf", () => {
+  const surface = (overrides: Parameters<typeof plugin>[0] = {}) =>
+    agentMcpSurfaceOf(plugin(overrides).manifest);
+
+  it("is stable for the same declarations and ignores capability order", () => {
+    expect(surface()).toBe(surface());
+    expect(surface({ capabilities: ["mcp:expose", "network"] as never })).toBe(
+      surface({ capabilities: ["network", "mcp:expose"] as never })
+    );
+  });
+
+  it("changes with capabilities, endpoints or databases", () => {
+    const base = surface();
+    expect(surface({ capabilities: [] })).not.toBe(base);
+    expect(
+      surface({ agentMcp: [{ id: "other", name: "Other", mode: "tools" }] as never })
+    ).not.toBe(base);
+    expect(surface({ databases: [{ id: "main", name: "Main" }] as never })).not.toBe(base);
   });
 });

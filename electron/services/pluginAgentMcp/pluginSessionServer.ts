@@ -50,6 +50,12 @@ export interface PluginSessionServerOptions {
   maxResultBytes?: number;
   /** How long a list or call waits for a roster that is not registered yet. */
   rosterWaitMs?: number;
+  /**
+   * Whether the session's credential may reach plugin code right now. The
+   * route checks it per request, but a request admitted just before a reload
+   * began can reach dispatch after the next generation registered.
+   */
+  isCallerServable?: () => boolean;
 }
 
 /** Long enough for a respawned worker to re-register; short enough to stay inside a call's budget. */
@@ -106,6 +112,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     callTimeoutMs = AGENT_MCP_CALL_TIMEOUT_MS,
     maxResultBytes = AGENT_MCP_MAX_RESULT_BYTES,
     rosterWaitMs = DEFAULT_ROSTER_WAIT_MS,
+    isCallerServable = () => true,
   } = options;
 
   const server = new Server(
@@ -311,6 +318,9 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
         abort("endpoint-changed");
       }
       if (controller.signal.aborted) return abortedResult();
+      if (!isCallerServable()) {
+        return toolError("The plugin is reloading. Retry the call in a moment.");
+      }
 
       let invocation: Promise<unknown>;
       try {

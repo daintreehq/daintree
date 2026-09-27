@@ -90,6 +90,7 @@ function makeHarness(root: string): Harness {
       running.delete(instanceKey);
       unloads.push(instanceKey);
     },
+    settleProjectPluginReload: vi.fn(),
     purgeConsentForInstance: vi.fn(),
     listGlobalPluginIds: () => new Set<string>(),
     getPluginLoadError: () => undefined,
