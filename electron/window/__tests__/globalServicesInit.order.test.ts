@@ -350,6 +350,7 @@ import {
   getGlobalServicesInitialized,
   setGlobalServicesInitialized,
   setPtyClientRef,
+  getStopEventLoopLagMonitor,
   setStopEventLoopLagMonitor,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
@@ -850,12 +851,13 @@ describe("initGlobalServices task ordering", () => {
   });
 
   it("feeds raw powerMonitor suspend/resume into the event-loop lag monitor (#12887)", async () => {
+    const previousStop = getStopEventLoopLagMonitor();
     setStopEventLoopLagMonitor(null);
     vi.mocked(startEventLoopLagMonitor).mockClear();
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
 
     try {
+      const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
       registeredTaskRuns.get("event-loop-lag-monitor")!();
 
       expect(startEventLoopLagMonitor).toHaveBeenCalledTimes(1);
@@ -873,7 +875,8 @@ describe("initGlobalServices task ordering", () => {
       expect(powerMonitor.off).toHaveBeenCalledWith("suspend", onSuspend);
       expect(powerMonitor.off).toHaveBeenCalledWith("resume", onResume);
     } finally {
-      setStopEventLoopLagMonitor(null);
+      getStopEventLoopLagMonitor()?.();
+      setStopEventLoopLagMonitor(previousStop);
     }
   });
 

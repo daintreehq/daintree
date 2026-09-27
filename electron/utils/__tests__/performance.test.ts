@@ -221,6 +221,36 @@ describe("startEventLoopLagMonitor", () => {
       expect(logWarn).not.toHaveBeenCalled();
     });
 
+    it("drops a sample that was pending when suspend arrived", () => {
+      const power = settle();
+
+      tickAt(1_020_000);
+      power.suspend();
+      tickAt(1_021_000);
+      power.resume();
+      tickAt(1_022_000);
+      tickAt(1_023_000);
+
+      expect(logWarn).not.toHaveBeenCalled();
+    });
+
+    it("reports a stall on the very first tick after resume", () => {
+      const power = settle();
+
+      power.suspend();
+      state.now = 1_020_000;
+      power.resume();
+      tickAt(1_026_000);
+      expect(logWarn).not.toHaveBeenCalled();
+
+      tickAt(1_027_000);
+      expect(logWarn).toHaveBeenCalledTimes(1);
+      expect(logWarn).toHaveBeenCalledWith("Event loop lag detected", {
+        lagMs: 5000,
+        intervalMs: 1000,
+      });
+    });
+
     it("ignores ticks that run while suspended (dark wake)", () => {
       const power = settle();
 
@@ -316,6 +346,19 @@ describe("startEventLoopLagMonitor capture marks", () => {
     const marks = await lagMarks();
     expect(marks).toHaveLength(1);
     expect(marks[0].meta.lagMs).toBe(6000);
+  });
+
+  it("records consecutive lagged ticks once each, in order", async () => {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.appendFileSync).mockClear();
+    const perf = await import("../performance.js");
+    stopFn = perf.startEventLoopLagMonitor(1000, 100);
+
+    tickAt(1500);
+    tickAt(2800);
+    tickAt(3800);
+
+    expect((await lagMarks()).map((m) => m.meta.lagMs)).toEqual([500, 300]);
   });
 });
 

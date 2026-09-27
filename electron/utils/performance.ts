@@ -165,7 +165,10 @@ export interface EventLoopLagPowerEvents {
  * tick after a wake sees the whole sleep as lag. Resume and that overdue tick
  * arrive in no guaranteed order, and suspend can be missed entirely, so an
  * over-threshold sample is held for one interval and dropped if any power
- * transition lands before it is confirmed.
+ * transition lands before it is confirmed. A resume delivered later than that
+ * can still let one sample through, and a resume that never arrives leaves the
+ * monitor quiet until the next one: ticks while suspended may be dark wakes, so
+ * they cannot be taken as proof the machine is awake.
  */
 export function startEventLoopLagMonitor(
   intervalMs = 1000,
