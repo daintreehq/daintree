@@ -80,6 +80,7 @@ const baseConfig: KnipConfig = {
     "src/components/ErrorBoundary/__preview__/preview.tsx",
     "src/components/Errors/__preview__/preview.tsx",
     "src/components/FileViewer/__preview__/preview.tsx",
+    "src/components/FileViewer/__preview__/imageDiffPreview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/footerPreview.tsx",
     "src/components/HelpPanel/__preview__/bannersPreview.tsx",
