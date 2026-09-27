@@ -169,6 +169,32 @@ describe("AutocompleteMenu", () => {
     expect(screen.getAllByRole("option")[0]!.textContent).not.toMatch(/Enter to/);
   });
 
+  it("drops the rise, not the fade, under the app's own reduce-animations setting", () => {
+    const spatial = /translate-y-0\.5|scale-\[0\.99\]/;
+    const menuClass = () => document.querySelector("[data-autocomplete-menu]")!.className;
+    const props = {
+      isOpen: true,
+      items: [{ key: "a", label: "alpha", insertText: "alpha" }],
+      selectedIndex: 0,
+      onSelect: noop,
+      emptyMessage: "No matches",
+    };
+
+    // Entering frame with motion allowed: the menu starts lowered and scaled.
+    const { unmount } = render(<AutocompleteMenu {...props} />);
+    expect(menuClass()).toMatch(spatial);
+    unmount();
+
+    document.body.dataset.reduceAnimations = "true";
+    try {
+      render(<AutocompleteMenu {...props} />);
+      expect(menuClass()).not.toMatch(spatial);
+      expect(menuClass()).toMatch(/transition-opacity/);
+    } finally {
+      delete document.body.dataset.reduceAnimations;
+    }
+  });
+
   it("gives each option a unique id the editor can name as its active descendant", () => {
     const items: AutocompleteItem[] = [
       { key: "a", label: "alpha", insertText: "alpha" },

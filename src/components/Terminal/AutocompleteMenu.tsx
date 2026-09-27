@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import {
   getUiPaletteTransitionDuration,
   UI_PALETTE_ENTER_DURATION,
@@ -166,6 +167,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
     // Palette-tier presence (150ms enter / 100ms exit) so the menu rises in
     // and fades out like its sibling overlays instead of popping on every
     // `/` or `@` keystroke.
+    const skipMotion = useShouldSkipMotion();
     const { isVisible, shouldRender } = useAnimatedPresence({
       isOpen,
       animationDuration: getUiPaletteTransitionDuration("exit"),
@@ -204,11 +206,13 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         className={cn(
           "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-tint/10 bg-surface shadow-[var(--theme-shadow-floating)]",
           "z-50 origin-bottom",
-          "transition-[opacity,translate,scale]",
-          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none motion-reduce:scale-none",
+          // Reduced motion keeps the fade and drops the rise. The hook, not a
+          // `motion-reduce:` class: it also answers the app's own "Reduce UI
+          // animations" setting and performance mode, which the class can't.
+          skipMotion ? "transition-opacity" : "transition-[opacity,translate,scale]",
           isVisible
             ? "opacity-100 translate-y-0 scale-100"
-            : "opacity-0 translate-y-0.5 scale-[0.99]"
+            : cn("opacity-0", !skipMotion && "translate-y-0.5 scale-[0.99]")
         )}
         style={{
           ...style,
