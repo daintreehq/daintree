@@ -263,13 +263,6 @@ export function HelpPanelBanners({
       loading: isApprovingTier && approvalSource === "project",
       disabled: isApprovingTier,
     },
-    {
-      id: "cancel",
-      label: "Cancel",
-      variant: "dismiss",
-      onClick: onDismissTierMismatch,
-      disabled: isApprovingTier,
-    },
   ];
 
   return (
@@ -345,8 +338,10 @@ export function HelpPanelBanners({
           }
           actions={tierMismatch.targetTier ? tierActions : undefined}
           onClose={onDismissTierMismatch}
-          // Dismissing mid-flight would strand the in-flight grant with no
-          // banner to report its outcome — the same reason Cancel goes inert.
+          // The × is the decline: a Cancel beside it ran the same handler and
+          // cost a row of its own at the panel's minimum width. Inert while an
+          // approval is in flight, which would otherwise be stranded with no
+          // banner to report its outcome.
           closeDisabled={isApprovingTier}
           closeAriaLabel="Dismiss tier mismatch notice"
         />

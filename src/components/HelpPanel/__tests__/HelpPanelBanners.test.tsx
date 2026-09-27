@@ -517,7 +517,7 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     const labels = Array.from(actionRow!.querySelectorAll("button")).map(
       (b) => b.textContent?.trim() ?? ""
     );
-    expect(labels).toEqual(["Allow this tool", "Set project default", "Cancel"]);
+    expect(labels).toEqual(["Allow this tool", "Set project default"]);
   });
 
   it("never claims the grant is one call or the elevation permanent", () => {
@@ -555,7 +555,7 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     const onApproveOnce = vi.fn();
     const onAlwaysAllow = vi.fn();
     const onDismissTierMismatch = vi.fn();
-    const { getByText } = render(
+    const { getByText, getByLabelText } = render(
       <HelpPanelBanners
         {...baseProps()}
         tierMismatch={tierMismatch}
@@ -567,7 +567,7 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
 
     fireEvent.click(getByText("Allow this tool"));
     fireEvent.click(getByText("Set project default"));
-    fireEvent.click(getByText("Cancel"));
+    fireEvent.click(getByLabelText("Dismiss tier mismatch notice"));
 
     expect(onApproveOnce).toHaveBeenCalledTimes(1);
     expect(onAlwaysAllow).toHaveBeenCalledTimes(1);
@@ -584,15 +584,14 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
 
     const banner = getByTestId("help-tier-mismatch-banner");
     const buttons = Array.from(banner.querySelectorAll("button"));
-    expect(buttons.length).toBe(4);
-    // The × and Cancel are inert too: dismissing mid-flight would strand the
-    // in-flight grant with no banner to report its outcome.
+    expect(buttons.length).toBe(3);
+    // The × is inert too: dismissing mid-flight would strand the in-flight
+    // grant with no banner to report its outcome.
     expect(buttons.every((b) => b.getAttribute("aria-disabled") === "true")).toBe(true);
     const busy = buttons.filter((b) => b.getAttribute("aria-busy") === "true");
     expect(busy.map((b) => b.textContent?.trim())).toEqual(["Set project default"]);
 
     fireEvent.click(getByLabelText("Dismiss tier mismatch notice"));
-    fireEvent.click(getByText("Cancel"));
     expect(props.onDismissTierMismatch).not.toHaveBeenCalled();
   });
 
@@ -646,12 +645,20 @@ describe("HelpPanelBanners — the stack", () => {
 
   it("reaches each banner's recovery before its dismiss in tab order", () => {
     const { container } = render(<HelpPanelBanners {...everything()} />);
-    for (const banner of Array.from(container.querySelectorAll("[data-testid^='help-']"))) {
+    const banners = Array.from(container.querySelectorAll("[data-testid^='help-']"));
+    // Every banner but the live grant carries a dismiss, and it is always last.
+    const withDismiss = banners.filter((banner) => {
       const buttons = Array.from(banner.querySelectorAll("button"));
       const dismiss = buttons.findIndex((b) => b.getAttribute("aria-label")?.startsWith("Dismiss"));
-      if (dismiss === -1) continue;
+      if (dismiss === -1) return false;
       expect(dismiss).toBe(buttons.length - 1);
-    }
+      return true;
+    });
+    expect(withDismiss.map((b) => b.getAttribute("data-testid"))).toEqual(
+      banners
+        .map((b) => b.getAttribute("data-testid"))
+        .filter((id) => id !== "help-grant-active-banner")
+    );
   });
 
   it("builds every control from the Button primitive, dismiss included", () => {
