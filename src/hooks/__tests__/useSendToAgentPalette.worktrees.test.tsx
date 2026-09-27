@@ -291,3 +291,59 @@ describe("useSendToAgentPalette worktree identity", () => {
     expect(result.current.results[1]!.worktreeName).toBeUndefined();
   });
 });
+
+describe("useSendToAgentPalette row subtitles", () => {
+  beforeEach(() => {
+    useWorktreeStoreOptionalMock.mockReset();
+    seedWorktrees([]);
+    usePaletteStore.setState({ activePaletteId: "send-to-agent" });
+  });
+
+  afterEach(() => {
+    cleanup();
+    usePaletteStore.setState({ activePaletteId: null });
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  });
+
+  it("never spends the second line repeating what the title already says", () => {
+    seedPanels([
+      panel("shell", { title: "Terminal" }),
+      panel("named", { title: "build watcher" }),
+      panel("codex", {
+        title: "Codex",
+        detectedAgentId: "codex",
+        lastObservedTitle: "write the migration",
+      } as Partial<PtyPanelData>),
+    ]);
+
+    const { result } = renderHook(() => useSendToAgentPalette());
+
+    for (const item of result.current.results) {
+      const label = item.chrome.label.toLowerCase();
+      const titleSaysIt = item.title.toLowerCase().startsWith(label);
+      // Echoed: nothing to add. Not echoed: the agent is the one fact the
+      // title doesn't carry, so it stays.
+      expect(item.subtitle?.toLowerCase().includes(label) ?? false).toBe(!titleSaysIt);
+    }
+  });
+
+  it("says why a locked row is locked, in the line the row draws and names", () => {
+    seedWorktrees([
+      ["/repo", "main"],
+      ["/repo-fix", "fix-auth"],
+    ]);
+    seedPanels([
+      panel("a", { worktreeId: "/repo", isInputLocked: true }),
+      panel("b", { worktreeId: "/repo-fix" }),
+    ]);
+
+    const { result } = renderHook(() => useSendToAgentPalette());
+    const locked = result.current.results.find((item) => item.id === "a")!;
+    const open = result.current.results.find((item) => item.id === "b")!;
+
+    expect(locked.subtitle).toMatch(/locked/i);
+    // The worktree still separates it from its twin.
+    expect(locked.subtitle).toContain("main");
+    expect(open.subtitle ?? "").not.toMatch(/locked/i);
+  });
+});

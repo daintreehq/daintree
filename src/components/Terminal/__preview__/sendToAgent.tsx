@@ -72,6 +72,7 @@ function Host() {
       selectNext={palette.selectNext}
       selectItem={palette.selectItem}
       confirmSelection={palette.confirmSelection}
+      setSelectedIndex={palette.setSelectedIndex}
     />
   );
 }

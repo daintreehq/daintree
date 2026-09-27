@@ -91,6 +91,39 @@ const FUSE_OPTIONS: IFuseOptions<SendToAgentItem> = {
   includeScore: true,
 };
 
+/** The reason a locked row draws in place of its agent, matching the plugin picker's. */
+export const INPUT_LOCKED_REASON = "Input locked";
+
+/**
+ * The row's second line. The agent label only when the title doesn't already
+ * open with it — "Claude: fix auth tests" over "Claude" spent a line on one
+ * fact — and the worktree only when the targets span more than one. A locked
+ * row says why in place of the agent, so the line that has to be read is the
+ * one that explains why Enter skips it.
+ */
+function subtitleFor(
+  title: string,
+  chromeLabel: string,
+  isInputLocked: boolean,
+  worktreeName: string | undefined
+): string | undefined {
+  const t = title.trim().toLowerCase();
+  const label = chromeLabel.trim();
+  const l = label.toLowerCase();
+  const echoed = !l || t === l || t.startsWith(`${l}:`) || t.startsWith(`${l} `);
+  const lead = isInputLocked ? INPUT_LOCKED_REASON : echoed ? undefined : label;
+  return [lead, worktreeName].filter(Boolean).join(" · ") || undefined;
+}
+
+/**
+ * Whether the pane can take the text right now. Read at send time, not from
+ * the row: a pane can lock, exit or close while the palette sits open.
+ */
+function isSendableTarget(targetId: string): boolean {
+  const t = usePanelStore.getState().panelsById[targetId];
+  return !!t && isPtyPanel(t) && t.hasPty !== false && !t.isInputLocked;
+}
+
 function sendSelectionToTarget(targetId: string): void {
   const text = pendingState.selection;
   if (!text) return;
@@ -154,15 +187,15 @@ export function useSendToAgentPalette() {
       if (t.hasPty === false) continue;
 
       const chrome = deriveTerminalChrome(t);
-      const subtitle = chrome.label;
       if (t.worktreeId) worktreeIds.add(t.worktreeId);
+      // Full composed display title so rows read (and fuzzy-match) the same
+      // as the live tab: "Claude: fix auth tests".
+      const title = getTerminalDisplayTitle(t, "full", { showTask: showAgentTaskTitles });
 
       result.push({
         id: t.id,
-        // Full composed display title so rows read (and fuzzy-match) the same
-        // as the live tab: "Claude: fix auth tests".
-        title: getTerminalDisplayTitle(t, "full", { showTask: showAgentTaskTitles }),
-        subtitle,
+        title,
+        subtitle: subtitleFor(title, chrome.label, !!t.isInputLocked, undefined),
         terminalKind: t.kind,
         chrome,
         isInputLocked: t.isInputLocked,
@@ -176,7 +209,12 @@ export function useSendToAgentPalette() {
     if (worktreeIds.size > 1) {
       for (const item of result) {
         if (!item.worktreeName) continue;
-        item.subtitle = [item.chrome.label, item.worktreeName].filter(Boolean).join(" · ");
+        item.subtitle = subtitleFor(
+          item.title,
+          item.chrome.label,
+          !!item.isInputLocked,
+          item.worktreeName
+        );
       }
     }
 
@@ -205,6 +243,9 @@ export function useSendToAgentPalette() {
 
   const selectItem = useCallback(
     (item: SendToAgentItem) => {
+      // Stay open on a refusal: the row redraws with its reason from the same
+      // store change, and the selection is still there to send elsewhere.
+      if (!isSendableTarget(item.id)) return;
       sendSelectionToTarget(item.id);
       palette.close();
     },

@@ -345,6 +345,7 @@ export function ModalHostLayer({
               selectNext={sendToAgentPalette.selectNext}
               selectItem={sendToAgentPalette.selectItem}
               confirmSelection={sendToAgentPalette.confirmSelection}
+              setSelectedIndex={sendToAgentPalette.setSelectedIndex}
             />
           </Suspense>
         )}
