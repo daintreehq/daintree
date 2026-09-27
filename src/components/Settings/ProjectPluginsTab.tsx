@@ -45,6 +45,7 @@ import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   PROJECT_PLUGIN_INSTANCE_PREFIX,
@@ -67,7 +68,7 @@ const STATE_LABEL: Record<ProjectPluginState, string> = {
   active: "Running",
   staged: "Staged",
   blocked: "Off",
-  invalid: "Unreadable",
+  invalid: "Invalid",
 };
 
 /**
@@ -104,13 +105,15 @@ function RowFailure({
   onRetry?: () => void;
 }) {
   return (
-    <span role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+    // The recovery sits under the words rather than beside them, so the glyph
+    // stays on the first line and a long reason from main never squeezes it.
+    <span role="alert" className="flex flex-col items-start gap-2">
       <span className="min-w-0 break-words">
         {summary}
         {detail && <span className="text-text-secondary"> — {detail}</span>}
       </span>
       {onRetry && (
-        <Button variant="outline" size="xs" onClick={onRetry}>
+        <Button variant="outline" size="sm" onClick={onRetry}>
           Retry
         </Button>
       )}
@@ -273,6 +276,7 @@ function usePluginSettingsGaps(
               id: def.id,
               label: def.label ?? def.id,
               scope: def.scope ?? "user",
+              fallback: typeof def.default === "string" ? def.default : "",
             })),
           },
         ];
@@ -296,9 +300,12 @@ function usePluginSettingsGaps(
         if (scope !== "user" && projectId === null) continue;
         const { values } = await bridge.getSettingValues(target.id, scope, projectId);
         for (const path of target.paths.filter((p) => p.scope === scope)) {
+          // The value the plugin actually uses: what is stored, else its default —
+          // the same one its settings form checks.
           const stored = values[path.id];
-          if (typeof stored !== "string" || stored === "") continue;
-          if (!(await bridge.pathExists(target.id, stored))) brokenPaths.push(path);
+          const effective = typeof stored === "string" ? stored : path.fallback;
+          if (effective === "") continue;
+          if (!(await bridge.pathExists(target.id, effective))) brokenPaths.push(path);
         }
       }
       return {
@@ -349,7 +356,7 @@ function setupGapDescription(gap: SettingsGaps): string | undefined {
 /** Why a project plugin in the overview's attention list needs a look. */
 function attentionReason(plugin: ProjectPluginInfo): string {
   return plugin.state === "invalid"
-    ? "Its manifest couldn't be read, so it isn't loaded"
+    ? "Its manifest isn't valid, so it isn't loaded"
     : "New to this project, so it hasn't run yet. Review what it declares before activating it";
 }
 
@@ -644,11 +651,16 @@ function ProjectPluginPane({
   const editable =
     isProjectPluginRunning(plugin, folderTrusted) && hasPluginSettings(loaded) ? loaded : undefined;
 
+  const [revealFailure, setRevealFailure] = useState<{ reason: string | null } | null>(null);
   const handleReveal = () => {
     if (!projectPath) return;
     systemClient
       .showItemInFolder(`${projectPath}/.daintree/plugins/${plugin.dirName}`)
-      .catch((err: unknown) => logError("Failed to reveal project plugin folder", err));
+      .then(() => setRevealFailure(null))
+      .catch((err: unknown) => {
+        setRevealFailure({ reason: formatErrorMessage(err, "") || null });
+        logError("Failed to reveal project plugin folder", err);
+      });
   };
 
   const folderOff = !folderTrusted && plugin.state !== "invalid";
@@ -779,7 +791,7 @@ function ProjectPluginPane({
             <SettingsRow
               label="Manifest"
               accessory={badges}
-              description={plugin.error ? undefined : "Its manifest couldn't be read"}
+              description={plugin.error ? undefined : "Its manifest isn't valid"}
               error={plugin.error ? <span className="break-words">{plugin.error}</span> : undefined}
             />
           )}
@@ -838,6 +850,12 @@ function ProjectPluginPane({
                   summary="Couldn't re-scan the plugins folder"
                   detail={reloadFailure.detail}
                   onRetry={() => void reload()}
+                />
+              ) : revealFailure ? (
+                <RowFailure
+                  summary="Couldn't reveal the plugin's folder"
+                  detail={revealFailure.reason}
+                  onRetry={handleReveal}
                 />
               ) : undefined
             }
@@ -965,9 +983,11 @@ function InstalledPluginPane({
   const visibilityError = visibilityFailure ? (
     <RowFailure
       summary={
-        visibilityFailure.source.visible === false
-          ? `Couldn't hide ${name} in this project`
-          : `Couldn't show ${name} in this project`
+        // A null write returns to the default, so what it tried to do is whatever
+        // the default is.
+        (visibilityFailure.source.visible ?? !hiddenByDefault)
+          ? `Couldn't show ${name} in this project`
+          : `Couldn't hide ${name} in this project`
       }
       detail={visibilityFailure.detail}
       onRetry={() => void setVisibility(pluginId, visibilityFailure.source.visible)}
@@ -1140,6 +1160,7 @@ function InstalledPluginPane({
 export function ProjectPluginsTab() {
   const projectPlugins = useProjectPluginStore((s) => s.plugins);
   const clearError = useProjectPluginStore((s) => s.clearError);
+  const visibility = useProjectPluginStore((s) => s.visibility);
   const errorSource = useProjectPluginStore((s) => s.errorSource);
   const folderTrusted = useProjectPluginStore((s) => s.trust?.enabled === true);
   const projectPath = useProjectStore((s) => s.currentProject?.path);
@@ -1193,27 +1214,36 @@ export function ProjectPluginsTab() {
     [installed]
   );
 
-  const options: ProjectPluginOption[] = useMemo(
-    () => [
-      ...projectPlugins.map((p) => ({
-        id: `${PROJECT_OPTION_PREFIX}${p.id}`,
-        pluginId: p.id,
-        name: p.displayName,
-        origin: "project" as const,
-        status: projectPluginStatus(p, folderTrusted),
-        active: folderTrusted && !p.muted && p.state === "active",
-      })),
-      ...installedOnly.map((p) => ({
+  // Each group in name order: the lists arrive in load order, which differs
+  // from one launch to the next, so a plugin would otherwise move around.
+  const options: ProjectPluginOption[] = useMemo(() => {
+    const byName = (a: ProjectPluginOption, b: ProjectPluginOption) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    const project = projectPlugins.map((p) => ({
+      id: `${PROJECT_OPTION_PREFIX}${p.id}`,
+      pluginId: p.id,
+      name: p.displayName,
+      origin: "project" as const,
+      status: projectPluginStatus(p, folderTrusted),
+      active: folderTrusted && !p.muted && p.state === "active",
+    }));
+    const installedOptions = installedOnly.map((p) => {
+      // What this project shows, not only where it came from: a plugin hidden
+      // here reads "Hidden", so the list agrees with its pane's switch.
+      const shown =
+        visibility.overrides[p.instanceId] ??
+        !visibility.defaultHiddenPluginIds.includes(p.instanceId);
+      return {
         id: `${INSTALLED_OPTION_PREFIX}${p.instanceId}`,
         pluginId: p.instanceId,
         name: p.manifest.displayName ?? p.instanceId,
         origin: "installed" as const,
-        status: p.disabled ? "Off" : p.isBuiltin ? "Built-in" : "Installed",
-        active: !p.disabled,
-      })),
-    ],
-    [projectPlugins, installedOnly, folderTrusted]
-  );
+        status: p.disabled ? "Off" : !shown ? "Hidden" : p.isBuiltin ? "Built-in" : "Installed",
+        active: !p.disabled && shown,
+      };
+    });
+    return [...project.sort(byName), ...installedOptions.sort(byName)];
+  }, [projectPlugins, installedOnly, folderTrusted, visibility]);
 
   // A failure is stated on the row that caused it. One plugin's failed switch
   // leaves with its pane rather than waiting to be read as news about the next

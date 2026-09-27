@@ -349,7 +349,7 @@ function createRepo(): { dir: string; cleanup: () => void } {
   writePlugin(path.join(plugins, DEPLOY_PREVIEW.name), DEPLOY_PREVIEW, "dist/index.js");
   writePlugin(path.join(plugins, MUTED_LINTER.name), MUTED_LINTER, "dist/index.js");
   writePlugin(path.join(plugins, COLLIDING.name), COLLIDING, "dist/index.js");
-  // Unreadable: a manifest that fails the project schema.
+  // Invalid: a manifest that fails the project schema.
   mkdirSync(path.join(plugins, "acme.broken-widget"), { recursive: true });
   writeFileSync(
     path.join(plugins, "acme.broken-widget", "plugin.json"),

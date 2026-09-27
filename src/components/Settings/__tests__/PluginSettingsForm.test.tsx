@@ -693,6 +693,27 @@ describe("PluginSettingsForm", () => {
     expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  it("says a path couldn't be checked, rather than that it's fine, and checks again", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { out: "/srv/data" } }));
+    pluginApi.pathExists.mockRejectedValueOnce(new Error("EIO")).mockResolvedValue(false);
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "out", type: "directory", label: "Data folder", mustExist: true },
+        ])}
+      />
+    );
+    const input = (await screen.findByLabelText("Data folder")) as HTMLInputElement;
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+    await waitFor(() =>
+      expect(row.textContent).toContain("Couldn't check that this folder still exists")
+    );
+    // Not known to be wrong, so the field isn't marked invalid.
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(row.textContent).toContain("This folder no longer exists"));
+  });
+
   it("puts a picked path back when saving it fails", async () => {
     pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { out: "/srv/old" } }));
     pluginApi.pickPath.mockResolvedValue("/srv/new");

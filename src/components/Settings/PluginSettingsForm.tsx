@@ -256,8 +256,10 @@ function SettingField({
   // — so the tier disclosure clears its "still plaintext" nudge without a form
   // reload.
   const [migratedToKeychain, setMigratedToKeychain] = useState(false);
-  // Path-specific: tracks a `mustExist` path that no longer resolves on disk.
-  const [pathMissing, setPathMissing] = useState(false);
+  // Path-specific: whether a `mustExist` path still resolves on disk — "unknown"
+  // when the check itself failed, which is not the same as the path being there.
+  const [pathCheck, setPathCheck] = useState<"ok" | "missing" | "unknown">("ok");
+  const [pathCheckAttempt, setPathCheckAttempt] = useState(0);
   // Enum-specific: the Select's open state, held here so an open list can sit
   // on the escape stack. This form also renders inside the plugin manager,
   // which is a non-modal view: there the global keybinding layer takes Escape
@@ -297,27 +299,29 @@ function SettingField({
   // path is treated as present (no override → nothing to flag).
   useEffect(() => {
     if (!isPath || def.mustExist !== true) {
-      setPathMissing(false);
+      setPathCheck("ok");
       return;
     }
     const target = committed;
     if (target === "") {
-      setPathMissing(false);
+      setPathCheck("ok");
       return;
     }
     let cancelled = false;
     window.electron.plugin
       .pathExists(pluginId, target)
       .then((exists) => {
-        if (!cancelled) setPathMissing(!exists);
+        if (!cancelled) setPathCheck(exists ? "ok" : "missing");
       })
-      .catch(() => {
-        if (!cancelled) setPathMissing(false);
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setPathCheck("unknown");
+        logError(`Failed to check plugin setting path ${pluginId}.${def.id}`, err);
       });
     return () => {
       cancelled = true;
     };
-  }, [isPath, def.mustExist, committed, pluginId]);
+  }, [isPath, def.mustExist, def.id, committed, pluginId, pathCheckAttempt]);
 
   // Returns whether the write succeeded so callers can advance their committed
   // state; never throws (the error is surfaced inline) so blur handlers can fire
@@ -572,11 +576,14 @@ function SettingField({
     </>
   );
   const isModified = (isSecret ? hasStored : overridden) && loaded && scopeReady;
+  const pathNoun = type === "file" ? "file" : "folder";
   const shownError =
     error ??
-    (pathMissing
-      ? `This ${type === "file" ? "file" : "folder"} no longer exists — pick a new one`
-      : null);
+    (pathCheck === "missing"
+      ? `This ${pathNoun} no longer exists — pick a new one`
+      : pathCheck === "unknown"
+        ? `Couldn't check that this ${pathNoun} still exists`
+        : null);
   // Required and nothing stored: say so on the row, with accepting the default
   // as the action beside it when there is one.
   const requiredUnset =
@@ -587,7 +594,7 @@ function SettingField({
     (isSecret ? !hasStored : !overridden);
   const defaultText = def.default === undefined ? "" : toDraft(def.default, type);
   const requiredNote = requiredUnset ? (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+    <span className="flex flex-col items-start gap-2">
       <span>
         {canAcceptDefault ? "Not set yet — enter a value or use the default" : "Not set yet"}
       </span>
@@ -595,7 +602,7 @@ function SettingField({
         <Button
           type="button"
           variant="outline"
-          size="xs"
+          size="sm"
           disabled={saving}
           onClick={() => void acceptDefault()}
         >
@@ -608,8 +615,10 @@ function SettingField({
       )}
     </span>
   ) : null;
-  // A required value that isn't set is as invalid as a rejected one, and says so the same way.
-  const invalid = shownError !== null || requiredUnset;
+  // A required value that isn't set is as invalid as a rejected one, and says so
+  // the same way. A path that couldn't be checked isn't known to be wrong.
+  const invalid =
+    (shownError !== null && !(error === null && pathCheck === "unknown")) || requiredUnset;
   const rowProps = {
     id: fieldId,
     label,
@@ -631,17 +640,30 @@ function SettingField({
         : undefined,
     // A failed write is announced where it happened; a missing path, found by a
     // probe after the form settles, is a standing state announced politely.
+    // Recovery sits under the words, so the glyph stays on the first line.
     error: error ? (
-      <span role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span role="alert" className="flex flex-col items-start gap-2">
         <span className="min-w-0 break-words">{error}</span>
         {failedWrite !== null && (
-          <Button type="button" variant="outline" size="xs" disabled={saving} onClick={retryWrite}>
+          <Button type="button" variant="outline" size="sm" disabled={saving} onClick={retryWrite}>
             Retry
           </Button>
         )}
       </span>
     ) : shownError ? (
-      <span role="status">{shownError}</span>
+      <span role="status" className="flex flex-col items-start gap-2">
+        <span>{shownError}</span>
+        {pathCheck === "unknown" && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setPathCheckAttempt((n) => n + 1)}
+          >
+            Retry
+          </Button>
+        )}
+      </span>
     ) : (
       (requiredNote ?? undefined)
     ),

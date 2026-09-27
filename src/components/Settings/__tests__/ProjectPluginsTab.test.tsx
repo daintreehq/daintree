@@ -967,6 +967,90 @@ describe("ProjectPluginsTab failures and state honesty", () => {
     }
   });
 
+  it("lists each group by name and says Hidden for an installed plugin hidden here", async () => {
+    pluginApi.list.mockResolvedValue([
+      installed({
+        instanceId: "zeta.tools",
+        manifest: { ...installed().manifest, displayName: "Zeta Tools" },
+      }),
+      installed({
+        instanceId: "alpha.tools",
+        manifest: { ...installed().manifest, displayName: "alpha Tools" },
+      }),
+    ]);
+    seed([
+      projectPlugin({
+        id: "b.one",
+        instanceId: `project__${PROJECT_ID}__b.one`,
+        displayName: "Beta",
+        dirName: "b",
+      }),
+      projectPlugin({
+        id: "a.one",
+        instanceId: `project__${PROJECT_ID}__a.one`,
+        displayName: "Alpha",
+        dirName: "a",
+      }),
+    ]);
+    act(() =>
+      useProjectPluginStore.getState().applyVisibility({
+        projectId: PROJECT_ID,
+        visibility: { defaultHiddenPluginIds: [], overrides: { "zeta.tools": false } },
+      })
+    );
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("project-plugin-selector-trigger"));
+    const list = await screen.findByRole("listbox", { name: "Plugins" });
+    await within(list).findByText("Zeta Tools");
+    const rows = [...list.querySelectorAll('[role="option"]:not([aria-disabled="true"])')].map(
+      (el) => el.textContent
+    );
+    expect(rows.slice(1)).toEqual([
+      expect.stringContaining("Alpha"),
+      expect.stringContaining("Beta"),
+      expect.stringContaining("alpha Tools"),
+      expect.stringContaining("Zeta Tools"),
+    ]);
+    expect(rows[4]).toContain("Hidden");
+    expect(rows[3]).toContain("Installed");
+  });
+
+  it("names the right verb when returning to a hidden default fails", async () => {
+    pluginApi.list.mockResolvedValue([installed()]);
+    pluginApi.setProjectPluginVisibility.mockRejectedValueOnce(new Error("EACCES"));
+    seed([]);
+    act(() =>
+      useProjectPluginStore.getState().applyVisibility({
+        projectId: PROJECT_ID,
+        visibility: { defaultHiddenPluginIds: ["acme.tools"], overrides: { "acme.tools": true } },
+      })
+    );
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+    // Shown by override over a hidden default: switching off writes null (back to hidden).
+    fireEvent.click(await screen.findByTestId("installed-plugin-visibility-switch"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't hide Acme Tools");
+  });
+
+  it("says so on its row when revealing the plugin's folder fails, and retries it", async () => {
+    showItemInFolder.mockRejectedValueOnce(new Error("Finder isn't responding"));
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Dashboard");
+    fireEvent.click(await screen.findByRole("button", { name: "Reveal folder" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't reveal the plugin's folder");
+    expect(alert.closest("[data-settings-row]")?.textContent).toContain("Plugins folder");
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(showItemInFolder).toHaveBeenCalledTimes(2);
+  });
+
   it("lists the plugins that need a look on the overview, each with a way to it", async () => {
     seed([
       projectPlugin(),

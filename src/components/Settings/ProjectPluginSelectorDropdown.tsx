@@ -23,7 +23,7 @@ export interface ProjectPluginOption {
   pluginId: string;
   name: string;
   origin: "project" | "installed";
-  /** Short state word beside the name — "Running", "Staged", "Off", "Unreadable". */
+  /** Short state word beside the name — "Running", "Staged", "Off", "Invalid". */
   status: string;
   /** Whether the plugin is doing anything in this project right now. */
   active: boolean;
