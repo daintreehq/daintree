@@ -35,6 +35,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { classifyGitError, getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { logError } from "@/utils/logger";
 import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 
 // The commits pill's list (issue #10414). Commit history is local git data, not
 // forge data, so the host renders it when no forge provider supplies a stats
@@ -946,9 +947,11 @@ export function LocalCommitsDropdown({
           fieldClassName="h-8 text-sm"
           icon={
             showRefreshing ? (
-              <RefreshCw
-                className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none animate-spin"
-                aria-hidden="true"
+              <SpinningIcon
+                icon={RefreshCw}
+                active
+                className="w-3.5 h-3.5 text-text-secondary pointer-events-none"
+                aria-hidden
               />
             ) : undefined
           }
@@ -1129,7 +1132,7 @@ export function LocalCommitsDropdown({
                           >
                             {showLoadingMore ? (
                               <>
-                                <RefreshCw className="animate-spin" />
+                                <SpinningIcon icon={RefreshCw} active aria-hidden />
                                 {isSlowLoadingMore ? "Still working…" : "Loading…"}
                               </>
                             ) : (

@@ -663,9 +663,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           </div>
 
           <button
-            onClick={handleRefresh}
-            disabled={isLoading}
-            className="pulse-control rounded-md p-1.5 text-text-secondary transition-colors hover:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
+            onClick={() => {
+              if (!isLoading) handleRefresh();
+            }}
+            // Not `disabled`: pressing it would drop keyboard focus to the page.
+            aria-disabled={isLoading}
+            className="pulse-control rounded-md p-1.5 text-text-secondary transition-colors hover:text-text-primary aria-disabled:opacity-50"
             aria-label="Refresh"
           >
             <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />

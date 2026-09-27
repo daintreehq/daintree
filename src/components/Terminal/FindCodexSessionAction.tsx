@@ -3,7 +3,9 @@ import { useShallow } from "zustand/react/shallow";
 import { Search, RefreshCw } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/Spinner";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
@@ -19,6 +21,7 @@ import type {
   CodexFolderSessionsResult,
 } from "@shared/types/ipc/agentSubagents";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { HEADER_CHIP_FOCUS_CLASS } from "./terminalHeaderChip";
 import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
 import { Button } from "@/components/ui/button";
 import {
@@ -87,6 +90,8 @@ export function FindCodexSessionAction({
   // read here at render time.
   const [heldElsewhere, setHeldElsewhere] = useState<ReadonlySet<string>>(new Set());
   const showSpinner = useDohertyGate(isLoading);
+  // With motion off the spin never runs, so the refresh icon steps down to muted.
+  const skipMotion = useShouldSkipMotion();
   const addPanel = usePanelStore((state) => state.addPanel);
 
   const {
@@ -271,12 +276,24 @@ export function FindCodexSessionAction({
           </span>
           <button
             type="button"
-            onClick={load}
-            disabled={isLoading}
-            className="text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            onClick={() => {
+              if (!isLoading) load();
+            }}
+            // Not `disabled`: pressing it would drop keyboard focus to the page.
+            // The spin is the busy state.
+            aria-disabled={isLoading}
+            className={cn(
+              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
+              HEADER_CHIP_FOCUS_CLASS
+            )}
             aria-label="Refresh sessions"
           >
-            <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} aria-hidden="true" />
+            <SpinningIcon
+              icon={RefreshCw}
+              active={isLoading}
+              className={cn("w-3.5 h-3.5", isLoading && skipMotion && "text-text-muted")}
+              aria-hidden
+            />
           </button>
         </div>
         {result === null ? (

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
+import { HEADER_CHIP_FOCUS_CLASS } from "./terminalHeaderChip";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { PaneNotifyState, TerminalNotifyDelivery } from "@shared/types/terminalNotify";
@@ -131,7 +132,8 @@ export function TerminalNotifyChip({ terminalId }: { terminalId: string }) {
           type="button"
           className={cn(
             "inline-flex items-center gap-1 shrink-0 text-xs font-sans bg-overlay-soft px-1.5 py-0.5 rounded-full border border-divider hover:text-text-primary transition-colors",
-            tone === "warning" ? "text-status-warning" : "text-text-secondary"
+            tone === "warning" ? "text-status-warning" : "text-text-secondary",
+            HEADER_CHIP_FOCUS_CLASS
           )}
           aria-label={`${heading}; Daintree may type a notice into this pane`}
           data-testid="terminal-notify-chip"

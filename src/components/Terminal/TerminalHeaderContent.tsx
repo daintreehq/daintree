@@ -11,6 +11,7 @@ import { formatTokenCount } from "@/utils/formatTokenCount";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
+import { HEADER_CHIP_FOCUS_CLASS } from "./terminalHeaderChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
@@ -344,7 +345,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-text-primary px-1.5 py-0.5 rounded"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-text-primary px-1.5 py-0.5 rounded-full"
               role="status"
               aria-live="off"
             >
@@ -373,7 +374,7 @@ export function TerminalHeaderContent({
       {isInputLocked && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
+            <div className="flex items-center text-text-secondary shrink-0" role="status">
               <Lock className="w-3.5 h-3.5" aria-hidden="true" />
             </div>
           </TooltipTrigger>
@@ -392,7 +393,10 @@ export function TerminalHeaderContent({
         <Tooltip autoDismiss={false} disableHoverableContent={false}>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1.5 px-1 text-2xs font-mono shrink-0 rounded-sm tabular-nums"
+              className={cn(
+                "inline-flex items-center gap-1.5 px-1 text-2xs font-mono shrink-0 rounded-sm tabular-nums",
+                HEADER_CHIP_FOCUS_CLASS
+              )}
               role="status"
               aria-live="off"
               tabIndex={0}

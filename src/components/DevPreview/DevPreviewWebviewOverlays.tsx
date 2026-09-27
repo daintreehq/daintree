@@ -25,7 +25,7 @@ import { webviewLoadErrorHeading, type WebviewLoadError } from "./useDevPreviewL
 import { FindBar } from "../Browser/FindBar";
 import type { FindInPageState } from "@/hooks/useFindInPage";
 import { WebviewDialog, type WebviewDialogRequest } from "../Browser/WebviewDialog";
-import { cn } from "@/lib/utils";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 
 interface DevPreviewWebviewOverlaysProps {
   reconnectAttempt: number;
@@ -142,7 +142,7 @@ export function DevPreviewWebviewOverlays({
                       disabled={isRestarting}
                       className="gap-1.5 px-2.5 py-1.5 rounded-r-none group"
                     >
-                      <RotateCw className={cn("h-3.5 w-3.5", isRestarting && "animate-spin")} />
+                      <SpinningIcon icon={RotateCw} active={isRestarting} className="h-3.5 w-3.5" />
                       <span className="text-xs">Restart dev server</span>
                     </Button>
                   </TooltipTrigger>

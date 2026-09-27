@@ -5,6 +5,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 
 interface SystemRequirementsSectionProps {
   onFatalFailureChange: (hasFatal: boolean) => void;
@@ -202,10 +203,7 @@ export function SystemRequirementsSection({
                 disabled={isChecking}
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 py-1 text-xs text-text-primary ring-1 ring-border-strong bg-surface-panel-elevated transition-colors hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
               >
-                <RotateCw
-                  className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
-                  aria-hidden="true"
-                />
+                <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
                 {isChecking ? "Checking…" : "Check again"}
               </button>
             </div>
@@ -218,10 +216,7 @@ export function SystemRequirementsSection({
               disabled={isChecking}
               className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             >
-              <RotateCw
-                className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
-                aria-hidden="true"
-              />
+              <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
               {isChecking ? "Checking…" : "Re-check"}
             </button>
           )}

@@ -241,7 +241,7 @@ describe("ProjectPulseCard — accessibility (issue #7229)", () => {
     // block in index.css — so the old per-element `motion-reduce:animate-none`
     // utility is redundant and deliberately dropped. Assert the delegation
     // instead: SpinningIcon is the reduced-motion-safe primitive.
-    expect(content).toContain("<SpinningIcon icon={RefreshCw} active={isLoading}");
+    expect(content).toMatch(/<SpinningIcon\s+icon=\{RefreshCw\}\s+active=\{isLoading\}/);
   });
 });
 
