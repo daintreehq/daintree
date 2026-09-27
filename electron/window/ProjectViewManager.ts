@@ -109,8 +109,8 @@ const DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS = 30_000;
  * call (5–50 ms per invocation) out of the budget that would risk main-thread
  * jank. Each tick also evaluates the low-memory pressure floor (see
  * `maybeEvictUnderPressure`), which acts only on consecutive low readings and
- * spares a view used within the last minute, so pressure-eviction latency is a
- * few sample periods and needs no new timer.
+ * spares a recently used view (five minutes in the soft band, one below the
+ * critical edge), so it needs no new timer.
  */
 const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
 
@@ -329,6 +329,17 @@ export class ProjectViewManager {
   memoryPressurePolicy: MemoryPressurePolicy | null = null;
   /** Consecutive sampler readings below the warning edge — see `maybeEvictUnderPressure`. */
   pressureSampleStreak = 0;
+  /**
+   * Soft-pressure backoff (#12885) — see `maybeEvictUnderPressure`. The last
+   * soft-band eviction awaiting the next reading's verdict, how many in a row
+   * freed nothing measurable, and whether that has held further soft
+   * evictions until a reading reaches the warning edge. Per window, and
+   * deliberately separate from ProcessMemoryMonitor's global tier backoff.
+   */
+  pendingSoftPressureEviction: { availableMbBefore: number; evictedFootprintMb: number } | null =
+    null;
+  softPressureUnproductivePasses = 0;
+  softPressureBackoffLatched = false;
   /**
    * What the last `projectview.pressure-override` and `projectview.eviction-skipped`
    * lines said, so an unchanged pass logs nothing — see `evictStaleViews` (#12517).
@@ -1174,6 +1185,7 @@ export class ProjectViewManager {
     // Readings counted against the previous band say nothing about this one.
     this.pressureSampleStreak = 0;
     this.lastPressureOverrideLog = null;
+    EvictionController.clearSoftPressureBackoff(this);
     if (
       policy == null ||
       !Number.isFinite(policy.criticalMb) ||
@@ -1202,6 +1214,7 @@ export class ProjectViewManager {
   setLowMemoryFreeThresholdMb(mb: number | null): void {
     this.pressureSampleStreak = 0;
     this.lastPressureOverrideLog = null;
+    EvictionController.clearSoftPressureBackoff(this);
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {
       this.memoryPressurePolicy = null;
     } else {
