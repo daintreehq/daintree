@@ -170,6 +170,8 @@ describe("SendToAgentPalette locked rows", () => {
     renderPalette([locked("a"), locked("b")], { selectedIndex: 0 });
 
     expect(document.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(0);
+    // …and the combobox points at no option, rather than at a row Enter skips.
+    expect(document.querySelector("input")!.getAttribute("aria-activedescendant")).toBeNull();
     expect(document.body.textContent).toMatch(/unlock/i);
   });
 
@@ -213,6 +215,21 @@ describe("SendToAgentPalette pointer and Home/End", () => {
 
     setSelectedIndex.mockClear();
     fireEvent.pointerMove(rowFor("b"));
+    expect(setSelectedIndex).not.toHaveBeenCalled();
+  });
+
+  it("leaves the cursor alone when the pointer crosses a locked row at either end", () => {
+    const setSelectedIndex = vi.fn();
+    renderPalette(
+      [item("a", { isInputLocked: true }), item("b"), item("c", { isInputLocked: true })],
+      {
+        setSelectedIndex,
+        selectedIndex: 1,
+      }
+    );
+
+    fireEvent.pointerMove(rowFor("a"));
+    fireEvent.pointerMove(rowFor("c"));
     expect(setSelectedIndex).not.toHaveBeenCalled();
   });
 

@@ -40,7 +40,7 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
 
 test.use({ deviceScaleFactor: 2 });
 
-const DIALOG = '[role="dialog"][aria-label="Send selection to agent"]';
+const DIALOG = '[role="dialog"][aria-label="Send text to a terminal"]';
 const VIEWPORT = { width: 900, height: 800 };
 const STATES_PER_THEME = 9;
 

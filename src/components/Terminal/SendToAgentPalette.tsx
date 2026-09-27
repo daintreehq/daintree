@@ -48,8 +48,10 @@ function SendToAgentItemRow({
       tabIndex={-1}
       onPointerDown={(e) => e.preventDefault()}
       // The pointer moves the cursor Enter acts on, so pointing at one row and
-      // pressing Enter can't send to another.
-      onPointerMove={onHover}
+      // pressing Enter can't send to another. A locked row can't hold it, and
+      // pointing at one leaves the cursor where it was rather than moving it
+      // somewhere the pointer isn't.
+      onPointerMove={locked ? undefined : onHover}
       className={cn(
         PALETTE_ROW_CLASS,
         "group w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
@@ -57,9 +59,7 @@ function SendToAgentItemRow({
         !locked && "hover:bg-overlay-subtle"
       )}
       onClick={() => !locked && onSelect(item)}
-      // Keyboard navigation never lands here, but an all-locked list still
-      // parks the index on row 0; the rail must not claim a row Enter skips.
-      aria-selected={isSelected && !locked}
+      aria-selected={isSelected}
       aria-disabled={locked}
       // The subtitle carries the agent, the lock reason and, when the targets
       // span more than one worktree, the worktree — the only thing separating
@@ -117,18 +117,18 @@ export function SendToAgentPalette({
     [selectItem]
   );
 
-  // Home and End come through here too, so a locked row at either end hands
-  // the cursor to its nearest open neighbour instead of swallowing the key.
-  const handleHoverIndex = useCallback(
+  // The shell routes Home and End through its hover callback with index 0 or
+  // the last index. A locked row at either end hands the cursor to its nearest
+  // open neighbour instead of swallowing the key. Rows report the pointer
+  // straight to `setSelectedIndex`, so none of this scanning applies to hover.
+  const handleEdgeIndex = useCallback(
     (index: number) => {
-      const atEdge = index === 0 || index === results.length - 1;
-      const step = index === results.length - 1 && index > 0 ? -1 : 1;
+      const step = index === 0 ? 1 : -1;
       for (let i = index; i >= 0 && i < results.length; i += step) {
         if (!results[i]!.isInputLocked) {
           setSelectedIndex(i);
           return;
         }
-        if (!atEdge) return;
       }
     },
     [results, setSelectedIndex]
@@ -145,22 +145,25 @@ export function SendToAgentPalette({
       isOpen={isOpen}
       query={query}
       results={results}
-      selectedIndex={selectedIndex}
+      // With nothing Enter could act on there is no active option: the index
+      // would otherwise park on locked row 0 and point the combobox at a row
+      // that draws no selection and takes no Enter.
+      selectedIndex={allLocked ? -1 : selectedIndex}
       onQueryChange={setQuery}
       onSelectPrevious={selectPrevious}
       onSelectNext={selectNext}
       onConfirm={confirmSelection}
       onClose={close}
-      onHoverIndex={handleHoverIndex}
+      onHoverIndex={handleEdgeIndex}
       getItemId={(item) => item.id}
       getActionLabel={getSendToAgentActionLabel}
-      renderItem={(item, index, isItemSelected, onHoverIndex) => (
+      renderItem={(item, index, isItemSelected) => (
         <SendToAgentItemRow
           key={item.id}
           item={item}
           isSelected={isItemSelected}
           onSelect={handleSelect}
-          onHover={() => onHoverIndex(index)}
+          onHover={() => setSelectedIndex(index)}
         />
       )}
       afterList={
@@ -170,9 +173,11 @@ export function SendToAgentPalette({
           </p>
         ) : undefined
       }
-      label="Send selection to"
+      // "Text", not "selection": the agent completion banner opens this with
+      // text nobody selected. "To" a terminal, since plain shells are targets.
+      label="Send text to"
       shortcut={sendToAgentShortcut}
-      ariaLabel="Send selection to agent"
+      ariaLabel="Send text to a terminal"
       searchPlaceholder="Search terminals, agents, and worktrees"
       searchAriaLabel="Search terminals, agents, and worktrees"
       listId="send-to-agent-list"
