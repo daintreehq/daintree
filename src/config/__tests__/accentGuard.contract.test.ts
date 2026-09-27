@@ -128,9 +128,6 @@ const KNOWN_CLOSED_ISSUES = new Set([
 // Legitimate accent usage that will persist after all cleanup PRs land.
 // Each entry must carry a brief rationale.
 const DURABLE_ALLOWLIST = new Set([
-  // Theme browser accent display (theme content, not app chrome)
-  "src/components/ThemeBrowser/ThemeBrowser.tsx",
-
   // The plugin manager's two row components used to sit here for their
   // selected-row accent stripe. Selection is neutral now: it persists while
   // focus moves, so an accent stripe on one row plus an accent focus ring on

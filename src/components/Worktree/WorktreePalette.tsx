@@ -1,3 +1,4 @@
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
@@ -32,7 +33,10 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
           "group w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
           "bg-surface-canvas hover:bg-surface"
         )}
+        // The cursor is aria-selected; the worktree you are in is aria-current
+        // with a neutral check, as in the rest of the palette family.
         aria-selected={isSelected}
+        aria-current={isActive ? "true" : undefined}
         role="option"
       >
         <div className="flex items-center justify-between gap-2 text-sm">
@@ -44,9 +48,10 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
               <span className="font-mono text-text-secondary truncate">{worktree.branch}</span>
             )}
             {isActive && (
-              <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-2xs font-semibold">
-                Active
-              </span>
+              <>
+                <Check className="w-4 h-4 shrink-0 text-text-primary" aria-hidden="true" />
+                <span className="sr-only">Current worktree</span>
+              </>
             )}
           </div>
         </div>
