@@ -108,7 +108,7 @@ const ASSISTANT_BASE = {
   tier: "core",
   bypassPermissions: false,
   auditRetention: 7,
-  modelId: "",
+  modelIds: {},
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,

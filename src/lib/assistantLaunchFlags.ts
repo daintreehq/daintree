@@ -1,5 +1,5 @@
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
-import { resolveAssistantModelId } from "@shared/config/agentRegistry";
+import { getSavedAssistantModelId, resolveAssistantModelId } from "@shared/config/agentRegistry";
 import { logError } from "@/utils/logger";
 
 async function loadCatalogIds(agentId: string): Promise<string[] | undefined> {
@@ -20,7 +20,9 @@ async function loadCatalogIds(agentId: string): Promise<string[] | undefined> {
 export async function loadCustomLaunchFlags(agentId: string): Promise<string[]> {
   try {
     const settings = await window.electron.helpAssistant.getSettings();
-    const saved = settings.modelId ?? null;
+    // Only this agent's own entry — a model saved for another agent must never
+    // reach this launch.
+    const saved = getSavedAssistantModelId(settings.modelIds, agentId);
     const availableIds = saved === null ? await loadCatalogIds(agentId) : undefined;
     const flags: string[] = [];
     const modelId = resolveAssistantModelId(agentId, saved, availableIds).trim();
