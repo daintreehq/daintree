@@ -326,7 +326,7 @@ export function PrChecksPopover({
                 className={FOOTER_BUTTON_MOTION}
               >
                 <Send aria-hidden="true" />
-                Send {failingCount === 1 ? "failure" : `${failingCount} failures`} to agent
+                Send {failingCount === 1 ? "1 check" : `${failingCount} checks`} to agent
               </Button>
             )}
             {cannotRead && (

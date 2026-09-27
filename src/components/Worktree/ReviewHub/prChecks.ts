@@ -246,6 +246,8 @@ export interface PrChecksSummary {
   settledCount: number;
 }
 
+const BROKE = new Set([CONCLUSIONS.failure.visual, CONCLUSIONS.timed_out.visual]);
+
 /** The order counts are read in: live work before quiet outcomes, passes before skips. */
 const DETAIL_ORDER = [
   RUNNING.label,
@@ -278,7 +280,11 @@ export function summarizePrChecks(rows: readonly PrCheckRow[]): PrChecksSummary 
   let detailRows: readonly PrCheckRow[] = rest;
   if (attention.length > 0) {
     const required = attention.filter((row) => row.required === true).length;
-    headline = `${attention.length} failing${required > 0 ? ` · ${required} required` : ""}`;
+    // "Failing" only when every one of them broke; a cancellation or a check
+    // waiting on approval is attention-worthy without being a failure.
+    const allBroke = attention.every((row) => BROKE.has(row.outcome));
+    const noun = allBroke ? "failing" : "need attention";
+    headline = `${attention.length} ${noun}${required > 0 ? ` · ${required} required` : ""}`;
   } else if (inFlight > 0) {
     headline = `${inFlight} in progress`;
     detailRows = rest.filter((row) => row.outcome !== RUNNING && row.outcome !== QUEUED);

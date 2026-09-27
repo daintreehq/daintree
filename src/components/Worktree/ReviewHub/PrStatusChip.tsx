@@ -3,6 +3,7 @@ import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import type { CIStatus, NormalizedPRState } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { PrChecksPopover } from "./PrChecksPopover";
 
@@ -104,19 +105,17 @@ export function PrStatusChip({
             />
           </Badge>
         </PrChecksPopover>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           onClick={() => onOpenExternal(worktreePR.prUrl)}
-          className={cn(
-            "inline-flex items-center justify-center p-0.5 rounded-sm",
-            "text-text-secondary hover:bg-tint/5 hover:text-text-primary",
-            "transition-colors cursor-pointer",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
-          )}
+          // 24px target without growing the header row the chip sits in.
+          className="-my-1 transition-colors"
           aria-label={`View pull request #${worktreePR.prNumber}`}
         >
-          <ExternalLink className="w-3 h-3" />
-        </button>
+          <ExternalLink aria-hidden="true" />
+        </Button>
       </>
     );
   }

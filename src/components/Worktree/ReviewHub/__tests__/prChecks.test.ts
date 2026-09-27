@@ -416,7 +416,21 @@ describe("summarizePrChecks", () => {
         check({ status: "in_progress", conclusion: undefined }),
       ])
     );
-    expect(summary.headline).toMatch(/^2 failing · 1 required$/);
+    expect(summary.headline).toMatch(/^2 need attention · 1 required$/);
+  });
+
+  it("calls the attention group failing only when every check in it broke", () => {
+    const broke = summarizePrChecks(
+      preparePrChecks([check({ conclusion: "failure" }), check({ conclusion: "timed_out" })])
+    );
+    expect(broke.headline).toMatch(/failing/);
+    for (const conclusion of ["cancelled", "action_required"] as const) {
+      const mixed = summarizePrChecks(
+        preparePrChecks([check({ conclusion: "failure" }), check({ conclusion })])
+      );
+      expect(mixed.headline).not.toMatch(/failing/);
+      expect(mixed.headline).toMatch(/^2 /);
+    }
   });
 
   it("accounts for every check exactly once between headline and detail", () => {
