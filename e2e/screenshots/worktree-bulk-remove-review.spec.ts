@@ -118,7 +118,7 @@ async function drive(page: Page, name: BulkRemoveFixtureName): Promise<void> {
     const input = card.locator('input[type="text"]');
     // The field is frozen while a confirm runs, so a snapshot that opens
     // mid-run can only show it as it stands.
-    if (await input.isDisabled()) return;
+    if (!(await input.isEditable())) return;
     await input.fill(spec.value.typedNameTarget, { timeout: 10_000 });
     // Blur so the capture shows the resting matched field, not a focus ring.
     await input.evaluate((el) => (el as HTMLInputElement).blur());

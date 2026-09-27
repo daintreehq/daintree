@@ -210,7 +210,14 @@ export function bulkRemoveEvidenceKey(target: BulkRemoveTarget): string {
       status.state === "verified"
         ? status.preview.changes.map((c) => `${c.status}:${c.path}`).sort()
         : null,
-    nested: risk ? [...risk.dirtyFiles, "|", ...risk.untrackedFiles].sort() : null,
+    // Kept apart: a nested file moving from untracked to modified changes the
+    // row's glyph and the loss line's wording.
+    dirty: risk ? [...risk.dirtyFiles].sort() : null,
+    untracked: risk ? [...risk.untrackedFiles].sort() : null,
+    // What `splitDisplayChanges` reads to describe a submodule pointer row.
+    entries: risk
+      ? risk.entries.map((e) => `${e.path}:${e.state}:${e.headOid ?? ""}:${e.recordedOid}`).sort()
+      : null,
     commits: risk ? risk.atRiskCommits.map((c) => c.oid).sort() : null,
     ahead: bulkRemoveAheadCount(target),
     teardown: target.teardown ?? null,

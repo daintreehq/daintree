@@ -32,7 +32,12 @@ vi.mock("@/utils/logger", () => ({ logError: logErrorMock }));
   },
 };
 
-import { useWorktreeBulkRemove, isBulkRemoveEligible } from "../useWorktreeBulkRemove";
+import {
+  useWorktreeBulkRemove,
+  isBulkRemoveEligible,
+  bulkRemoveEvidenceKey,
+  type BulkRemoveTarget,
+} from "../useWorktreeBulkRemove";
 import type { WorktreeState } from "@/types";
 import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
@@ -1148,5 +1153,57 @@ describe("useWorktreeBulkRemove — the evidence is re-read before anything runs
     const b = hook.result.current.targets.find((t) => t.id === "b")!;
     expect(isBulkRemoveEligible(b)).toBe(false);
     expect(hook.result.current.eligibleCount).toBe(1);
+  });
+});
+
+describe("bulkRemoveEvidenceKey", () => {
+  function row(submodules: SubmoduleDeleteRisk): BulkRemoveTarget {
+    return {
+      id: "a",
+      name: "a",
+      branch: "feature/a",
+      path: "/repo/a",
+      aheadCount: 0,
+      status: {
+        state: "verified",
+        preview: {
+          trackedChangeCount: 0,
+          untrackedFileCount: 0,
+          hasTrackedChanges: false,
+          hasUntrackedFiles: false,
+          changes: [],
+          rootPath: "/repo/a",
+          submodules: { status: "verified", risk: submodules },
+        },
+      },
+    };
+  }
+
+  it("changes when a nested file moves between untracked and modified", () => {
+    // The row's glyph and the loss line's wording both change, so consent
+    // given to the old one can't stand.
+    expect(bulkRemoveEvidenceKey(row(risk({ untrackedFiles: ["vendor/lib/x.c"] })))).not.toBe(
+      bulkRemoveEvidenceKey(row(risk({ dirtyFiles: ["vendor/lib/x.c"] })))
+    );
+  });
+
+  it("changes when a submodule checkout moves", () => {
+    const entry = (headOid: string) => ({
+      path: "vendor/lib",
+      state: "moved" as const,
+      recordedOid: "a".repeat(40),
+      headOid,
+      hasModifiedContent: false,
+      hasUntrackedContent: false,
+    });
+    expect(bulkRemoveEvidenceKey(row(risk({ entries: [entry("b".repeat(40))] })))).not.toBe(
+      bulkRemoveEvidenceKey(row(risk({ entries: [entry("c".repeat(40))] })))
+    );
+  });
+
+  it("is stable across reads that list the same evidence in another order", () => {
+    expect(bulkRemoveEvidenceKey(row(risk({ dirtyFiles: ["vendor/b.c", "vendor/a.c"] })))).toBe(
+      bulkRemoveEvidenceKey(row(risk({ dirtyFiles: ["vendor/a.c", "vendor/b.c"] })))
+    );
   });
 });

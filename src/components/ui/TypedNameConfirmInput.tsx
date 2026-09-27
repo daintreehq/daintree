@@ -13,6 +13,12 @@ export interface TypedNameConfirmInputProps {
    * typed value cannot change out from under an awaiting dispatch.
    */
   disabled?: boolean;
+  /**
+   * The same freeze, but the field keeps focus: for a submit that can come
+   * back and ask for the gate again, where a disabled field would have
+   * dropped the user's focus on the page.
+   */
+  readOnly?: boolean;
   "data-testid"?: string;
 }
 
@@ -24,6 +30,7 @@ export function TypedNameConfirmInput({
   preamble,
   instructions,
   disabled = false,
+  readOnly = false,
   "data-testid": testId,
 }: TypedNameConfirmInputProps) {
   const instructionsId = useId();
@@ -59,6 +66,8 @@ export function TypedNameConfirmInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
+        readOnly={readOnly}
+        aria-readonly={readOnly || undefined}
         onKeyDown={(e) => {
           if (e.key === "Enter" && isMatched && onMatchSubmit) {
             e.preventDefault();
@@ -73,7 +82,7 @@ export function TypedNameConfirmInput({
         spellCheck={false}
         // Scroll margin so focusing the field in a scrolled dialog body brings
         // it clear of the body's bottom fade rather than parking it beneath.
-        className="w-full px-3 py-2 text-sm font-mono bg-surface-canvas border border-border-input rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error disabled:opacity-50 scroll-mb-8"
+        className="w-full px-3 py-2 text-sm font-mono bg-surface-canvas border border-border-input rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error disabled:opacity-50 read-only:opacity-50 scroll-mb-8"
         data-testid={testId}
       />
       <span className="sr-only" aria-live="polite">

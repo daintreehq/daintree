@@ -287,8 +287,10 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             }}
             preamble={typedNamePreamble}
             // Frozen while the confirm runs, so the attestation on screen is the
-            // one that was submitted.
-            disabled={isConfirmLoading}
+            // one that was submitted. Read-only rather than disabled: a submit
+            // that re-checks first can hand the gate back, and the Enter that
+            // started it left focus here.
+            readOnly={isConfirmLoading}
           />
         )}
       </AppDialog.Body>

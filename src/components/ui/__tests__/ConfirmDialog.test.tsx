@@ -418,8 +418,31 @@ describe("ConfirmDialog — typed-name gate", () => {
         isConfirmLoading={true}
       />
     );
-    // The attestation on screen has to stay the one that was submitted.
-    expect(findTypedInput().disabled).toBe(true);
+    // The attestation on screen has to stay the one that was submitted — and
+    // the field keeps focus, since a submit that re-checks can hand it back.
+    const input = findTypedInput();
+    expect(input.readOnly).toBe(true);
+    expect(input.disabled).toBe(false);
+  });
+
+  it("hands focus to Cancel when a focused typed gate is withdrawn", async () => {
+    const props = {
+      isOpen: true,
+      onClose: () => {},
+      title: "Remove 2 worktrees?",
+      confirmLabel: "Remove 2 worktrees",
+      onConfirm: () => {},
+      variant: "destructive" as const,
+    };
+    const { rerender } = render(<ConfirmDialog {...props} typedNameTarget="2 worktrees" />);
+    findTypedInput().focus();
+    expect(document.activeElement).toBe(findTypedInput());
+
+    rerender(<ConfirmDialog {...props} typedNameTarget={undefined} />);
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    });
+    expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
   });
 
   it("says what enables the primary while the typed gate is unmatched, and only then", () => {
