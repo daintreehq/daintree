@@ -319,6 +319,21 @@ describe("DevPreviewEmptyStates — interaction contract", () => {
     expect(screen.queryByRole("button", { name: /another script/i })).toBeNull();
   });
 
+  it("offers the recommendation back in the menu after an alternate script fails", async () => {
+    render(
+      <DevPreviewEmptyStates
+        {...baseProps({ ...unconfiguredDetected, autoDetectFailedCommand: "npm run dev:https" })}
+      />
+    );
+    const trigger = screen.getByRole("button", { name: /another script/i });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const items = await screen.findAllByRole("menuitem");
+    const offered = items.map((item) => item.textContent);
+    expect(offered).toContain("npm run dev");
+    expect(offered).not.toContain("npm run dev:https");
+  });
+
   it("shows the command that failed, not the first candidate, beside the retry", () => {
     render(
       <DevPreviewEmptyStates

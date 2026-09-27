@@ -260,20 +260,22 @@ export function DevPreviewEmptyStates({
 
   if (!currentUrl || status !== "running") {
     if (isUnconfigured && primaryCandidate) {
-      const shownCommand = attemptingCommand ?? primaryCandidate.command;
       const failed = autoDetectFailedCommand !== null;
-      // Run already offers the shown command; the menu is for the others.
-      const otherCandidates = candidates.filter((c) => c.command !== shownCommand);
+      // The one command this state is offering: the save in flight, else the
+      // one that failed (empty means re-detection found nothing), else the
+      // recommendation. The chip, Run, Retry and the menu's exclusion all key
+      // off it so they can never disagree.
+      const offeredCommand =
+        attemptingCommand ?? (autoDetectFailedCommand || primaryCandidate.command);
+      // Run already offers that command; the menu is for the others.
+      const otherCandidates = candidates.filter((c) => c.command !== offeredCommand);
       return (
         <PaneState
           title="Start the dev server"
           description="This script in package.json looks like your dev server."
         >
           <div className="flex w-full max-w-sm flex-col items-center gap-3">
-            <CommandChip
-              label="Detected"
-              command={failed ? autoDetectFailedCommand || shownCommand : shownCommand}
-            />
+            <CommandChip label="Detected" command={offeredCommand} />
             <FocusSlot swapKey={failed ? "failed" : "run"}>
               {failed ? (
                 <InlineStatusBanner
@@ -287,8 +289,7 @@ export function DevPreviewEmptyStates({
                     label: "Retry",
                     icon: RotateCw,
                     variant: "dangerFilled",
-                    onClick: () =>
-                      void handleAutoDetect(autoDetectFailedCommand || primaryCandidate.command),
+                    onClick: () => void handleAutoDetect(offeredCommand),
                   }}
                 />
               ) : (
@@ -297,7 +298,7 @@ export function DevPreviewEmptyStates({
                   loading={isAutoDetecting}
                   disabled={isSettingsLoading}
                   variant="contrast"
-                  aria-label={`Run ${shownCommand}`}
+                  aria-label={`Run ${offeredCommand}`}
                 >
                   <Play />
                   Run
