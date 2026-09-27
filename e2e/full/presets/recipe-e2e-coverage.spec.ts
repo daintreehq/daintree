@@ -30,7 +30,7 @@ async function closeAppDialog(window: Page): Promise<void> {
   await expect(window.locator('[role="dialog"]')).toHaveCount(0, { timeout: T_MEDIUM });
 }
 
-function getRecipeEditor(window: Page, title: "Create Recipe" | "Edit recipe" = "Create Recipe") {
+function getRecipeEditor(window: Page, title: "Create recipe" | "Edit recipe" = "Create recipe") {
   return window.getByRole("dialog").filter({ hasText: title });
 }
 

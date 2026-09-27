@@ -820,7 +820,7 @@ export function WorktreeIssueErrorBanner({
   onRetry,
   onDismiss,
 }: WorktreeIssueErrorBannerProps) {
-  const title = mutationType === "attach-issue" ? "Couldn't attach issue" : "Couldn't detach issue";
+  const title = mutationType === "attach-issue" ? "Couldn't attach issue" : "Couldn't unlink issue";
   // The card root selects the worktree on any click that reaches it, and
   // `handleCardClick` has no interactive-target guard — the card's convention
   // (documented on its `handleDoubleClick`, #10319) is that interactive

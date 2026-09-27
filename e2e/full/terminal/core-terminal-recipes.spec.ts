@@ -52,7 +52,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
       });
     }
 
-    function getRecipeEditor(title: "Create Recipe" | "Edit recipe" = "Create Recipe") {
+    function getRecipeEditor(title: "Create recipe" | "Edit recipe" = "Create recipe") {
       return ctx.window.getByRole("dialog").filter({ hasText: title });
     }
 
