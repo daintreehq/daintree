@@ -69,6 +69,24 @@ function maskValue(value: string): string {
 }
 
 /**
+ * A rejected line echoed back under its error is still pasted text, and a
+ * malformed secret is still a secret — mask its value the way the comparison
+ * rows do. The key stays readable because the key is usually what is wrong.
+ */
+function redactRaw(raw: string): string {
+  const eq = raw.indexOf("=");
+  if (eq === -1) return raw;
+  const head = raw.slice(0, eq + 1);
+  const value = raw.slice(eq + 1).trim();
+  const bare = value.replace(/^["']|["']$/g, "");
+  const key = head
+    .replace(/^\s*export\s+/, "")
+    .slice(0, -1)
+    .trim();
+  return isSecretPair(key, bare, "") ? `${head}${maskValue(bare)}` : raw;
+}
+
+/**
  * Character offsets of a 1-based line in the paste, for selecting it. Split on
  * LF alone: a textarea's value has its newlines normalized to LF, so a CRLF
  * paste arrives here without its CRs and the offsets match the field.
@@ -188,7 +206,7 @@ export function ImportEnvDialog({
 
   const headingId = useId();
   const helpId = useId();
-  const errorsId = useId();
+  const errorSummaryId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const prevStepRef = useRef<Step>("paste");
@@ -247,6 +265,10 @@ export function ImportEnvDialog({
   // button that says it will must not be pressable.
   const changesSomething = newCount > 0 || conflicts.length > 0;
   const canProceed = !hasErrors && changesSomething;
+  // Keeping every existing value when nothing is new is a cancel that looks
+  // like a success: the dialog would close having changed nothing.
+  const keepIsNoOp = step === "conflicts" && conflictResolution === "keep" && newCount === 0;
+  const canCommit = step === "conflicts" ? !keepIsNoOp : canProceed;
   const duplicateInPasteCount = parsed.pairs.length - incomingCount;
 
   const toggleReveal = (key: string) =>
@@ -272,7 +294,7 @@ export function ImportEnvDialog({
   };
 
   const handlePrimary = () => {
-    if (!canProceed) return;
+    if (!canCommit) return;
     if (step === "paste") {
       if (conflicts.length > 0) {
         setStep("conflicts");
@@ -302,8 +324,9 @@ export function ImportEnvDialog({
           : `Import ${plural(newCount, "variable")}`;
 
   /** Why the primary action is dead. A disabled button that explains nothing is a dead end. */
-  const blockedHint =
-    step !== "paste" || canProceed
+  const blockedHint = keepIsNoOp
+    ? "Nothing is new, so keeping existing values changes nothing"
+    : step !== "paste" || canProceed
       ? null
       : hasErrors
         ? `Fix ${plural(parsed.errors.length, "parse error")} to continue`
@@ -388,7 +411,7 @@ export function ImportEnvDialog({
                 aria-labelledby={headingId}
                 invalid={hasErrors}
                 aria-invalid={hasErrors || undefined}
-                aria-describedby={hasErrors ? `${errorsId} ${helpId}` : helpId}
+                aria-describedby={hasErrors ? `${errorSummaryId} ${helpId}` : helpId}
                 data-testid="import-env-textarea"
               />
               {/* Directly under the field, ahead of any errors: it is the
@@ -418,7 +441,19 @@ export function ImportEnvDialog({
               // mid-word while they repair the very line it describes. The
               // field's aria-invalid and its describedby link to this are what
               // announce it, on focus — the same contract as `FieldError`.
-              <div id={errorsId} data-testid="import-env-errors">
+              <div data-testid="import-env-errors">
+                {/* What the field is described by: the count and the first
+                    problem, not the whole interactive list — landing back in
+                    the field from a Line link would otherwise read every
+                    reason, fix and pasted line again. */}
+                <span
+                  id={errorSummaryId}
+                  className="sr-only"
+                  data-testid="import-env-error-summary"
+                >
+                  {plural(parsed.errors.length, "parse error")}. Line {parsed.errors[0]!.line}:{" "}
+                  {parsed.errors[0]!.reason}.
+                </span>
                 <InlineStatusBanner
                   severity="error"
                   role="status"
@@ -451,7 +486,7 @@ export function ImportEnvDialog({
                               so inline it reads as a continuation. */}
                           {e.raw.trim() !== "" && (
                             <div className="mt-0.5 break-all font-mono text-2xs text-text-secondary">
-                              {e.raw}
+                              {redactRaw(e.raw)}
                             </div>
                           )}
                         </li>
@@ -576,7 +611,7 @@ export function ImportEnvDialog({
         primaryAction={{
           label: primaryLabel,
           onClick: handlePrimary,
-          disabled: !canProceed,
+          disabled: !canCommit,
         }}
       />
     </AppDialog>

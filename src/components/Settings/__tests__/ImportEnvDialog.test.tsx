@@ -204,6 +204,16 @@ describe("ImportEnvDialog", () => {
       expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
     });
 
+    /** Keeping everything when nothing is new would close the dialog having done nothing. */
+    it("will not commit a keep-existing import that changes nothing", () => {
+      renderDialog();
+      goToConflicts();
+      expect(primary().getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
+      fireEvent.click(screen.getByTestId("import-env-mode-overwrite"));
+      expect(primary().hasAttribute("aria-disabled")).toBe(false);
+    });
+
     /** The conflict step is where the user commits, so the additions must still be in view there. */
     it("keeps the additions in view on the conflict step", () => {
       renderDialog();
@@ -263,17 +273,41 @@ describe("ImportEnvDialog", () => {
       const textarea = screen.getByTestId("import-env-textarea");
       expect(textarea.getAttribute("aria-invalid")).toBe("true");
 
-      expect(describedElements(textarea)).toContain(screen.getByTestId("import-env-errors"));
+      const errors = screen.getByTestId("import-env-errors");
+      expect(describedElements(textarea).some((el) => !!el && errors.contains(el))).toBe(true);
+    });
+
+    /**
+     * The field is described by the problem, not by the whole interactive
+     * list: returning to it from a line link would otherwise re-read every
+     * reason, fix and pasted line.
+     */
+    it("describes the field with the first problem, not the whole list", () => {
+      renderDialog();
+      paste("this line has no equals sign\nalso wrong\nstill wrong");
+      const textarea = screen.getByTestId("import-env-textarea");
+      const errors = screen.getByTestId("import-env-errors");
+      const described = describedElements(textarea).filter((el) => !!el && errors.contains(el));
+      const text = described.map((el) => el!.textContent).join(" ");
+      expect(text).toMatch(/line 1/i);
+      expect(text).not.toMatch(/line 2|line 3/i);
+    });
+
+    /** A malformed secret is still a secret, and the error list echoes the line. */
+    it("does not echo a secret value back in the error list", () => {
+      renderDialog();
+      paste('ANTHROPIC_API_KEY="sk-ant-api03-Zq8w3EhTn5vB7mJdX2fK');
+      const errors = screen.getByTestId("import-env-errors");
+      expect(errors.textContent).toContain("ANTHROPIC_API_KEY");
+      expect(errors.textContent).not.toContain("Zq8w3EhTn5vB7mJdX2fK");
     });
 
     it("drops the association again once the paste parses", () => {
       renderDialog();
       paste("this line has no equals sign");
-      const errors = screen.getByTestId("import-env-errors");
       paste("FINE=yes");
       const textarea = screen.getByTestId("import-env-textarea");
       expect(textarea.getAttribute("aria-invalid")).toBeNull();
-      expect(describedElements(textarea)).not.toContain(errors);
       // No dangling reference to a region that is gone.
       expect(describedElements(textarea)).not.toContain(null);
     });
