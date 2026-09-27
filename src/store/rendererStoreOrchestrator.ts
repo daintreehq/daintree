@@ -11,7 +11,6 @@ import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
 import { subscribeFleetRunWatcher } from "./fleetRunStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
 import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
-import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
@@ -403,7 +402,6 @@ export function initStoreOrchestrator(): () => void {
             // are ephemeral and a stale lock would silently break routing.
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
-            semanticAnalysisService.unregisterTerminal(removedId);
             // Drop the renderer-side artifact store entry so content strings
             // don't pin the dead panel's heap for the rest of the renderer
             // lifetime (#10023). The hook listener Set is owned by each

@@ -1888,10 +1888,6 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./terminal.js").BackendTerminalInfo[];
   };
-  "terminal:get-analysis-buffer": {
-    args: [];
-    result: SharedArrayBuffer | null;
-  };
   "terminal:get-available": {
     args: [];
     result: import("./terminal.js").BackendTerminalInfo[];

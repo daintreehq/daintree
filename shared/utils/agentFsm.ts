@@ -1,7 +1,6 @@
 /**
- * Canonical agent finite-state machine, shared between the main process
- * (`electron/services/AgentStateMachine.ts`) and the renderer Web Worker
- * (`src/workers/WorkerAgentStateService.ts`).
+ * Canonical agent finite-state machine used by the main process
+ * (`electron/services/AgentStateMachine.ts`).
  *
  * Browser-safe: no Node or DOM imports.
  */

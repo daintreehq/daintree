@@ -55,12 +55,6 @@ vi.mock("../../persistence/panelPersistence", () => ({
   },
 }));
 
-vi.mock("@/services/SemanticAnalysisService", () => ({
-  semanticAnalysisService: {
-    unregisterTerminal: vi.fn(),
-  },
-}));
-
 vi.mock("../terminalInputStore", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../terminalInputStore")>();
   return {
@@ -97,7 +91,6 @@ const { useResourceMonitoringStore } = await import("../resourceMonitoringStore"
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
 const { unregisterInputController } = await import("../terminalInputStore");
-const { semanticAnalysisService } = await import("@/services/SemanticAnalysisService");
 const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
   await import("../cliAvailabilityStore");
 const { useAgentSettingsStore, cleanupAgentSettingsStore } = await import("../agentSettingsStore");
@@ -1077,28 +1070,7 @@ describe("rendererStoreOrchestrator", () => {
     expect(unregisterInputController).toHaveBeenCalledWith("term-1");
   });
 
-  it("calls semanticAnalysisService.unregisterTerminal when terminal is removed", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "term-1": {
-          id: "term-1",
-          title: "T1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["term-1"],
-    });
-
-    usePanelStore.getState().removePanel("term-1");
-
-    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("term-1");
-  });
-
-  it("calls both new cleanup hooks for each terminal in batch removal", () => {
+  it("unregisters the input controller for each terminal in batch removal", () => {
     usePanelStore.setState({
       panelsById: {
         "t-a": {
@@ -1128,9 +1100,6 @@ describe("rendererStoreOrchestrator", () => {
     expect(unregisterInputController).toHaveBeenCalledTimes(2);
     expect(unregisterInputController).toHaveBeenCalledWith("t-a");
     expect(unregisterInputController).toHaveBeenCalledWith("t-b");
-    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledTimes(2);
-    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-a");
-    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-b");
   });
 
   it("debounces persistMruList during rapid focus changes", async () => {

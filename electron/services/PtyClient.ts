@@ -2963,14 +2963,6 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Get the SharedArrayBuffer for semantic analysis (Web Worker).
-   * Always returns null — SharedArrayBuffer is not supported in Electron UtilityProcess.
-   */
-  getAnalysisBuffer(): SharedArrayBuffer | null {
-    return null;
-  }
-
-  /**
    * Check if SharedArrayBuffer-based I/O is enabled.
    * Always false — Electron UtilityProcess does not support SharedArrayBuffer transfer.
    */

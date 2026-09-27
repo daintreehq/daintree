@@ -68,10 +68,6 @@ vi.mock("../../persistence/panelPersistence", () => ({
   },
 }));
 
-vi.mock("@/services/SemanticAnalysisService", () => ({
-  semanticAnalysisService: { unregisterTerminal: vi.fn() },
-}));
-
 // A controllable stand-in for main's view-lifecycle signals: a cached view
 // keeps reporting `document.visibilityState === "visible"`, so this is the
 // only way the orchestrator can learn nobody is looking.

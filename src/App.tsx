@@ -38,7 +38,6 @@ import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted } from "./utils/removeStartupSkeleton";
 import {
   usePanelStoreBootstrap,
-  useSemanticWorkerLifecycle,
   useCloudSyncWarning,
   useRosettaWarning,
   useAccessibilityAnnouncements,
@@ -404,7 +403,6 @@ function AppInner() {
 
   // App lifecycle hooks
   usePanelStoreBootstrap(bootResult?.terminalConfig ?? null);
-  useSemanticWorkerLifecycle();
   useCloudSyncWarning(homeDir);
   useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
