@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type MouseEvent } from "react";
+import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { FolderX, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -57,10 +57,11 @@ export function DeletedWorktreeCard({
   const isActive = useWorktreeSelectionStore((s) => s.activeWorktreeId === worktree.id);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const trackTerminalFocus = useWorktreeSelectionStore((s) => s.trackTerminalFocus);
-  const isTerminalsExpanded = useWorktreeSelectionStore((s) =>
-    s.expandedTerminals.has(worktree.id)
-  );
-  const toggleTerminalsExpanded = useWorktreeSelectionStore((s) => s.toggleTerminalsExpanded);
+  // Open by default, and local rather than the live card's persisted
+  // `expandedTerminals`: the terminals are all this row exists for, so hiding
+  // them behind an "N active" bar made opening the group show less than the
+  // collapsed rail did.
+  const [isTerminalsExpanded, setIsTerminalsExpanded] = useState(true);
 
   const { counts, terminals } = useWorktreeTerminals(worktree.id);
 
@@ -78,6 +79,12 @@ export function DeletedWorktreeCard({
       .map((id) => panelsById[id])
       .filter((panel): panel is PanelInstance => panel != null);
   }, [worktree.id, panelsById, panelIdsByWorktreeId]);
+  // Listed from the same set the dismiss would close (#9699): the live hook
+  // keeps overlay and dialog panels, which never belong to a worktree row.
+  const listedTerminals = useMemo(() => {
+    const ids = new Set(panels.map((panel) => panel.id));
+    return terminals.filter((terminal) => ids.has(terminal.id));
+  }, [panels, terminals]);
 
   const handleDismiss = useCallback(() => {
     if (panels.length === 0) {
@@ -136,13 +143,10 @@ export function DeletedWorktreeCard({
     ]
   );
 
-  const handleToggleTerminals = useCallback(
-    (e: MouseEvent) => {
-      e.stopPropagation();
-      toggleTerminalsExpanded(worktree.id);
-    },
-    [toggleTerminalsExpanded, worktree.id]
-  );
+  const handleToggleTerminals = useCallback((e: MouseEvent) => {
+    e.stopPropagation();
+    setIsTerminalsExpanded((open) => !open);
+  }, []);
 
   // Defensive: the store prunes empty deleted-worktree rows, so an empty row should never
   // reach render. Bailing keeps a torn frame from showing a zero-terminal card.
@@ -264,9 +268,10 @@ export function DeletedWorktreeCard({
           worktreeId={worktree.id}
           isExpanded={isTerminalsExpanded}
           counts={counts}
-          terminals={terminals}
+          terminals={listedTerminals}
           onToggle={handleToggleTerminals}
           onTerminalSelect={handleTerminalSelect}
+          rowClick="select"
         />
       </div>
       {/* The row separator and the countdown are one element, not two stacked

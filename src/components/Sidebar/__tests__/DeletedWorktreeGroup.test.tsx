@@ -171,7 +171,7 @@ describe("DeletedWorktreeGroup", () => {
 
     expect(screen.getByText("/repo/wt-1")).toBeTruthy();
     expect(screen.getByText("/repo/wt-2")).toBeTruthy();
-    expect(sortableProps).not.toHaveBeenCalled();
+    expect(screen.queryByRole("list", { name: /^Terminals from deleted worktree/ })).toBeNull();
   });
 
   it("toggles expansion from the summary row", () => {

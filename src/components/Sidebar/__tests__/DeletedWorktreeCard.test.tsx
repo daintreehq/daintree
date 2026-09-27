@@ -34,6 +34,7 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePreferencesStore, type DeletedWorktreeCleanupSeconds } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktreeStore";
@@ -123,29 +124,37 @@ describe("DeletedWorktreeCard", () => {
     expect(screen.getByText("/repo/feature-login")).toBeTruthy();
   });
 
-  it("shows the live-card terminal summary bar instead of instructional copy", () => {
-    setPanels([
-      { id: "t1", worktreeId: "wt-1" },
-      { id: "t2", worktreeId: "wt-1" },
-    ]);
-    renderCard();
-
-    expect(screen.queryByText("Drag terminals to another worktree")).toBeNull();
-    // Collapsed WorktreeTerminalSection: count + "active" label, same as live cards.
-    expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("active")).toBeTruthy();
-  });
-
-  it("lists surviving terminals when the sessions section is expanded", () => {
+  it("opens on its surviving terminals rather than a summary bar", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1", title: "claude" },
       { id: "t2", worktreeId: "wt-1", title: "shell" },
     ]);
-    useWorktreeSelectionStore.getState().toggleTerminalsExpanded("wt-1");
     renderCard();
 
+    // The terminals are the whole reason the row exists, so they show without
+    // a second click — and without instructional copy in their place.
+    expect(screen.queryByText("Drag terminals to another worktree")).toBeNull();
     expect(screen.getByText("claude")).toBeTruthy();
     expect(screen.getByText("shell")).toBeTruthy();
+  });
+
+  it("views a terminal on click instead of arming it for a fleet broadcast", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1", title: "claude" }]);
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        t1: { ...s.panelsById.t1, detectedAgentId: "claude", agentState: "waiting" } as never,
+      },
+    }));
+    const pingTerminal = vi.fn();
+    usePanelStore.setState({ pingTerminal });
+    renderCard();
+
+    fireEvent.click(screen.getByText("claude"));
+
+    expect(pingTerminal).toHaveBeenCalledWith("t1");
+    expect(useFleetArmingStore.getState().armedIds.has("t1")).toBe(false);
   });
 
   it("selects the deleted worktree when the card is clicked", () => {

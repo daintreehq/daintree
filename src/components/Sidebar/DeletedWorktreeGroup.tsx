@@ -167,11 +167,13 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
               strokeWidth={2.5}
               aria-hidden="true"
             />
-            <span className="truncate text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/summary:text-text-primary">
+            {/* At a narrow sidebar the count gives way before the noun does:
+                "3 deleted wo…" names nothing. */}
+            <span className="shrink-0 text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/summary:text-text-primary">
               {members.length} {worktreeNoun}
             </span>
             <span className="sr-only">, </span>
-            <span className="shrink-0 text-2xs tabular-nums text-text-secondary">
+            <span className="min-w-0 truncate text-2xs tabular-nums text-text-secondary">
               {terminalCount} {terminalNoun}
             </span>
           </span>
