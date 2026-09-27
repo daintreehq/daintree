@@ -4,7 +4,11 @@ import {
   type LoadedPluginInfo,
   type PluginManifest,
 } from "../../../../shared/types/plugin.js";
-import { agentMcpSurfaceOf, listDeclaredAgentMcpPlugins } from "../declaredEndpoints.js";
+import {
+  agentMcpSurfaceOf,
+  isSharedAcrossProjects,
+  listDeclaredAgentMcpPlugins,
+} from "../declaredEndpoints.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -233,5 +237,37 @@ describe("agentMcpSurfaceOf", () => {
     expect(surface({ mcpName: "ledger" })).toBe(surface({ mcpName: "ledger" }));
     expect(surface({ mcpName: "ledger" })).not.toBe(surface());
     expect(surface({ mcpName: "books" })).not.toBe(surface({ mcpName: "ledger" }));
+  });
+});
+
+describe("isSharedAcrossProjects", () => {
+  it("is an installed plugin with databases, and nothing else", () => {
+    const instanceId = makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger");
+    const declared = listDeclaredAgentMcpPlugins(
+      [
+        plugin({ databases: DATABASES }),
+        plugin({ name: "acme.notes" }),
+        plugin({ instanceId, origin: "project", projectId: PROJECT_A, databases: DATABASES }),
+      ],
+      PROJECT_A,
+      loaded
+    );
+    expect(
+      declared.map((d) => [
+        d.pluginInstanceId,
+        isSharedAcrossProjects(d.pluginInstanceId, d.hasDatabases),
+      ])
+    ).toEqual([
+      ["acme.ledger", true],
+      ["acme.notes", false],
+      [instanceId, false],
+    ]);
+  });
+
+  it("classifies a plugin that is no longer loaded by its instance id alone", () => {
+    expect(isSharedAcrossProjects("gone.plugin", true)).toBe(true);
+    expect(
+      isSharedAcrossProjects(makeProjectPluginInstanceKey(PROJECT_B, "gone.plugin"), true)
+    ).toBe(false);
   });
 });

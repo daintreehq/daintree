@@ -27,6 +27,13 @@ export interface ProjectAgentToolPlugin {
   origin: "installed" | "project";
   /** The plugin declares databases, so the host offers read-only tools for them. */
   hasDatabases: boolean;
+  /**
+   * An installed plugin with databases: they are one set of files shared by
+   * every project, and the host's database tools can't filter them by project,
+   * so any level that includes those tools lets agents here read what the
+   * plugin stored for the user's other projects.
+   */
+  sharedAcrossProjects?: true;
   /** The plugin's own `agentMcp` endpoint, when it declares one. */
   pluginTools?: { name: string; description?: string };
   access: AgentMcpAccess;

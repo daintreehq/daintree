@@ -2,7 +2,10 @@ import { z } from "zod";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { PLUGIN_AGENT_MCP_METHOD_CHANNELS } from "./pluginAgentMcp.preload.js";
-import { listDeclaredAgentMcpPlugins } from "../../services/pluginAgentMcp/declaredEndpoints.js";
+import {
+  isSharedAcrossProjects,
+  listDeclaredAgentMcpPlugins,
+} from "../../services/pluginAgentMcp/declaredEndpoints.js";
 import {
   allProjectsAgentMcpAccess,
   hasLegacyAgentMcpAnswer,
@@ -154,6 +157,9 @@ function row(
     pluginDisplayName: plugin.pluginDisplayName,
     origin: installed ? "installed" : "project",
     hasDatabases: plugin.hasDatabases,
+    ...(isSharedAcrossProjects(id, plugin.hasDatabases)
+      ? { sharedAcrossProjects: true as const }
+      : {}),
     ...(plugin.pluginEndpoint
       ? {
           pluginTools: {
