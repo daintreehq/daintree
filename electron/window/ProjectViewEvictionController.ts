@@ -50,8 +50,9 @@ export const MIN_PRESSURE_EVICTION_AGE_MS = 300_000;
 
 /**
  * The same floor for a sampler tick reading below `criticalMb`. Kept short:
- * there the cache is converging on the active view alone, and holding a view
- * for five minutes would leave only tier 2's much slower escalation.
+ * there the cache is converging on the active view and the assistant floor,
+ * and holding a view for five minutes would leave only tier 2's much slower
+ * escalation.
  */
 export const MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS = 60_000;
 
@@ -471,8 +472,8 @@ export function evictStaleViews(
   // pins three views indefinitely, where the plain tier settles at two.
   //
   // Both halves of the issue's ask fall out of staying in `candidates`, with no
-  // branch for either. Residency can never carry the cache over the configured
-  // cap, because a candidate is always available to take. And it yields at
+  // branch for either. Residency can never carry the cache over `effectiveMax`,
+  // because a candidate is always available to take. And it yields at
   // critical pressure for the same reason — a forced reclaim converges on the
   // active view plus the assistant floor, and a grant is not exempt from that,
   // it is merely the last thing surrendered.
@@ -603,7 +604,8 @@ export function evictStaleViews(
   // The cache is deliberately over its cap because protecting a running
   // assistant outranks the limit. Emit it so the extra resident renderers are
   // attributable — otherwise this reads as a leak in the memory logs. Gated on
-  // an exhausted queue so a gradual pass that merely spent its one-view budget
+  // an exhausted queue, or a pass that stopped at the assistant allowance, so a
+  // gradual pass that merely spent its one-view budget or deferred on age
   // (ordinary candidates still waiting) isn't misreported as assistant-blocked.
   //
   // Forced passes are included since #11477 made the floor unconditional: a
