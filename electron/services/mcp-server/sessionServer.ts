@@ -3380,15 +3380,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           dispatchAuthorization = "skip-preference";
           dispatchConfirmed = true;
         }
-        // A protected close already announced itself before asking (#12881).
-        // An agent's close-all always raises the dialog, whatever it declares.
+        // A protected close already announced itself before asking (#12881);
+        // an agent's close-all is confirm-gated by the effective danger.
         // A call under the skip preference never waits. A native grant's still
         // can: the renderer demotes a D3 force delete back to the dialog.
         if (!toolCallStartedEmitted) {
-          emitToolCallStarted(
-            (entry?.danger === "confirm" || actionId === "terminal.closeAll") &&
-              dispatchAuthorization !== "skip-preference"
-          );
+          emitToolCallStarted(confirmGated && dispatchAuthorization !== "skip-preference");
         }
 
         // The workspace the dispatch actually landed on, resolved renderer-side

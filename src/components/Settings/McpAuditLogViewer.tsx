@@ -344,7 +344,7 @@ function DispatchRow({
         {/* Never shown as "confirmed": nobody was asked (#12874). */}
         {record.authorization === "skip-preference" && (
           <div className="mt-0.5 text-text-secondary">
-            Ran without asking — Skip permission prompts
+            Confirmation skipped — Skip permission prompts
           </div>
         )}
       </div>
