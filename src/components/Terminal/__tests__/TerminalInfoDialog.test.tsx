@@ -659,4 +659,69 @@ describe("TerminalInfoDialog", () => {
       expect(payload).not.toMatch(/Unavailable lines/);
     });
   });
+
+  describe("one absence per field", () => {
+    // Screen label → report key, for every field shown in both places.
+    const PAIRS: Array<[string, string]> = [
+      ["Process", "Foreground process"],
+      ["Exit code", "Exit code"],
+      ["Shell", "Shell"],
+      ["Arguments", "Args"],
+      ["Project ID", "Project ID"],
+      ["PTY active", "PTY active"],
+      ["Analysis enabled", "Analysis enabled"],
+      ["Resize strategy", "Resize strategy"],
+      ["Spawn source", "Spawn source"],
+    ];
+    const ABSENCES = new Set(["—", "Unknown", "Unavailable"]);
+
+    async function expectScreenAndReportAgree(): Promise<void> {
+      for (const toggle of screen.getAllByRole("button", { expanded: false })) {
+        if (toggle.getAttribute("aria-controls")) fireEvent.click(toggle);
+      }
+      const body = screen.getByTestId("terminal-info-body");
+      const report = await copyPayload();
+      let compared = 0;
+      for (const [label, key] of PAIRS) {
+        const dt = Array.from(body.querySelectorAll("dt")).find((el) => el.textContent === label);
+        const shown = dt?.nextElementSibling?.textContent?.trim() ?? "";
+        if (!ABSENCES.has(shown)) continue;
+        const line = report.split("\n").find((l) => l.trim().startsWith(`${key}:`));
+        expect({ label, reported: line?.split(": ").slice(1).join(": ").trim() }).toEqual({
+          label,
+          reported: shown,
+        });
+        compared += 1;
+      }
+      expect(compared).toBeGreaterThan(0);
+    }
+
+    it("agrees between screen and report when the read failed", async () => {
+      dispatchMock.mockResolvedValue({ ok: false, error: { message: "not found" } });
+      renderDialog();
+      await screen.findByTestId("terminal-info-error");
+      await expectScreenAndReportAgree();
+    });
+
+    it("agrees between screen and report for an exit with no code", async () => {
+      mockPanelsById = {
+        "test-id": {
+          id: "test-id",
+          kind: "terminal",
+          title: "t",
+          cwd: "/r",
+          location: "grid",
+          runtimeStatus: "exited",
+        },
+      };
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({ ptyForegroundProcess: undefined, resizeStrategy: undefined }),
+      });
+      renderDialog();
+      // The PID is host-only, so its presence proves the read has landed.
+      await waitFor(() => expect(screen.queryByText("12345")).not.toBeNull());
+      await expectScreenAndReportAgree();
+    });
+  });
 });

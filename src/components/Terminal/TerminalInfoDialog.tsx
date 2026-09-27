@@ -107,9 +107,17 @@ function formatSyncMode(value: boolean | null): string {
   return value ? "On" : "Off";
 }
 
-function formatYesNo(value: boolean | undefined): string {
-  if (value === undefined) return UNKNOWN;
+function formatYesNo(value: boolean | undefined, absent: string): string {
+  if (value === undefined) return absent;
   return value ? "Yes" : "No";
+}
+
+function formatArgsForClipboard(args: string[] | undefined, absent: string): string {
+  if (args === undefined) return absent;
+  if (args.length === 0) return "(none)";
+  // JSON, not a space join: argv boundaries and embedded whitespace are the facts a
+  // bug report needs, and a join reconstructs a command line that never existed.
+  return JSON.stringify(args);
 }
 
 /** Prefer an agent's product name over its slug; fall back to the slug we were given. */
@@ -497,6 +505,13 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // The host's `hasPty` only decides when the store has no status at all; a known
   // status wins outright, or a lagging `hasPty: false` labelled a live terminal dead.
   const hasExited = runtimeStatus ? runtimeStatus === "exited" : info?.hasPty === false;
+  // Each field's absence is decided once and read by both the screen and the copied
+  // report, so the two can't drift: a host-owned value is "Unavailable" when there is
+  // no payload to read it from, "Unknown" when the payload simply lacks it.
+  const hostAbsence = info ? UNKNOWN : UNAVAILABLE;
+  const processAbsence = hasExited ? NONE : hostAbsence;
+  const exitCodeAbsence = hasExited ? UNKNOWN : NONE;
+  const resizeStrategy = info ? info.resizeStrategy || "default" : undefined;
   const liveness = hasExited
     ? exitCode != null
       ? `Exited · code ${exitCode}`
@@ -563,14 +578,6 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // in this session (so plain terminals that ran `claude` still show the exit).
   const showAgentLiveSection = !!(launchAgentId || detectedAgentId || everDetectedAgent);
 
-  const formatArgsForClipboard = (args: string[] | undefined): string => {
-    if (args === undefined) return info ? NONE : UNAVAILABLE;
-    if (args.length === 0) return "(none)";
-    // JSON, not a space join: argv boundaries and embedded whitespace are the facts a
-    // bug report needs, and a join reconstructs a command line that never existed.
-    return JSON.stringify(args);
-  };
-
   /**
    * The full payload, built from data rather than from the DOM.
    *
@@ -595,7 +602,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
 Agent launch:
   Launch agent: ${launchAgentId ?? NONE}
   Command: ${command ?? NONE}
-  Launch flags: ${formatArgsForClipboard(agentLaunchFlags)}
+  Launch flags: ${formatArgsForClipboard(agentLaunchFlags, NONE)}
   Model: ${agentModelId ?? NONE}
   Preset: ${agentPresetId ?? NONE}
   Preset color: ${agentPresetColor ?? NONE}
@@ -619,8 +626,8 @@ Agent state:
 Status:
   Liveness: ${liveness}
   Runtime status: ${runtimeStatus ?? UNKNOWN}
-  Foreground process: ${info?.ptyForegroundProcess ?? (info ? NONE : UNAVAILABLE)}
-  Exit code: ${exitCode != null ? exitCode : NONE}
+  Foreground process: ${info?.ptyForegroundProcess ?? processAbsence}
+  Exit code: ${exitCode ?? exitCodeAbsence}
 ${diagnosticsNote}
 Session:
   ID: ${info?.id ?? terminalId}
@@ -638,13 +645,13 @@ ${startedByAssistant ? "  Started by: Daintree Assistant\n" : ""}  Started via M
 How it launched:
   Shell: ${info?.shell || UNAVAILABLE}
   Command: ${command ?? NONE}
-  Args: ${formatArgsForClipboard(info?.spawnArgs)}${agentSection}
+  Args: ${formatArgsForClipboard(info?.spawnArgs, info ? NONE : UNAVAILABLE)}${agentSection}
 
 Terminal internals:
   Agent launch hint: ${launchAgentId ? "Yes" : "No"}
-  PTY active: ${formatYesNo(info?.hasPty)}
-  Analysis enabled: ${formatYesNo(info?.analysisEnabled)}
-  Resize strategy: ${info?.resizeStrategy || "default"}
+  PTY active: ${formatYesNo(info?.hasPty, hostAbsence)}
+  Analysis enabled: ${formatYesNo(info?.analysisEnabled, hostAbsence)}
+  Resize strategy: ${resizeStrategy ?? UNAVAILABLE}
   Dimensions: ${info?.ptyCols != null && info?.ptyRows != null ? `${info.ptyCols} × ${info.ptyRows}` : UNAVAILABLE}
   Shell PID: ${info?.ptyPid ?? UNAVAILABLE}
   TTY device: ${info?.ptyTty ?? UNAVAILABLE}
@@ -679,13 +686,17 @@ Performance:
     error,
     everDetectedAgent,
     exitCode,
+    exitCodeAbsence,
     hasExited,
+    hostAbsence,
     info,
     launchAgentId,
     liveness,
     location,
     originalPresetId,
     panel?.kind,
+    processAbsence,
+    resizeStrategy,
     runtimeStatus,
     showAgentLaunchSection,
     showAgentLiveSection,
@@ -789,7 +800,7 @@ Performance:
                 label="Process"
                 value={processValue}
                 pending={pending}
-                fallback={hasExited ? NONE : UNKNOWN}
+                fallback={processAbsence}
               />
               <Row
                 label={hasExited ? "Started" : "Runtime"}
@@ -1040,7 +1051,11 @@ Performance:
             expanded={internalsOpen}
             onToggle={() => setInternalsOpen((v) => !v)}
           >
-            <Row label="PTY active" value={formatYesNo(info?.hasPty)} pending={pending} />
+            <Row
+              label="PTY active"
+              value={formatYesNo(info?.hasPty, hostAbsence)}
+              pending={pending}
+            />
             <Row
               label="Shell PID"
               value={info?.ptyPid}
@@ -1066,17 +1081,18 @@ Performance:
               pending={pending}
               fallback={UNAVAILABLE}
             />
-            <Row label="Exit code" value={exitCode} mono fallback={hasExited ? UNKNOWN : NONE} />
+            <Row label="Exit code" value={exitCode} mono fallback={exitCodeAbsence} />
             <Row label="Kind" value={info?.kind || panel?.kind || "terminal"} />
             <Row label="Title mode" value={titleMode ?? "default"} />
             <Row
               label="Resize strategy"
-              value={info?.resizeStrategy || "default"}
+              value={resizeStrategy}
               pending={pending}
+              fallback={UNAVAILABLE}
             />
             <Row
               label="Analysis enabled"
-              value={formatYesNo(info?.analysisEnabled)}
+              value={formatYesNo(info?.analysisEnabled, hostAbsence)}
               pending={pending}
             />
             <Row label="Agent launch hint" value={launchAgentId ? "Yes" : "No"} />
