@@ -118,6 +118,10 @@ export const CORE_TIER_TOOLS = [
   "slashCommands.list",
 
   "help.displayImage",
+  // Logs meant for someone else go through the review the user trims and saves
+  // themselves, not an archive the assistant builds from the raw log folder
+  // (#12882). Reserved to the assistant below; off the external list.
+  "diagnostics.openReview",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -237,6 +241,9 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "terminal.kill",
   "terminal.restart",
   "terminal.closeAll",
+  // Opens a dialog in the window the user is watching, which only the
+  // assistant pinned to that window should do.
+  "diagnostics.openReview",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

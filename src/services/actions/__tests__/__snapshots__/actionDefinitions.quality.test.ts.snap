@@ -1207,7 +1207,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "diagnostics",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Collect a diagnostics snapshot and open the review dialog for export. Optional scope hint (timeWindowMs, sections) pre-selects which sections to include.",
+    "description": "Collect a diagnostics snapshot and open the review dialog, where the user checks, trims and redacts each section before saving the export themselves. The way to hand logs to someone else: nothing leaves the machine from this call.",
     "examples": undefined,
     "id": "diagnostics.openReview",
     "keywords": undefined,

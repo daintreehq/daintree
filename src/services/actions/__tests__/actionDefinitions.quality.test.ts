@@ -472,7 +472,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // four-agent vote went from 12 MCP calls to 4 — so the bytes buy far more
   // than they cost. The external total does not move: none is external.
   // 27_154 → 18_700 after description trim, measured at 18_616 B.
-  const MAX_COHORT_TOTAL_BYTES = 18_700;
+  // 18_700 → 18_850 for #12882's `diagnostics.openReview` on core, measured at
+  // 18_847 B. The surface had 84 B spare, so its 230 B description could not
+  // have fit at any wording above the 120 B floor. What the prose has to carry
+  // is that the user trims and saves the export, so a caller asked for logs to
+  // share reaches for it instead of archiving the raw log folder.
+  const MAX_COHORT_TOTAL_BYTES = 18_850;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
