@@ -278,7 +278,7 @@ function Card({
               menu={menu}
               // As the card wires it: the delete shortcut appears once a
               // worktree's work is ready for cleanup.
-              onCleanupWorktree={row.id === "cleanup" && !row.noGrip ? noop : undefined}
+              onCleanupWorktree={chipState === "cleanup" && !row.noGrip ? noop : undefined}
             />
           </div>
           {!collapsed && (
