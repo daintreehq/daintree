@@ -147,7 +147,7 @@ import {
   HelpSessionService,
   codexTrustArgs,
   projectRuleRoots,
-  withoutProtectedAncestors,
+  editDenyRuleRoots,
 } from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
@@ -829,13 +829,42 @@ describe("HelpSessionService", () => {
     expect(reader).not.toHaveBeenCalled();
   });
 
+  it("never denies edits over the scratch folder even when serving a project that contains it", async () => {
+    const result = await service.provisionSession({ ...provisionInput(), projectPath: tmpRoot });
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    for (const covering of [tmpRoot, await fs.realpath(tmpRoot)]) {
+      expect(deny).not.toContain(`Edit(/${covering}/**)`);
+    }
+    expect(deny).toContain("Edit(**)");
+  });
+
   it("drops roots that equal or contain a protected folder, but not prefix neighbours", async () => {
     await expect(
-      withoutProtectedAncestors(
-        ["/data", "/data/app", "/data/app-sibling", "/data/app/help-sessions/x", "/elsewhere"],
-        ["/data/app/help-sessions"]
+      editDenyRuleRoots(
+        ["/data", "/data/app", "/data/app-sibling", "/elsewhere", "/elsewhere"],
+        ["/data/app/help-sessions"],
+        "darwin"
       )
-    ).resolves.toEqual(["/data/app-sibling", "/data/app/help-sessions/x", "/elsewhere"]);
+    ).resolves.toEqual(["//data/app-sibling", "//elsewhere"]);
+  });
+
+  it("sees a protected folder through a symlinked parent before it exists", async () => {
+    const real = path.join(tmpRoot, "real");
+    const link = path.join(tmpRoot, "link");
+    await fs.mkdir(real);
+    await fs.symlink(real, link);
+
+    const rules = await editDenyRuleRoots(
+      [real, "/elsewhere"],
+      [path.join(link, "app", "assistant-scratch")],
+      "darwin"
+    );
+    expect(rules).toEqual(["//elsewhere"]);
   });
 
   it("writes project rules as literal paths, escaping glob characters", async () => {
