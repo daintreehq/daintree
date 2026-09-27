@@ -126,6 +126,40 @@ export function parseFseventsdRssMb(stdout: string): number {
   return maxKb / 1024;
 }
 
+/** Null where the reading failed. */
+interface OverCauses {
+  swapOver: boolean | null;
+  fseventsdOver: boolean | null;
+  kernelPressureLevel: KernelPressureLevel | null;
+}
+
+/**
+ * A reading that differs from the last one seen. A failed reading is no
+ * change, and neither is a first healthy reading of a figure that had only
+ * ever failed — it completes the picture rather than altering it.
+ */
+function overCausesChanged(seen: OverCauses, observed: OverCauses): boolean {
+  const differs = <T>(before: T | null, after: T | null, healthy: boolean) =>
+    after !== null && after !== before && !(before === null && healthy);
+  return (
+    differs(seen.swapOver, observed.swapOver, observed.swapOver === false) ||
+    differs(seen.fseventsdOver, observed.fseventsdOver, observed.fseventsdOver === false) ||
+    differs(
+      seen.kernelPressureLevel,
+      observed.kernelPressureLevel,
+      observed.kernelPressureLevel !== null && observed.kernelPressureLevel < KERNEL_PRESSURE_WARN
+    )
+  );
+}
+
+function mergeOverCauses(seen: OverCauses | null, observed: OverCauses): OverCauses {
+  return {
+    swapOver: observed.swapOver ?? seen?.swapOver ?? null,
+    fseventsdOver: observed.fseventsdOver ?? seen?.fseventsdOver ?? null,
+    kernelPressureLevel: observed.kernelPressureLevel ?? seen?.kernelPressureLevel ?? null,
+  };
+}
+
 /**
  * Observes whether the machine itself is degraded — swap nearly full, or on
  * Darwin an `fseventsd` grown to many gigabytes or the kernel reporting memory
@@ -156,8 +190,12 @@ export function createSystemMemoryPressureMonitor(
   /** An over-threshold record was logged since the last recovery record. */
   let elevated = false;
   let episodeOpen = false;
-  /** Causes and kernel level of the last logged over record; null until one is logged. */
-  let lastOverSignature: string | null = null;
+  /**
+   * Which thresholds were last seen crossed, and the kernel level, since the
+   * last recovery; null until the first over-threshold sample. A failed reading
+   * keeps the previous value rather than reading as a change.
+   */
+  let seenCauses: OverCauses | null = null;
 
   function record(sample: SystemMemorySample): void {
     const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
@@ -175,27 +213,20 @@ export function createSystemMemoryPressureMonitor(
       kernelPressureLevel,
     };
 
-    const fullyObserved =
-      swap !== null &&
-      (!deps.isDarwin || (fseventsdRssMb !== null && kernelPressureLevel !== null));
-
     if (swapOver || fseventsdOver || kernelOver) {
       overStreak++;
       clearStreak = 0;
       elevated = true;
       const episodeOpening = !episodeOpen && overStreak >= EPISODE_OPEN_SAMPLES;
-      // Figures are left out: they move on every reading. A sample with a failed
-      // reading cannot tell whether a cause changed, so it never re-logs on its own.
-      const signature = JSON.stringify({
-        swapOver,
-        fseventsdOver,
-        kernelOver,
+      // Figures are left out: they move on every reading.
+      const observed: OverCauses = {
+        swapOver: swap === null ? null : swapOver,
+        fseventsdOver: fseventsdRssMb === null ? null : fseventsdOver,
         kernelPressureLevel,
-      });
-      const causeChanged =
-        lastOverSignature === null || (fullyObserved && signature !== lastOverSignature);
+      };
+      const causeChanged = seenCauses === null || overCausesChanged(seenCauses, observed);
+      seenCauses = mergeOverCauses(seenCauses, observed);
       if (episodeOpening || causeChanged) {
-        if (fullyObserved || lastOverSignature === null) lastOverSignature = signature;
         logWarn("system-health", { state: "over", ...figures, consecutiveSamples: overStreak });
       }
       if (episodeOpening) {
@@ -211,6 +242,9 @@ export function createSystemMemoryPressureMonitor(
       return;
     }
 
+    const fullyObserved =
+      swap !== null &&
+      (!deps.isDarwin || (fseventsdRssMb !== null && kernelPressureLevel !== null));
     if (!fullyObserved) {
       // Breaks both runs: "consecutive" means consecutive observations. An
       // open episode stays open — only observed clear samples close it.
@@ -229,7 +263,7 @@ export function createSystemMemoryPressureMonitor(
     elevated = false;
     episodeOpen = false;
     clearStreak = 0;
-    lastOverSignature = null;
+    seenCauses = null;
     if (wasOpen) {
       deps.publish({
         status: "normal",

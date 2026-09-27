@@ -288,6 +288,36 @@ describe("createSystemMemoryPressureMonitor", () => {
     expect(systemHealthRecords(logWarn, "over")).toHaveLength(2);
   });
 
+  it("logs a kernel change seen while an unrelated reading fails", async () => {
+    let fseventsd: number | null = 100;
+    let level: KernelPressureLevel = 1;
+    const { tick } = makeMonitor({
+      swap: () => FULL_SWAP,
+      fseventsdRssMb: () => fseventsd,
+      kernelPressureLevel: () => level,
+    });
+
+    await tick(EPISODE_OPEN_SAMPLES);
+    fseventsd = null;
+    level = 4;
+    await tick(1);
+
+    const records = systemHealthRecords(logWarn, "over");
+    expect(records).toHaveLength(3);
+    expect(records[2]![1]).toEqual(expect.objectContaining({ kernelPressureLevel: 4 }));
+  });
+
+  it("does not re-log when a reading that failed on the first sample comes back healthy", async () => {
+    let level: KernelPressureLevel | null = null;
+    const { tick } = makeMonitor({ swap: () => FULL_SWAP, kernelPressureLevel: () => level });
+
+    await tick(1);
+    level = 1;
+    await tick(1);
+
+    expect(systemHealthRecords(logWarn, "over")).toHaveLength(1);
+  });
+
   it("does not re-log a reading that flaps around the threshold without recovering", async () => {
     const readings = [FULL_SWAP, HEALTHY_SWAP, FULL_SWAP, HEALTHY_SWAP, FULL_SWAP, HEALTHY_SWAP];
     const { tick } = makeMonitor({ swap: sequence(readings, HEALTHY_SWAP) });
