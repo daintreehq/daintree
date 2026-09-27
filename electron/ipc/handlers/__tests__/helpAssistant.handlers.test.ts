@@ -249,7 +249,9 @@ describe("registerHelpAssistantHandlers", () => {
     storeMock.get.mockReturnValue({ daintreeConfirmations: "always-ask" });
     expect(await handler(null)).toMatchObject({ daintreeConfirmations: "always-ask" });
 
-    storeMock.get.mockReturnValue({ daintreeConfirmations: "skip" });
+    storeMock.get.mockReturnValue({
+      daintreeConfirmations: "skip" as unknown as "inherit",
+    });
     expect(await handler(null)).toMatchObject({ daintreeConfirmations: "inherit" });
   });
 
