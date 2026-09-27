@@ -2512,6 +2512,17 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: 2px !important;
   }
 
+  /* The UA greys a natively disabled button, but not one that announces
+     unavailability with `aria-disabled` to stay focusable — which is what
+     `Button` does for `disabled`-while-loading and what the full-width CTAs do
+     while blocked. Without this a blocked Commit or Continue reads exactly
+     like an available one. */
+  button[aria-disabled="true"],
+  [role="button"][aria-disabled="true"] {
+    color: GrayText;
+    border-color: GrayText;
+  }
+
   /* Chromium forces an inherited `currentColor` but not a colour set on the SVG
      itself, by class or inline style — so a severity glyph kept its amber stroke
      on the white canvas at ~2.6:1. The glyph's shape carries the severity here;
