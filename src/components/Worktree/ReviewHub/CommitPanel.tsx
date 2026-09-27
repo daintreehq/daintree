@@ -179,15 +179,12 @@ export function CommitPanel({
   const canCommit =
     stagedCount > 0 && commitMessage.trim().length > 0 && !isDetachedHead && !hasConflicts;
 
+  // Ordered by where a blocked click sends focus first.
   const blockers = [
-    { key: "detached-head" as const, active: isDetachedHead, label: "Not on detached HEAD" },
-    { key: "conflicts" as const, active: hasConflicts, label: "No merge conflicts" },
-    { key: "zero-staged" as const, active: stagedCount === 0, label: "Files staged for commit" },
-    {
-      key: "empty-message" as const,
-      active: commitMessage.trim().length === 0,
-      label: "Commit message entered",
-    },
+    { key: "detached-head" as const, active: isDetachedHead },
+    { key: "conflicts" as const, active: hasConflicts },
+    { key: "zero-staged" as const, active: stagedCount === 0 },
+    { key: "empty-message" as const, active: commitMessage.trim().length === 0 },
   ];
 
   const primaryBlocker = blockers.find((b) => b.active) ?? null;
@@ -476,13 +473,6 @@ export function CommitPanel({
       "Pushing…"
     );
     statusTitle = pushTarget ? `Pushing to ${pushTarget}` : undefined;
-    if (isPushQuiet) {
-      statusContent = (
-        <>
-          {statusContent} · no new progress in the last {PUSH_QUIET_MS / 1000}s
-        </>
-      );
-    }
   } else if (isCommitting) {
     statusContent = `Committing ${formatFileCount(pendingCount)}…`;
   } else if (isBlocked) {
@@ -598,6 +588,13 @@ export function CommitPanel({
         <span className={cn("min-w-0", isBlocked && !isBusy ? "break-words" : "truncate")}>
           {statusContent}
         </span>
+        {isPushing && isPushQuiet && (
+          // Its own slot, so a long destination truncating beside it can never
+          // hide the one line explaining a pause.
+          <span className="shrink-0 whitespace-nowrap">
+            · no new progress in the last {PUSH_QUIET_MS / 1000}s
+          </span>
+        )}
         {showShortcut && (
           <KbdChord
             shortcut={PRIMARY_SHORTCUT}
@@ -735,7 +732,9 @@ export function CommitPanel({
             }}
             aria-disabled={!canCommit || actionsBusy || undefined}
             aria-describedby={statusId}
-            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+            // Solid ink rather than opacity: a faded label is a slash-alpha text
+            // colour by another route. Matches the primary's unavailable ink.
+            className="aria-disabled:text-text-muted aria-disabled:cursor-not-allowed forced-colors:aria-disabled:text-[GrayText]"
           >
             {pendingAction === "commit" ? (
               <Spinner size="sm" className="mr-1.5" />
