@@ -148,6 +148,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
         onQueryChange={loggerPalette.setQuery}
         onSelectPrevious={loggerPalette.selectPrevious}
         onSelectNext={loggerPalette.selectNext}
+        onSelectIndex={loggerPalette.setSelectedIndex}
         onConfirm={handleLoggerConfirm}
         onClose={onClose}
         getItemId={(item) => item.id}
@@ -189,6 +190,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
       onQueryChange={levelPalette.setQuery}
       onSelectPrevious={levelPalette.selectPrevious}
       onSelectNext={levelPalette.selectNext}
+      onSelectIndex={levelPalette.setSelectedIndex}
       onConfirm={handleLevelConfirm}
       onClose={onClose}
       getItemId={(item) => item.id}

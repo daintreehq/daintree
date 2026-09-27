@@ -13,8 +13,27 @@ import { useEscapeStack } from "@/hooks";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
+import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 
 const noopHoverIndex = () => {};
+
+// Same band head as the action palette's: the header sits inside its group, so
+// the air above a later band goes on the group rather than the label.
+const SECTION_HEADER_CLASS = `${PALETTE_SECTION_LABEL_CLASS} px-3 py-1`;
+
+function sectionRuns<T>(
+  items: readonly T[],
+  getLabel: (item: T) => string
+): { label: string; start: number; items: T[] }[] {
+  const runs: { label: string; start: number; items: T[] }[] = [];
+  items.forEach((item, index) => {
+    const label = getLabel(item);
+    const last = runs[runs.length - 1];
+    if (last && last.label === label) last.items.push(item);
+    else runs.push({ label, start: index, items: [item] });
+  });
+  return runs;
+}
 
 export interface SearchablePaletteProps<T> {
   isOpen: boolean;
@@ -48,6 +67,18 @@ export interface SearchablePaletteProps<T> {
   ) => React.ReactNode;
   /** Called when the pointer hovers a row, for keeping selectedIndex in sync. */
   onHoverIndex?: (index: number) => void;
+  /**
+   * Moves the cursor to an index. Home/End need it; without it (or
+   * `onHoverIndex` as a fallback) they are left to the input's own caret
+   * movement rather than swallowed.
+   */
+  onSelectIndex?: (index: number) => void;
+  /**
+   * Bands consecutive rows that share a label into a labelled `role="group"`
+   * inside the listbox, headed by the palette section label. Results must
+   * already be ordered by band; a label change starts a new band.
+   */
+  getSectionLabel?: (item: T) => string;
   /**
    * Optional Fuse match ranges keyed by item ID. When provided, each item's
    * matches are forwarded to `renderItem` as the 5th argument. Produced by
@@ -194,6 +225,8 @@ export function SearchablePalette<T>({
   getItemId,
   renderItem,
   onHoverIndex,
+  onSelectIndex,
+  getSectionLabel,
   matchesById,
   label,
   shortcut,
@@ -234,13 +267,16 @@ export function SearchablePalette<T>({
   );
 
   useEffect(() => {
-    if (listRef.current && selectedIndex >= 0 && results.length > 0) {
-      const selectedItem = listRef.current.children[selectedIndex];
+    if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
+      // By id, not by child position: section bands put headers and group
+      // wrappers between the listbox and its options.
+      const id = `${itemIdPrefix}-${getItemId(results[selectedIndex]!)}`;
+      const selectedItem = listRef.current.querySelector(`[id="${CSS.escape(id)}"]`);
       if (selectedItem instanceof HTMLElement) {
         selectedItem.scrollIntoView({ block: "nearest", behavior: "instant" });
       }
     }
-  }, [selectedIndex, results]);
+  }, [selectedIndex, results, itemIdPrefix, getItemId]);
 
   // One owner for "N results". Two things can end with a count worth saying —
   // a filter pass settling and an announced load landing — and they often end
@@ -341,6 +377,7 @@ export function SearchablePalette<T>({
   });
 
   const hoverIndexHandler = onHoverIndex ?? noopHoverIndex;
+  const jumpToIndex = onSelectIndex ?? onHoverIndex;
 
   /**
    * List navigation shared by the query input and the focusable results region
@@ -366,17 +403,19 @@ export function SearchablePalette<T>({
           // result. The palette input is single-line, the caret rarely needs
           // explicit movement, and matching VS Code / Linear / Raycast keeps
           // the muscle memory consistent. No-op when there's nothing to jump
-          // to so empty-state typing isn't intercepted.
-          if (results.length === 0) break;
+          // to so empty-state typing isn't intercepted, and when the consumer
+          // gave us no way to move the cursor — preventing the default then
+          // made the key do nothing at all.
+          if (results.length === 0 || !jumpToIndex) break;
           e.preventDefault();
           e.stopPropagation();
-          hoverIndexHandler(0);
+          jumpToIndex(0);
           break;
         case "End":
-          if (results.length === 0) break;
+          if (results.length === 0 || !jumpToIndex) break;
           e.preventDefault();
           e.stopPropagation();
-          hoverIndexHandler(results.length - 1);
+          jumpToIndex(results.length - 1);
           break;
         case "Enter":
           e.preventDefault();
@@ -385,7 +424,7 @@ export function SearchablePalette<T>({
           break;
       }
     },
-    [onSelectPrevious, onSelectNext, onConfirm, results.length, hoverIndexHandler]
+    [onSelectPrevious, onSelectNext, onConfirm, results.length, jumpToIndex]
   );
 
   const handleKeyDown = useCallback(
@@ -549,17 +588,40 @@ export function SearchablePalette<T>({
                 data-stale={isFiltering ? "true" : undefined}
                 aria-busy={isFiltering || undefined}
               >
-                {results
-                  .slice(0, renderLimit)
-                  .map((item, index) =>
-                    renderItem(
-                      item,
-                      index,
-                      index === selectedIndex,
-                      hoverIndexHandler,
-                      matchesById?.get(getItemId(item))
-                    )
-                  )}
+                {getSectionLabel
+                  ? sectionRuns(results.slice(0, renderLimit), getSectionLabel).map((run) => (
+                      <div
+                        key={`${run.start}-${run.label}`}
+                        role="group"
+                        className="not-first:mt-2"
+                        aria-labelledby={`${listId}-band-${run.start}`}
+                      >
+                        <div id={`${listId}-band-${run.start}`} className={SECTION_HEADER_CLASS}>
+                          {run.label}
+                        </div>
+                        {run.items.map((item, offset) => {
+                          const index = run.start + offset;
+                          return renderItem(
+                            item,
+                            index,
+                            index === selectedIndex,
+                            hoverIndexHandler,
+                            matchesById?.get(getItemId(item))
+                          );
+                        })}
+                      </div>
+                    ))
+                  : results
+                      .slice(0, renderLimit)
+                      .map((item, index) =>
+                        renderItem(
+                          item,
+                          index,
+                          index === selectedIndex,
+                          hoverIndexHandler,
+                          matchesById?.get(getItemId(item))
+                        )
+                      )}
               </div>
             )}
             {totalResults != null && (

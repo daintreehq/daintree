@@ -191,6 +191,31 @@ describe("SearchablePalette keyboard navigation (non-composing)", () => {
     expect(onHoverIndex).not.toHaveBeenCalled();
     expect(prevented).toBe(false);
   });
+
+  it("moves the cursor through onSelectIndex, not the hover handler, when both exist", () => {
+    const onHoverIndex = vi.fn();
+    const onSelectIndex = vi.fn();
+    renderPalette({ onHoverIndex, onSelectIndex, selectedIndex: 0 });
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "End", keyCode: 35 });
+    expect(onSelectIndex).toHaveBeenCalledWith(items.length - 1);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+  });
+
+  it.each(["Home", "End"])(
+    "leaves %s to the input when the consumer cannot move the cursor",
+    (key) => {
+      renderPalette({ selectedIndex: 1 });
+      const input = screen.getByRole("combobox");
+      const event = new window.KeyboardEvent("keydown", { key, bubbles: true });
+      let prevented = false;
+      event.preventDefault = () => {
+        prevented = true;
+      };
+      input.dispatchEvent(event);
+      expect(prevented).toBe(false);
+    }
+  );
 });
 
 describe("SearchablePalette Tab remap (input)", () => {
