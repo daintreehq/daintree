@@ -15,6 +15,11 @@ import { DATABASE_SCHEMA_TOOL, type DatabaseToolRequest } from "../databaseTools
 
 const request: DatabaseToolRequest = { tool: DATABASE_SCHEMA_TOOL, targets: [] };
 
+/** A request told apart by a marker in `targets`; the fake child never reads it as a target. */
+function tagged(label: string): DatabaseToolRequest {
+  return { ...request, targets: [label] } as unknown as DatabaseToolRequest;
+}
+
 class FakeChild extends EventEmitter {
   pid: number | undefined = undefined;
   posted: DatabaseToolRequest[] = [];
@@ -184,16 +189,8 @@ describe("runDatabaseToolInProcess", () => {
     it("admits waiters first come first served", async () => {
       const d = deps();
       fillSlots(d);
-      const first = runDatabaseToolInProcess(
-        { ...request, targets: ["first"] } as DatabaseToolRequest,
-        queuedSignal(),
-        d
-      );
-      const second = runDatabaseToolInProcess(
-        { ...request, targets: ["second"] } as DatabaseToolRequest,
-        queuedSignal(),
-        d
-      );
+      const first = runDatabaseToolInProcess(tagged("first"), queuedSignal(), d);
+      const second = runDatabaseToolInProcess(tagged("second"), queuedSignal(), d);
       children[0]!.exit();
       expect(d.child().posted[0]).toMatchObject({ targets: ["first"] });
       children[1]!.exit();
@@ -231,11 +228,7 @@ describe("runDatabaseToolInProcess", () => {
       ).rejects.toMatchObject({ code: "DB_BUSY" });
 
       controllers[3]!.abort();
-      const replacement = runDatabaseToolInProcess(
-        { ...request, targets: ["replacement"] } as DatabaseToolRequest,
-        queuedSignal(),
-        d
-      );
+      const replacement = runDatabaseToolInProcess(tagged("replacement"), queuedSignal(), d);
       replacement.catch(() => {});
       expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
       // The replacement waits behind every earlier waiter still queued.
@@ -249,11 +242,7 @@ describe("runDatabaseToolInProcess", () => {
       const stuck = Array.from({ length: MAX_CONCURRENT_DATABASE_PROCESSES }, () =>
         runDatabaseToolInProcess(request, new AbortController().signal, d).catch(() => {})
       );
-      const waiter = runDatabaseToolInProcess(
-        { ...request, targets: ["waiter"] } as DatabaseToolRequest,
-        queuedSignal(),
-        d
-      );
+      const waiter = runDatabaseToolInProcess(tagged("waiter"), queuedSignal(), d);
       expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
 
       vi.advanceTimersByTime(SPAWN_DEADLINE_MS);
