@@ -157,36 +157,33 @@ describe("HelpPanelBanners — launch error", () => {
     expect(onOpenAssistantSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("renders the exact CTA matrix per kind (label + variant + order)", () => {
+  it("renders the exact CTA matrix per kind (label + rank + order)", () => {
+    // Primary recovery first, then at most one demoted affordance.
     const cases: { kind: LaunchErrorKind; labels: string[] }[] = [
       { kind: "mcp-server-not-started", labels: ["Retry", "Open settings"] },
       { kind: "mcp-probe-failed", labels: ["Retry", "Open settings"] },
       { kind: "skills-sync-failed", labels: ["Retry", "Open logs"] },
       { kind: "spawn-failed", labels: ["Retry"] },
       { kind: "mixed-agent-lanes", labels: [] },
-      { kind: "folder-unavailable", labels: ["Open logs", "Open installer page"] },
+      { kind: "folder-unavailable", labels: ["Open installer page", "Open logs"] },
     ];
     for (const { kind, labels } of cases) {
       const { getByTestId, queryAllByRole, unmount } = render(
         <HelpPanelBanners {...baseProps()} launchError={{ agentId: "claude", kind }} />
       );
       const banner = getByTestId("help-launch-error-banner");
-      const actionRow = banner.querySelector(".flex.items-center.gap-2.flex-wrap.pl-5");
+      const actionRow = banner.querySelector("[data-banner-controls]");
       // A kind with no CTAs drops the row entirely rather than rendering an
-      // empty one — the parent is a `gap-2` column, so an empty child would
-      // pad the banner with a phantom action row's worth of space.
+      // empty one that pads the banner with a phantom action row.
       expect(actionRow === null).toBe(labels.length === 0);
       const buttons = actionRow ? Array.from(actionRow.querySelectorAll("button")) : [];
       const actualLabels = buttons.map((b) => b.textContent?.trim() ?? "");
       expect(actualLabels).toEqual(labels);
-      // folder-unavailable: "Open installer page" is the primary CTA, so it
-      // carries the bg-daintree-text/10 fill — keep the visual rank honest.
-      if (kind === "folder-unavailable") {
-        const primary = buttons.find((b) => b.textContent?.trim() === "Open installer page");
-        expect(primary?.className).toMatch(/font-medium/);
-        expect(primary?.className).toMatch(/bg-daintree-text\/10/);
-        const secondary = buttons.find((b) => b.textContent?.trim() === "Open logs");
-        expect(secondary?.className).not.toMatch(/font-medium/);
+      // The primary is visibly ranked above the demoted affordance.
+      if (buttons.length === 2) {
+        expect(buttons[0]!.getAttribute("data-variant")).not.toBe(
+          buttons[1]!.getAttribute("data-variant")
+        );
       }
       // Sanity: no orphaned buttons beyond the dismiss × and the CTAs above.
       const allButtons = queryAllByRole("button");
@@ -253,7 +250,7 @@ describe("HelpPanelBanners — resume banner (#10057)", () => {
       <HelpPanelBanners {...baseProps()} showResumeBanner={true} />
     );
     expect(getByTestId("help-resume-banner").getAttribute("role")).toBe("status");
-    expect(getByText("Resumed your previous session.")).toBeTruthy();
+    expect(getByText("Resumed your previous session")).toBeTruthy();
   });
 
   it("wires the resume banner's dismiss button to onDismissResume", () => {
@@ -441,7 +438,10 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
         onRevokeGrant={onRevokeGrant}
       />
     );
-    expect((getByText("Revoke access") as HTMLButtonElement).disabled).toBe(true);
+    // Busy, not natively disabled: the button keeps focus while it spins.
+    const busy = getByText("Revoke access").closest("button")!;
+    expect(busy.getAttribute("aria-busy")).toBe("true");
+    expect(busy.getAttribute("aria-disabled")).toBe("true");
   });
 });
 
@@ -512,12 +512,12 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     const banner = getByTestId("help-tier-mismatch-banner");
     expect(banner.getAttribute("role")).toBe("alert");
 
-    const actionRow = banner.querySelector(".flex.items-center.gap-2.flex-wrap.pl-5");
+    const actionRow = banner.querySelector("[data-banner-controls]");
     expect(actionRow).not.toBeNull();
     const labels = Array.from(actionRow!.querySelectorAll("button")).map(
       (b) => b.textContent?.trim() ?? ""
     );
-    expect(labels).toEqual(["Allow this tool", "Set project default", "Cancel"]);
+    expect(labels).toEqual(["Allow this tool", "Set project default"]);
   });
 
   it("never claims the grant is one call or the elevation permanent", () => {
@@ -555,7 +555,7 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     const onApproveOnce = vi.fn();
     const onAlwaysAllow = vi.fn();
     const onDismissTierMismatch = vi.fn();
-    const { getByText } = render(
+    const { getByText, getByLabelText } = render(
       <HelpPanelBanners
         {...baseProps()}
         tierMismatch={tierMismatch}
@@ -567,25 +567,32 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
 
     fireEvent.click(getByText("Allow this tool"));
     fireEvent.click(getByText("Set project default"));
-    fireEvent.click(getByText("Cancel"));
+    fireEvent.click(getByLabelText("Dismiss tier mismatch notice"));
 
     expect(onApproveOnce).toHaveBeenCalledTimes(1);
     expect(onAlwaysAllow).toHaveBeenCalledTimes(1);
     expect(onDismissTierMismatch).toHaveBeenCalledTimes(1);
   });
 
-  it("disables every action while an approval is in flight", () => {
-    const { getByTestId } = render(
-      <HelpPanelBanners {...baseProps()} tierMismatch={tierMismatch} isApprovingTier />
+  it("makes every control inert while an approval is in flight, and spins only the one clicked", () => {
+    const props = { ...baseProps(), tierMismatch };
+    const { getByTestId, getByText, getByLabelText, rerender } = render(
+      <HelpPanelBanners {...props} />
     );
-    const actionRow = getByTestId("help-tier-mismatch-banner").querySelector(
-      ".flex.items-center.gap-2.flex-wrap.pl-5"
-    );
-    const buttons = Array.from(actionRow!.querySelectorAll("button"));
+    fireEvent.click(getByText("Set project default"));
+    rerender(<HelpPanelBanners {...props} isApprovingTier />);
+
+    const banner = getByTestId("help-tier-mismatch-banner");
+    const buttons = Array.from(banner.querySelectorAll("button"));
     expect(buttons.length).toBe(3);
-    // Cancel is disabled too: dismissing mid-flight would strand the in-flight
+    // The × is inert too: dismissing mid-flight would strand the in-flight
     // grant with no banner to report its outcome.
-    expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    expect(buttons.every((b) => b.getAttribute("aria-disabled") === "true")).toBe(true);
+    const busy = buttons.filter((b) => b.getAttribute("aria-busy") === "true");
+    expect(busy.map((b) => b.textContent?.trim())).toEqual(["Set project default"]);
+
+    fireEvent.click(getByLabelText("Dismiss tier mismatch notice"));
+    expect(props.onDismissTierMismatch).not.toHaveBeenCalled();
   });
 
   // `targetTier: null` means neither tool set permits the tool, so neither
@@ -607,5 +614,74 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     expect(banner.textContent).not.toContain("The project default");
     expect(queryByText("Allow this tool")).toBeNull();
     expect(queryByText("Set project default")).toBeNull();
+  });
+});
+
+describe("HelpPanelBanners — the stack", () => {
+  const everything = () => ({
+    ...baseProps(),
+    showResumeBanner: true,
+    activeGrant: { sessionId: "s1", toolId: "t1", ttlMs: 900_000, expiresAt: Date.now() + 60_000 },
+    grantEnded: { toolId: "t2", reason: "expired" as const },
+    tierMismatch: {
+      sessionId: "s1",
+      toolId: "terminal.new",
+      tier: "core",
+      targetTier: "full" as const,
+      projectId: "p1",
+    },
+    launchError: { agentId: "claude", kind: "mcp-server-not-started" as const },
+    sessionRevoked: { sessionId: "s1", denialKind: "tierMismatch" },
+  });
+
+  it("puts every blocking alert above every advisory status", () => {
+    const { container } = render(<HelpPanelBanners {...everything()} />);
+    const roles = Array.from(container.querySelectorAll("[data-testid^='help-']")).map((el) =>
+      el.getAttribute("role")
+    );
+    expect(roles.length).toBe(5);
+    expect(roles.lastIndexOf("alert")).toBeLessThan(roles.indexOf("status"));
+  });
+
+  it("reaches each banner's recovery before its dismiss in tab order", () => {
+    const { container } = render(<HelpPanelBanners {...everything()} />);
+    const banners = Array.from(container.querySelectorAll("[data-testid^='help-']"));
+    // Every banner but the live grant carries a dismiss, and it is always last.
+    const withDismiss = banners.filter((banner) => {
+      const buttons = Array.from(banner.querySelectorAll("button"));
+      const dismiss = buttons.findIndex((b) => b.getAttribute("aria-label")?.startsWith("Dismiss"));
+      if (dismiss === -1) return false;
+      expect(dismiss).toBe(buttons.length - 1);
+      return true;
+    });
+    expect(withDismiss.map((b) => b.getAttribute("data-testid"))).toEqual(
+      banners
+        .map((b) => b.getAttribute("data-testid"))
+        .filter((id) => id !== "help-grant-active-banner")
+    );
+  });
+
+  it("builds every control from the Button primitive, dismiss included", () => {
+    const { container } = render(<HelpPanelBanners {...everything()} />);
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons.length).toBeGreaterThan(6);
+    for (const button of buttons) expect(button.hasAttribute("data-variant")).toBe(true);
+  });
+
+  it("holds the resume advisory back while anything is blocking, and shows it after", () => {
+    const blockers = [
+      { tierMismatch: everything().tierMismatch },
+      { launchError: everything().launchError },
+      { sessionRevoked: everything().sessionRevoked },
+    ];
+    for (const blocker of blockers) {
+      const { queryByTestId, rerender, unmount } = render(
+        <HelpPanelBanners {...baseProps()} showResumeBanner {...blocker} />
+      );
+      expect(queryByTestId("help-resume-banner")).toBeNull();
+      rerender(<HelpPanelBanners {...baseProps()} showResumeBanner />);
+      expect(queryByTestId("help-resume-banner")).not.toBeNull();
+      unmount();
+    }
   });
 });

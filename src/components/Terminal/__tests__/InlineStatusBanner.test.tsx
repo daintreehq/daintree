@@ -879,6 +879,183 @@ describe("InlineStatusBanner family invariants", () => {
 });
 
 describe("InlineStatusBanner focus handoff on any removal", () => {
+  it("never hands focus past a surviving banner to what sits beside the stack", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      // The assistant panel's shape: a stack of banners directly above a
+      // terminal, whose input would take the user's next keystrokes.
+      function Panel() {
+        const [open, setOpen] = useState(["a", "b"]);
+        const [replaced, setReplaced] = useState(false);
+        return (
+          <div>
+            {open.map((id) => (
+              <InlineStatusBanner
+                key={id}
+                title={id}
+                severity="warning"
+                animated={false}
+                closeAriaLabel={`Dismiss ${id}`}
+                onClose={() => setOpen((ids) => ids.filter((x) => x !== id))}
+                actions={
+                  id === "a" && !replaced
+                    ? [{ id: "swap", label: "Swap", onClick: () => setReplaced(true) }]
+                    : undefined
+                }
+              />
+            ))}
+            {replaced && (
+              <InlineStatusBanner
+                title="replacement"
+                severity="info"
+                animated={false}
+                closeAriaLabel="Dismiss replacement"
+                onClose={() => {}}
+              />
+            )}
+            <textarea aria-label="Terminal input" />
+          </div>
+        );
+      }
+      const view = render(<Panel />);
+      const button = (name: string) => screen.getByRole("button", { name });
+
+      // The bottom banner leaves: the one above survives, so focus steps back
+      // to its nearest control rather than down into the terminal.
+      button("Dismiss b").focus();
+      fireEvent.click(button("Dismiss b"));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(button("Dismiss a"));
+      view.unmount();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lands on the banner that replaced the one that left", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      function Stack() {
+        const [approved, setApproved] = useState(false);
+        return (
+          <div>
+            <InlineStatusBanner
+              title="top"
+              severity="error"
+              animated={false}
+              onClose={() => {}}
+              closeAriaLabel="Dismiss top"
+            />
+            {/* Separate slots, as HelpPanelBanners renders them: the asking
+                banner unmounts and a different one mounts in the same commit. */}
+            {!approved && (
+              <InlineStatusBanner
+                title="asking"
+                severity="warning"
+                animated={false}
+                actions={[{ id: "allow", label: "Allow", onClick: () => setApproved(true) }]}
+              />
+            )}
+            {approved && (
+              <InlineStatusBanner
+                title="granted"
+                severity="neutral"
+                animated={false}
+                action={{ id: "revoke", label: "Revoke", onClick: () => {} }}
+              />
+            )}
+            <InlineStatusBanner
+              title="bottom"
+              severity="info"
+              animated={false}
+              onClose={() => {}}
+              closeAriaLabel="Dismiss bottom"
+            />
+            <textarea aria-label="Terminal input" />
+          </div>
+        );
+      }
+      const view = render(<Stack />);
+      const allow = screen.getByRole("button", { name: "Allow" });
+      allow.focus();
+      fireEvent.click(allow);
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Revoke" }));
+      view.unmount();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the user's place in a stack: focus goes to the survivor after, else before", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      function Stack() {
+        const [open, setOpen] = useState(["a", "b", "c", "d"]);
+        return (
+          <div>
+            {open.map((id) => (
+              <InlineStatusBanner
+                key={id}
+                title={id}
+                severity="warning"
+                animated={false}
+                closeAriaLabel={`Dismiss ${id}`}
+                onClose={() => setOpen((ids) => ids.filter((x) => x !== id))}
+              />
+            ))}
+          </div>
+        );
+      }
+      const view = render(<Stack />);
+      const dismiss = (id: string) => screen.getByRole("button", { name: `Dismiss ${id}` });
+
+      // The middle one hands focus down to the banner that now stands in its place.
+      dismiss("b").focus();
+      fireEvent.click(dismiss("b"));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(dismiss("c"));
+
+      // The last one has nothing after it, so focus steps back up — not to the top.
+      dismiss("d").focus();
+      fireEvent.click(dismiss("d"));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(dismiss("c"));
+      view.unmount();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("hands focus back when an action, not the ×, unmounts the banner", () => {
     vi.useFakeTimers();
     const raf = vi

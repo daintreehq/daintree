@@ -81,6 +81,7 @@ const baseConfig: KnipConfig = {
     "src/components/FileViewer/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/footerPreview.tsx",
+    "src/components/HelpPanel/__preview__/bannersPreview.tsx",
     "src/components/HelpPanel/__preview__/figureRailPreview.tsx",
     "src/components/HelpPanel/__preview__/launchingPreview.tsx",
     "src/components/HelpPanel/__preview__/recentCallsPreview.tsx",
