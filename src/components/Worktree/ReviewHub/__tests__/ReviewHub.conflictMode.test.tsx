@@ -363,7 +363,12 @@ describe("ReviewHub", () => {
 
     abortRepositoryOperationMock.mockReset().mockResolvedValue(undefined);
     continueRepositoryOperationMock.mockReset().mockResolvedValue(undefined);
-    scanConflictMarkersMock.mockReset().mockResolvedValue([]);
+    // Mirrors the handler's contract: one entry per requested path.
+    scanConflictMarkersMock
+      .mockReset()
+      .mockImplementation(async (_cwd: string, paths: string[]) =>
+        paths.map((path) => ({ path, hunkCount: 0, firstMarkerLine: null }))
+      );
     checkoutOursTheirsMock.mockReset().mockResolvedValue(undefined);
     openInEditorMock.mockReset().mockResolvedValue(undefined);
     // Deliberately unlike the fixture worktree id — a worktree id is not a
@@ -636,7 +641,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
@@ -651,7 +656,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeTheirs = screen.getByRole("menuitem", { name: /of src\/app\.ts \(theirs\)/i });
+      const takeTheirs = screen.getByRole("menuitem", { name: /for src\/app\.ts \(theirs\)/i });
       fireEvent.click(takeTheirs);
       await confirmCheckout("theirs");
 
@@ -666,7 +671,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      fireEvent.click(screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i }));
 
       // Dialog is open but unconfirmed — the IPC must not have fired.
       await screen.findByRole("alertdialog");
@@ -760,13 +765,13 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
       await waitFor(() => {
         // The row reappears after rollback — the Take ours button is still rendered.
-        expect(screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i })).toBeTruthy();
+        expect(screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i })).toBeTruthy();
       });
     });
 
@@ -789,7 +794,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
@@ -944,6 +949,35 @@ describe("ReviewHub", () => {
       expect(stageFileMock).not.toHaveBeenCalled();
     });
 
+    it("asks before staging when the re-read returns nothing for the file", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await screen.findByRole("alertdialog");
+      expect(stageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("stages a file the scanner had no text to check (deleted, binary) without asking", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: null, firstMarkerLine: null },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await waitFor(() => {
+        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+      });
+    });
+
     it("hands focus to the next file when a confirm dialog resolves the row", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeMergingStatus({
@@ -958,7 +992,7 @@ describe("ReviewHub", () => {
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
-      fireEvent.click(await screen.findByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i }));
       await confirmCheckout("ours");
 
       await waitFor(() => {

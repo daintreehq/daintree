@@ -478,7 +478,7 @@ test("conflict panel review — merge, rebase, resolved, confirm, themes", async
           .getByRole("menuitem", { name: /\(ours\)$/ })
           .first()
           .click();
-        await expectState(page, ':text("current branch version of")', {
+        await expectState(page, ':text("Use current branch for")', {
           label: "take-ours confirm",
         });
         await snap(page, "31-confirm-take-ours");

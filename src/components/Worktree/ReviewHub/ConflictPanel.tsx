@@ -427,7 +427,10 @@ export function ConflictPanel({
       let hunkCount: number | null;
       try {
         const [entry] = await window.electron.git.scanConflictMarkers(worktreePath, [filePath]);
-        hunkCount = entry?.hunkCount ?? 0;
+        // A missing entry is as unknown as a thrown read. A `null` count is
+        // the scanner saying there's no text to check — the file is deleted,
+        // binary or oversized — so nothing textual can be staged by mistake.
+        hunkCount = entry ? (entry.hunkCount ?? 0) : null;
       } catch {
         hunkCount = null;
       } finally {
@@ -641,9 +644,9 @@ export function ConflictPanel({
                             key={side}
                             destructive
                             onSelect={() => setPendingCheckout({ filePath: file.path, side })}
-                            aria-label={`Use ${sideSource[side]} version of ${file.path} (${side})`}
+                            aria-label={`Use ${sideSource[side]} for ${file.path} (${side})`}
                           >
-                            Use {sideSource[side]} version
+                            Use {sideSource[side]}
                             <DropdownMenuMeta>{side}</DropdownMenuMeta>
                           </DropdownMenuItem>
                         ))}
@@ -750,7 +753,7 @@ export function ConflictPanel({
         onClose={() => setPendingCheckout(null)}
         title={
           pendingCheckout
-            ? `Use the ${sideSource[pendingCheckout.side]} version of '${splitPath(pendingCheckout.filePath).base}'?`
+            ? `Use ${sideSource[pendingCheckout.side]} for '${splitPath(pendingCheckout.filePath).base}'?`
             : ""
         }
         description={
