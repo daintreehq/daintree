@@ -44,6 +44,10 @@ interface CommandStore {
 // after that still reports its result to whoever awaited it, but must not
 // write its pending or error state into a builder opened since.
 let runGeneration = 0;
+// The same for builder loads: a response for an opening that has since been
+// closed, or superseded by reopening the same command, is dropped. Keyed on the
+// opening, not the command id, which a reopen shares.
+let loadGeneration = 0;
 
 export const useCommandStore = create<CommandStore>()((set, get) => ({
   // Picker state
@@ -69,12 +73,12 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
       builderLoadError: null,
     });
 
+    const generation = ++loadGeneration;
     if (command.hasBuilder) {
       const commandId = command.id;
       try {
         const builder = await commandsClient.getBuilder(commandId);
-        const currentCommandId = get().activeCommandId;
-        if (currentCommandId === commandId) {
+        if (generation === loadGeneration) {
           if (builder) {
             set({ builderSteps: builder.steps, isLoadingBuilder: false });
           } else {
@@ -87,8 +91,7 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
       } catch (error) {
         const message = formatErrorMessage(error, "Failed to load builder");
         logError("Failed to fetch builder steps", error);
-        const currentCommandId = get().activeCommandId;
-        if (currentCommandId === commandId) {
+        if (generation === loadGeneration) {
           set({ builderLoadError: message, isLoadingBuilder: false });
         }
       }
@@ -98,6 +101,7 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
   },
   closeBuilder: () => {
     runGeneration++;
+    loadGeneration++;
     set({
       activeCommand: null,
       activeCommandId: null,

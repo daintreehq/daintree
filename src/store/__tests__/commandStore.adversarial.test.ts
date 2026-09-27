@@ -156,6 +156,24 @@ describe("commandStore adversarial", () => {
     expect(useCommandStore.getState().isExecuting).toBe(false);
   });
 
+  it("drops a builder load from an opening that was closed and reopened for the same command", async () => {
+    const resolvers: Array<(v: unknown) => void> = [];
+    commandsClientMock.getBuilder.mockImplementation(() => new Promise((r) => resolvers.push(r)));
+    const cmd = makeCommand("same");
+
+    const first = useCommandStore.getState().openBuilder(cmd, {});
+    useCommandStore.getState().closeBuilder();
+    const second = useCommandStore.getState().openBuilder(cmd, {});
+
+    resolvers[1]?.({ steps: [{ id: "new", title: "New", fields: [] }] });
+    await second;
+    resolvers[0]?.(null);
+    await first;
+
+    expect(useCommandStore.getState().builderLoadError).toBeNull();
+    expect(useCommandStore.getState().builderSteps?.[0]?.id).toBe("new");
+  });
+
   it("loadCommands reentrancy guard blocks duplicate fetches while one is in flight", async () => {
     let resolveList: (v: unknown[]) => void = () => {};
     commandsClientMock.list.mockImplementation(

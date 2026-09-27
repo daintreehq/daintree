@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -410,7 +410,9 @@ export function CommandBuilder({
   const showSuccessState = executionResult?.success === true;
 
   // The form, and the button that ran it, are gone once the result shows.
-  useEffect(() => {
+  // Layout, not passive: focus has to land before the frame that removed its
+  // old home is painted, or it sits on <body> for that frame.
+  useLayoutEffect(() => {
     if (showSuccessState) closeRef.current?.focus();
   }, [showSuccessState]);
 
