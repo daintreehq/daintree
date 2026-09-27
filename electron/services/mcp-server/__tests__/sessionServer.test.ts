@@ -10669,7 +10669,7 @@ describe("assistant close approval (#12881)", () => {
     const readTerminalAgentState = vi.fn(async (id: string) => agentStates[id] ?? null);
     const dispatchAction = vi.fn(async (_id: string, args: unknown) => ({
       result: {
-        ok: true,
+        ok: true as const,
         result: { closedIds: [(args as { terminalId: string }).terminalId] },
       },
     }));
