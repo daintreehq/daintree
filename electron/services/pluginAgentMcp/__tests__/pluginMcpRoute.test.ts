@@ -3,6 +3,7 @@ import net, { type AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const storeMock = vi.hoisted(() => {
   const data = new Map<string, unknown>();
@@ -506,6 +507,23 @@ describe("PluginMcpRoute", () => {
     pluginMcpGrantRegistry.releasePlugin(INSTANCE, "surface-1");
     await listing;
     expect(listed).toEqual(["lookup"]);
+    expect(route.sessionCount).toBe(1);
+  });
+
+  it("tells a kept credential's sessions to list again once the reload settles", async () => {
+    const { token } = issue();
+    const { client } = await connect(token);
+    let notified = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      notified += 1;
+    });
+    // Establish the standalone stream notifications travel on.
+    await client.listTools();
+
+    pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
+    pluginMcpGrantRegistry.releasePlugin(INSTANCE, "surface-1");
+
+    await waitFor(() => notified > 0);
     expect(route.sessionCount).toBe(1);
   });
 

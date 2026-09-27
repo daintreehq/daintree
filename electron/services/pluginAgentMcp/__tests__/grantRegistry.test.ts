@@ -220,6 +220,23 @@ describe("PluginMcpGrantRegistry", () => {
       expect(listener).not.toHaveBeenCalled();
     });
 
+    it("tells kept listeners which grants survived, and nothing on a revoke", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const kept = vi.fn();
+      registry.onKept(kept);
+      const { grant } = issue(registry);
+      issue(registry, { terminalId: "term-2" });
+
+      registry.holdPlugin("acme.ledger", "surface-1");
+      registry.revokeTerminal("term-2");
+      registry.releasePlugin("acme.ledger", "surface-1");
+      expect(kept).toHaveBeenCalledExactlyOnceWith([grant]);
+
+      registry.holdPlugin("acme.ledger", "surface-1");
+      registry.releasePlugin("acme.ledger", "surface-2");
+      expect(kept).toHaveBeenCalledTimes(1);
+    });
+
     it("revokes held grants when the reloaded surface differs", () => {
       const registry = new PluginMcpGrantRegistry();
       const listener = vi.fn();

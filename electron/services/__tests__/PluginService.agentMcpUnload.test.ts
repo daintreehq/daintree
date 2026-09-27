@@ -293,6 +293,18 @@ describe("PluginService agent MCP teardown", () => {
       await expect(service.waitForProjectPlugins(PROJECT_A, 60_000)).resolves.toBe(false);
     });
 
+    it("reports not ready when the service is disposed while queued work runs", async () => {
+      const fake = fakeController();
+      const service = serviceWith(fake);
+      fake.queued.add(PROJECT_A);
+      const waiting = service.waitForProjectPlugins(PROJECT_A, 60_000);
+
+      service.dispose();
+      fake.settle();
+
+      await expect(waiting).resolves.toBe(false);
+    });
+
     it("gives up after the timeout and forgets the waiter", async () => {
       const fake = fakeController();
       const service = serviceWith(fake);

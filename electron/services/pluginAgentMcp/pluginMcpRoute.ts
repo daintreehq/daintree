@@ -159,6 +159,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly callTimeoutMs: number | undefined;
   private readonly maxResultBytes: number | undefined;
   private readonly offRevoked: () => void;
+  private readonly offKept: () => void;
   /**
    * Bumped by {@link closeAllSessions}, so a handshake still in flight when the
    * listener stops cannot file a session after the sweep that should have
@@ -181,6 +182,19 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     // already fails authentication; this only has to reap what is open.
     this.offRevoked = this.grants.onRevoked((revoked) => {
       for (const grant of revoked) this.closeCredentialSessions(grant.credentialId);
+    });
+    // The reload's roster changes may have reached a client while its
+    // credential was held, or not at all (a lazy plugin registers nothing until
+    // asked). Once the credential is kept, tell its sessions to list again.
+    this.offKept = this.grants.onKept((kept) => {
+      for (const grant of kept) {
+        for (const sessionId of this.sessionsByCredential.get(grant.credentialId) ?? []) {
+          this.sessions
+            .get(sessionId)
+            ?.server.sendToolListChanged()
+            .catch(() => {});
+        }
+      }
     });
   }
 
@@ -214,6 +228,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   /** Stop listening for revocations and close everything. For tests and shutdown. */
   dispose(): void {
     this.offRevoked();
+    this.offKept();
     this.closeAllSessions();
   }
 

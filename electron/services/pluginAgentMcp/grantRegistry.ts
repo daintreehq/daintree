@@ -65,6 +65,7 @@ export class PluginMcpGrantRegistry {
    */
   private readonly held = new Map<string, { surface: string; credentialIds: Set<string> }>();
   private readonly heldWaiters = new Set<() => void>();
+  private readonly keptListeners = new Set<(grants: readonly PluginMcpGrant[]) => void>();
 
   /** Mint a grant. The returned token is the only copy of the bearer; hand it to the launch and drop it. */
   issue(
@@ -167,14 +168,23 @@ export class PluginMcpGrantRegistry {
     this.held.delete(pluginInstanceId);
     // Revoked before any waiter resumes, so a request parked on the hold wakes
     // to a dead credential rather than slipping through first.
-    const revoked =
-      surface !== null && surface === hold.surface
-        ? []
-        : this.revokeWhere(
-            (grant) => hold.credentialIds.has(grant.credentialId),
-            "plugin-unloaded"
-          );
+    const kept = surface !== null && surface === hold.surface;
+    const revoked = kept
+      ? []
+      : this.revokeWhere((grant) => hold.credentialIds.has(grant.credentialId), "plugin-unloaded");
     this.wakeHeldWaiters();
+    if (kept) {
+      const survivors = this.filter((grant) => hold.credentialIds.has(grant.credentialId));
+      if (survivors.length > 0) {
+        for (const listener of this.keptListeners) {
+          try {
+            listener(survivors);
+          } catch (err) {
+            console.error("[PluginAgentMcp] kept listener threw:", err);
+          }
+        }
+      }
+    }
     return revoked;
   }
 
@@ -254,6 +264,14 @@ export class PluginMcpGrantRegistry {
 
   revokeAll(reason: PluginMcpGrantRevokeReason = "server-stopped"): PluginMcpGrant[] {
     return this.revokeWhere(() => true, reason);
+  }
+
+  /** Fires once per release that kept a reload's held grants, with the grants it kept. */
+  onKept(listener: (grants: readonly PluginMcpGrant[]) => void): () => void {
+    this.keptListeners.add(listener);
+    return () => {
+      this.keptListeners.delete(listener);
+    };
   }
 
   /** Fires after grants are deleted, once per revocation batch, only when the batch is non-empty. */

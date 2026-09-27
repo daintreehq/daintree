@@ -5179,6 +5179,8 @@ export class PluginService {
       for (const wake of waiters) wake();
     }
     await opening;
+    // Disposed meanwhile: the watcher sync below would build a fresh controller.
+    if (this.disposed) return;
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId, projectRoot);
   }
@@ -5215,7 +5217,7 @@ export class PluginService {
       // Woken by dispose: the getter would build a fresh controller.
       if (this.disposed) return false;
       await this.projectPlugins.whenSettled(projectId);
-      return true;
+      return !this.disposed;
     })();
     try {
       return await Promise.race([settled, timedOut]);
