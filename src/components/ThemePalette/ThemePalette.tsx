@@ -110,6 +110,9 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     // Every theme stays reachable by browsing: the shell's default cap of 20
     // cut imported themes off the end, including a committed one.
     maxResults: allSchemes.length,
+    // Match marks are computed from the live query below, so the rows must be
+    // too — a deferred pass would pair one query's rows with another's marks.
+    deferFiltering: false,
     paletteId: "theme",
     getItemId: (scheme) => scheme.id,
   });
@@ -217,7 +220,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
             />
           </div>
           {!onSaved && savedScheme && (
-            <span className="shrink-0 truncate text-text-secondary">
+            <span className="min-w-0 max-w-[40%] truncate text-text-secondary">
               Current: {savedScheme.name}
             </span>
           )}
