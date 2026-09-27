@@ -48,7 +48,7 @@ export function registerCrashRecoveryHandlers(): () => void {
           } catch (err) {
             console.error("[CrashRecovery] Failed to remove deselected panels:", err);
             await rollBackProjectPanels(originals);
-            throw new Error("Crash recovery restore failed");
+            throw new Error("Crash recovery restore failed", { cause: err });
           }
           const ok = service.restoreBackup(action.panelIds);
           if (!ok) await rollBackProjectPanels(originals);
