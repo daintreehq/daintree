@@ -724,4 +724,23 @@ describe("TerminalInfoDialog", () => {
       await expectScreenAndReportAgree();
     });
   });
+
+  describe("reduced motion", () => {
+    // Every chevron that rotates carries the marker `src/index.css` uses to drop the
+    // rotation under reduced motion; one without it animates for users who opted out.
+    it("marks every rotating chevron for the reduced-motion rule", async () => {
+      dispatchMock.mockResolvedValue({ ok: false, error: { message: "not found" } });
+      renderDialog();
+      await screen.findByTestId("terminal-info-error");
+
+      const toggles = screen
+        .getAllByRole("button")
+        .filter((el) => el.hasAttribute("aria-expanded"));
+      expect(toggles.length).toBeGreaterThan(2);
+      for (const toggle of toggles) {
+        const chevron = toggle.querySelector("svg");
+        expect(chevron?.hasAttribute("data-animated-chevron")).toBe(true);
+      }
+    });
+  });
 });

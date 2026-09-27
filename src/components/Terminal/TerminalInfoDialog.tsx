@@ -275,6 +275,8 @@ function DisclosureGroup({
       >
         <ChevronRight
           aria-hidden="true"
+          // `src/index.css` drops the rotation for this marker under reduced motion.
+          data-animated-chevron
           className={cn(
             "w-3 h-3 shrink-0 text-text-secondary group-hover:text-text-primary transition-[color,rotate] duration-150 ease-out",
             expanded && "rotate-90"
@@ -905,6 +907,7 @@ Performance:
                 >
                   <ChevronRight
                     aria-hidden="true"
+                    data-animated-chevron
                     className={cn(
                       "w-3 h-3 shrink-0 transition-transform duration-150 ease-out",
                       showErrorDetail && "rotate-90"
