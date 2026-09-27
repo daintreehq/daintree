@@ -13,6 +13,9 @@ type ButtonVariant = "primary" | "accent" | "dismiss" | "danger" | "dangerFilled
 
 const TINT_PERCENT = `${BANNER_TINT_ALPHA * 100}%`;
 
+/** Marks a banner root (see the root's `data-inline-status-banner`), so a stack of sibling banners can find each other. */
+const STACK_MEMBER_ATTR = "data-inline-status-banner";
+
 export interface BannerAction {
   id: string;
   label: string;
@@ -238,31 +241,34 @@ function ContextLine({ text, truncate }: { text: string; truncate: "end" | "midd
 }
 
 /**
- * The first tabbable at or after where the banner stood, else the last one
- * before it. Either neighbour may have left in the same commit, so each is
- * only trusted while it is still in the document.
+ * Where focus goes when a focused banner leaves a stack of sibling banners:
+ * the first control in a banner below the one that left (which includes a
+ * banner that replaced it in the same commit), else the last control above
+ * it. Only banners in the same stack count — a terminal or form beside the
+ * stack is not "the next banner", and landing in a terminal would send the
+ * user's next keystrokes to its process. Undefined when no sibling banner
+ * has a control left, so the caller keeps its container fallback.
+ *
+ * The banner above is the anchor, not the one below: a replacement lands
+ * directly after it, while the banner below may no longer be adjacent.
  */
-function nearestSurvivor(
+function nearestStackSurvivor(
   candidates: HTMLElement[],
-  next: Element | null,
-  prev: Element | null
+  stack: Element | null,
+  above: Element | null
 ): HTMLElement | undefined {
-  if (next?.isConnected) {
-    const after = candidates.find(
+  if (!stack?.isConnected) return undefined;
+  const inStack = candidates.filter(
+    (c) => c.closest(`[${STACK_MEMBER_ATTR}]`)?.parentElement === stack
+  );
+  if (!above?.isConnected || above.parentElement !== stack) return inStack[0];
+  return (
+    inStack.find(
       (c) =>
-        next.contains(c) || !!(next.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING)
-    );
-    if (after) return after;
-  }
-  if (prev?.isConnected) {
-    for (let i = candidates.length - 1; i >= 0; i--) {
-      const c = candidates[i]!;
-      if (prev.contains(c) || prev.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_PRECEDING) {
-        return c;
-      }
-    }
-  }
-  return undefined;
+        !above.contains(c) &&
+        !!(above.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ) ?? inStack[inStack.length - 1]
+  );
 }
 
 export function InlineStatusBanner({
@@ -385,12 +391,13 @@ export function InlineStatusBanner({
   // chrome behind an open dialog. Captured on focus, since the ref is gone by
   // the time the unmount cleanup runs.
   const focusHomeRef = useRef<HTMLElement | null>(null);
-  // The banner's neighbours, so a banner in a stack hands focus to whatever
-  // now stands where it did rather than to the top of its container — the
-  // user keeps their place instead of being thrown back up the stack.
-  const focusNeighboursRef = useRef<{ next: Element | null; prev: Element | null }>({
-    next: null,
-    prev: null,
+  // The banner's stack and the banner directly above it in that stack, so a
+  // banner in a stack hands focus to whatever now stands where it did rather
+  // than to the top of its container — the user keeps their place instead of
+  // being thrown back up the stack.
+  const focusStackRef = useRef<{ stack: Element | null; above: Element | null }>({
+    stack: null,
+    above: null,
   });
   const handleFocusCapture = (e: React.FocusEvent) => {
     const root = rootRef.current;
@@ -398,10 +405,9 @@ export function InlineStatusBanner({
     focusWithinRef.current = true;
     focusHomeRef.current =
       root.closest<HTMLElement>("[role='dialog'], [role='alertdialog']") ?? root.parentElement;
-    focusNeighboursRef.current = {
-      next: root.nextElementSibling,
-      prev: root.previousElementSibling,
-    };
+    let above = root.previousElementSibling;
+    while (above && !above.hasAttribute(STACK_MEMBER_ATTR)) above = above.previousElementSibling;
+    focusStackRef.current = { stack: root.parentElement, above };
   };
   const handleBlurCapture = (e: React.FocusEvent) => {
     const root = rootRef.current;
@@ -420,11 +426,11 @@ export function InlineStatusBanner({
     () => () => {
       if (!focusWithinRef.current) return;
       const home = focusHomeRef.current;
-      const { next, prev } = focusNeighboursRef.current;
+      const { stack, above } = focusStackRef.current;
       requestAnimationFrame(() => {
         if (document.activeElement && document.activeElement !== document.body) return;
         const candidates = home?.isConnected ? getVisibleTabbableElements(home) : [];
-        restoreFocusTo(nearestSurvivor(candidates, next, prev) ?? candidates[0]);
+        restoreFocusTo(nearestStackSurvivor(candidates, stack, above) ?? candidates[0]);
       });
     },
     []
@@ -622,6 +628,7 @@ export function InlineStatusBanner({
       }}
       role={role}
       data-testid={testId}
+      data-inline-status-banner=""
       onFocusCapture={handleFocusCapture}
       onBlurCapture={handleBlurCapture}
       aria-live={ariaLive}
