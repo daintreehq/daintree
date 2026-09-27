@@ -55,7 +55,7 @@ Each tool checks the abort signal before it starts, and again once the database 
 
 Whether `ledger.db` is committed is the project's call. The declaration keeps the default rollback journal (`journalMode: "delete"`), and the host sets it again on every writable open, so an agent that switched the file to WAL cannot leave committed rows in a `-wal` sidecar that a commit of `ledger.db` alone would miss. To keep the database out of git, add `.daintree/data/acme.ledger/` to the project's `.gitignore`.
 
-Earlier versions of this sample kept the ledger at `.daintree/plugin-storage/acme.ledger/ledger.db`. Nothing moves it: the new location starts empty. To keep the old rows, copy it with SQLite's own backup before the first tool call — `sqlite3 .daintree/plugin-storage/acme.ledger/ledger.db ".backup .daintree/data/acme.ledger/ledger.db"` — rather than copying the file, which can miss rows still in a `-wal` sidecar. Its schema version is the first migration, so the host upgrades it in place.
+Earlier versions of this sample kept the ledger at `.daintree/plugin-storage/acme.ledger/ledger.db`. Nothing moves it: the new location starts empty. To keep the old rows, copy it with SQLite's own backup before the first tool call — `mkdir -p .daintree/data/acme.ledger && sqlite3 .daintree/plugin-storage/acme.ledger/ledger.db ".backup .daintree/data/acme.ledger/ledger.db"` — rather than copying the file, which can miss rows still in a `-wal` sidecar. Its schema version is the first migration, so the host upgrades it in place.
 
 ## Limits
 

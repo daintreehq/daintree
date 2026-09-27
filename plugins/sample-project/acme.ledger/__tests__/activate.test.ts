@@ -892,7 +892,8 @@ describe("acme.ledger — rules held in the schema, for agents writing with sqli
     insert.run("2026-09-15", -300, "fuel", "two-days", -500);
     insert.run("2026-09-16", -200, "snacks", "two-days", -500);
     insert.run("2026-09-17", -300, "fuel", "two-totals", -500);
-    insert.run("2026-09-17", -200, "snacks", "two-totals", -600);
+    // Balanced against the smaller total, so only the differing totals flag it.
+    insert.run("2026-09-17", -200, "snacks", "two-totals", -400);
     const rows = agent.prepare("SELECT * FROM unbalanced_splits ORDER BY split_group").all();
     agent.close();
     expect(rows.map((r) => r.split_group)).toEqual([
