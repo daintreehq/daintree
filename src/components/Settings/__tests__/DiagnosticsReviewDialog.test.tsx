@@ -126,4 +126,14 @@ describe("DiagnosticsReviewDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save report" }));
     expect(onSave).toHaveBeenCalledWith(expect.anything(), expect.anything(), null);
   });
+
+  it("keeps the version cutoff when the oldest retained log starts exactly at the update", () => {
+    const onSave = vi.fn();
+    renderDialog({ ...updatedPayload, oldestRetainedLogMs: 4_000 }, onSave);
+    fireEvent.change(timeWindowSelect(), { target: { value: "update" } });
+
+    expect(screen.queryByText(/rotated out/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save report" }));
+    expect(onSave).toHaveBeenCalledWith(expect.anything(), expect.anything(), 4_000);
+  });
 });

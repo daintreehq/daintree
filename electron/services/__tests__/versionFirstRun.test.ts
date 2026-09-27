@@ -71,17 +71,28 @@ describe("resolveVersionFirstRun", () => {
 
 describe("toVersionFirstRunBoundary", () => {
   it("returns the boundary only for a timestamped record of the running version", () => {
-    expect(toVersionFirstRunBoundary({ version: "0.39.0", firstRunAtMs: 1000 }, "0.39.0")).toEqual({
+    expect(
+      toVersionFirstRunBoundary({ version: "0.39.0", firstRunAtMs: 1000 }, "0.39.0", 10_000)
+    ).toEqual({
       version: "0.39.0",
       firstRunAtMs: 1000,
     });
-    expect(toVersionFirstRunBoundary({ version: "0.39.0", firstRunAtMs: null }, "0.39.0")).toBe(
-      null
-    );
-    expect(toVersionFirstRunBoundary({ version: "0.38.0", firstRunAtMs: 1000 }, "0.39.0")).toBe(
-      null
-    );
-    expect(toVersionFirstRunBoundary(undefined, "0.39.0")).toBe(null);
+    expect(
+      toVersionFirstRunBoundary({ version: "0.39.0", firstRunAtMs: null }, "0.39.0", 10_000)
+    ).toBe(null);
+    expect(
+      toVersionFirstRunBoundary({ version: "0.38.0", firstRunAtMs: 1000 }, "0.39.0", 10_000)
+    ).toBe(null);
+    expect(toVersionFirstRunBoundary(undefined, "0.39.0", 10_000)).toBe(null);
+  });
+
+  it("ignores a boundary that is non-positive or in the future", () => {
+    expect(
+      toVersionFirstRunBoundary({ version: "0.39.0", firstRunAtMs: -5 }, "0.39.0", 10_000)
+    ).toBe(null);
+    expect(
+      toVersionFirstRunBoundary({ version: "0.39.0", firstRunAtMs: 20_000 }, "0.39.0", 10_000)
+    ).toBe(null);
   });
 });
 
@@ -103,5 +114,12 @@ describe("recordVersionFirstRun across boots", () => {
     recordVersionFirstRun(400);
     expect(getVersionFirstRunBoundary()).toEqual({ version: "0.39.0", firstRunAtMs: 300 });
     expect(storeMock.set).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports an unknown boundary instead of throwing when the settings read fails", () => {
+    storeMock.get.mockImplementationOnce(() => {
+      throw new Error("EACCES");
+    });
+    expect(getVersionFirstRunBoundary()).toBe(null);
   });
 });

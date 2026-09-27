@@ -1,4 +1,4 @@
-import { open } from "node:fs/promises";
+import { access, open } from "node:fs/promises";
 import path from "node:path";
 
 // Matches the rotated files writeBundleZip considers.
@@ -38,9 +38,35 @@ export async function readOldestRetainedLogMs(
   logDir: string,
   activeLogFile: string
 ): Promise<number | null> {
-  for (let i = MAX_ROTATED_LOG_INDEX; i >= 1; i--) {
-    const result = await readFirstTimestampMs(path.join(logDir, `daintree.log.${i}`));
-    if (result !== undefined) return result;
+  const files = [
+    ...Array.from({ length: MAX_ROTATED_LOG_INDEX }, (_, i) =>
+      path.join(logDir, `daintree.log.${MAX_ROTATED_LOG_INDEX - i}`)
+    ),
+    activeLogFile,
+  ];
+  // A rotation landing mid-scan can shift an older file into a slot already
+  // checked, reporting a newer file as the oldest and wrongly widening the
+  // window. Confirm the slot above is still empty; retry once, else unknown.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const index = await findFirstExisting(files);
+    if (index === -1) return null;
+    const result = await readFirstTimestampMs(files[index]);
+    if (result === undefined) continue;
+    if (index === 0 || (await readFirstTimestampMs(files[index - 1])) === undefined) {
+      return result;
+    }
   }
-  return (await readFirstTimestampMs(activeLogFile)) ?? null;
+  return null;
+}
+
+async function findFirstExisting(files: string[]): Promise<number> {
+  for (let i = 0; i < files.length; i++) {
+    try {
+      await access(files[i]);
+      return i;
+    } catch {
+      // Missing (or unreadable) — keep looking further down.
+    }
+  }
+  return -1;
 }

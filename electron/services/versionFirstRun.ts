@@ -18,7 +18,7 @@ function parseRecord(raw: unknown): VersionFirstRunRecord | null {
   const { version, firstRunAtMs } = raw as { version?: unknown; firstRunAtMs?: unknown };
   if (typeof version !== "string" || version === "") return null;
   if (firstRunAtMs === null) return { version, firstRunAtMs: null };
-  if (typeof firstRunAtMs === "number" && Number.isFinite(firstRunAtMs)) {
+  if (typeof firstRunAtMs === "number" && Number.isFinite(firstRunAtMs) && firstRunAtMs > 0) {
     return { version, firstRunAtMs };
   }
   return null;
@@ -40,13 +40,19 @@ export function resolveVersionFirstRun(
   return { version: currentVersion, firstRunAtMs: nowMs };
 }
 
-/** The boundary for the running version, or null when it isn't known. */
+/**
+ * The boundary for the running version, or null when it isn't known. A
+ * boundary in the future (clock moved backwards since) would filter out every
+ * log, so it's treated as unknown too.
+ */
 export function toVersionFirstRunBoundary(
   stored: unknown,
-  currentVersion: string
+  currentVersion: string,
+  nowMs: number
 ): VersionFirstRunBoundary | null {
   const record = parseRecord(stored);
   if (!record || record.version !== currentVersion || record.firstRunAtMs === null) return null;
+  if (record.firstRunAtMs > nowMs) return null;
   return { version: record.version, firstRunAtMs: record.firstRunAtMs };
 }
 
@@ -59,6 +65,13 @@ export function recordVersionFirstRun(nowMs: number = Date.now()): void {
   if (next) store.set("versionFirstRun", next);
 }
 
-export function getVersionFirstRunBoundary(): VersionFirstRunBoundary | null {
-  return toVersionFirstRunBoundary(store.get("versionFirstRun"), app.getVersion());
+/** Never throws: a settings read failure must not block exporting diagnostics. */
+export function getVersionFirstRunBoundary(
+  nowMs: number = Date.now()
+): VersionFirstRunBoundary | null {
+  try {
+    return toVersionFirstRunBoundary(store.get("versionFirstRun"), app.getVersion(), nowMs);
+  } catch {
+    return null;
+  }
 }
