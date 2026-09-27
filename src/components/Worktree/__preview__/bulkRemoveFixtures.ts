@@ -182,6 +182,8 @@ function snapshot(
     isConfirmOpen: true,
     targets,
     excludedMainCount: 0,
+    excludedMainNames: [],
+    isRechecking: false,
     eligibleCount,
     isPreviewPending,
     hasRetryablePreviews: targets.some(isBulkRemoveRetryable),
@@ -214,12 +216,14 @@ export const BULK_REMOVE_FIXTURES = {
   mixed: {
     value: snapshot([clean, dirty, untrackedOnly, blocked, verifyFailed], {
       excludedMainCount: 1,
+      excludedMainNames: ["main"],
     }),
     expectText: "Remove 3 worktrees?",
   },
   "mixed-typed": {
     value: snapshot([clean, dirty, untrackedOnly, blocked, verifyFailed], {
       excludedMainCount: 1,
+      excludedMainNames: ["main"],
     }),
     typeGate: true,
     expectText: "Remove 3 worktrees?",

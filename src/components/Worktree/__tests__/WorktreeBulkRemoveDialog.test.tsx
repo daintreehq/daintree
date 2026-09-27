@@ -90,7 +90,13 @@ function hookValue(over: Partial<UseWorktreeBulkRemoveReturn> = {}): UseWorktree
   return {
     isConfirmOpen: true,
     targets,
-    excludedMainCount: 0,
+    excludedMainCount: over.excludedMainNames?.length ?? over.excludedMainCount ?? 0,
+    excludedMainNames:
+      over.excludedMainNames ??
+      Array.from({ length: over.excludedMainCount ?? 0 }, (_, i) =>
+        i === 0 ? "main" : `main-${i}`
+      ),
+    isRechecking: false,
     eligibleCount,
     isPreviewPending,
     hasRetryablePreviews: targets.some(isBulkRemoveRetryable),
@@ -594,7 +600,7 @@ describe("WorktreeBulkRemoveDialog — the title and the button agree", () => {
     expect(scopeCounts()).toEqual({ eligible: 1, excluded: 2 });
     expect(
       document.querySelector('[data-testid="bulk-remove-excluded-group"]')?.textContent
-    ).toContain("1 main worktree");
+    ).toContain("main");
   });
 
   it("offers no typed gate and no removal question when nothing can run", () => {
@@ -751,10 +757,18 @@ describe("WorktreeBulkRemoveDialog — copy", () => {
   });
 
   it("names the excluded main worktrees in the excluded group", () => {
-    renderDialog({ excludedMainCount: 1 });
-    const group = document.querySelector('[data-testid="bulk-remove-excluded-group"]');
-    expect(group?.textContent).toContain("1 main worktree");
-    expect(group?.textContent).toContain("Only linked worktrees can be removed here");
+    renderDialog({ excludedMainNames: ["main", "trunk"] });
+    const main = document.querySelectorAll(
+      '[data-testid="bulk-remove-excluded-group"] [data-testid="bulk-remove-excluded-main"]'
+    );
+    // Named, one row each: a count says a main worktree was dropped, not which.
+    expect(Array.from(main, (row) => row.querySelector(".font-mono")?.textContent)).toEqual([
+      "main",
+      "trunk",
+    ]);
+    for (const row of main) {
+      expect(row.textContent).toContain("only linked worktrees can be removed here");
+    }
   });
 
   it("names the dev server the run stops first", () => {
@@ -860,6 +874,13 @@ describe("WorktreeBulkRemoveDialog — outcome groups", () => {
     });
     const list = document.querySelector('[data-testid="bulk-remove-file-list"]')!;
     expect(list.querySelector(".sr-only")?.textContent).toContain("submodule");
+  });
+
+  it("says the run is re-reading, not removing, while the pre-dispatch check runs", () => {
+    renderDialog({ targets: [target("a")], isExecuting: true, isRechecking: true });
+    expect(document.querySelector('[data-testid="app-dialog-hint"]')?.textContent).toBe(
+      "Checking current work before removing"
+    );
   });
 
   it("never describes a deletion when nothing can run", () => {

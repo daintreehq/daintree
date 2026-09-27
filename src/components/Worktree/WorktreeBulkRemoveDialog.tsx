@@ -1,4 +1,4 @@
-import { AlertTriangle, GitBranch } from "lucide-react";
+import { AlertTriangle, GitBranch, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -432,6 +432,7 @@ export function WorktreeBulkRemoveDialog({
   const {
     targets,
     excludedMainCount,
+    excludedMainNames,
     eligibleCount,
     isPreviewPending,
     hasRetryablePreviews,
@@ -490,13 +491,15 @@ export function WorktreeBulkRemoveDialog({
 
   // Says what the primary is waiting on, in the place the user is looking when
   // they ask. The typed gate's own hint comes from `ConfirmDialog`.
-  const hint = isExecuting
-    ? `Removing ${plural(eligibleCount, "worktree")}`
-    : isPreviewPending
-      ? "Checking each worktree for uncommitted work"
-      : nothingToRun && (targets.length > 0 || excludedMainCount > 0)
-        ? "Every selected worktree was excluded"
-        : null;
+  const hint = bulkRemove.isRechecking
+    ? "Checking current work before removing"
+    : isExecuting
+      ? `Removing ${plural(eligibleCount, "worktree")}`
+      : isPreviewPending
+        ? "Checking each worktree for uncommitted work"
+        : nothingToRun && (targets.length > 0 || excludedMainCount > 0)
+          ? "Every selected worktree was excluded"
+          : null;
 
   // The typed attestation is for the work listed above it, so it names that
   // work rather than repeating that the action is irreversible.
@@ -525,6 +528,7 @@ export function WorktreeBulkRemoveDialog({
       restoreFocusTo={restoreFocusTo}
       onClose={bulkRemove.handleCancel}
       title={title}
+      titleIcon={<Trash2 className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />}
       description={description}
       confirmLabel={confirmLabel}
       cancelLabel="Cancel"
@@ -653,20 +657,26 @@ export function WorktreeBulkRemoveDialog({
                     <ExcludedBody target={target} exclusion={exclusion} />
                   </li>
                 ))}
-                {excludedMainCount > 0 && (
-                  <li className={TARGET_ROW} data-testid="bulk-remove-excluded-main">
+                {excludedMainNames.map((name) => (
+                  <li
+                    key={`main:${name}`}
+                    className={TARGET_ROW}
+                    data-testid="bulk-remove-excluded-main"
+                  >
                     <div className="flex items-start gap-2 text-sm text-text-primary">
                       <GitBranch
                         className="w-3.5 h-3.5 mt-[3px] shrink-0 text-text-secondary"
                         aria-hidden="true"
                       />
-                      <span>{plural(excludedMainCount, "main worktree")}</span>
+                      <span className="min-w-0 font-mono [overflow-wrap:anywhere]">
+                        <PathText value={name} />
+                      </span>
                     </div>
                     <p className={cn(DETAIL, "text-xs text-text-secondary")}>
-                      Only linked worktrees can be removed here
+                      The main worktree — only linked worktrees can be removed here
                     </p>
                   </li>
-                )}
+                ))}
               </ul>
             )}
           </Section>

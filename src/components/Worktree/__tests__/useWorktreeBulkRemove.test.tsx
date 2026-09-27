@@ -167,6 +167,8 @@ describe("useWorktreeBulkRemove — confirm derivation", () => {
 
     expect(hook.result.current.targets.map((t) => t.id)).toEqual(["feature"]);
     expect(hook.result.current.excludedMainCount).toBe(1);
+    // Named, so the confirm can say which selection it dropped.
+    expect(hook.result.current.excludedMainNames).toEqual(["branch-main"]);
     expect(hook.result.current.typedNameTarget).toBe("1 worktree");
   });
 
@@ -1086,5 +1088,65 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
     });
 
     expect(deletedIds()).toEqual(["a", "b"]);
+  });
+});
+
+describe("useWorktreeBulkRemove — the evidence is re-read before anything runs", () => {
+  async function confirm(hook: ReturnType<typeof setup>["hook"]) {
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+  }
+
+  it("re-reads every target, then runs when nothing changed", async () => {
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+    const readsAtOpen = worktreeClientMock.getFreshChanges.mock.calls.length;
+
+    await confirm(hook);
+
+    // One more read per target, all before the first delete.
+    expect(worktreeClientMock.getFreshChanges.mock.calls.length - readsAtOpen).toBe(2);
+    const lastRead = Math.max(...worktreeClientMock.getFreshChanges.mock.invocationCallOrder);
+    const firstDelete = Math.min(...worktreeClientMock.delete.mock.invocationCallOrder);
+    expect(lastRead).toBeLessThan(firstDelete);
+    expect(worktreeClientMock.delete).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds the whole run when a target changed since the check, and resets consent", async () => {
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+    const consentBefore = hook.result.current.consentKey;
+
+    // An agent writes into "b" after the user read its clean preview.
+    worktreeClientMock.getFreshChanges.mockImplementation((id: string) =>
+      Promise.resolve(id === "b" ? fresh(id, [change("/repo/b/new.ts", "modified")]) : fresh(id))
+    );
+    await confirm(hook);
+
+    expect(worktreeClientMock.delete).not.toHaveBeenCalled();
+    expect(hook.result.current.isConfirmOpen).toBe(true);
+    expect(hook.result.current.isExecuting).toBe(false);
+    // The new evidence is what's on screen now, and the typed count was for
+    // the old one.
+    const b = hook.result.current.targets.find((t) => t.id === "b")!;
+    expect(b.status.state === "verified" && b.status.preview.changes).toHaveLength(1);
+    expect(hook.result.current.consentKey).not.toBe(consentBefore);
+  });
+
+  it("holds the run when a re-read fails, and leaves that target out", async () => {
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+
+    worktreeClientMock.getFreshChanges.mockImplementation((id: string) =>
+      id === "b" ? Promise.reject(new Error("port closed")) : Promise.resolve(fresh(id))
+    );
+    await confirm(hook);
+
+    expect(worktreeClientMock.delete).not.toHaveBeenCalled();
+    const b = hook.result.current.targets.find((t) => t.id === "b")!;
+    expect(isBulkRemoveEligible(b)).toBe(false);
+    expect(hook.result.current.eligibleCount).toBe(1);
   });
 });

@@ -46,6 +46,8 @@ type ConfirmDialogBaseProps = {
   isOpen: boolean;
   onClose?: () => void;
   title: React.ReactNode;
+  /** Forwarded to {@link AppDialog.Title.icon} — e.g. `Trash2` on a delete. */
+  titleIcon?: React.ReactNode;
   description?: React.ReactNode;
   children?: React.ReactNode;
   confirmLabel: string;
@@ -138,6 +140,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     isOpen,
     onClose,
     title,
+    titleIcon,
     description,
     children,
     confirmLabel,
@@ -267,7 +270,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       restoreFocusTo={restoreFocusTo}
     >
       <AppDialog.Header>
-        <AppDialog.Title>{title}</AppDialog.Title>
+        <AppDialog.Title icon={titleIcon}>{title}</AppDialog.Title>
         {onClose && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
