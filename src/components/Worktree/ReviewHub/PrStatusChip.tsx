@@ -1,4 +1,4 @@
-import { ExternalLink, GitPullRequest } from "lucide-react";
+import { ChevronDown, ExternalLink, GitPullRequest } from "lucide-react";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import type { CIStatus, NormalizedPRState } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
@@ -58,12 +58,21 @@ export function PrStatusChip({
           triggerLabel={triggerLabel}
           onOpenExternal={onOpenExternal}
         >
-          <Badge tone="outline" className="text-2xs font-mono">
+          <Badge
+            tone="outline"
+            className={cn(
+              "text-2xs font-mono transition-colors",
+              "group-hover/pr-checks:bg-overlay-soft group-data-[state=open]/pr-checks:bg-overlay-soft"
+            )}
+          >
             {/* Shape AND colour — see `getPrStateGlyph`. This chip does carry the
               state word beside it, but the glyph is what the eye reaches
               first, and it is shared with the card badge, which does not. */}
             <PrStateGlyph className={cn("w-3 h-3 shrink-0", prStateColor)} />
-            <span className={prStateColor}>#{worktreePR.prNumber}</span>
+            {/* Words stay neutral and the glyphs carry the state colour: status
+                tokens are only guaranteed the 3:1 non-text floor, which small
+                text does not clear. */}
+            <span className="text-text-primary">#{worktreePR.prNumber}</span>
             <span className="text-text-muted">·</span>
             <span className="text-text-secondary">{prStateLabel}</span>
             {ciVisual && (
@@ -85,22 +94,22 @@ export function PrStatusChip({
                       />
                     )}
                   </span>
-                  <span
-                    className={ciVisual.kind === "icon" ? ciVisual.colorClass : ciVisual.labelClass}
-                  >
-                    {ciVisual.shortLabel}
-                  </span>
+                  <span className="text-text-secondary">{ciVisual.shortLabel}</span>
                 </span>
               </>
             )}
+            <ChevronDown
+              className="w-3 h-3 shrink-0 -mr-0.5 text-text-secondary transition-transform group-data-[state=open]/pr-checks:rotate-180"
+              aria-hidden="true"
+            />
           </Badge>
         </PrChecksPopover>
         <button
           type="button"
           onClick={() => onOpenExternal(worktreePR.prUrl)}
           className={cn(
-            "inline-flex items-center justify-center p-0.5 rounded",
-            "text-daintree-text/60 hover:bg-tint/5 hover:text-text-primary",
+            "inline-flex items-center justify-center p-0.5 rounded-sm",
+            "text-text-secondary hover:bg-tint/5 hover:text-text-primary",
             "transition-colors cursor-pointer",
             "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
           )}

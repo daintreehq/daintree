@@ -77,6 +77,12 @@ async function openAndSettle() {
   await waitFor(() => expect(getChecksMock).toHaveBeenCalled());
 }
 
+/** Reveal the clean results that the list folds away behind their count. */
+function expandSettled() {
+  const toggle = screen.queryByTestId("pr-checks-settled-toggle");
+  if (toggle && toggle.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+}
+
 /** A promise the test resolves or rejects by hand. */
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -118,6 +124,7 @@ describe("PrChecksPopover", () => {
     await openAndSettle();
 
     const list = await screen.findByTestId("pr-checks-list");
+    expandSettled();
     const rows = list.querySelectorAll("li");
     expect(rows).toHaveLength(3);
     // Failures lead.
@@ -176,6 +183,7 @@ describe("PrChecksPopover", () => {
     renderPopover();
     await openAndSettle();
     await screen.findByTestId("pr-checks-list");
+    expandSettled();
 
     // Tabbing between the two link buttons must not meet the same name twice.
     const names = screen
@@ -199,9 +207,7 @@ describe("PrChecksPopover", () => {
     getChecksMock.mockResolvedValue({ checks: [] });
     const { unmount } = renderPopover();
     await openAndSettle();
-    expect((await screen.findByTestId("pr-checks-empty")).textContent).toContain(
-      "No CI checks reported"
-    );
+    expect((await screen.findByTestId("pr-checks-empty")).textContent).toContain("No checks yet");
     unmount();
     cleanup();
 
@@ -218,7 +224,7 @@ describe("PrChecksPopover", () => {
     await openAndSettle();
 
     const notice = await screen.findByTestId("pr-checks-error");
-    expect(notice.textContent).toContain("Couldn't load checks.");
+    expect(notice.textContent).toContain("Couldn't load checks");
 
     const reload = screen.getByTestId("pr-checks-reload");
     // `Retry` for a failure, `Refresh` for a re-read — see user-signals.md.
@@ -470,6 +476,58 @@ describe("PrChecksPopover", () => {
     expect(screen.getByTestId("pr-checks-list")).toBeTruthy();
   });
 
+  it("folds clean results behind their count only while something else needs reading", async () => {
+    getChecksMock.mockResolvedValue({
+      checks: [
+        check({ name: "lint", conclusion: "success" }),
+        check({ name: "build", conclusion: "failure" }),
+      ],
+    });
+    renderPopover();
+    await openAndSettle();
+    const list = await screen.findByTestId("pr-checks-list");
+    expect(list.textContent).toContain("build");
+    expect(list.textContent).not.toContain("lint");
+
+    const toggle = screen.getByTestId("pr-checks-settled-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.textContent).toContain("1 passed");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(list.textContent).toContain("lint");
+  });
+
+  it("shows every row, with nothing to unfold, when every check settled cleanly", async () => {
+    getChecksMock.mockResolvedValue({
+      checks: [check({ name: "lint" }), check({ name: "build", conclusion: "skipped" })],
+    });
+    renderPopover();
+    await openAndSettle();
+    const list = await screen.findByTestId("pr-checks-list");
+    expect(list.querySelectorAll("li")).toHaveLength(2);
+    expect(screen.queryByTestId("pr-checks-settled-toggle")).toBeNull();
+  });
+
+  it("summarises the run above the list", async () => {
+    getChecksMock.mockResolvedValue({
+      checks: [check({ conclusion: "failure", required: true }), check({ name: "lint" })],
+    });
+    renderPopover();
+    await openAndSettle();
+    const summary = await screen.findByTestId("pr-checks-summary");
+    expect(summary.textContent).toContain("1 failing · 1 required");
+    expect(summary.textContent).toContain("1 passed");
+  });
+
+  it("offers the pull request itself when its checks cannot be read", async () => {
+    getChecksMock.mockRejectedValue(new Error("boom"));
+    renderPopover();
+    await openAndSettle();
+    await screen.findByTestId("pr-checks-error");
+    fireEvent.click(screen.getByTestId("pr-checks-open-pr"));
+    expect(onOpenExternal).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
+  });
+
   it("keeps every row of a large check list", async () => {
     getChecksMock.mockResolvedValue({
       checks: Array.from({ length: 300 }, (_, i) =>
@@ -480,6 +538,7 @@ describe("PrChecksPopover", () => {
     await openAndSettle();
 
     const list = await screen.findByTestId("pr-checks-list");
+    expandSettled();
     expect(list.querySelectorAll("li")).toHaveLength(300);
     expect(list.querySelectorAll("li")[0]!.textContent).toContain("job-297");
   });
