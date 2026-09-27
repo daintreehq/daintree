@@ -9,6 +9,7 @@ import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { assistantSkipsDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
@@ -39,6 +40,7 @@ import type {
   HelpSessionBearerRecord,
   McpActiveClientInfo,
   McpBearerIdentity,
+  McpDispatchAuthorization,
   McpIssueGrantResult,
   McpIssueNativeGrantResult,
   McpRevokeNativeGrantResult,
@@ -94,7 +96,8 @@ export interface HttpLifecycleDeps {
     args: unknown,
     confirmed?: boolean,
     callerInfo?: McpBearerIdentity,
-    sessionOrigin?: McpSessionOrigin
+    sessionOrigin?: McpSessionOrigin,
+    authorization?: McpDispatchAuthorization
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Pinned variants used for help-session bearers — route to the renderer
   // WebContents that minted the bearer at provision time (#7002). Optional
@@ -109,7 +112,7 @@ export interface HttpLifecycleDeps {
     confirmed?: boolean,
     contextOverride?: import("../../../shared/types/actions.js").ActionContext,
     sessionOrigin?: McpSessionOrigin,
-    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason">
+    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason" | "authorization">
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
   // at handshake (#11789) and for agent panes bound to their launch workspace
@@ -1923,7 +1926,8 @@ export class HttpLifecycle {
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
       actionId,
       args,
-      confirmed
+      confirmed,
+      authorization
     ) => {
       if (boundWorkspaceId !== null) {
         // A bound external session records no context: unlike a help session,
@@ -1949,7 +1953,9 @@ export class HttpLifecycle {
               args,
               confirmed,
               sessionOrigin,
-              paneDispatchOptions
+              authorization !== undefined
+                ? { ...paneDispatchOptions, authorization }
+                : paneDispatchOptions
             )
           : Promise.reject(missingWorkspaceRoute());
       }
@@ -1961,14 +1967,27 @@ export class HttpLifecycle {
         // the model's turn (#8317). Absent for context-less sessions, in
         // which case pinned dispatch falls back to live renderer context.
         const boundContext = this.deps.sessionStore.sessionContextMap.get(sessionId);
-        return pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
+        return authorization !== undefined
+          ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
+              authorization,
+            })
+          : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
       }
       // Unpinned external/api-key dispatch — surface the requesting bearer's
       // identity so the confirm dialog can name the client (#9157). Returns
       // null (→ undefined) for help-session bearers, so callerInfo never
       // reaches the renderer for the assistant's own dispatches.
       const callerInfo = this.getBearerInfoForSession(sessionId) ?? undefined;
-      return this.deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin);
+      return authorization !== undefined
+        ? this.deps.dispatchAction(
+            actionId,
+            args,
+            confirmed,
+            callerInfo,
+            sessionOrigin,
+            authorization
+          )
+        : this.deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin);
     };
 
     /**
@@ -2289,6 +2308,13 @@ export class HttpLifecycle {
         helpSessionId !== null
           ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
           : null,
+      // Live, never snapshotted (#12874): "Always ask" takes effect on the
+      // assistant's next call. sessionServer consults it for help sessions only.
+      readAssistantConfirmationsSkipped: () =>
+        assistantSkipsDaintreeConfirmations(
+          store.get("helpAssistant")?.daintreeConfirmations,
+          store.get("agentSettings")?.globalSkipPermissions
+        ),
       notifyToolCallStarted,
       notifyToolCallSettled,
       notifyDisplayImage,

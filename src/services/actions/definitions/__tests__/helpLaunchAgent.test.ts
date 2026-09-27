@@ -247,6 +247,7 @@ describe("help.launchAgent", () => {
       idleHibernateMinutes: 5,
       debugLogging: false,
       loadGlobalHooksAndServers: false,
+      daintreeConfirmations: "inherit",
     });
 
     await action.run({ agentId: "codex" }, stubCtx);

@@ -1660,6 +1660,32 @@ describe("filterIntrospectionResultForSession", () => {
         expect(perToolGranted.requiresConfirmation).toBe(true);
       });
 
+      // Mirrors the dispatch gate's skip preference (#12874): a help session
+      // told its confirm-gated calls run straight away must not be told they wait.
+      it("clears requiresConfirmation under the skip preference, except for a per-resolved-target tool", () => {
+        const skipped = policyOf(
+          lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
+            policySnapshot: snapshot({ confirmationsSkipped: true }),
+          })
+        );
+        expect(skipped.requiresConfirmation).toBe(false);
+
+        const asking = policyOf(
+          lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
+            policySnapshot: snapshot({ confirmationsSkipped: false }),
+          })
+        );
+        expect(asking.requiresConfirmation).toBe(true);
+
+        const fanOut = policyOf(
+          lookup(makeEntry({ id: "terminal.closeAll", danger: "confirm" }), {
+            permittedActionIds: new Set([...permitted, "terminal.closeAll"]),
+            policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
+          })
+        );
+        expect(fanOut.requiresConfirmation).toBe(true);
+      });
+
       it("keeps requiresConfirmation set for a per-resolved-target tool (#12121)", () => {
         // `peekNativeGrant` refuses terminal.closeAll, so a grant listing it
         // buys no bypass. Reading the allowlist alone would advertise one the
@@ -1850,6 +1876,26 @@ describe("filterIntrospectionResultForSession", () => {
           })
         );
         expect(pane.confirmationMayEscalate).toBe(false);
+      });
+
+      // The skip preference (#12874) covers only what a native grant could, and
+      // neither covers these gates: a declared-safe closeAll still asks, and a
+      // guarded close still reports that it may.
+      it("keeps the assistant's close gates under the skip preference", () => {
+        const closes = {
+          permittedActionIds: new Set([
+            ...permitted,
+            "terminal.close",
+            "terminal.closeMany",
+            "terminal.closeAll",
+          ]),
+          policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
+        };
+        for (const id of ["terminal.close", "terminal.closeMany"]) {
+          expect(policyOf(lookup(makeEntry({ id }), closes)).confirmationMayEscalate).toBe(true);
+        }
+        const closeAll = policyOf(lookup(makeEntry({ id: "terminal.closeAll" }), closes));
+        expect(closeAll.requiresConfirmation).toBe(true);
       });
 
       it("never reports escalation for a target already declared confirm", () => {

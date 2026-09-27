@@ -28,6 +28,7 @@ import {
 } from "../../../shared/types/mcpBatch.js";
 import { ASSISTANT_CLOSE_CONFIRM_AGENT_STATES } from "../../../shared/types/agent.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
+import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import {
   readDispatchTerminalCommand,
   readDispatchTerminalCwd,
@@ -837,7 +838,13 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   dispatchAction: (
     actionId: string,
     args: unknown,
-    confirmed?: boolean
+    confirmed?: boolean,
+    /**
+     * What pre-authorized a `confirmed` dispatch, passed only for the skip
+     * preference (#12874) — the one reason the renderer treats differently,
+     * since it alone also waives the typed-name gate on a force delete.
+     */
+    authorization?: McpDispatchAuthorization
   ) => Promise<DispatchEnvelope>;
   /**
    * Take the user to a run, and bring the window it lands in with them
@@ -1069,6 +1076,13 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   getCurrentTurnId?: () => string | null;
   /**
+   * Whether the assistant's confirm-gated Daintree actions currently skip the
+   * host dialog (#12874) — the global "Skip permission prompts" unless the
+   * assistant is set to always ask. Read on every call so a change takes effect
+   * on the next one. Only consulted for `help` sessions; absent reads as false.
+   */
+  readAssistantConfirmationsSkipped?: () => boolean;
+  /**
    * Optional renderer notifier fired when an MCP tool dispatch enters the call
    * path (after tier/rate/dedup guards pass and the manifest entry resolves).
    * Drives the Assistant panel's live activity strip (#9759). Implemented by
@@ -1161,6 +1175,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifySessionRevoked,
     clearDenialState,
     getCurrentTurnId,
+    readAssistantConfirmationsSkipped,
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,
@@ -1375,6 +1390,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Captured once so discovery, the tier gate and `mcp.surface` all describe
     // the same session (#12407).
     const rendererOwnedOrigin = sessionStore.isRendererOwnedOrigin(sessionId);
+    // Daintree's own assistant only (#12874): not the retired `assistant-pane`
+    // origin, not agent panes, not api-key clients. Read live per call, and a
+    // failed read keeps the dialog.
+    let confirmationsSkipped = false;
+    if (sessionStore.getOrigin(sessionId) === "help") {
+      try {
+        confirmationsSkipped = readAssistantConfirmationsSkipped?.() === true;
+      } catch (err) {
+        console.error("[MCP] Failed to read the assistant confirmation preference:", err);
+      }
+    }
     // Whose ownership records this call reads and writes (#12487): the
     // bearer's principal for a pane session, else the session itself. Captured
     // at admission so the ownership gate, an `owned` listing and the
@@ -1524,6 +1550,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
               perToolGrantedActionIds,
               nativeGrantedActionIds,
+              confirmationsSkipped,
             } satisfies TargetPolicySessionSnapshot,
           };
         })()
@@ -1642,7 +1669,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       delegateArgs[entry.delegateIdArg ?? entry.idArg] = resourceId;
       if (entry.reveals !== true) {
         return {
-          envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
+          envelope: await dispatchToRenderer(entry.delegateTo, delegateArgs),
           raised: true,
         };
       }
@@ -1659,7 +1686,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
       if (deps.revealOwnedRun === undefined) {
         return {
-          envelope: await dispatchAction(entry.delegateTo, delegateArgs, dispatchConfirmed),
+          envelope: await dispatchToRenderer(entry.delegateTo, delegateArgs),
           raised: true,
         };
       }
@@ -2298,6 +2325,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         console.error("[MCP] Failed to notify tool-call-started:", err);
       }
     };
+
+    // Read at call time, not captured: the skip preference is settled once the
+    // manifest entry is known, well after this is defined.
+    const dispatchToRenderer = (id: string, dispatchArgs: unknown): Promise<DispatchEnvelope> =>
+      dispatchAuthorization === "skip-preference"
+        ? dispatchAction(id, dispatchArgs, dispatchConfirmed, dispatchAuthorization)
+        : dispatchAction(id, dispatchArgs, dispatchConfirmed);
 
     /**
      * Mint the per-tool grant behind "Allow for this session" (#12692), unless
@@ -3348,10 +3382,36 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // proof of human authorization — a headless/agentic client could
         // otherwise self-approve its own destructive call (#11342). Only a
         // host-issued native grant (`nativeGrantId`) pre-authorizes a dispatch.
-        // A protected close already announced itself before asking (#12881).
-        // An agent's close-all always raises the dialog, whatever it declares.
+        //
+        // The skip preference (#12874) is host state too, and is settled here
+        // rather than beside the grants above because it hangs on the resolved
+        // danger: stamping it on a safe call would put "ran without asking" on
+        // calls that never could ask. The danger is the per-dispatch one the
+        // renderer gates on, so a recipe id or a terminal launch target counts.
+        // It covers what a native grant can cover — a tool whose dialog is where
+        // the user picks its targets still asks — and it wins over a native
+        // grant, which pre-authorizes only the D2 dialog: under the skip there
+        // is no typed-name gate either. The grant's use is still spent. The
+        // assistant's protected close (#12881) is asked above, whatever a grant
+        // says, so the preference never reaches it either.
+        const confirmGated =
+          entry !== undefined &&
+          resolveEffectiveActionDanger(actionId, entry.danger, "agent", args) === "confirm";
+        if (
+          (dispatchAuthorization === undefined || dispatchAuthorization === "native-grant") &&
+          confirmationsSkipped &&
+          isGenericNativeGrantEligible(actionId) &&
+          confirmGated
+        ) {
+          dispatchAuthorization = "skip-preference";
+          dispatchConfirmed = true;
+        }
+        // A protected close already announced itself before asking (#12881);
+        // an agent's close-all is confirm-gated by the effective danger.
+        // A call under the skip preference never waits. A native grant's still
+        // can: the renderer demotes a D3 force delete back to the dialog.
         if (!toolCallStartedEmitted) {
-          emitToolCallStarted(entry?.danger === "confirm" || actionId === "terminal.closeAll");
+          emitToolCallStarted(confirmGated && dispatchAuthorization !== "skip-preference");
         }
 
         // The workspace the dispatch actually landed on, resolved renderer-side
@@ -3422,7 +3482,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               ? {
                   envelope: listPaging
                     ? await collectListPages()
-                    : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed),
+                    : await dispatchToRenderer(actionId, dispatchArgs),
                   raised: true,
                 }
               : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);

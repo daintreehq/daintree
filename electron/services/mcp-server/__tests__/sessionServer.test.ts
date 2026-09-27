@@ -150,6 +150,7 @@ function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionS
     sessionTierMap: new Map(),
     sessionWebContentsMap: new Map(),
     sessionOriginMap,
+    getOrigin: vi.fn((sessionId: string) => sessionOriginMap.get(sessionId) ?? "external"),
     isRendererOwnedOrigin: vi.fn((sessionId: string) => {
       const origin = sessionOriginMap.get(sessionId) ?? "external";
       return origin === "help" || origin === "assistant-pane";
@@ -8995,6 +8996,58 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(store.resourceOwnership.owns("s-del", "worktree", "/tmp/wt")).toBe(false);
     });
 
+    // The confirmation fires on the delegated call, so that is where the skip
+    // preference has to land — and ownership must still be checked first (#12874).
+    it("carries the skip preference to the delegated worktree.delete for a help session", async () => {
+      const { store, server, dispatchAction } = harness(
+        "s-skip",
+        { "worktree.delete": { result: { ok: true, result: null } } },
+        { readAssistantConfirmationsSkipped: () => true }
+      );
+      store.sessionOriginMap.set("s-skip", "help");
+      store.resourceOwnership.record("s-skip", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "worktree.delete",
+        { worktreeId: "/tmp/wt" },
+        true,
+        "skip-preference"
+      );
+    });
+
+    it("still refuses a worktree the session does not own under the skip preference (#12874)", async () => {
+      const { store, server, dispatchAction } = harness(
+        "s-skip-unowned",
+        { "worktree.delete": { result: { ok: true, result: null } } },
+        { readAssistantConfirmationsSkipped: () => true }
+      );
+      store.sessionOriginMap.set("s-skip-unowned", "help");
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "worktree.delete",
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
+      );
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "worktree.delete",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
     it("strips force, deleteBranch and closeTerminals from the delegated call", async () => {
       // The narrow tool omits them from its schema, but the renderer validates
       // against `worktree.delete`, which still accepts them — so rebuilding the
@@ -11079,5 +11132,278 @@ describe("assistant close approval (#12881)", () => {
 
     expect(requestCloseApproval).not.toHaveBeenCalled();
     expect(dispatchAction).toHaveBeenCalledWith("terminal.close", { terminalId: "t-a" }, false);
+  });
+});
+
+describe("assistant skip preference (#12874)", () => {
+  function confirmEntry(id: string): ActionManifestEntry {
+    return { ...makeManifestEntry(id), kind: "command", danger: "confirm" };
+  }
+
+  function skipServer(options: {
+    origin: string;
+    skipped: boolean;
+    tier?: "core" | "full";
+    entries?: ActionManifestEntry[];
+    extraDeps?: Partial<SessionServerDeps>;
+  }) {
+    const sessionStore = fakeSessionStore(options.tier ?? "full");
+    sessionStore.sessionOriginMap.set("s", options.origin as never);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const appendAuditRecord = vi.fn();
+    const notifyToolCallStarted = vi.fn();
+    const readAssistantConfirmationsSkipped = vi.fn(() => options.skipped);
+    const deps = fakeDeps({
+      sessionStore,
+      dispatchAction,
+      appendAuditRecord,
+      notifyToolCallStarted,
+      readAssistantConfirmationsSkipped,
+      getCachedManifest: vi.fn(
+        () =>
+          options.entries ?? [confirmEntry("worktree.delete"), makeManifestEntry("worktree.list")]
+      ),
+      ...options.extraDeps,
+    });
+    const server = createSessionServer("s", deps);
+    return {
+      server,
+      sessionStore,
+      dispatchAction,
+      appendAuditRecord,
+      notifyToolCallStarted,
+      readAssistantConfirmationsSkipped,
+    };
+  }
+
+  function lastAudit(appendAuditRecord: ReturnType<typeof vi.fn>) {
+    return appendAuditRecord.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+  }
+
+  it("runs a help session's confirm-gated call pre-confirmed and audits it as the skip preference", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    await help.server.connect(makeMockTransport());
+
+    const result = await callTool(help.server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1", force: true },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(help.dispatchAction).toHaveBeenCalledWith(
+      "worktree.delete",
+      expect.objectContaining({ worktreeId: "wt-1", force: true }),
+      true,
+      "skip-preference"
+    );
+    expect(lastAudit(help.appendAuditRecord)).toMatchObject({ authorization: "skip-preference" });
+    // Never going to wait, so the strip must not say it is.
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "worktree.delete", danger: false })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("keeps the dialog while the preference resolves to ask", async () => {
+    const help = skipServer({ origin: "help", skipped: false });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    const call = help.dispatchAction.mock.calls.at(-1)!;
+    expect(call[2]).toBe(false);
+    expect(call[3]).toBeUndefined();
+    expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "worktree.delete", danger: true })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("reads the preference on every call, so switching to always ask applies to the next one", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+    help.readAssistantConfirmationsSkipped.mockReturnValue(false);
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-2" } });
+
+    expect(help.dispatchAction.mock.calls[0][2]).toBe(true);
+    expect(help.dispatchAction.mock.calls[1][2]).toBe(false);
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it.each(["assistant-pane", "external"])(
+    "never applies to a %s session, whatever the preference says",
+    async (origin) => {
+      const other = skipServer({ origin, skipped: true, tier: "core" });
+      await other.server.connect(makeMockTransport());
+
+      await callTool(other.server, { name: "worktree.list", arguments: {} });
+      await callTool(other.server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "wt-1" },
+      });
+
+      expect(other.readAssistantConfirmationsSkipped).not.toHaveBeenCalled();
+      for (const call of other.dispatchAction.mock.calls) {
+        expect(call[3]).not.toBe("skip-preference");
+      }
+      other.sessionStore.grantCache.dispose();
+    }
+  );
+
+  it("does not stamp a safe call, which could never have asked", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.list", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.[2]).toBe(false);
+    expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("wins over a native grant, which would leave the typed-name gate in place", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    help.sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1", force: true },
+    });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+    expect(lastAudit(help.appendAuditRecord)).toMatchObject({ authorization: "skip-preference" });
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("keeps a native grant's awaiting state, since the renderer can still demote it", async () => {
+    const help = skipServer({ origin: "help", skipped: false });
+    help.sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true]);
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "worktree.delete", danger: true })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("covers a safe action its arguments raise to confirm, as the renderer does", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [{ ...makeManifestEntry("terminal.new"), kind: "command" }],
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.new", arguments: { command: "npm test" } });
+    await callTool(help.server, { name: "terminal.new", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls[0].slice(2)).toEqual([true, "skip-preference"]);
+    expect(help.dispatchAction.mock.calls[1].slice(2)).toEqual([false]);
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("fails closed to the dialog when the preference cannot be read", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    help.readAssistantConfirmationsSkipped.mockImplementation(() => {
+      throw new Error("store unavailable");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.[2]).toBe(false);
+    consoleError.mockRestore();
+    help.sessionStore.grantCache.dispose();
+  });
+
+  // #12881's protected close is asked whatever a grant says, and the skip
+  // preference covers only what a grant could, so it never waives that ask.
+  it("still asks before closing a panel the assistant did not open", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: true, result: { selectedTargetIds: ["t-user"] } },
+      confirmationDecision: "approved",
+    });
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.close", arguments: { terminalId: "t-user" } });
+
+    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+    expect(help.dispatchAction).toHaveBeenCalledTimes(1);
+    expect(help.dispatchAction.mock.calls[0][3]).not.toBe("skip-preference");
+    expect(lastAudit(help.appendAuditRecord).authorization).not.toBe("skip-preference");
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("closes nothing unasked when the user declines a protected close under the preference", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: false, error: { code: "USER_REJECTED", message: "declined" } },
+      confirmationDecision: "rejected",
+    });
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    await help.server.connect(makeMockTransport());
+
+    const result = await callTool(help.server, {
+      name: "terminal.close",
+      arguments: { terminalId: "t-user" },
+    });
+
+    expect(help.dispatchAction).not.toHaveBeenCalled();
+    expect(toolErrorPayload(result).code).toBe("USER_REJECTED");
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("leaves an agent's close-all to its dialog, which is where the sweep is approved", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.closeAll")],
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.closeAll", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([false]);
+    expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.closeAll", danger: true })
+    );
+    help.sessionStore.grantCache.dispose();
   });
 });

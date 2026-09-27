@@ -88,6 +88,7 @@ describe("registerHelpAssistantHandlers", () => {
       idleHibernateMinutes: 5,
       debugLogging: false,
       loadGlobalHooksAndServers: false,
+      daintreeConfirmations: "inherit",
     });
   });
 
@@ -113,6 +114,7 @@ describe("registerHelpAssistantHandlers", () => {
       idleHibernateMinutes: 5,
       debugLogging: false,
       loadGlobalHooksAndServers: false,
+      daintreeConfirmations: "inherit",
     });
   });
 
@@ -226,6 +228,31 @@ describe("registerHelpAssistantHandlers", () => {
     storeMock.set.mockClear();
     await handler(null, { loadGlobalHooksAndServers: "yes" as unknown as boolean });
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("persists daintreeConfirmations and rejects values outside the union (#12874)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { daintreeConfirmations: "always-ask" });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmations", "always-ask");
+
+    storeMock.set.mockClear();
+    await handler(null, { daintreeConfirmations: "never-ask" as unknown as "inherit" });
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("reads a stored daintreeConfirmations, and anything unrecognised as inherit (#12874)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    storeMock.get.mockReturnValue({ daintreeConfirmations: "always-ask" });
+    expect(await handler(null)).toMatchObject({ daintreeConfirmations: "always-ask" });
+
+    storeMock.get.mockReturnValue({
+      daintreeConfirmations: "skip" as unknown as "inherit",
+    });
+    expect(await handler(null)).toMatchObject({ daintreeConfirmations: "inherit" });
   });
 
   it("returns a stored debugLogging=true over the default", async () => {
@@ -416,6 +443,7 @@ describe("registerHelpAssistantHandlers", () => {
       idleHibernateMinutes: 5,
       debugLogging: false,
       loadGlobalHooksAndServers: false,
+      daintreeConfirmations: "inherit",
     });
   });
 

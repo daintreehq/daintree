@@ -376,6 +376,8 @@ export interface StoreSchema {
      * migration 031.
      */
     modelIds?: Record<string, string>;
+    /** Absent in stores written before #12874; read as `"inherit"`. */
+    daintreeConfirmations?: "inherit" | "always-ask";
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;

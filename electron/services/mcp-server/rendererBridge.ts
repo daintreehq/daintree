@@ -9,7 +9,11 @@ import {
 import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
 import type { WorkspaceViewLeaseRegistry } from "./workspaceViewLease.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
-import type { McpBearerIdentity, McpSessionOrigin } from "../../../shared/types/ipc/mcpServer.js";
+import type {
+  McpBearerIdentity,
+  McpDispatchAuthorization,
+  McpSessionOrigin,
+} from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import type {
   PendingRequest,
@@ -615,7 +619,7 @@ export function createRendererBridge(
     route?: BridgeRoute,
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "offerSessionApproval" | "approvalOnly" | "approvalReason"
+      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization"
     >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
@@ -697,6 +701,13 @@ export function createRendererBridge(
             ...(approval?.approvalOnly && approval.approvalReason
               ? { approvalReason: approval.approvalReason }
               : {}),
+            // Why a `confirmed` dispatch needs no dialog (#12874). Main decides;
+            // the renderer reads it only to tell the skip preference, which
+            // also waives the typed-name gate, from a native grant, which
+            // does not.
+            ...(confirmed && approval?.authorization
+              ? { authorization: approval.authorization }
+              : {}),
           });
         } catch (err) {
           clearTimeout(timer);
@@ -728,7 +739,8 @@ export function createRendererBridge(
     args: unknown,
     confirmed = false,
     callerInfo?: McpBearerIdentity,
-    sessionOrigin: McpSessionOrigin = "external"
+    sessionOrigin: McpSessionOrigin = "external",
+    authorization?: McpDispatchAuthorization
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getActiveProjectWebContents(),
@@ -737,7 +749,9 @@ export function createRendererBridge(
       confirmed,
       sessionOrigin,
       undefined,
-      callerInfo
+      callerInfo,
+      undefined,
+      { authorization }
     );
   }
 
@@ -828,7 +842,7 @@ export function createRendererBridge(
     confirmed = false,
     contextOverride?: ActionContext,
     sessionOrigin: McpSessionOrigin = "external",
-    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason">
+    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason" | "authorization">
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getPinnedWebContents(id),

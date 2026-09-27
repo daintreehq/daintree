@@ -4144,6 +4144,52 @@ describe("HelpSessionService", () => {
       expect(content).not.toContain("Forge remote");
     });
   });
+  describe("confirmations note (#12874)", () => {
+    const START = "<!-- DAINTREE_CONFIRMATIONS_START -->";
+    const storeWith =
+      (helpAssistant: Record<string, unknown>, globalSkipPermissions: boolean) => (key: string) =>
+        key === "agentSettings" ? { globalSkipPermissions } : helpAssistant;
+
+    it("tells the session its confirm-gated calls run straight away while skipping", async () => {
+      mockStoreGet.mockImplementation(storeWith({}, true));
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+        expect(content).toContain("## Daintree Confirmations");
+      }
+    });
+
+    it.each([
+      ["the global setting is off", {}, false],
+      ["the assistant is set to always ask", { daintreeConfirmations: "always-ask" }, true],
+      ["Daintree control is off", { daintreeControl: false }, true],
+    ] as const)("writes no note while %s", async (_label, helpAssistant, globalSkip) => {
+      mockStoreGet.mockImplementation(storeWith(helpAssistant, globalSkip));
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(content).not.toContain(START);
+    });
+
+    it("removes the note on re-provision once the assistant is set to always ask", async () => {
+      mockStoreGet.mockImplementation(storeWith({}, true));
+      await service.provisionSession(provisionInput());
+      mockStoreGet.mockImplementation(storeWith({ daintreeConfirmations: "always-ask" }, true));
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
+        expect(content).not.toContain(START);
+        expect(content).not.toContain("## Daintree Confirmations");
+      }
+    });
+  });
+
   describe("runbook rule", () => {
     const START = "<!-- DAINTREE_RUNBOOKS_START -->";
 

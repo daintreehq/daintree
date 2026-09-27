@@ -485,6 +485,12 @@ export interface TargetPolicySessionSnapshot {
   perToolGrantedActionIds: ReadonlySet<string>;
   /** Live native automation grants' `allowedTools`, unioned. */
   nativeGrantedActionIds: ReadonlySet<string>;
+  /**
+   * Whether this help session's confirm-gated calls skip the host dialog under
+   * the "Skip permission prompts" preference (#12874), read live. Optional and
+   * read as `=== true`.
+   */
+  confirmationsSkipped?: boolean;
 }
 
 /** Swept by an agent, every panel in the worktree: always confirmed (#12881). */
@@ -635,9 +641,13 @@ export function buildTargetPolicy(
   // An agent's `terminal.closeAll` is confirm-gated whatever it declares
   // (#12881), and every caller here is an agent.
   const effectiveDanger = id === CLOSE_ALL_TOOL_ID ? "confirm" : danger;
+  // Mirrors the dispatch gate's skip preference (#12874), which covers the
+  // same tools a native grant can.
+  const skipConfirmWaived =
+    snapshot.confirmationsSkipped === true && isGenericNativeGrantEligible(id);
   const requiresConfirmation =
     authorizedBy === "approval" ||
-    (effectiveDanger === "confirm" && !nativeGranted && !paneConfirmWaived);
+    (effectiveDanger === "confirm" && !nativeGranted && !paneConfirmWaived && !skipConfirmWaived);
 
   // Strict rather than `!== false`: a malformed `enabled` (absent, or the
   // string "false") would otherwise be reported as callable, which is the one

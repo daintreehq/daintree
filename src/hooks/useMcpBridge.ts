@@ -1097,6 +1097,7 @@ export function useMcpBridge(): void {
         offerSessionApproval,
         approvalOnly,
         approvalReason,
+        authorization,
       }) => {
         // An agent pane's replayed snapshot names its worktree by id only, so
         // describe it from this view's store once, up front (#12486): the
@@ -1155,7 +1156,16 @@ export function useMcpBridge(): void {
           // protected worktree irreversibly. So a granted force delete whose
           // LIVE tier comes back D3 gives up its pre-authorisation and asks for
           // the attestation on its own account (#12115).
-          if (effectiveConfirmed === true && actionId === "worktree.delete" && forceArg(args)) {
+          //
+          // The skip preference is the exception (#12874): it is the user's
+          // standing "don't ask" for the assistant, typed name included, so a
+          // force delete it covers runs and any failure surfaces from the action.
+          if (
+            effectiveConfirmed === true &&
+            authorization !== "skip-preference" &&
+            actionId === "worktree.delete" &&
+            forceArg(args)
+          ) {
             const grantedTarget = resolveMcpConfirmPreviewTarget(actionId, args, context);
             if (grantedTarget?.kind === "worktreeDelete") {
               const gate = resolveWorktreeDeleteGate(

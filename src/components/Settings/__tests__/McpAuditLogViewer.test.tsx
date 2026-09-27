@@ -32,6 +32,14 @@ function renderViewer(records: McpLogRecord[], turnRecords?: AssistantTurnRecord
 }
 
 describe("McpAuditLogViewer", () => {
+  it("marks a call that ran under the skip preference, and only that one (#12874)", () => {
+    renderViewer([
+      { ...dispatch("1", "worktree.delete"), authorization: "skip-preference" } as McpLogRecord,
+      { ...dispatch("2", "worktree.list"), authorization: "native-grant" } as McpLogRecord,
+    ]);
+    expect(screen.getAllByText("Confirmation skipped — Skip permission prompts")).toHaveLength(1);
+  });
+
   it("offers a way out of a filter that matches nothing", () => {
     renderViewer([dispatch("1", "worktree.list")]);
     fireEvent.change(screen.getByLabelText("Filter audit by tool name"), {

@@ -6,6 +6,7 @@ import type { IpcContext } from "../types.js";
 import { HELP_ASSISTANT_METHOD_CHANNELS } from "./helpAssistant.preload.js";
 import type {
   HelpAssistantAuditRetention,
+  HelpAssistantDaintreeConfirmations,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
   HelpSessionLiveStatus,
@@ -44,6 +45,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   idleHibernateMinutes: 5,
   debugLogging: false,
   loadGlobalHooksAndServers: false,
+  daintreeConfirmations: "inherit",
 };
 
 const HELP_ASSISTANT_KEYS = [
@@ -58,6 +60,7 @@ const HELP_ASSISTANT_KEYS = [
   "idleHibernateMinutes",
   "debugLogging",
   "loadGlobalHooksAndServers",
+  "daintreeConfirmations",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set(HELP_ASSISTANT_KEYS);
@@ -70,6 +73,10 @@ function isValidIdleHibernateMinutes(value: unknown): value is HelpAssistantIdle
   return (
     value === 0 || value === 5 || value === 15 || value === 30 || value === 60 || value === 120
   );
+}
+
+function isValidDaintreeConfirmations(value: unknown): value is HelpAssistantDaintreeConfirmations {
+  return value === "inherit" || value === "always-ask";
 }
 
 function isValidHelpAssistantTier(value: unknown): value is HelpAssistantTier {
@@ -112,6 +119,9 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
     out.bypassPermissions = record.skipPermissions;
   }
   if (isValidAuditRetention(record.auditRetention)) out.auditRetention = record.auditRetention;
+  if (isValidDaintreeConfirmations(record.daintreeConfirmations)) {
+    out.daintreeConfirmations = record.daintreeConfirmations;
+  }
   if (isValidIdleHibernateMinutes(record.idleHibernateMinutes)) {
     out.idleHibernateMinutes = record.idleHibernateMinutes;
   }
@@ -163,6 +173,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (field === "auditRetention" && !isValidAuditRetention(value)) continue;
           if (field === "idleHibernateMinutes" && !isValidIdleHibernateMinutes(value)) continue;
           if (field === "tier" && !isValidHelpAssistantTier(value)) continue;
+          if (field === "daintreeConfirmations" && !isValidDaintreeConfirmations(value)) continue;
           if (
             (field === "docSearch" ||
               field === "daintreeControl" ||
