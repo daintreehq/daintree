@@ -1,6 +1,29 @@
 import type { LoadedPluginInfo, PluginManifest } from "../../../shared/types/plugin.js";
-import { pluginManifestIdFromInstanceKey } from "../../../shared/types/plugin.js";
+import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "../../../shared/types/plugin.js";
 import type { DeclaredAgentMcpPlugin } from "./types.js";
+
+/**
+ * Whether a plugin's database tools read data every project shares. Only an
+ * installed plugin's do: its declared databases are all `"local"` (an installed
+ * plugin can't declare a `"project"` one), and local files live in the data
+ * directory of the plugin instance, which for an installed plugin is the same
+ * in every project. The host's database tools can't filter rows by the calling
+ * project because they don't know the plugin's data model, so giving them to
+ * one project lets agents there read what the plugin stored for all the others.
+ *
+ * A project plugin's instance key names its project, so its local data is its
+ * own. A plugin's own `agentMcp` tools can scope by `caller.projectId`, so they
+ * never count.
+ *
+ * Keyed by instance id, the same key the data directory is, so a plugin that is
+ * no longer loaded but still has access on record is classified like a live one.
+ */
+export function isSharedAcrossProjects(pluginInstanceId: string, hasDatabases: boolean): boolean {
+  return hasDatabases && projectIdFromPluginInstanceKey(pluginInstanceId) === null;
+}
 
 /**
  * The plugins that could serve agent tools to one project: running installed

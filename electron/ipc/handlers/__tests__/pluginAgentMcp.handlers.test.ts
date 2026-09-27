@@ -195,6 +195,7 @@ describe("plugin agent MCP access IPC", () => {
             pluginDisplayName: "Ledger",
             origin: "installed",
             hasDatabases: true,
+            sharedAcrossProjects: true,
             pluginTools: { name: "Household ledger", description: "Reads entries" },
             access: "off",
             source: "default",
@@ -292,6 +293,55 @@ describe("plugin agent MCP access IPC", () => {
 
       expect(row).toMatchObject({ hasDatabases: true, access: "off", available: true });
       expect(row.pluginTools).toBeUndefined();
+    });
+
+    it("marks an installed plugin with databases as shared across projects, live or withheld", async () => {
+      mocks.listPlugins.mockReturnValue([
+        plugin(),
+        plugin({ name: "acme.db", displayName: "Warehouse", agentMcp: null }),
+        plugin({ name: "acme.notes", displayName: "Notes", databases: false }),
+      ]);
+      storeData.set("projectAgentMcpEnablement", {
+        [PROJECT]: { "acme.ledger": { data: { decidedAt: 1 } } },
+      });
+
+      const rows = (await list()).plugins;
+
+      expect(
+        rows.map((r) => [r.pluginInstanceId, r.databasesWithheld, r.sharedAcrossProjects])
+      ).toEqual([
+        ["acme.ledger", true, true],
+        ["acme.db", undefined, true],
+        ["acme.notes", undefined, undefined],
+      ]);
+    });
+
+    it("never marks a project plugin's databases as shared", async () => {
+      mocks.listPlugins.mockReturnValue([projectLedger()]);
+
+      const [row] = (await list()).plugins;
+
+      expect(row).toMatchObject({ origin: "project", hasDatabases: true });
+      expect(row.sharedAcrossProjects).toBeUndefined();
+    });
+
+    it("keeps the shared mark on access saved for a plugin that is no longer running", async () => {
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only");
+      setProjectAgentMcpAccess(PROJECT, PROJECT_LEDGER, "read-only");
+      setAllProjectsAgentMcpAccess("gone.plugin", "read-only");
+      mocks.hasPlugin.mockReturnValue(false);
+      mocks.listPlugins.mockReturnValue([plugin(), projectLedger()]);
+
+      const rows = (await list()).plugins;
+
+      expect(rows.map((r) => [r.pluginInstanceId, r.available, r.sharedAcrossProjects])).toEqual(
+        expect.arrayContaining([
+          ["acme.ledger", false, true],
+          [PROJECT_LEDGER, false, undefined],
+          ["gone.plugin", false, true],
+        ])
+      );
+      expect(rows).toHaveLength(3);
     });
 
     it("keeps an answer left on for a plugin that is no longer running, so it can be revoked", async () => {

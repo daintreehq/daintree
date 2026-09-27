@@ -290,7 +290,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
       )}
 
       {plugin.databases && plugin.databases.length > 0 && (
-        <PluginDatabasesSection databases={plugin.databases} />
+        <PluginDatabasesSection databases={plugin.databases} origin="project" />
       )}
 
       {logs.lines && logs.lines.length > 0 && (

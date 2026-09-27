@@ -689,7 +689,9 @@ export function PluginDetailPane({
 
             {agents.length > 0 && <PluginContributedAgents agents={agents} />}
 
-            {databases.length > 0 && <PluginDatabasesSection databases={databases} />}
+            {databases.length > 0 && (
+              <PluginDatabasesSection databases={databases} origin={plugin.origin} />
+            )}
 
             {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
               <PluginContributors authors={plugin.manifest.authors} />

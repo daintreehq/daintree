@@ -95,6 +95,20 @@ function levelName(plugin: ProjectAgentToolPlugin, access: AgentMcpAccess): stri
   return ACCESS_LABELS[access].toLowerCase();
 }
 
+/**
+ * Whether a level that includes an installed plugin's shared database tools is
+ * on offer, for this project or as the default for every project. A plugin
+ * that is gone offers nothing new, so only access it still holds counts.
+ */
+function offersSharedDatabases(plugin: ProjectAgentToolPlugin): boolean {
+  if (!plugin.sharedAcrossProjects) return false;
+  if (plugin.available) return true;
+  return (
+    plugin.access !== "off" ||
+    (plugin.allProjectsAccess !== undefined && plugin.allProjectsAccess !== "off")
+  );
+}
+
 /** What the plugin offers, then where its current access comes from. */
 function PluginDescription({ plugin }: { plugin: ProjectAgentToolPlugin }) {
   const lines: string[] = [];
@@ -324,6 +338,21 @@ export function ProjectAgentToolsSection() {
                   description={
                     <>
                       <PluginDescription plugin={plugin} />
+                      {offersSharedDatabases(plugin) && (
+                        <span
+                          className="flex items-start gap-1.5"
+                          data-testid="project-agent-tool-shared-warning"
+                        >
+                          <TriangleAlert
+                            className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+                            aria-hidden="true"
+                          />
+                          <span>
+                            Shared by every project: agents with access to its databases can read
+                            what this plugin stored for your other projects
+                          </span>
+                        </span>
+                      )}
                       {canSetDefault && (
                         <span className="mt-1.5 block">
                           <Button

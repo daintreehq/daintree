@@ -129,6 +129,19 @@ function rowFor(name: string): HTMLElement {
   return row;
 }
 
+/** The text of every element a control's `aria-describedby` names; each must resolve. */
+function describedText(control: HTMLElement): string {
+  const ids = (control.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+  expect(ids.length).toBeGreaterThan(0);
+  return ids
+    .map((id) => {
+      const el = document.getElementById(id);
+      expect(el).not.toBeNull();
+      return el!.textContent ?? "";
+    })
+    .join(" ");
+}
+
 describe("ProjectAgentToolsSection", () => {
   it("renders one row per plugin with its current level", async () => {
     agentMcpApi.listProjectPlugins.mockResolvedValue(
@@ -202,6 +215,97 @@ describe("ProjectAgentToolsSection", () => {
     render(<ProjectAgentToolsSection />);
     const section = await screen.findByTestId("project-agent-tools");
     expect(section.textContent).not.toMatch(/claude/i);
+  });
+
+  it("warns where an installed plugin's shared databases can be turned on, and only there", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(
+      snapshot([
+        plugin({ sharedAcrossProjects: true }),
+        plugin({
+          pluginInstanceId: "acme.db",
+          pluginDisplayName: "Warehouse",
+          pluginTools: undefined,
+          sharedAcrossProjects: true,
+        }),
+        notes(),
+      ])
+    );
+    render(<ProjectAgentToolsSection />);
+
+    await screen.findByTestId("project-agent-tools");
+    const warnings = screen.getAllByTestId("project-agent-tool-shared-warning");
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]!.textContent).toBe(
+      "Shared by every project: agents with access to its databases can read what this plugin stored for your other projects"
+    );
+    expect(within(rowFor("Ledger")).queryByTestId("project-agent-tool-shared-warning")).not.toBe(
+      null
+    );
+    expect(within(rowFor("Notes")).queryByTestId("project-agent-tool-shared-warning")).toBe(null);
+
+    expect(describedText(groupFor("Ledger"))).toContain("Shared by every project");
+    const ordinary = describedText(groupFor("Notes"));
+    expect(ordinary).toContain("Team notes");
+    expect(ordinary).not.toContain("Shared by every project");
+  });
+
+  it("keeps the shared warning on access still saved for a plugin that is gone", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(
+      snapshot([
+        plugin({
+          sharedAcrossProjects: true,
+          access: "read-only",
+          source: "project",
+          available: false,
+        }),
+        plugin({
+          pluginInstanceId: "acme.db",
+          pluginDisplayName: "Warehouse",
+          pluginTools: undefined,
+          sharedAcrossProjects: true,
+          access: "off",
+          source: "project",
+          allProjectsAccess: "read-only",
+          available: false,
+        }),
+        plugin({
+          pluginInstanceId: "acme.old",
+          pluginDisplayName: "Archive",
+          sharedAcrossProjects: true,
+          available: false,
+        }),
+      ])
+    );
+    render(<ProjectAgentToolsSection />);
+
+    await screen.findByTestId("project-agent-tools");
+    expect(describedText(groupFor("Ledger"))).toContain("Shared by every project");
+    // Off here, but the default still gives every other project the database tools.
+    expect(describedText(groupFor("Warehouse"))).toContain("Shared by every project");
+    // Nothing on record and nothing new can be allowed, so there is nothing to warn about.
+    expect(optionLabels("Archive")).toEqual(["Off"]);
+    expect(within(rowFor("Archive")).queryByTestId("project-agent-tool-shared-warning")).toBe(null);
+    expect(screen.getAllByTestId("project-agent-tool-shared-warning")).toHaveLength(2);
+  });
+
+  it("keeps the warning while an answer from before access levels holds the database tools back", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(
+      snapshot([
+        plugin({
+          sharedAcrossProjects: true,
+          access: "read-write",
+          source: "project",
+          databasesWithheld: true,
+        }),
+      ])
+    );
+    render(<ProjectAgentToolsSection />);
+
+    await screen.findByTestId("project-agent-tools");
+    // Any new choice replaces the old answer, so read only or read and write
+    // would turn the shared database tools on.
+    expect(optionLabels("Ledger")).toEqual(["Off", "Read only", "Read and write"]);
+    expect(screen.getAllByTestId("project-agent-tool-shared-warning")).toHaveLength(1);
   });
 
   it("renders nothing when no plugin offers agent tools here", async () => {
