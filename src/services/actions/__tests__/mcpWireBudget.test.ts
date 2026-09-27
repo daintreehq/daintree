@@ -681,7 +681,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // call that returns every reply, which is what makes a vote or a fan-out
   // two calls instead of a dozen.
   // 135_000 → 113_400 after description trim, measured at 113_320 B.
-  const MAX_COHORT_PAYLOAD_BYTES = 113_400;
+  // 113_400 → 113_900 for #12882's `diagnostics.openReview` on core, measured
+  // at 113_882 B: its description and the `sections` field note that an
+  // unlisted section starts unchecked, which a caller guessing keys needs.
+  const MAX_COHORT_PAYLOAD_BYTES = 113_900;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
