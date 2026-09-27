@@ -4,6 +4,7 @@ import type { RefObject } from "react";
 import type { StagingFileEntry } from "@shared/types";
 import type { GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
+import { PathTail } from "@/components/ui/PathTail";
 import { Plus, Minus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -229,17 +230,17 @@ function FileStageRowComponent({
             {config.label}
           </span>
           {dir && (
-            <span
+            <PathTail
               data-testid="file-stage-row-dir"
               className={cn(
-                "shrink truncate font-mono text-2xs transition-colors",
+                "shrink font-mono text-2xs transition-colors",
                 generated
                   ? "text-text-placeholder"
                   : "text-text-secondary group-hover/stagerow:text-text-primary"
               )}
             >
-              {dir}/
-            </span>
+              {`${dir}/`}
+            </PathTail>
           )}
           <span
             data-testid="file-stage-row-base"

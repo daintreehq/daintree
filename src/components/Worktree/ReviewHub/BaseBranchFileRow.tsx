@@ -2,6 +2,7 @@ import type React from "react";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { FileDecoration } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
+import { PathTail } from "@/components/ui/PathTail";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { getBaseBranchStatusConfig } from "./reviewHubUtils";
 
@@ -63,15 +64,15 @@ export function BaseBranchFileRow({
             {config.label}
           </span>
           {dir && (
-            <span
+            <PathTail
               data-testid="base-branch-file-row-dir"
               className={cn(
-                "shrink truncate font-mono text-2xs transition-colors",
+                "shrink font-mono text-2xs transition-colors",
                 "text-text-secondary group-hover/baserow:text-text-primary"
               )}
             >
-              {dir}/
-            </span>
+              {`${dir}/`}
+            </PathTail>
           )}
           <span
             data-testid="base-branch-file-row-base"

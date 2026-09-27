@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { PathTail } from "@/components/ui/PathTail";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { getWorkingTreeChangeKey, type WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
@@ -93,7 +94,7 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                   {presentation.marker}
                 </span>
                 <span className="flex min-w-0 flex-1 items-center">
-                  {dir !== "" && <span className="truncate text-text-secondary">{dir}/</span>}
+                  {dir !== "" && <PathTail className="text-text-secondary">{`${dir}/`}</PathTail>}
                   <span className={cn("truncate font-medium", isReadable && "text-text-primary")}>
                     {base}
                   </span>

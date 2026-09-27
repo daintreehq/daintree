@@ -3,6 +3,7 @@ import type { CompletionKind } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
+import { PathTail } from "@/components/ui/PathTail";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
@@ -276,6 +277,10 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
               // Enter won't act on a stale row, so it doesn't wear the selection.
               const isSelected = idx === selectedIndex && !isRowStale;
               const isPath = item.descriptionKind === "path";
+              const descriptionClass = cn(
+                "min-w-0 text-3xs leading-4",
+                isSelected ? "text-text-primary" : "text-text-secondary"
+              );
 
               return (
                 <button
@@ -314,19 +319,12 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       <span className="sr-only">Category: {badge}</span>
                     </>
                   )}
-                  {item.description && (
-                    <span
-                      className={cn(
-                        "min-w-0 truncate text-3xs leading-4",
-                        isSelected ? "text-text-primary" : "text-text-secondary",
-                        // Clip from the start so the deepest directories survive.
-                        // The inner isolate keeps a path's slashes in LTR order.
-                        isPath && "[direction:rtl] text-left"
-                      )}
-                    >
-                      {isPath ? <bdi>{item.description}</bdi> : item.description}
-                    </span>
-                  )}
+                  {item.description &&
+                    (isPath ? (
+                      <PathTail className={descriptionClass}>{item.description}</PathTail>
+                    ) : (
+                      <span className={cn(descriptionClass, "truncate")}>{item.description}</span>
+                    ))}
                   {/* The header's hint band is hidden from assistive tech, so the
                       row Enter acts on carries the same instruction in words. */}
                   {isSelected && keyHints.length > 0 && (

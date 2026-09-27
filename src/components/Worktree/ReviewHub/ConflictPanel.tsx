@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RebaseAction, RebaseEntry, StagingStatus } from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
+import { PathTail } from "@/components/ui/PathTail";
 import {
   AlertTriangle,
   Check,
@@ -452,9 +453,9 @@ export function ConflictPanel({
                   <TruncatedTooltip content={`${file.path} (${file.label})`}>
                     <div className="flex-1 min-w-0 flex items-baseline">
                       {dir && (
-                        <span className="shrink truncate text-text-secondary font-mono text-2xs">
-                          {dir}/
-                        </span>
+                        <PathTail className="shrink text-text-secondary font-mono text-2xs">
+                          {`${dir}/`}
+                        </PathTail>
                       )}
                       <span className="shrink truncate text-text-primary font-medium font-mono text-2xs">
                         {base}
@@ -575,9 +576,9 @@ export function ConflictPanel({
                       <TruncatedTooltip content={file.path}>
                         <div className="flex-1 min-w-0 flex items-baseline">
                           {dir && (
-                            <span className="shrink truncate text-daintree-text/40 font-mono text-2xs">
-                              {dir}/
-                            </span>
+                            <PathTail className="shrink text-daintree-text/40 font-mono text-2xs">
+                              {`${dir}/`}
+                            </PathTail>
                           )}
                           <span className="shrink truncate text-text-secondary font-mono text-2xs">
                             {base}
