@@ -292,6 +292,33 @@ describe("DevPreviewEmptyStates — interaction contract", () => {
     }
   });
 
+  it("hands focus from Run to the failure's Retry and back when they swap", () => {
+    const props = baseProps(unconfiguredDetected);
+    const { rerender } = render(<DevPreviewEmptyStates {...props} />);
+    screen.getByRole("button", { name: /^run npm run dev$/i }).focus();
+
+    rerender(<DevPreviewEmptyStates {...props} autoDetectFailedCommand="npm run dev" />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /retry/i }));
+
+    rerender(<DevPreviewEmptyStates {...props} autoDetectFailedCommand={null} />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^run npm run dev$/i }));
+  });
+
+  it("leaves focus alone on a swap when the slot never held it", () => {
+    const props = baseProps(unconfiguredDetected);
+    const { rerender } = render(<DevPreviewEmptyStates {...props} />);
+    rerender(<DevPreviewEmptyStates {...props} autoDetectFailedCommand="npm run dev" />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("leaves the script Run already offers out of the other-scripts menu", () => {
+    // Two entries, one command: once Run's own command is set aside there is
+    // nothing else to offer, so the menu has no reason to exist.
+    const candidates = [runner(), runner({ id: "alias", name: "start", command: "npm run dev" })];
+    render(<DevPreviewEmptyStates {...baseProps({ ...unconfiguredDetected, candidates })} />);
+    expect(screen.queryByRole("button", { name: /another script/i })).toBeNull();
+  });
+
   it("shows the command that failed, not the first candidate, beside the retry", () => {
     render(
       <DevPreviewEmptyStates

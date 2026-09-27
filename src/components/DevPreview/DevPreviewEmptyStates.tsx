@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -117,6 +117,42 @@ function CommandChip({ label, command }: { label?: string; command: string }) {
   );
 }
 
+/**
+ * Holds a control that gets swapped for another in place (Run for a failure's
+ * Retry, and back). Unmounting the focused control drops focus on the body, so
+ * when the slot held focus before the swap, the replacement takes it over.
+ */
+function FocusSlot({ swapKey, children }: { swapKey: string; children: ReactNode }) {
+  const slotRef = useRef<HTMLDivElement>(null);
+  const hadFocusRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!hadFocusRef.current) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    slotRef.current?.querySelector<HTMLElement>("button:not([disabled])")?.focus();
+  }, [swapKey]);
+
+  return (
+    <div
+      ref={slotRef}
+      className="contents"
+      onFocus={() => {
+        hadFocusRef.current = true;
+      }}
+      onBlur={(e) => {
+        // A null relatedTarget is the focused control being unmounted (or the
+        // window losing focus) — keep the claim so the swap can restore it.
+        if (e.relatedTarget instanceof Node) {
+          hadFocusRef.current = slotRef.current?.contains(e.relatedTarget) ?? false;
+        }
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function SettingsButton({ onClick }: { onClick: () => void }) {
   return (
     <Button onClick={onClick} variant="ghost" size="sm">
@@ -226,6 +262,8 @@ export function DevPreviewEmptyStates({
     if (isUnconfigured && primaryCandidate) {
       const shownCommand = attemptingCommand ?? primaryCandidate.command;
       const failed = autoDetectFailedCommand !== null;
+      // Run already offers the shown command; the menu is for the others.
+      const otherCandidates = candidates.filter((c) => c.command !== shownCommand);
       return (
         <PaneState
           title="Start the dev server"
@@ -236,46 +274,48 @@ export function DevPreviewEmptyStates({
               label="Detected"
               command={failed ? autoDetectFailedCommand || shownCommand : shownCommand}
             />
-            {failed ? (
-              <InlineStatusBanner
-                icon={XCircle}
-                severity="error"
-                title="Couldn't save the command"
-                description="Project settings couldn't be updated, so the dev server didn't start."
-                className="w-full rounded-[var(--radius-md)] text-left"
-                action={{
-                  id: "dev-preview-auto-detect-retry",
-                  label: "Retry",
-                  icon: RotateCw,
-                  variant: "dangerFilled",
-                  onClick: () =>
-                    void handleAutoDetect(autoDetectFailedCommand || primaryCandidate.command),
-                }}
-              />
-            ) : (
-              <Button
-                onClick={() => void handleAutoDetect(primaryCandidate.command)}
-                loading={isAutoDetecting}
-                disabled={isSettingsLoading}
-                variant="contrast"
-                aria-label={`Run ${shownCommand}`}
-              >
-                <Play />
-                Run
-              </Button>
-            )}
+            <FocusSlot swapKey={failed ? "failed" : "run"}>
+              {failed ? (
+                <InlineStatusBanner
+                  icon={XCircle}
+                  severity="error"
+                  title="Couldn't save the command"
+                  description="Project settings couldn't be updated, so the dev server didn't start."
+                  className="w-full rounded-[var(--radius-md)] text-left"
+                  action={{
+                    id: "dev-preview-auto-detect-retry",
+                    label: "Retry",
+                    icon: RotateCw,
+                    variant: "dangerFilled",
+                    onClick: () =>
+                      void handleAutoDetect(autoDetectFailedCommand || primaryCandidate.command),
+                  }}
+                />
+              ) : (
+                <Button
+                  onClick={() => void handleAutoDetect(primaryCandidate.command)}
+                  loading={isAutoDetecting}
+                  disabled={isSettingsLoading}
+                  variant="contrast"
+                  aria-label={`Run ${shownCommand}`}
+                >
+                  <Play />
+                  Run
+                </Button>
+              )}
+            </FocusSlot>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-1">
-            {candidates.length > 1 && (
+            {otherCandidates.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" disabled={isAutoDetecting}>
+                  <Button variant="ghost" size="sm">
                     Run another script…
                     <ChevronDown />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="center" sideOffset={4} className="w-72 p-1">
-                  {candidates.map((c) => (
+                  {otherCandidates.map((c) => (
                     <DropdownMenuItem key={c.id} onSelect={() => handlePickCandidate(c)}>
                       <code className="min-w-0 flex-1 font-mono text-xs break-words">
                         {c.command}
@@ -317,33 +357,35 @@ export function DevPreviewEmptyStates({
               />
               {showInputError && <FieldError>{commandInputError}</FieldError>}
             </Field>
-            {saveCommandFailed ? (
-              <InlineStatusBanner
-                icon={XCircle}
-                severity="error"
-                title="Couldn't save the command"
-                description="Project settings couldn't be updated, so the dev server didn't start."
-                className="w-full rounded-[var(--radius-md)] text-left"
-                action={{
-                  id: "dev-preview-save-command-retry",
-                  label: "Retry",
-                  icon: RotateCw,
-                  variant: "dangerFilled",
-                  onClick: () => void handleSaveCommand(),
-                }}
-              />
-            ) : (
-              <Button
-                type="submit"
-                variant="contrast"
-                className="self-center"
-                loading={isSavingCommand}
-                disabled={!commandInput.trim() || commandInputError !== null}
-              >
-                <Play />
-                Run
-              </Button>
-            )}
+            <FocusSlot swapKey={saveCommandFailed ? "failed" : "run"}>
+              {saveCommandFailed ? (
+                <InlineStatusBanner
+                  icon={XCircle}
+                  severity="error"
+                  title="Couldn't save the command"
+                  description="Project settings couldn't be updated, so the dev server didn't start."
+                  className="w-full rounded-[var(--radius-md)] text-left"
+                  action={{
+                    id: "dev-preview-save-command-retry",
+                    label: "Retry",
+                    icon: RotateCw,
+                    variant: "dangerFilled",
+                    onClick: () => void handleSaveCommand(),
+                  }}
+                />
+              ) : (
+                <Button
+                  type="submit"
+                  variant="contrast"
+                  className="self-center"
+                  loading={isSavingCommand}
+                  disabled={!commandInput.trim() || commandInputError !== null}
+                >
+                  <Play />
+                  Run
+                </Button>
+              )}
+            </FocusSlot>
           </form>
           <SettingsButton onClick={handleOpenSettings} />
         </PaneState>
