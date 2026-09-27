@@ -761,6 +761,15 @@ describe("HelpSessionService", () => {
     if (!first) throw new Error("expected result");
     expect((await readSettings(first.sessionPath)).autoMemoryEnabled).toBe(false);
 
+    // A reused session folder whose settings were flipped back on must be
+    // corrected by the next provision, not just left as the first write.
+    const sessionSettingsPath = path.join(first.sessionPath, ".claude", "settings.json");
+    const tampered = await readSettings(first.sessionPath);
+    await fs.writeFile(
+      sessionSettingsPath,
+      JSON.stringify({ ...tampered, autoMemoryEnabled: true })
+    );
+
     await service.revokeSession(first.sessionId);
     const second = await service.provisionSession(provisionInput());
     if (!second) throw new Error("expected result");
