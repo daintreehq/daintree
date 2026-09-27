@@ -29,6 +29,7 @@
  *   keyboard     focus on the message box and on the primary button.
  *   confirm      the push confirm dialog.
  *   pushing      the push in flight: target only, then per-stage progress.
+ *   pushall      the push after a commit that leaves the tree clean.
  *   detached     detached HEAD, at rest and after the blocked click focuses the note.
  *   narrow       pushing and blocked at a squeezed window.
  *   contrast     forced-colors and prefers-contrast: more.
@@ -573,8 +574,9 @@ test("review hub commit panel review — every state of the commit composer", as
       rest
     );
 
-    const startPush = async (): Promise<void> => {
-      await stageSome();
+    /** `all` commits every file, the auto-staged default that leaves the tree clean. */
+    const startPush = async (opts: { all?: boolean } = {}): Promise<void> => {
+      if (!opts.all) await stageSome();
       await typeMessage(SHORT_MESSAGE);
       await injectDelay(app, CH.push, 25_000);
       await primary().click();
@@ -618,6 +620,23 @@ test("review hub commit panel review — every state of the commit composer", as
         await settle(page, 400);
         await snapPanel(page, "17-pushing-progress-late");
         await snapWindow(page, "18-pushing-window");
+        await waitPushDone();
+      },
+      rest
+    );
+
+    await step(
+      "pushall",
+      async () => {
+        await startPush({ all: true });
+        await blurAll();
+        await sendProgress(app, cwds, [
+          { stage: "target", progress: null, targetBranch: `origin/${FEATURE_BRANCH}` },
+          { stage: "counting", progress: 100 },
+          { stage: "writing", progress: 58 },
+        ]);
+        await expectState(page, `${CONTENT} :text("Pushing to")`, { label: "push after clean" });
+        await snapWindow(page, "28-pushing-after-clean-window");
         await waitPushDone();
       },
       rest
