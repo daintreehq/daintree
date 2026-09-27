@@ -13,6 +13,7 @@ The whole design is shaped by one case: an agent working in a fresh worktree sho
 ├── recipes/                     # existing, git-tracked
 ├── plugin-settings/             # existing, git-tracked, project-scope settings (never secrets)
 ├── data/<manifestId>/<id>.db    # a declared "project" database, git-tracked unless you ignore it
+├── mcp.json                     # optional: which of these plugins agents get by default
 └── plugins/
     └── acme.dashboard/
         ├── plugin.json          # must declare "scope": "project"
@@ -132,7 +133,7 @@ Trusting the folder lets the plugin run; it does not pre-approve what the plugin
 
 One grant covers every call of that capability, so a plugin that already writes files asks for nothing new to render a PDF. Only an approval the user pins is remembered. A one-time approval lets that one call through; a refusal, or a prompt left to time out, rejects it with `PERMISSION_REQUIRED:`. None of the three is remembered and the next call asks again — so a plugin must not retry a refused write from a timer or a watch callback, and should not start a write-class call from `activate()`, whose 5-second budget a waiting prompt would outlast. Reads (`fs:*-read`, `agent:read`, `git:read`) and a `readonly` database open are gated by the manifest alone and never prompt.
 
-Grants are held per plugin _instance_, so one project's grant never answers for another project's copy of the same plugin id, and revoking the project's trust purges them. An agent MCP endpoint is a separate decision again, made per endpoint in Project settings → Plugins → Agent tools, or turned on for everyone who opens the project by listing it in `.daintree/mcp.json` ([Agent extensions → Project defaults](./agent-extensions.md#project-defaults-daintreemcpjson)).
+Grants are held per plugin _instance_, so one project's grant never answers for another project's copy of the same plugin id, and revoking the project's trust purges them. What the plugin serves to agents is a separate decision again: one agent access setting per plugin — Off, Read only or Read and write — made in Project settings → Plugins → Agent tools, or turned on for everyone who opens the project in `.daintree/mcp.json` ([Agent extensions → Project defaults](./agent-extensions.md#project-defaults-daintreemcpjson)).
 
 ## What a project plugin may contribute
 
@@ -148,8 +149,8 @@ Scoped to the owning project, and visible only in its views:
 | `keybindings` | Renderer-level, so they resolve within the focused project |
 | `settings` | All of a project plugin's fields live in Project settings → Plugins; `scope: "project"` values resolve from the bound project root, not from whatever is focused. See [Settings and storage](#settings-and-storage) |
 | `surfaces` | Project-scope only — see [Surfaces](#surfaces) |
-| `databases` | SQLite files opened with `host.db`. A `"project"` database resolves against the bound project root, so it is the same file an agent in the project's terminal opens with `sqlite3`; `"local"` stays in this machine's plugin data. See [Databases](./contribution-points.md#databases--shipped) |
-| `agentMcp` | Tools served to agents in this project's terminals only. Every credential is minted for one terminal launch in one project, and a project plugin's endpoint can only be granted to the project that loaded it. Still off until the user turns the endpoint on for the project — trusting the folder does not do it. See [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) |
+| `databases` | SQLite files opened with `host.db`. A `"project"` database resolves against the bound project root, so it is the same file an agent in the project's terminal opens with `sqlite3`; `"local"` stays in this machine's plugin data, per project, where agents read it through the plugin's database tools. See [Databases](./contribution-points.md#databases--shipped) |
+| `agentMcp` | Tools served to agents in this project's terminals only, on the plugin's one server beside its database tools. Every credential is minted for one terminal launch in one project, and a project plugin's server can only be granted to the project that loaded it. Off until the user, or the project's `.daintree/mcp.json`, turns the plugin's agent access on — trusting the folder does not do it. See [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
 
@@ -269,7 +270,7 @@ A project plugin's panel kind is qualified at runtime as `project:{projectId}/{m
 - **A manifest without `"scope": "project"`** under `.daintree/plugins/` is rejected (`project_scope_required`), and a manifest _with_ it installed into the user directory is rejected the other way (`project_scope_not_allowed`). The guard runs in both directions so a plugin cannot quietly load under assumptions its author never made.
 - **Editing `src/` and expecting a reload.** Only `plugin.json` and `dist/` are watched. Keep the watcher running.
 - **Writing from `activate()`.** A first write-class call waits on a consent prompt, and `activate()` has 5 seconds. Open a writable project database or write a file from the first handler that needs it.
-- **Expecting a restart to be required.** It never is. Every contribution point available to a project plugin registers, reloads and unregisters live; anything that genuinely needed an app restart is simply not offered here.
+- **Expecting a restart to be required.** Daintree never needs one. Every contribution point available to a project plugin registers, reloads and unregisters live; anything that genuinely needed an app restart is simply not offered here. The exception is on the agent's side: an agent CLI takes its MCP servers at launch, and a reload that changes what the plugin declares for agents (its capabilities, scopes, `agentMcp` endpoint, databases or `mcpName`) revokes the plugin's credentials, so an agent started before the plugin loaded, before such a reload, or before its agent access was given has to be relaunched to get the plugin's tools ([Agent extensions → Tools don't show up in `/mcp`](./agent-extensions.md#tools-dont-show-up-in-mcp)).
 
 ## See also
 

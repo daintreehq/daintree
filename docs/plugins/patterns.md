@@ -67,6 +67,7 @@ An agent edits your data knowing only what it reads. Put the contract in the plu
 ```markdown
 ## Budget data (acme.budget)
 
+- If you have the `daintree-budget` MCP tools, use them: `database_query` for reads, `record_transaction` for every write (it checks the category and the sign). Without them, use `sqlite3` as below.
 - Transactions live in `data/budget.db`, table `tx`. Run `sqlite3` from the main checkout, `"$(git rev-parse --path-format=absolute --git-common-dir)/.."`, never a linked worktree's copy.
 - `amount_cents` is an integer; spending is negative. `category` is one of the rows in `categories`.
 - Totals, balances and "this month": run `node scripts/budget-report.mjs`, never add rows up by hand.
@@ -78,11 +79,12 @@ An agent edits your data knowing only what it reads. Put the contract in the plu
 
 What it needs, learned from the first app plugins agents edited:
 
+- **Which tools to use.** Name the plugin's MCP server and tools and when to use each, with the `sqlite3` or file recipe as the fallback for an agent that doesn't have them — one launched outside Daintree, before the plugin was on, or by a CLI Daintree can't wire ([Agent extensions → Reaching an agent](./agent-extensions.md#reaching-an-agent)).
 - **Paths, schema and invariants** — which files or tables, which fields are required, what a valid value looks like.
 - **One worked example whose values are not your test prompts.** An example that matches the request turns discovery into copy-paste and proves nothing.
 - **Which checkout to write.** The panel reads `host.pluginInfo.projectRoot`, the main checkout. An agent in a linked worktree edits that worktree's copy of every committed file, and the panel never sees it.
 - **A script for anything computed.** Agents eyeballing raw data get streaks, weekly totals and "due this week" wrong. Keep the calculation in a pure module with no imports — `dist/core.mjs` — that the worker imports, the view imports (`plugin://` serves `.mjs` as JavaScript), and `scripts/<name>-report.mjs` imports for agents, so the three cannot disagree. For SQLite, a view in `definitions` does the same job.
-- **What not to touch.** Settings are the user's; `.daintree/` beyond your data is Daintree's.
+- **What not to touch.** Settings are the user's; `.daintree/` beyond your data — `mcp.json` included — is Daintree's.
 - **Conventions a hand-off relies on** — "move the card to Review when you finish" — belong here, not in each [hand-off](#hand-work-to-an-agent).
 
 ## Watch a folder, refresh, badge the tab
