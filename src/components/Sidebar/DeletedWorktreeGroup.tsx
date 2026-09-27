@@ -161,7 +161,7 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
             )}
             aria-hidden="true"
           />
-          <span className="ml-0.5 flex min-w-0 flex-1 items-center gap-1.5">
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <FolderX
               className="w-3.5 h-3.5 shrink-0 text-text-secondary"
               strokeWidth={2.5}
