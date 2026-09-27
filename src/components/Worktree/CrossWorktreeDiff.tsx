@@ -266,8 +266,10 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         rightWorktree.branch
       );
       if (token !== compareTokenRef.current) return; // stale response
-      if (typeof res === "string") {
-        setError("Unexpected result from comparison");
+      // Only a file list is a comparison; anything else would leave the
+      // canvas with nothing to say, so it takes the retryable failure path.
+      if (!res || typeof res !== "object" || !Array.isArray(res.files)) {
+        setError("The comparison came back without a file list.");
         return;
       }
       setResult(res);
@@ -517,7 +519,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           data-testid="cross-worktree-file-shelf"
         >
           {listReady && result && result.files.length > 0 && (
-            <div className="shrink-0 border-b border-border-default px-3 py-2">
+            <div className="shrink-0 border-b border-border-default px-3.5 py-2">
               <ChangeSetSummary files={result.files} />
             </div>
           )}

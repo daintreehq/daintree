@@ -162,4 +162,15 @@ describe("CrossWorktreeDiff file shelf", () => {
       expect(screen.getAllByRole("tooltip").some((t) => t.textContent?.includes(deep))).toBe(true)
     );
   });
+
+  it("turns a comparison response without a file list into a retryable failure", async () => {
+    mockCompareWorktrees.mockImplementation(() => Promise.resolve(null));
+    render(
+      <TooltipProvider>
+        <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId="wt-left" />
+      </TooltipProvider>
+    );
+    fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /retry/i })).toBeTruthy());
+  });
 });
