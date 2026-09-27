@@ -256,7 +256,9 @@ describe("runDatabaseTool schema", () => {
   });
 
   it("stops only the database that reached the object cap", () => {
-    const many = Array.from({ length: 1001 }, (_, i) => `CREATE TABLE t${i} (a);`).join("");
+    // Keep the real 1,001-object database while avoiding one disk commit per
+    // table, which can exceed the test timeout on Windows runners.
+    const many = `BEGIN;${Array.from({ length: 1001 }, (_, i) => `CREATE TABLE t${i} (a);`).join("")}COMMIT;`;
     const result = runDatabaseSchema([target("a", many), target("b", "CREATE TABLE only (a);")]);
     expect(result.truncated).toBe(true);
     expect(result.databases[0]).toMatchObject({ truncated: true });

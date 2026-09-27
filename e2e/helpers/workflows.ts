@@ -1,7 +1,12 @@
 import { test, expect } from "@playwright/test";
 import type { ElectronApplication, Locator, Page } from "@playwright/test";
 import path from "path";
-import { mockOpenDialog, refreshActiveWindow, waitForActiveProject } from "./launch";
+import {
+  getActiveAppWindow,
+  mockOpenDialog,
+  refreshActiveWindow,
+  waitForActiveProject,
+} from "./launch";
 import { dismissTelemetryConsent } from "./project";
 import { waitForTerminalPty, waitForTerminalReady, waitForTerminalText } from "./terminal";
 import { getGridPanelIds, getPanelById, openTerminal } from "./panels";
@@ -49,40 +54,38 @@ export async function addAndSwitchToProject(
   projectPath: string,
   projectName: string
 ): Promise<Page> {
-  await test.step(
+  const newWindow = await test.step(
     `Add and switch to project "${projectName}"`,
     async () => {
       await mockOpenDialog(app, projectPath);
-
-      await openProjectSwitcherPalette(window);
-
-      const palette = window.locator(SEL.projectSwitcher.palette);
-      let clicked = false;
-      for (let attempt = 0; attempt < 3 && !clicked; attempt += 1) {
-        const addBtn = window.locator(SEL.projectSwitcher.addButton);
+      let current = window;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const palette = current.locator(SEL.projectSwitcher.palette);
+        if (!(await palette.isVisible().catch(() => false))) {
+          await openProjectSwitcherPalette(current);
+        }
+        const addBtn = current.locator(SEL.projectSwitcher.addButton);
         await expect(addBtn).toBeVisible({ timeout: T_SHORT });
         try {
           await addBtn.click({ force: true, noWaitAfter: true, timeout: T_SHORT });
-          clicked = true;
-        } catch {
-          if (!(await palette.isVisible().catch(() => false))) {
-            clicked = true;
-            break;
+        } catch (error) {
+          // A detached button can close the palette without dispatching Add.
+          // The active project, not palette visibility, proves the click landed.
+          lastError = error;
+        }
+        try {
+          return await waitForActiveProject(app, current, path.basename(projectPath));
+        } catch (error) {
+          lastError = error;
+          if (attempt < 2) {
+            current = await getActiveAppWindow(app, T_MEDIUM, { requireProject: true });
           }
-          await window.waitForTimeout(250);
         }
       }
-      if (!clicked) {
-        const addBtn = window.locator(SEL.projectSwitcher.addButton);
-        await addBtn.click({ force: true, noWaitAfter: true, timeout: T_MEDIUM });
-      }
+      throw lastError ?? new Error(`Could not switch to project "${projectName}"`);
     },
     { box: true }
-  );
-  const newWindow = await waitForActiveProject(
-    app,
-    await refreshActiveWindow(app, window),
-    path.basename(projectPath)
   );
   await dismissProjectSwitcherPalette(newWindow);
   await dismissTelemetryConsent(newWindow);

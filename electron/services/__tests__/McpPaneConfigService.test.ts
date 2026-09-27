@@ -787,7 +787,11 @@ describe("McpPaneConfigService", () => {
       const entry = written.mcpServers[prepared!.pluginServerKeys[0]];
       expect(entry.type).toBe("http");
       expect(grants.authenticate(bearerOf(entry))?.endpointId).toBe("data");
-      expect((await fs.stat(prepared!.configPath!)).mode & 0o777).toBe(0o600);
+      // Windows does not report POSIX file mode bits; the dedicated mode test
+      // covers this guarantee on platforms that support it.
+      if (process.platform !== "win32") {
+        expect((await fs.stat(prepared!.configPath!)).mode & 0o777).toBe(0o600);
+      }
     });
 
     it("a non-off tier keeps the Daintree entry and pane token, with the plugin entries alongside", async () => {
