@@ -1150,7 +1150,7 @@ export function BrowserPane({
                   {isSlowLoad && (
                     <>
                       <p aria-hidden="true" className="text-xs text-text-secondary">
-                        Taking longer than usual...
+                        Taking longer than usual…
                       </p>
                       <Button
                         onClick={handleCancelLoad}

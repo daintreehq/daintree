@@ -203,7 +203,7 @@ export function AgentInstallSection({
       <SettingsSection
         id="agents-installation"
         title="Installation"
-        description="Checking CLI availability..."
+        description="Checking CLI availability…"
       >
         {null}
       </SettingsSection>

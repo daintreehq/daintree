@@ -244,7 +244,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
               onChange={(e) => handleTraceIdChange(e.target.value)}
               onClear={clearTraceId}
               clearLabel="Clear trace ID filter"
-              placeholder="Filter by trace ID..."
+              placeholder="Filter by trace ID…"
               className="font-mono placeholder:font-sans"
             />
           </div>

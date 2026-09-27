@@ -620,7 +620,7 @@ export function WorktreeFilterPopover({
                 setLocalQuery("");
                 setQuery("");
               }}
-              placeholder="Search worktrees..."
+              placeholder="Search worktrees…"
               aria-label="Search worktrees"
             />
           </div>

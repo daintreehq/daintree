@@ -337,7 +337,7 @@ export function AgentButton({
       : `${unavailableLabel}${visibleStateSuffix}`;
   const tooltipShortcut = isLaunchable ? effectiveCombo : undefined;
   const chevronTooltip = isLoading
-    ? `Checking ${config.name} CLI availability...`
+    ? `Checking ${config.name} CLI availability…`
     : isLaunchable
       ? `Set ${config.name} preset`
       : needsSetup

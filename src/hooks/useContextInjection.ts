@@ -278,7 +278,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         globalInjectionState.lastProgress = {
           stage: "Waiting",
           progress: 0,
-          message: "Waiting for agent to become idle...",
+          message: "Waiting for agent to become idle…",
         };
         localProgressRef.current = globalInjectionState.lastProgress;
         globalInjectionState.notify();
@@ -355,7 +355,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       globalInjectionState.lastProgress = {
         stage: "Starting",
         progress: 0,
-        message: "Initializing...",
+        message: "Initializing…",
       };
       globalInjectionState.isPendingInjection = false;
       globalInjectionState.notify();
