@@ -107,10 +107,11 @@ function PaneState({
 
 /** A command exactly as it will run, with an optional quieter label before it. */
 // Wraps rather than truncates: the point of showing the command is that all of
-// it can be read before it runs.
+// it can be read before it runs. Same box as `CopyableCommand`, minus its copy
+// button — here that would take the first Tab stop ahead of Run.
 function CommandChip({ label, command }: { label?: string; command: string }) {
   return (
-    <div className="inline-flex min-w-0 max-w-full items-baseline gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel px-3 py-1.5 text-left">
+    <div className="inline-flex min-w-0 max-w-full items-baseline gap-2 rounded-[var(--radius-sm)] border border-border-default bg-overlay-subtle px-3 py-1.5 text-left">
       {label && <span className="shrink-0 text-xs text-text-secondary">{label}</span>}
       <code className="min-w-0 font-mono text-xs text-text-primary break-words">{command}</code>
     </div>
