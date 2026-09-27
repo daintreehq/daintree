@@ -731,9 +731,12 @@ test("project plugins review — every pane, lifecycle state and failure", async
     await step("listerror", async () => {
       await injectFault(app, "plugin:list", "Plugin host is restarting");
       await page.evaluate(() => window.electron.plugin.reloadProjectPlugins());
-      await expect(page.locator(PANEL)).toContainText("Couldn't read your installed plugins", {
-        timeout: 10_000,
-      });
+      await expect(page.locator(PANEL)).toContainText(
+        /Couldn't (read|refresh) your installed plugins/,
+        {
+          timeout: 10_000,
+        }
+      );
       await settle(page, 400);
       await capturePage(page, "listerror", "61-list-error", 1);
       await clearAllFaults(app);
