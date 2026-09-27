@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 vi.mock("react-dom", async () => {
@@ -216,7 +216,7 @@ describe("DeletedWorktreeGroup", () => {
     expect(screen.getByRole("button", { name: "Close 1 terminal" })).toBeTruthy();
   });
 
-  it("shows the soonest member deadline while collapsed", () => {
+  it("gives each member its own deadline in the rail, not one shared readout", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1" },
       { id: "t2", worktreeId: "wt-2" },
@@ -227,23 +227,117 @@ describe("DeletedWorktreeGroup", () => {
       makeDeleted("wt-2", "feature/beta", now + 10_000),
     ]);
 
-    const readout = container.querySelector("[data-testid='deleted-worktree-group-countdown']");
-    // Soonest wins: ~10s, not the 50s sibling.
-    expect(Number(readout?.textContent?.replace("s", ""))).toBeLessThanOrEqual(11);
+    const readouts = Array.from(
+      container.querySelectorAll("[data-deleted-worktree-member]"),
+      (member) => ({
+        id: member.getAttribute("data-deleted-worktree-member"),
+        seconds: Number(
+          member
+            .querySelector("[data-testid='deleted-worktree-member-countdown']")
+            ?.textContent?.replace("s", "")
+        ),
+      })
+    );
+    expect(readouts.map((r) => r.id)).toEqual(["wt-1", "wt-2"]);
+    expect(readouts[0]!.seconds).toBeGreaterThan(readouts[1]!.seconds);
   });
 
-  it("defers the countdown readout to the member cards once expanded", () => {
-    setPanels([
-      { id: "t1", worktreeId: "wt-1" },
-      { id: "t2", worktreeId: "wt-2" },
-    ]);
-    useWorktreeSelectionStore.setState({ deletedWorktreeGroupExpanded: true });
-    const { container } = renderGroup([
-      makeDeleted("wt-1", "feature/alpha", Date.now() + 50_000),
-      makeDeleted("wt-2", "feature/beta", Date.now() + 10_000),
-    ]);
+  it("freezes a held member and names why, while its siblings keep counting", () => {
+    vi.useFakeTimers();
+    try {
+      setPanels([
+        { id: "t1", worktreeId: "wt-1" },
+        { id: "t2", worktreeId: "wt-2" },
+      ]);
+      const now = Date.now();
+      const held = {
+        ...makeDeleted("wt-1", "feature/alpha", now + 20_000),
+        holdReason: "agent" as const,
+      };
+      const running = makeDeleted("wt-2", "feature/beta", now + 40_000);
+      const { container, rerender } = renderGroup([held, running]);
+      const read = (id: string) =>
+        Number(
+          container
+            .querySelector(
+              `[data-deleted-worktree-member='${id}'] [data-testid='deleted-worktree-member-countdown']`
+            )
+            ?.textContent?.replace("s", "")
+        );
+      const heldBefore = read("wt-1");
+      const runningBefore = read("wt-2");
 
-    expect(container.querySelector("[data-testid='deleted-worktree-group-countdown']")).toBeNull();
+      // The sweep re-pins a held row's deadline to now + remaining on every
+      // pass; the readout must hold still rather than follow it.
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      rerender(
+        <TooltipProvider>
+          <DeletedWorktreeGroup
+            worktrees={[{ ...held, expiresAt: Date.now() + 20_500 }, running]}
+          />
+        </TooltipProvider>
+      );
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(read("wt-1")).toBe(heldBefore);
+      expect(read("wt-2")).toBeLessThan(runningBefore);
+      expect(
+        container.querySelector(
+          "[data-deleted-worktree-member='wt-1'] [data-testid='deleted-worktree-member-hold']"
+        )?.textContent
+      ).toBe("Agent working");
+      expect(
+        container.querySelector(
+          "[data-deleted-worktree-member='wt-2'] [data-testid='deleted-worktree-member-hold']"
+        )
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("files every rail chip under the worktree it came from", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1", title: "claude" },
+      { id: "t2", worktreeId: "wt-2", title: "claude" },
+    ]);
+    renderGroup();
+
+    // Two sessions can share a title; the list they sit in is what tells them apart.
+    for (const title of ["feature/alpha", "feature/beta"]) {
+      const list = screen.getByRole("list", { name: `Terminals from deleted worktree ${title}` });
+      expect(list.textContent).toContain("claude");
+    }
+  });
+
+  it("carries each agent's state into the rail", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1", title: "codex" }]);
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        t1: { ...s.panelsById.t1, detectedAgentId: "codex", agentState: "waiting" } as never,
+      },
+    }));
+    renderGroup();
+
+    const chip = screen.getByRole("button", { name: "codex in deleted worktree feature/alpha" });
+    expect(chip.getAttribute("aria-description")).toMatch(/^waiting/);
+  });
+
+  it("keeps the bulk clear neutral until it is pointed at or focused", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    renderGroup();
+
+    const clear = screen.getByRole("button", { name: "Close 1 terminal" });
+    const restingDanger = clear.className
+      .split(/\s+/)
+      .filter((c) => c.includes("status-error") && !/^(hover|focus-visible):/.test(c));
+    expect(restingDanger).toEqual([]);
   });
 
   it("stages a confirm previewing the actual terminals rather than clearing (D2)", () => {

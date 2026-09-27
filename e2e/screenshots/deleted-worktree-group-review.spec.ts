@@ -50,6 +50,7 @@ const FIXTURES = [
   "group-collapsed",
   "group-expanded",
   "group-no-cleanup",
+  "group-held",
   "group-pair",
   "single",
   "single-held",

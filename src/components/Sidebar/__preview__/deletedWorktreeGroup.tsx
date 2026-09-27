@@ -86,6 +86,7 @@ interface DeletedSeed {
   id: string;
   title: string;
   terminals: TerminalSeed[];
+  holdReason?: DeletedWorktree["holdReason"];
 }
 
 const COHORT: DeletedSeed[] = [
@@ -142,6 +143,12 @@ const FIXTURES: Record<string, Fixture> = {
     deleted: COHORT,
     remaining: null,
     cleanupSeconds: 0,
+  },
+  /** One member held by its working agent while the others count down. */
+  "group-held": {
+    what: "collapsed group, one member held by a working agent",
+    deleted: [{ ...COHORT[0]!, holdReason: "agent" }, COHORT[1]!, COHORT[2]!],
+    remaining: 42,
   },
   /** The smallest group: two rows, one terminal each. */
   "group-pair": {
@@ -261,7 +268,7 @@ function seedStores() {
           fixture!.remaining === null || cleanupSeconds === 0
             ? null
             : now + (fixture!.remaining + i * 6) * 1000 + 500,
-        holdReason: fixture!.holdReason ?? null,
+        holdReason: d.holdReason ?? fixture!.holdReason ?? null,
         pinnedBeforeWorktreeId: "wt-handback",
       },
     ])
