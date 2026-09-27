@@ -283,6 +283,19 @@ describe("ImportEnvDialog", () => {
      * the dialog and never again — so a user returning to the field after
      * reading an error could not hear the syntax it expects.
      */
+    /** WCAG 2.5.3: the field answers to the label a user can see. */
+    it("names the field by its visible label", () => {
+      renderDialog();
+      const textarea = screen.getByTestId("import-env-textarea");
+      const heading = screen.getByTestId("import-env-step-heading");
+      const name = (textarea.getAttribute("aria-labelledby") ?? "")
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
+      expect(textarea.getAttribute("aria-label")).toBeNull();
+      expect(name).toContain(heading.textContent!.trim());
+    });
+
     it("keeps the format help associated with the field", () => {
       renderDialog();
       const textarea = screen.getByTestId("import-env-textarea");

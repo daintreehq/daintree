@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
-import { AppDialog } from "@/components/ui/AppDialog";
+import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,6 +25,8 @@ interface ImportEnvDialogProps {
   onClose: () => void;
   env: Record<string, string>;
   onImport: (merged: Record<string, string>) => void;
+  /** Where focus goes on close if the button that opened the dialog is gone by then. */
+  restoreFocusTo?: RestoreFocusTarget;
 }
 
 /**
@@ -66,9 +68,13 @@ function maskValue(value: string): string {
   return value.length >= 16 ? `••••••••${value.slice(-4)}` : "••••••••";
 }
 
-/** Character offsets of a 1-based line in the paste, for selecting it. */
+/**
+ * Character offsets of a 1-based line in the paste, for selecting it. Split on
+ * LF alone: a textarea's value has its newlines normalized to LF, so a CRLF
+ * paste arrives here without its CRs and the offsets match the field.
+ */
 function lineRange(text: string, line: number): [number, number] {
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const lines = text.split("\n");
   let start = 0;
   for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i]!.length + 1;
   return [start, start + (lines[line - 1]?.length ?? 0)];
@@ -168,12 +174,19 @@ function ConflictSide({
   );
 }
 
-export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDialogProps) {
+export function ImportEnvDialog({
+  isOpen,
+  onClose,
+  env,
+  onImport,
+  restoreFocusTo,
+}: ImportEnvDialogProps) {
   const [pastedText, setPastedText] = useState("");
   const [step, setStep] = useState<Step>("paste");
   const [conflictResolution, setConflictResolution] = useState<ConflictResolution>("keep");
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
 
+  const headingId = useId();
   const helpId = useId();
   const errorsId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -317,6 +330,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
       size="md"
       zIndex="nested"
       initialFocus="none"
+      restoreFocusTo={restoreFocusTo}
       data-testid="import-env-dialog"
     >
       <AppDialog.Header>
@@ -328,6 +342,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
         <div className="space-y-1">
           <h3
             ref={stepHeadingRef}
+            id={headingId}
             tabIndex={-1}
             className="text-sm font-medium text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-xs"
             data-testid="import-env-step-heading"
@@ -368,7 +383,9 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
-                aria-label="Paste .env content"
+                // Named by the heading above it, so the name a voice-control
+                // user reads off the screen is the name that reaches the field.
+                aria-labelledby={headingId}
                 invalid={hasErrors}
                 aria-invalid={hasErrors || undefined}
                 aria-describedby={hasErrors ? `${errorsId} ${helpId}` : helpId}

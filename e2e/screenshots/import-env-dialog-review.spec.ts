@@ -159,6 +159,9 @@ const PASTE = {
     "REGION=eu-west-1",
   ].join("\n"),
 
+  /** Every key already holds exactly this value — an import that changes nothing. */
+  alreadySet: ["NODE_ENV=development", "LOG_LEVEL=info"].join("\n"),
+
   /** One collision where both sides are far wider than the dialog. */
   longValues: [
     "ANTHROPIC_BASE_URL=https://gateway.internal.example.com/v1/anthropic/proxy?tenant=platform-engineering&region=eu-west-1&trace=1",
@@ -509,6 +512,25 @@ test("import-env dialog review — paste and conflict states", async () => {
         "Overwrite conflicts",
         "Import, overwrite conflicts",
       ]);
+      await closeDialog(page);
+    });
+
+    await step("already-set", async () => {
+      await openDialog(page, "claude");
+      await typePaste(page, PASTE.alreadySet);
+      await snap(page, "38-paste-already-set", ["already set"]);
+      await closeDialog(page);
+    });
+
+    await step("reveal", async () => {
+      await openDialog(page, "claude");
+      await typePaste(page, PASTE.manyConflicts);
+      await goToConflicts(page);
+      await page.locator('[data-testid="import-env-reveal"]').first().click({ force: true });
+      await settle(page, 300);
+      // The revealed value is the assertion: a frame that still shows the
+      // mask would be a capture of the wrong state.
+      await snap(page, "58-conflicts-secret-revealed", ["sk-ant-api03-Hk7v2QpLm9xR4tYbN1cZ"]);
       await closeDialog(page);
     });
 

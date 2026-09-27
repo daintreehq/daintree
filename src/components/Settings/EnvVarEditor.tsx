@@ -444,6 +444,7 @@ export function EnvVarEditor({
   // When non-null, the focus-recovery effect focuses the key input for that rowId.
   const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const importButtonRef = useRef<HTMLButtonElement>(null);
   const focus = useRowFocus();
   // Per-row "Pasted text normalized" inline indicator. Auto-clears after 2s.
   const [normalizedRows, setNormalizedRows] = useState<Set<string>>(() => new Set());
@@ -756,6 +757,7 @@ export function EnvVarEditor({
   );
   const importButton = (
     <Button
+      ref={importButtonRef}
       variant="outline"
       size="sm"
       onClick={() => setIsImportOpen(true)}
@@ -771,6 +773,10 @@ export function EnvVarEditor({
       onClose={() => setIsImportOpen(false)}
       env={env}
       onImport={handleImportConfirm}
+      // An import into an empty editor swaps it to the table layout, which
+      // remounts this button — so the opener the dialog captured is gone by
+      // the time it closes. The ref follows whichever layout is mounted.
+      restoreFocusTo={importButtonRef}
     />
   );
 
