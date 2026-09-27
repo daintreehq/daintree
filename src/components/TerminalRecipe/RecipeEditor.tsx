@@ -324,7 +324,7 @@ export function RecipeEditor({
                 checked={showInEmptyState}
                 onChange={(e) => setShowInEmptyState(e.target.checked)}
                 aria-describedby="show-in-empty-state-help"
-                className="w-4 h-4 rounded border-border-default bg-surface-canvas checked:bg-accent-primary checked:border-accent-primary focus:ring-2 focus:ring-daintree-accent/30"
+                className="w-4 h-4 rounded border-border-default bg-surface-canvas checked:bg-accent-primary checked:border-accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               />
             </FormRow>
 

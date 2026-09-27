@@ -2250,7 +2250,9 @@ export function ReviewHubContent({
                         title={
                           pushError
                             ? `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} not pushed`
-                            : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
+                            : isPushing
+                              ? `Pushing ${aheadCount} commit${aheadCount !== 1 ? "s" : ""}`
+                              : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
                         }
                         // "Ready to push" is a readiness claim, so it must not
                         // survive a rejection: after a push fails, `pushReady`
@@ -2346,10 +2348,13 @@ export function ReviewHubContent({
                             tabIndex={-1}
                             /* Focusable because `handleFocusBlocker` sends focus
                              here from the readiness rail's "conflicts" CTA, so
-                             it keeps its own ring. The banner inside carries the
-                             shared failure grammar; this wrapper only owns
+                             it keeps its own ring — on `focus:`, since a
+                             scripted focus after a pointer click never matches
+                             `:focus-visible`, and inset so the unpadded
+                             scrollport cannot clip it. The banner inside carries
+                             the shared failure grammar; this wrapper only owns
                              focus. */
-                            className="outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+                            className="rounded-[var(--radius-md)] focus:outline focus:outline-2 focus:outline-accent-primary focus:-outline-offset-2"
                           >
                             <InlineStatusBanner
                               severity="warning"

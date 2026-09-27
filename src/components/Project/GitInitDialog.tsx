@@ -537,7 +537,7 @@ export function GitInitDialog({
               >
                 {currentPhase && (
                   <div
-                    className="h-full rounded-full bg-daintree-text/60 transition-[width] duration-150 ease-out"
+                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                     style={{
                       width: `${(completedCount / Math.max(plannedSteps.length, 1)) * 100}%`,
                     }}

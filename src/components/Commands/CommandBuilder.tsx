@@ -275,7 +275,7 @@ function BuilderCheckboxField({
         aria-describedby={field.helpText ? helpId : undefined}
         className={cn(
           "h-4 w-4 rounded border-border-default bg-surface-canvas",
-          "text-accent-primary focus:ring-daintree-accent/30 focus:ring-offset-0",
+          "text-accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
           "cursor-pointer"
         )}
       />

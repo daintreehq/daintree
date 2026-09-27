@@ -366,7 +366,14 @@ export function DiffFileSidebar({
           {/* The track only appears once review has started — an empty
               full-width strip at zero progress reads as stray chrome. */}
           {viewedCount > 0 && (
-            <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10">
+            <div
+              role="progressbar"
+              aria-label="Files viewed"
+              aria-valuemin={0}
+              aria-valuemax={files.length}
+              aria-valuenow={viewedCount}
+              className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10"
+            >
               <div
                 className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                 style={{ width: `${files.length ? (viewedCount / files.length) * 100 : 0}%` }}
