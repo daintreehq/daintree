@@ -203,7 +203,7 @@ describe("createSystemMemoryPressureMonitor", () => {
     await second;
   });
 
-  it("logs every over-threshold sample and publishes once when the episode opens", async () => {
+  it("logs the first over-threshold sample and the episode opening, and publishes once", async () => {
     const { tick } = makeMonitor({ swap: () => FULL_SWAP });
 
     await tick(EPISODE_OPEN_SAMPLES - 1);
@@ -220,7 +220,9 @@ describe("createSystemMemoryPressureMonitor", () => {
     });
 
     const records = systemHealthRecords(logWarn, "over");
-    expect(records).toHaveLength(EPISODE_OPEN_SAMPLES + 2);
+    expect(
+      records.map(([, ctx]) => (ctx as { consecutiveSamples: number }).consecutiveSamples)
+    ).toEqual([1, EPISODE_OPEN_SAMPLES]);
     expect(records[0]![1]).toEqual({
       state: "over",
       swapUsedPercent: 91,
@@ -231,6 +233,81 @@ describe("createSystemMemoryPressureMonitor", () => {
       kernelPressureLevel: 1,
       consecutiveSamples: 1,
     });
+  });
+
+  it("stays quiet while only the figures move within an open episode (#12888)", async () => {
+    let percent = 85;
+    const { tick } = makeMonitor({ swap: () => swapAt(percent) });
+
+    await tick(EPISODE_OPEN_SAMPLES);
+    for (let i = 0; i < 20; i++) {
+      percent = 85 + (i % 10);
+      await tick(1);
+    }
+
+    expect(systemHealthRecords(logWarn, "over")).toHaveLength(2);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs again when the cause or the kernel level changes", async () => {
+    let fseventsd = 100;
+    let level: KernelPressureLevel = 1;
+    const { tick } = makeMonitor({
+      swap: () => FULL_SWAP,
+      fseventsdRssMb: () => fseventsd,
+      kernelPressureLevel: () => level,
+    });
+
+    await tick(EPISODE_OPEN_SAMPLES + 2);
+    expect(systemHealthRecords(logWarn, "over")).toHaveLength(2);
+
+    fseventsd = FSEVENTSD_RSS_THRESHOLD_MB + 1;
+    await tick(3);
+    expect(systemHealthRecords(logWarn, "over")).toHaveLength(3);
+
+    level = 2;
+    await tick(1);
+    level = 4;
+    await tick(3);
+    const records = systemHealthRecords(logWarn, "over");
+    expect(records).toHaveLength(5);
+    expect(records[4]![1]).toEqual(expect.objectContaining({ kernelPressureLevel: 4 }));
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-log when a failed reading interrupts an elevated run", async () => {
+    let level: KernelPressureLevel | null = 1;
+    const { tick } = makeMonitor({ swap: () => FULL_SWAP, kernelPressureLevel: () => level });
+
+    await tick(EPISODE_OPEN_SAMPLES + 1);
+    level = null;
+    await tick(2);
+    level = 1;
+    await tick(2);
+
+    expect(systemHealthRecords(logWarn, "over")).toHaveLength(2);
+  });
+
+  it("does not re-log a reading that flaps around the threshold without recovering", async () => {
+    const readings = [FULL_SWAP, HEALTHY_SWAP, FULL_SWAP, HEALTHY_SWAP, FULL_SWAP, HEALTHY_SWAP];
+    const { tick } = makeMonitor({ swap: sequence(readings, HEALTHY_SWAP) });
+
+    await tick(readings.length);
+    expect(systemHealthRecords(logWarn, "over")).toHaveLength(1);
+  });
+
+  it("logs the first sample of a new spike after a recovery", async () => {
+    let swap = FULL_SWAP;
+    const { tick } = makeMonitor({ swap: () => swap });
+
+    await tick(1);
+    swap = HEALTHY_SWAP;
+    await tick(EPISODE_CLEAR_SAMPLES);
+    expect(systemHealthRecords(logInfo, "recovered")).toHaveLength(1);
+    swap = FULL_SWAP;
+    await tick(1);
+
+    expect(systemHealthRecords(logWarn, "over")).toHaveLength(2);
   });
 
   it("requires the over-threshold samples to be consecutive", async () => {

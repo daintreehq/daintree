@@ -132,10 +132,13 @@ export function parseFseventsdRssMb(stdout: string): number {
  * pressure (#12799) — so a slow Mac is not read as
  * a slow Daintree (#12462). Numbers only: it never infers a cause.
  *
- * Every over-threshold sample logs a `system-health` record. An episode opens
- * after {@link EPISODE_OPEN_SAMPLES} consecutive ones and is published exactly
- * once; it closes, with one recovery record and one publish, after
- * {@link EPISODE_CLEAR_SAMPLES} consecutive fully observed clear samples. A
+ * The first over-threshold sample logs a `system-health` record, and another
+ * follows only when the episode opens or which thresholds are crossed (or the
+ * kernel level) changes — never merely because the figures moved (#12888). An
+ * episode opens after {@link EPISODE_OPEN_SAMPLES} consecutive over-threshold
+ * samples and is published exactly once; it closes, with one recovery record
+ * and one publish, after {@link EPISODE_CLEAR_SAMPLES} consecutive fully
+ * observed clear samples. A
  * sample with a failed reading breaks both runs — a missing measurement can
  * neither open an episode nor prove recovery.
  *
@@ -153,6 +156,8 @@ export function createSystemMemoryPressureMonitor(
   /** An over-threshold record was logged since the last recovery record. */
   let elevated = false;
   let episodeOpen = false;
+  /** Causes and kernel level of the last logged over record; null until one is logged. */
+  let lastOverSignature: string | null = null;
 
   function record(sample: SystemMemorySample): void {
     const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
@@ -170,12 +175,30 @@ export function createSystemMemoryPressureMonitor(
       kernelPressureLevel,
     };
 
+    const fullyObserved =
+      swap !== null &&
+      (!deps.isDarwin || (fseventsdRssMb !== null && kernelPressureLevel !== null));
+
     if (swapOver || fseventsdOver || kernelOver) {
       overStreak++;
       clearStreak = 0;
       elevated = true;
-      logWarn("system-health", { state: "over", ...figures, consecutiveSamples: overStreak });
-      if (!episodeOpen && overStreak >= EPISODE_OPEN_SAMPLES) {
+      const episodeOpening = !episodeOpen && overStreak >= EPISODE_OPEN_SAMPLES;
+      // Figures are left out: they move on every reading. A sample with a failed
+      // reading cannot tell whether a cause changed, so it never re-logs on its own.
+      const signature = JSON.stringify({
+        swapOver,
+        fseventsdOver,
+        kernelOver,
+        kernelPressureLevel,
+      });
+      const causeChanged =
+        lastOverSignature === null || (fullyObserved && signature !== lastOverSignature);
+      if (episodeOpening || causeChanged) {
+        if (fullyObserved || lastOverSignature === null) lastOverSignature = signature;
+        logWarn("system-health", { state: "over", ...figures, consecutiveSamples: overStreak });
+      }
+      if (episodeOpening) {
         episodeOpen = true;
         deps.publish({
           status: "degraded",
@@ -188,9 +211,6 @@ export function createSystemMemoryPressureMonitor(
       return;
     }
 
-    const fullyObserved =
-      swap !== null &&
-      (!deps.isDarwin || (fseventsdRssMb !== null && kernelPressureLevel !== null));
     if (!fullyObserved) {
       // Breaks both runs: "consecutive" means consecutive observations. An
       // open episode stays open — only observed clear samples close it.
@@ -209,6 +229,7 @@ export function createSystemMemoryPressureMonitor(
     elevated = false;
     episodeOpen = false;
     clearStreak = 0;
+    lastOverSignature = null;
     if (wasOpen) {
       deps.publish({
         status: "normal",
