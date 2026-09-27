@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { GripVertical, ImageOff } from "lucide-react";
 import type { DiffMediaFileVersions, DiffMediaSide, GitStatus } from "@shared/types";
 import { getDiffMediaImageMime } from "@shared/types/ipc/diffMedia";
@@ -7,6 +14,7 @@ import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 import { formatBytes } from "@/lib/formatBytes";
 import { cn } from "@/lib/utils";
 import { TRANSPARENCY_CHECKERBOARD_STYLE } from "./transparencyCheckerboard";
@@ -32,8 +40,20 @@ const MODE_OPTIONS: Array<{ value: ImageDiffMode; label: string }> = [
 ];
 
 const SWIPE_KEYBOARD_STEP = 2;
+const SWIPE_PAGE_STEP = 10;
 
 const CHECKERBOARD_STYLE: CSSProperties = TRANSPARENCY_CHECKERBOARD_STYLE;
+
+type OkSide = Extract<DiffMediaSide, { ok: true }>;
+
+export interface ImageDims {
+  width: number;
+  height: number;
+}
+
+type ImageDiffStatusSide = "head" | "working";
+
+type SideDims = Record<ImageDiffStatusSide, ImageDims | null>;
 
 function sideErrorMessage(error: Extract<DiffMediaSide, { ok: false }>["error"]): string {
   switch (error) {
@@ -48,20 +68,123 @@ function sideErrorMessage(error: Extract<DiffMediaSide, { ok: false }>["error"])
   }
 }
 
-function SideChip({ label, floating }: { label: string; floating?: boolean }) {
+/** Where the swipe divider is, in words — the number alone doesn't say which version shows. */
+export function swipeValueText(position: number): string {
+  const head = Math.round(position);
+  if (head <= 0) return "Working tree only";
+  if (head >= 100) return "HEAD only";
+  return `HEAD ${head}% on the left, working tree ${100 - head}% on the right`;
+}
+
+/** The slider keyboard contract (APG): arrows step, pages jump further, Home/End hit the ends. */
+export function nextSwipePosition(key: string, current: number): number | null {
+  const clamp = (value: number) => Math.min(100, Math.max(0, value));
+  switch (key) {
+    case "ArrowLeft":
+    case "ArrowDown":
+      return clamp(current - SWIPE_KEYBOARD_STEP);
+    case "ArrowRight":
+    case "ArrowUp":
+      return clamp(current + SWIPE_KEYBOARD_STEP);
+    case "PageDown":
+      return clamp(current - SWIPE_PAGE_STEP);
+    case "PageUp":
+      return clamp(current + SWIPE_PAGE_STEP);
+    case "Home":
+      return 0;
+    case "End":
+      return 100;
+    default:
+      return null;
+  }
+}
+
+function formatSignedBytes(delta: number): string {
+  return `${delta > 0 ? "+" : "−"}${formatBytes(Math.abs(delta))}`;
+}
+
+/**
+ * One side's facts, with the change against the other side spelled out so the
+ * reader never has to subtract two captions. Only the working tree carries a
+ * baseline — HEAD is what it changed from.
+ */
+export function describeImageFacts(
+  side: OkSide,
+  dims: ImageDims | null,
+  baseline?: { side: OkSide; dims: ImageDims | null }
+): string {
+  const parts: string[] = [];
+  if (dims) {
+    const was =
+      baseline?.dims && (baseline.dims.width !== dims.width || baseline.dims.height !== dims.height)
+        ? ` (was ${baseline.dims.width}×${baseline.dims.height})`
+        : "";
+    parts.push(`${dims.width}×${dims.height} px${was}`);
+  }
+  const byteDelta = baseline ? side.byteSize - baseline.side.byteSize : 0;
+  parts.push(
+    byteDelta === 0
+      ? formatBytes(side.byteSize)
+      : `${formatBytes(side.byteSize)} (${formatSignedBytes(byteDelta)})`
+  );
+  return parts.join(" · ");
+}
+
+/** The smallest box both versions fit in, anchored at a shared top-left origin. */
+function unionDims(a: ImageDims | null, b: ImageDims | null): ImageDims | null {
+  if (!a) return b;
+  if (!b) return a;
+  return { width: Math.max(a.width, b.width), height: Math.max(a.height, b.height) };
+}
+
+/**
+ * One scale for every version on screen, measured against the frame. Fitting
+ * each image on its own (`object-contain`) gives two differently sized versions
+ * two different scales, which reads as a content change that never happened.
+ * Never upscales: a 64px icon stays 64px rather than blurring to fill the pane.
+ * Null until the frame has been measured or when the natural size is unknown,
+ * and callers fall back to fitting each image independently.
+ */
+function useFitScale(box: ImageDims | null): [(el: HTMLDivElement | null) => void, number | null] {
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null);
+  const [size, setSize] = useState<ImageDims | null>(null);
+  useResizeObserverRaf(frame, (entry) => {
+    const { width, height } = entry.contentRect;
+    setSize((prev) =>
+      prev && prev.width === width && prev.height === height ? prev : { width, height }
+    );
+  });
+  const scale =
+    box && size && size.width > 0 && size.height > 0 && box.width > 0 && box.height > 0
+      ? Math.min(1, size.width / box.width, size.height / box.height)
+      : null;
+  return [setFrame, scale];
+}
+
+function scaledSize(dims: ImageDims, scale: number): CSSProperties {
+  return { width: Math.round(dims.width * scale), height: Math.round(dims.height * scale) };
+}
+
+function SideChip({ label }: { label: string }) {
+  // Opaque on purpose: it floats over arbitrary image content in the overlay modes.
   return (
-    <span
-      className={cn(
-        "rounded bg-surface-sidebar px-1.5 py-0.5 text-3xs font-medium text-muted-foreground",
-        floating && "bg-daintree-sidebar/90"
-      )}
-    >
+    <span className="rounded-sm border border-border-default bg-surface-panel-elevated px-1.5 py-0.5 text-3xs font-medium text-text-secondary">
       {label}
     </span>
   );
 }
 
-type ImageDiffStatusSide = "head" | "working";
+/** Always rendered, so a pane with nothing to report keeps its frame aligned with its neighbour's. */
+function FactsLine({ children, className }: { children?: ReactNode; className?: string }) {
+  return (
+    <p
+      className={cn("min-h-4 truncate text-2xs tabular-nums text-text-secondary", className)}
+      aria-hidden={children ? undefined : true}
+    >
+      {children ?? " "}
+    </p>
+  );
+}
 
 interface CommittedSnapshot {
   /** Identity of the fetch's *target* (worktree+path+status+nonce) — see makeRequestKey. */
@@ -83,6 +206,8 @@ interface CommittedSnapshot {
    * frame — and so the swap is never blocked by one bad side.
    */
   decodeFailures: { head: boolean; working: boolean };
+  /** Natural size from the off-screen decode — what the shared scale is computed from. */
+  dims: SideDims;
 }
 
 function deriveSingleSide(status: GitStatus): ImageDiffStatusSide | null {
@@ -117,15 +242,21 @@ function makeRequestKey(
  * `false` rather than throwing, so one bad side never blocks the whole swap.
  * `decode()` is absent under jsdom (and older engines), so guard for it.
  */
-async function decodeOffscreen(dataUrl: string): Promise<boolean> {
+async function decodeOffscreen(dataUrl: string): Promise<{ ok: boolean; dims: ImageDims | null }> {
   const img = new Image();
   img.src = dataUrl;
-  if (typeof img.decode !== "function") return true;
+  if (typeof img.decode !== "function") return { ok: true, dims: null };
   try {
     await img.decode();
-    return true;
+    return {
+      ok: true,
+      dims:
+        img.naturalWidth > 0 && img.naturalHeight > 0
+          ? { width: img.naturalWidth, height: img.naturalHeight }
+          : null,
+    };
   } catch {
-    return false;
+    return { ok: false, dims: null };
   }
 }
 
@@ -134,6 +265,12 @@ interface ImagePaneProps {
   side: DiffMediaSide;
   relPath: string;
   caption?: string;
+  /** This version's natural size, when the predecode knew it. */
+  dims: ImageDims | null;
+  /** The box every pane in the comparison fits, so they share one scale. */
+  fitBox: ImageDims | null;
+  /** What the facts line measures a change against (the working tree's HEAD). */
+  baseline?: { side: OkSide; dims: ImageDims | null };
   /**
    * Seeded from the off-screen predecode so a side that failed to decode shows
    * the fallback on first paint. Each pane is keyed by the committed request +
@@ -151,30 +288,42 @@ function ImagePane({
   side,
   relPath,
   caption,
+  dims: knownDims,
+  fitBox,
+  baseline,
   initialDecodeFailed,
   onRetry,
 }: ImagePaneProps) {
-  const [dims, setDims] = useState<{ width: number; height: number } | null>(null);
+  const [loadedDims, setLoadedDims] = useState<ImageDims | null>(null);
   const [decodeFailed, setDecodeFailed] = useState(initialDecodeFailed ?? false);
+  const [frameRef, scale] = useFitScale(fitBox);
+  const dims = knownDims ?? loadedDims;
+  const showImage = side.ok && !decodeFailed;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <SideChip label={label} />
-        {caption ? <span className="text-xs text-muted-foreground">{caption}</span> : null}
+        {caption ? <span className="truncate text-xs text-text-secondary">{caption}</span> : null}
       </div>
       <div
+        ref={frameRef}
         className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-border-default"
-        style={side.ok && !decodeFailed ? CHECKERBOARD_STYLE : undefined}
       >
-        {side.ok && !decodeFailed ? (
+        {showImage ? (
           <img
             src={side.dataUrl}
             alt={`${label} version of ${relPath}`}
             draggable={false}
-            className="max-h-full max-w-full object-contain"
+            className={
+              scale !== null && knownDims ? "max-w-none" : "max-h-full max-w-full object-contain"
+            }
+            style={{
+              ...CHECKERBOARD_STYLE,
+              ...(scale !== null && knownDims ? scaledSize(knownDims, scale) : null),
+            }}
             onLoad={(event) =>
-              setDims({
+              setLoadedDims({
                 width: event.currentTarget.naturalWidth,
                 height: event.currentTarget.naturalHeight,
               })
@@ -183,7 +332,7 @@ function ImagePane({
           />
         ) : (
           <div className="flex flex-col items-center gap-2 px-4">
-            <p className="text-center text-xs text-muted-foreground">
+            <p className="text-center text-xs text-text-secondary">
               {side.ok ? "Couldn't display this version" : sideErrorMessage(side.error)}
             </p>
             {!side.ok && side.error === "ERROR" && onRetry ? (
@@ -194,160 +343,220 @@ function ImagePane({
           </div>
         )}
       </div>
-      {side.ok && !decodeFailed ? (
-        <p className="text-2xs tabular-nums text-muted-foreground">
-          {dims ? `${dims.width}×${dims.height} px · ` : ""}
-          {formatBytes(side.byteSize)}
-        </p>
-      ) : null}
+      <FactsLine>{showImage ? describeImageFacts(side, dims, baseline) : null}</FactsLine>
     </div>
   );
 }
 
 interface OkSides {
-  head: Extract<DiffMediaSide, { ok: true }>;
-  working: Extract<DiffMediaSide, { ok: true }>;
+  head: OkSide;
+  working: OkSide;
 }
 
-// Both layers render into the same full-container box with object-contain, so
-// they superimpose in an identical fitted rect and pixel comparison lines up.
-function OverlayLayers({
-  sides,
-  relPath,
-  topStyle,
-}: {
+interface OverlayProps {
   sides: OkSides;
+  dims: SideDims;
   relPath: string;
-  topStyle: CSSProperties;
-}) {
-  return (
-    <>
-      <img
-        src={sides.working.dataUrl}
-        alt={`Working tree version of ${relPath}`}
-        draggable={false}
-        className="absolute inset-0 h-full w-full object-contain"
-      />
-      <img
-        src={sides.head.dataUrl}
-        alt={`HEAD version of ${relPath}`}
-        draggable={false}
-        className="absolute inset-0 h-full w-full object-contain"
-        style={topStyle}
-      />
-    </>
-  );
+}
+
+/**
+ * The shared geometry of the two overlay modes. With both natural sizes known,
+ * the stage is the union of the two images at one shared scale, and each layer
+ * sits at the stage's top-left at its own true size — so a resized version
+ * shows as resized instead of being stretched to match. Without them it falls
+ * back to both layers filling the frame with `object-contain`.
+ */
+function useOverlayGeometry(dims: SideDims) {
+  const box = dims.head && dims.working ? unionDims(dims.head, dims.working) : null;
+  const [frameRef, scale] = useFitScale(box);
+  const exact = scale !== null && box !== null;
+  const stageStyle: CSSProperties = exact
+    ? { position: "relative", ...scaledSize(box, scale), ...CHECKERBOARD_STYLE }
+    : { position: "absolute", inset: 0, ...CHECKERBOARD_STYLE };
+  const layerImg = (side: ImageDiffStatusSide) => {
+    const sideDims = dims[side];
+    return exact && sideDims
+      ? {
+          className: "absolute left-0 top-0 max-w-none",
+          style: scaledSize(sideDims, scale),
+        }
+      : { className: "absolute inset-0 h-full w-full object-contain", style: undefined };
+  };
+  return { frameRef, stageStyle, layerImg };
 }
 
 function OverlayChips() {
   return (
     <>
-      <div className="pointer-events-none absolute left-2 top-2 z-10">
-        <SideChip label="HEAD" floating />
+      <div className="pointer-events-none absolute left-2 top-2 z-20">
+        <SideChip label="HEAD" />
       </div>
-      <div className="pointer-events-none absolute right-2 top-2 z-10">
-        <SideChip label="Working tree" floating />
+      <div className="pointer-events-none absolute right-2 top-2 z-20">
+        <SideChip label="Working tree" />
       </div>
     </>
   );
 }
 
-function SwipeCompare({ sides, relPath }: { sides: OkSides; relPath: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+/** Both sides' facts under the overlay, each under its own corner label. */
+function OverlayFacts({ sides, dims }: { sides: OkSides; dims: SideDims }) {
+  return (
+    <div className="flex shrink-0 justify-between gap-3 pt-1.5">
+      <FactsLine>{describeImageFacts(sides.head, dims.head)}</FactsLine>
+      <FactsLine className="text-right">
+        {describeImageFacts(sides.working, dims.working, {
+          side: sides.head,
+          dims: dims.head,
+        })}
+      </FactsLine>
+    </div>
+  );
+}
+
+const OVERLAY_FRAME_CLASS =
+  "relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-border-default";
+
+function SwipeCompare({ sides, dims, relPath }: OverlayProps) {
+  const stageRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(50);
   const draggingRef = useRef(false);
+  const { frameRef, stageStyle, layerImg } = useOverlayGeometry(dims);
 
+  // Measured against the stage, not the frame, so the divider tracks the image
+  // rather than the letterbox around it. Clicks in the letterbox clamp to an end.
   const updateFromClientX = useCallback((clientX: number) => {
-    const rect = containerRef.current?.getBoundingClientRect();
+    const rect = stageRef.current?.getBoundingClientRect();
     if (!rect || rect.width === 0) return;
     const next = ((clientX - rect.left) / rect.width) * 100;
     setPosition(Math.min(100, Math.max(0, next)));
   }, []);
 
+  const head = layerImg("head");
+  const working = layerImg("working");
+  const dividerLeft = `round(nearest, ${position}%, 1px)`;
+
   return (
-    <div
-      ref={containerRef}
-      className="relative min-h-0 flex-1 touch-none overflow-hidden rounded-md border border-border-default"
-      style={CHECKERBOARD_STYLE}
-      onPointerDown={(event) => {
-        draggingRef.current = true;
-        event.currentTarget.setPointerCapture(event.pointerId);
-        updateFromClientX(event.clientX);
-      }}
-      onPointerMove={(event) => {
-        if (draggingRef.current) updateFromClientX(event.clientX);
-      }}
-      onPointerUp={() => {
-        draggingRef.current = false;
-      }}
-      onPointerCancel={() => {
-        draggingRef.current = false;
-      }}
-    >
-      <OverlayLayers
-        sides={sides}
-        relPath={relPath}
-        // HEAD on top, clipped to the left of the divider — old on the left,
-        // new on the right.
-        topStyle={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
-      />
-      <OverlayChips />
+    <div className="flex min-h-0 flex-1 flex-col">
       <div
-        role="slider"
-        tabIndex={0}
-        aria-label="Swipe divider"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(position)}
-        className="absolute inset-y-0 z-10 flex w-4 -translate-x-1/2 cursor-ew-resize items-center justify-center"
-        style={{ left: `${position}%` }}
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-          event.preventDefault();
-          const delta = event.key === "ArrowLeft" ? -SWIPE_KEYBOARD_STEP : SWIPE_KEYBOARD_STEP;
-          setPosition((prev) => Math.min(100, Math.max(0, prev + delta)));
+        ref={frameRef}
+        className={cn(OVERLAY_FRAME_CLASS, "touch-none")}
+        onPointerDown={(event) => {
+          draggingRef.current = true;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          updateFromClientX(event.clientX);
+        }}
+        onPointerMove={(event) => {
+          if (draggingRef.current) updateFromClientX(event.clientX);
+        }}
+        onPointerUp={() => {
+          draggingRef.current = false;
+        }}
+        onPointerCancel={() => {
+          draggingRef.current = false;
         }}
       >
-        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-daintree-text/60 shadow-[0_0_0_1px_var(--color-surface-canvas)]" />
-        {/* Colour on the wrapper: forced colours keep an SVG's own colour class. */}
-        <div className="relative flex h-6 w-3.5 items-center justify-center rounded border border-border-default bg-surface-sidebar text-muted-foreground">
-          <GripVertical className="h-3 w-3" />
+        <div ref={stageRef} style={stageStyle}>
+          {/* Complementary clips over one shared stage: HEAD only left of the
+              divider, the working tree only right of it. Clipping HEAD alone
+              let working-tree pixels show through wherever HEAD is transparent. */}
+          <div className="absolute inset-0" style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}>
+            <img
+              src={sides.head.dataUrl}
+              alt={`HEAD version of ${relPath}`}
+              draggable={false}
+              className={head.className}
+              style={head.style}
+            />
+          </div>
+          <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${position}%)` }}>
+            <img
+              src={sides.working.dataUrl}
+              alt={`Working tree version of ${relPath}`}
+              draggable={false}
+              className={working.className}
+              style={working.style}
+            />
+          </div>
+          {/* Dual-tone and opaque: a text-primary core between two canvas
+              rails, so one of the two holds contrast over any image. Borders,
+              not a shadow, because forced colours drop box-shadow. Snapped to
+              a whole pixel so the core never smears across two columns. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 z-10 -ml-px w-[3px] border-x border-surface-canvas bg-text-primary forced-colors:border-[Canvas] forced-colors:bg-[CanvasText]"
+            style={{ left: dividerLeft }}
+          />
+          {/* The handle is the slider, so its focus ring is its own and sits on
+              the handle rather than on a full-height column. The frame behind
+              it takes the drag and the click-to-jump, so the handle only has to
+              be findable; the pseudo-element widens its hit area to 24px.
+              Colour on the wrapper: forced colours keep an SVG's own colour. */}
+          <div
+            role="slider"
+            tabIndex={0}
+            aria-label="Swipe divider"
+            aria-orientation="horizontal"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(position)}
+            aria-valuetext={swipeValueText(position)}
+            className="absolute top-1/2 z-10 -ml-[7px] -mt-4 flex h-8 w-[15px] cursor-ew-resize items-center justify-center rounded-sm border border-text-secondary bg-surface-panel-elevated text-text-secondary before:absolute before:inset-y-0 before:-inset-x-1 before:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            style={{ left: dividerLeft }}
+            onKeyDown={(event) => {
+              const next = nextSwipePosition(event.key, position);
+              if (next === null) return;
+              event.preventDefault();
+              setPosition(next);
+            }}
+          >
+            <GripVertical className="h-3 w-3" />
+          </div>
         </div>
+        <OverlayChips />
       </div>
+      <OverlayFacts sides={sides} dims={dims} />
     </div>
   );
 }
 
-function OnionCompare({
-  sides,
-  relPath,
-  opacity,
-}: {
-  sides: OkSides;
-  relPath: string;
-  opacity: number;
-}) {
+function OnionCompare({ sides, dims, relPath, opacity }: OverlayProps & { opacity: number }) {
+  const { frameRef, stageStyle, layerImg } = useOverlayGeometry(dims);
+  const head = layerImg("head");
+  const working = layerImg("working");
   return (
-    <div
-      className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-border-default"
-      style={CHECKERBOARD_STYLE}
-    >
-      {/* HEAD as the base layer; the working-tree layer fades in on top. */}
-      <img
-        src={sides.head.dataUrl}
-        alt={`HEAD version of ${relPath}`}
-        draggable={false}
-        className="absolute inset-0 h-full w-full object-contain"
-      />
-      <img
-        src={sides.working.dataUrl}
-        alt={`Working tree version of ${relPath}`}
-        draggable={false}
-        className="absolute inset-0 h-full w-full object-contain"
-        style={{ opacity: opacity / 100 }}
-      />
-      <OverlayChips />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div ref={frameRef} className={OVERLAY_FRAME_CLASS}>
+        <div style={stageStyle}>
+          {/* HEAD as the base layer; the working-tree layer fades in on top. */}
+          <img
+            src={sides.head.dataUrl}
+            alt={`HEAD version of ${relPath}`}
+            draggable={false}
+            className={head.className}
+            style={head.style}
+          />
+          <img
+            src={sides.working.dataUrl}
+            alt={`Working tree version of ${relPath}`}
+            draggable={false}
+            className={working.className}
+            style={{ ...working.style, opacity: opacity / 100 }}
+          />
+        </div>
+        <OverlayChips />
+      </div>
+      <OverlayFacts sides={sides} dims={dims} />
     </div>
+  );
+}
+
+/** Retry only helps a transient read failure; a size or format limit won't change on a refetch. */
+function isAggregateReadFailure(result: DiffMediaFileVersions): boolean {
+  return (
+    !result.head.ok &&
+    !result.working.ok &&
+    result.head.error === "ERROR" &&
+    result.working.error === "ERROR"
   );
 }
 
@@ -389,8 +598,9 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
         if (cancelled) return;
         // A comparison whose two transport reads both failed has nothing to
         // render — surface the aggregate error for this target rather than
-        // committing (and then holding) an empty frame.
-        if (deriveSingleSide(status) === null && !result.head.ok && !result.working.ok) {
+        // committing (and then holding) an empty frame. Two *limit* failures
+        // (too large, unsupported) commit instead, so each side says why.
+        if (deriveSingleSide(status) === null && isAggregateReadFailure(result)) {
           setFailedRequestKey(requestKey);
           return;
         }
@@ -401,16 +611,28 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
         const decoded = await Promise.all(
           renderableSides(status).map(async (sideKey) => {
             const sideValue = result[sideKey];
-            const ok = sideValue.ok ? await decodeOffscreen(sideValue.dataUrl) : true;
-            return [sideKey, ok] as const;
+            const outcome = sideValue.ok
+              ? await decodeOffscreen(sideValue.dataUrl)
+              : { ok: true, dims: null };
+            return [sideKey, outcome] as const;
           })
         );
         if (cancelled) return;
         const decodeFailures = { head: false, working: false };
-        for (const [sideKey, ok] of decoded) {
-          if (!ok) decodeFailures[sideKey] = true;
+        const dims: SideDims = { head: null, working: null };
+        for (const [sideKey, outcome] of decoded) {
+          if (!outcome.ok) decodeFailures[sideKey] = true;
+          dims[sideKey] = outcome.dims;
         }
-        setCommitted({ requestKey, attempt, versions: result, relPath, status, decodeFailures });
+        setCommitted({
+          requestKey,
+          attempt,
+          versions: result,
+          relPath,
+          status,
+          decodeFailures,
+          dims,
+        });
       })
       .catch(() => {
         if (!cancelled) setFailedRequestKey(requestKey);
@@ -446,18 +668,27 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
   }
 
   // 2. Nothing committed yet (first-ever load, or a prior failure with no held
-  //    frame to keep): show the skeleton. Bone count comes from the live status.
+  //    frame to keep): show the skeleton, in the loaded layout's own rows so the
+  //    swap doesn't shift anything. Bone count comes from the live status.
   if (committed === null) {
     const skeletonSingle = deriveSingleSide(status);
+    const paneBones = (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
+        <SkeletonBone className="h-[18px] w-20 rounded-sm" />
+        <SkeletonBone className="min-h-0 flex-1 rounded-md" />
+        <SkeletonBone className="h-4 w-32 rounded-sm" />
+      </div>
+    );
     return (
-      <Skeleton
-        label="Loading image versions"
-        className="flex h-full min-h-0 w-full flex-col gap-3 p-3"
-      >
-        <SkeletonBone className="h-6 w-44" />
-        <div className="flex min-h-0 flex-1 gap-3">
-          <SkeletonBone className="min-h-0 flex-1 rounded-md" />
-          {skeletonSingle === null ? <SkeletonBone className="min-h-0 flex-1 rounded-md" /> : null}
+      <Skeleton label="Loading image versions" className="flex h-full min-h-0 w-full flex-col">
+        {skeletonSingle === null ? (
+          <div className="flex shrink-0 px-3 pt-3">
+            <SkeletonBone className="h-7 w-52 rounded-lg" />
+          </div>
+        ) : null}
+        <div className="flex min-h-0 flex-1 gap-3 p-3">
+          {paneBones}
+          {skeletonSingle === null ? paneBones : null}
         </div>
       </Skeleton>
     );
@@ -487,6 +718,8 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
           side={view.versions[singleSide]}
           relPath={view.relPath}
           caption={caption}
+          dims={view.dims[singleSide]}
+          fitBox={view.dims[singleSide]}
           initialDecodeFailed={view.decodeFailures[singleSide]}
           onRetry={retry}
         />
@@ -505,14 +738,17 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
   // hides the compare modes.
   const showModes = bothOk && !anyDecodeFailed;
   const effectiveMode: ImageDiffMode = showModes ? mode : "two-up";
+  const headSide = view.versions.head;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" aria-busy={isHolding || undefined}>
       {showModes ? (
-        <div className="flex shrink-0 items-center justify-between gap-2 px-3 pt-3">
+        // Wraps rather than squeezes: in a narrow pane the opacity control
+        // drops to its own row instead of breaking its label over two lines.
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 pt-3">
           <SegmentedToggle options={MODE_OPTIONS} value={effectiveMode} onChange={setMode} />
           {effectiveMode === "onion" ? (
-            <label className="flex items-center gap-2 text-2xs text-muted-foreground">
+            <label className="flex items-center gap-2 whitespace-nowrap text-2xs text-text-secondary">
               Working tree opacity
               <input
                 type="range"
@@ -520,10 +756,13 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
                 max={100}
                 value={onionOpacity}
                 aria-label="Working tree opacity"
+                aria-valuetext={`Working tree at ${onionOpacity}% over HEAD`}
                 onChange={(event) => setOnionOpacity(Number(event.currentTarget.value))}
-                className="w-36 cursor-pointer"
-                style={{ accentColor: "var(--color-text-primary)" }}
+                className="w-36 cursor-pointer accent-[var(--color-text-primary)]"
               />
+              <span className="w-7 text-right font-mono tabular-nums" aria-hidden="true">
+                {onionOpacity}%
+              </span>
             </label>
           ) : null}
         </div>
@@ -535,22 +774,34 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
             <ImagePane
               key={`${view.attempt}:head`}
               label="HEAD"
-              side={view.versions.head}
+              side={headSide}
               relPath={view.relPath}
+              dims={view.dims.head}
+              fitBox={unionDims(view.dims.head, view.dims.working)}
               initialDecodeFailed={view.decodeFailures.head}
+              onRetry={retry}
             />
             <ImagePane
               key={`${view.attempt}:working`}
               label="Working tree"
               side={view.versions.working}
               relPath={view.relPath}
+              dims={view.dims.working}
+              fitBox={unionDims(view.dims.head, view.dims.working)}
+              baseline={headSide.ok ? { side: headSide, dims: view.dims.head } : undefined}
               initialDecodeFailed={view.decodeFailures.working}
+              onRetry={retry}
             />
           </div>
         ) : effectiveMode === "swipe" ? (
-          <SwipeCompare sides={okSides} relPath={view.relPath} />
+          <SwipeCompare sides={okSides} dims={view.dims} relPath={view.relPath} />
         ) : (
-          <OnionCompare sides={okSides} relPath={view.relPath} opacity={onionOpacity} />
+          <OnionCompare
+            sides={okSides}
+            dims={view.dims}
+            relPath={view.relPath}
+            opacity={onionOpacity}
+          />
         )}
       </div>
     </div>

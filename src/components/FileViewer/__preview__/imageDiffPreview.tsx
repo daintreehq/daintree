@@ -112,8 +112,12 @@ const FIXTURES: Record<string, { status: GitStatus; read: () => DiffMediaFileVer
   loading: { status: "modified", read: () => null },
 };
 
-const selected = FIXTURES[fixture];
-if (!selected) throw new Error(`unknown image-diff fixture "${fixture}"`);
+function requireFixture(name: string) {
+  const found = FIXTURES[name];
+  if (!found) throw new Error(`unknown image-diff fixture "${name}"`);
+  return found;
+}
+const selected = requireFixture(fixture);
 
 installPreviewShims({
   diffMedia: {
