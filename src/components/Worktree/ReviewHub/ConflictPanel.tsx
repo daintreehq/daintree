@@ -91,6 +91,22 @@ function RebaseSequenceRail({ entries }: { entries: RebaseEntry[] }) {
     return out;
   }, [entries]);
 
+  // A long todo list scrolls inside its own viewport; keep the step the
+  // operation is stopped on in view whenever it changes.
+  const listRef = useRef<HTMLUListElement>(null);
+  const currentIndex = display.findIndex((e) => e.state === "current");
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || currentIndex < 0) return;
+    const row = list.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!row) return;
+    const top = row.offsetTop;
+    const bottom = top + row.offsetHeight;
+    if (top < list.scrollTop || bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = Math.max(0, top - (list.clientHeight - row.offsetHeight) / 2);
+    }
+  }, [currentIndex]);
+
   if (display.length === 0) return null;
 
   return (
@@ -104,7 +120,8 @@ function RebaseSequenceRail({ entries }: { entries: RebaseEntry[] }) {
         </div>
       </div>
       <ul
-        className="px-2 py-1 flex flex-col gap-0.5 max-h-48 overflow-y-auto"
+        ref={listRef}
+        className="relative px-2 py-1 flex flex-col gap-0.5 max-h-48 overflow-y-auto"
         role="list"
         aria-label="Rebase commit sequence"
       >
@@ -170,6 +187,15 @@ function RebaseSequenceRow({ entry }: { entry: RebaseDisplayEntry }) {
       {isDropped && <span className="sr-only">(dropped)</span>}
     </li>
   );
+}
+
+/**
+ * Git's unmerged labels speak in merge terms ("deleted by us"). A rebase swaps
+ * the sides, so name them for what they are, matching the take-side menu.
+ */
+function conflictKindLabel(label: string, isRebase: boolean): string {
+  if (!isRebase) return label;
+  return label.replace(/\bus\b/, "destination").replace(/\bthem\b/, "incoming commit");
 }
 
 function splitPath(filePath: string): { dir: string; base: string } {
@@ -586,7 +612,9 @@ export function ConflictPanel({
                   className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-sm text-xs hover:bg-tint/5 transition-colors"
                 >
                   <AlertTriangle className="w-3 h-3 shrink-0 text-status-error" aria-hidden />
-                  <TruncatedTooltip content={`${file.path} (${file.label})`}>
+                  <TruncatedTooltip
+                    content={`${file.path} (${conflictKindLabel(file.label, isRebase)})`}
+                  >
                     <div className="flex-1 min-w-0 flex items-baseline gap-2">
                       {/* The directory gives way first; the basename is the
                           file's identity and truncates only once the
@@ -600,7 +628,7 @@ export function ConflictPanel({
                         </span>
                       </span>
                       <span className="shrink-0 whitespace-nowrap text-3xs uppercase tracking-wider text-text-secondary font-mono">
-                        {file.label}
+                        {conflictKindLabel(file.label, isRebase)}
                       </span>
                       {hunkCount != null && hunkCount > 0 && (
                         <span

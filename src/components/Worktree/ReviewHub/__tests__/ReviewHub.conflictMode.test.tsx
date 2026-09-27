@@ -1092,6 +1092,23 @@ describe("ReviewHub", () => {
       expect(current[0]?.textContent).toContain("second");
     });
 
+    it("names deletion sides in rebase terms, and leaves merge labels alone", async () => {
+      const deletedByUs = [{ path: "src/app.ts", xy: "DU", label: "deleted by us" }];
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({ repoState: "REBASING", conflictedFiles: deletedByUs })
+      );
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      const rebaseList = await screen.findByRole("list", { name: "Conflicted files" });
+      expect(rebaseList.textContent).not.toMatch(/\bus\b/);
+      expect(rebaseList.textContent).toMatch(/deleted by destination/);
+      cleanup();
+
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus({ conflictedFiles: deletedByUs }));
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      const mergeList = await screen.findByRole("list", { name: "Conflicted files" });
+      expect(mergeList.textContent).toMatch(/deleted by us/);
+    });
+
     it("renders cherry-pick operation labels", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus({ repoState: "CHERRY_PICKING" }));
 
