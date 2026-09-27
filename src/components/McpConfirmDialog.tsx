@@ -736,7 +736,7 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
           // dialogs copy, so the marker travels with the pattern.
           data-animated-chevron
           className={cn(
-            "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            "w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
             expanded && "rotate-90"
           )}
         />
