@@ -182,7 +182,7 @@ function TelemetryEmptyState({ active }: { active: boolean }) {
         title="Telemetry preview is off"
         description="Turn it on to see exactly what Daintree would send, before you decide whether to share anything."
         action={
-          <Button variant="subtle" size="xs" onClick={handleEnable}>
+          <Button variant="contrast" size="xs" onClick={handleEnable}>
             Turn on telemetry preview
           </Button>
         }

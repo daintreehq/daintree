@@ -403,7 +403,7 @@ export function ContentGridEmptyState({
                   title="Worktree deleted"
                   description="Its leftover terminals stay in the sidebar row until they close — drag them to another worktree to keep them"
                   action={
-                    <Button variant="outline" size="sm" onClick={handleGoToMainWorktree}>
+                    <Button variant="contrast" size="sm" onClick={handleGoToMainWorktree}>
                       Go to main worktree
                     </Button>
                   }
@@ -430,7 +430,7 @@ export function ContentGridEmptyState({
                 description="Worktrees let you work on multiple tasks in isolated environments"
                 action={
                   <Button
-                    variant="outline"
+                    variant="contrast"
                     size="sm"
                     onClick={() => {
                       void actionService.dispatch("project.add", undefined, { source: "user" });

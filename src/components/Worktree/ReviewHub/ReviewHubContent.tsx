@@ -2248,7 +2248,7 @@ export function ReviewHubContent({
                         action={
                           readinessSummary.pushReady ? (
                             <Button
-                              variant="subtle"
+                              variant="contrast"
                               size="sm"
                               onClick={() => void handlePushClean()}
                               disabled={isPushing}

@@ -436,7 +436,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
           title="Couldn't load image versions"
           description="Neither version of this image could be read"
           action={
-            <Button variant="outline" size="sm" onClick={retry}>
+            <Button variant="contrast" size="sm" onClick={retry}>
               Retry
             </Button>
           }

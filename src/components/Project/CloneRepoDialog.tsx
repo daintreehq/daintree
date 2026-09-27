@@ -879,7 +879,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
           </Button>
         ) : mode === "running" ? (
           <Button ref={footerActionRef} variant="outline" onClick={stopClone} loading={isStopping}>
-            {isStopping ? "Stopping…" : "Stop clone"}
+            Stop clone
           </Button>
         ) : error ? (
           <div className="flex shrink-0 items-center gap-3">
@@ -904,7 +904,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               onClick={isCloning ? stopClone : onCancel}
               loading={isStopping}
             >
-              {isCloning ? (isStopping ? "Stopping…" : "Stop clone") : "Cancel"}
+              {isCloning ? "Stop clone" : "Cancel"}
             </Button>
             <Button
               variant="contrast"

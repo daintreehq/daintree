@@ -40,6 +40,9 @@ export function useDevPreviewCommandConfig({
   // Empty string means the attempt never resolved a command (re-detection found
   // nothing), so retry falls back to the currently displayed candidate.
   const [autoDetectFailedCommand, setAutoDetectFailedCommand] = useState<string | null>(null);
+  // The command a save is in flight for, so the pane can show what it is about
+  // to run rather than the first candidate when another script was picked.
+  const [attemptingCommand, setAttemptingCommand] = useState<string | null>(null);
   const autoDetectRef = useRef(false);
 
   useEffect(() => {
@@ -54,9 +57,17 @@ export function useDevPreviewCommandConfig({
   const activeCandidate = candidates.find((c) => c.command.trim() === devCommand.trim());
   const headerLabel = activeCandidate?.name || devCommand;
 
-  const [commandInput, setCommandInput] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [commandInput, setCommandInputState] = useState("");
   const savingRef = useRef(false);
+  const [isSavingCommand, setIsSavingCommand] = useState(false);
+  const [saveCommandFailed, setSaveCommandFailed] = useState(false);
+
+  // A failure belongs to the command that failed; editing the field makes it a
+  // different command, so the Retry for the old one goes away with it.
+  const setCommandInput = useCallback((value: string) => {
+    setCommandInputState(value);
+    setSaveCommandFailed(false);
+  }, []);
 
   const handleAutoDetect = useCallback(
     async (candidateCommand?: string): Promise<boolean> => {
@@ -65,6 +76,7 @@ export function useDevPreviewCommandConfig({
       autoDetectRef.current = true;
       setIsAutoDetecting(true);
       setAutoDetectFailedCommand(null);
+      setAttemptingCommand(candidateCommand ?? null);
       let attemptedCommand = candidateCommand ?? "";
       try {
         const latestSettings = await projectClient.getSettings(currentProjectId);
@@ -87,6 +99,7 @@ export function useDevPreviewCommandConfig({
           return false;
         }
         attemptedCommand = command;
+        if (isMountedRef.current) setAttemptingCommand(command);
 
         await saveSettings({
           ...latestSettings,
@@ -104,6 +117,7 @@ export function useDevPreviewCommandConfig({
         autoDetectRef.current = false;
         if (isMountedRef.current) {
           setIsAutoDetecting(false);
+          setAttemptingCommand(null);
         }
       }
     },
@@ -132,22 +146,30 @@ export function useDevPreviewCommandConfig({
     if (!trimmed || getInvalidCommandMessage(trimmed)) return;
 
     savingRef.current = true;
+    setIsSavingCommand(true);
+    setSaveCommandFailed(false);
+    let saved = false;
     try {
       const latestSettings = await projectClient.getSettings(currentProjectId);
-      if (!latestSettings) return;
-
-      await saveSettings({
-        ...latestSettings,
-        devServerCommand: trimmed,
-        devServerAutoDetected: false,
-        devServerDismissed: false,
-      });
+      if (latestSettings) {
+        await saveSettings({
+          ...latestSettings,
+          devServerCommand: trimmed,
+          devServerAutoDetected: false,
+          devServerDismissed: false,
+        });
+        saved = true;
+      }
     } catch (err) {
       logError("Failed to save dev command", err);
     } finally {
       savingRef.current = false;
+      if (isMountedRef.current) {
+        setIsSavingCommand(false);
+        setSaveCommandFailed(!saved);
+      }
     }
-  }, [currentProjectId, commandInput, saveSettings]);
+  }, [currentProjectId, commandInput, saveSettings, isMountedRef]);
 
   const headerContent = useMemo(() => {
     if (isUnconfigured || candidates.length === 0) return null;
@@ -203,15 +225,16 @@ export function useDevPreviewCommandConfig({
     candidates,
     primaryCandidate,
     isAutoDetecting,
+    attemptingCommand,
     autoDetectFailedCommand,
     handleAutoDetect,
     handlePickCandidate,
-    pickerOpen,
-    setPickerOpen,
     commandInput,
     setCommandInput,
     commandInputError,
     handleSaveCommand,
+    isSavingCommand,
+    saveCommandFailed,
     handleOpenSettings,
   };
 }

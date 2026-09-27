@@ -296,15 +296,16 @@ export function DevPreviewPane({
     candidates,
     primaryCandidate,
     isAutoDetecting,
+    attemptingCommand,
     autoDetectFailedCommand,
     handleAutoDetect,
     handlePickCandidate,
-    pickerOpen,
-    setPickerOpen,
     commandInput,
     setCommandInput,
     commandInputError,
     handleSaveCommand,
+    isSavingCommand,
+    saveCommandFailed,
     handleOpenSettings,
   } = useDevPreviewCommandConfig({
     currentProjectId,
@@ -1053,18 +1054,19 @@ export function DevPreviewPane({
                 isUnconfigured={isUnconfigured}
                 primaryCandidate={primaryCandidate}
                 isAutoDetecting={isAutoDetecting}
+                attemptingCommand={attemptingCommand}
                 isSettingsLoading={isSettingsLoading}
                 handleAutoDetect={handleAutoDetect}
                 autoDetectFailedCommand={autoDetectFailedCommand}
                 candidates={candidates}
-                pickerOpen={pickerOpen}
-                setPickerOpen={setPickerOpen}
                 handlePickCandidate={handlePickCandidate}
                 handleOpenSettings={handleOpenSettings}
                 commandInput={commandInput}
                 setCommandInput={setCommandInput}
                 handleSaveCommand={handleSaveCommand}
                 commandInputError={commandInputError}
+                isSavingCommand={isSavingCommand}
+                saveCommandFailed={saveCommandFailed}
                 devCommand={devCommand}
                 handleStartFromRestored={handleStartFromRestored}
                 hasBeenVisible={hasBeenVisible}

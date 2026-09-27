@@ -1167,7 +1167,7 @@ export function makePluginViewContent(
               description="This plugin's turned off. Enable it in the plugin manager to use this view."
               action={
                 <Button
-                  variant="secondary"
+                  variant="contrast"
                   size="sm"
                   onClick={() => {
                     void actionService.dispatch("app.pluginManager", undefined, {

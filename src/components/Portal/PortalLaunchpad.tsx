@@ -37,7 +37,7 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
           title="Add a chat service"
           description="Choose which web chats open here in Portal settings."
           action={
-            <Button type="button" variant="outline" size="sm" onClick={openPortalSettings}>
+            <Button type="button" variant="contrast" size="sm" onClick={openPortalSettings}>
               Open Portal settings
             </Button>
           }

@@ -38,7 +38,7 @@ function FullSkeleton({
             live regions carrying the same phase would announce it twice. */}
         {showSpinner && (
           <>
-            <Spinner size="xl" className="text-daintree-text/45" />
+            <Spinner size="xl" className="text-text-secondary" />
             <p aria-hidden="true" className="text-sm text-text-secondary break-words">
               {phaseLabel}
             </p>
@@ -80,7 +80,7 @@ function OverlaySkeleton({
 
         {/* Visible caption only (aria-hidden). The wrapper is named but not
             live — the hint below speaks the phase, once. */}
-        <Spinner size="xl" className="text-daintree-text/45" />
+        <Spinner size="xl" className="text-text-secondary" />
         <p aria-hidden="true" className="text-sm text-text-secondary break-words">
           {phaseLabel}
         </p>
