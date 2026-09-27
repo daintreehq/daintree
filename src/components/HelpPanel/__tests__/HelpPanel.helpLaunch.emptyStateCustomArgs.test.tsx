@@ -738,6 +738,35 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
+  it("starts the chosen agent without another agent's saved model (#12872)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetHelpAssistantSettings.mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      tier: "core" as const,
+      bypassPermissions: false,
+      auditRetention: 7,
+      modelIds: { claude: "opus" },
+      customArgs: "",
+    });
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "chosen-term" } });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("help-choose-agent-codex"));
+    });
+
+    const launch = mockDispatch.mock.calls.find(([id]) => id === "agent.launch");
+    expect(launch?.[1]).toMatchObject({ agentId: "codex" });
+    expect((launch?.[1] as { agentLaunchFlags?: string[] }).agentLaunchFlags ?? []).not.toContain(
+      "opus"
+    );
+  });
+
   it("falls back to settings when no installed agent can run the assistant", () => {
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = {};

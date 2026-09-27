@@ -23,7 +23,10 @@ function soleCatalogOwner(modelId: string): string | undefined {
  * other agents' launches. It moves onto the one assistant-capable built-in
  * agent whose catalog lists it; a model several such catalogs list, a custom ID no catalog lists, and
  * an explicit CLI-default "" can't be attributed and are dropped, which reads
- * as each agent's recommended model. An existing `modelIds` map is
+ * as each agent's recommended model. Attribution is best-effort — a live
+ * catalog may have offered the model to a different agent — but it only ever
+ * lands on an agent whose own catalog lists that model, so it can't produce a
+ * launch that agent can't serve. An existing `modelIds` map is
  * authoritative, so a replay never resurrects a choice the user has since
  * reset.
  */

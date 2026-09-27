@@ -636,6 +636,34 @@ describe("registerHelpAssistantHandlers", () => {
     });
   });
 
+  it("composes successive patches for different agents against what was stored", async () => {
+    let stored: Partial<HelpAssistantSettings> | undefined = { modelIds: { claude: "opus" } };
+    storeMock.get.mockImplementation(() => stored);
+    storeMock.set.mockImplementation((key: string, value: unknown) => {
+      if (key === "helpAssistant.modelIds") {
+        stored = { ...stored, modelIds: value as Record<string, string> };
+      }
+    });
+
+    await setModelIds({ codex: "gpt-6-sol" });
+    await setModelIds({ gemini: "" });
+    await setModelIds({ claude: null });
+
+    expect(stored?.modelIds).toEqual({ codex: "gpt-6-sol", gemini: "" });
+  });
+
+  it("reads own keys that shadow Object.prototype names literally", async () => {
+    storeMock.get.mockReturnValue({
+      modelIds: JSON.parse('{"toString": "custom-model", "__proto__": "opus"}'),
+    });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = (await handler(null)) as HelpAssistantSettings;
+    expect(Object.keys(result.modelIds)).toEqual(["toString"]);
+    expect(result.modelIds.toString).toBe("custom-model");
+  });
+
   it("persists an empty model so the agent launches with the CLI default", async () => {
     await setModelIds({ claude: "" });
 

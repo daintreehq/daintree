@@ -452,17 +452,18 @@ export function DaintreeAssistantSettingsTab() {
   // Resolved model catalog for the currently-preferred agent. `null` means "not
   // loaded / unavailable" (we render nothing); an empty array means "agent has
   // no models" (also nothing). The model picker only appears once a non-empty
-  // catalog resolves for the selected agent.
-  // Tagged with the agent it was read for, so a switch never shows the previous
-  // agent's models (or their synthesized saved choice) for a render.
+  // catalog resolves for the selected agent. A failed read is not "this agent
+  // has no models": the row stays, with Retry. Tagged with the agent it was
+  // read for, so a switch never shows the previous agent's models, saved choice
+  // or failure for a render.
   const [modelCatalog, setModelCatalog] = useState<{
     agentId: string;
     models: AgentModelConfig[];
+    failed: boolean;
   } | null>(null);
-  const resolvedModels =
-    modelCatalog && modelCatalog.agentId === preferredAgentId ? modelCatalog.models : null;
-  // A failed catalog read is not "this agent has no models": the row stays, with Retry.
-  const [modelCatalogFailed, setModelCatalogFailed] = useState(false);
+  const currentCatalog = modelCatalog?.agentId === preferredAgentId ? modelCatalog : null;
+  const resolvedModels = currentCatalog?.models ?? null;
+  const modelCatalogFailed = currentCatalog?.failed ?? false;
   const [modelCatalogAttempt, setModelCatalogAttempt] = useState(0);
 
   useEffect(() => {
@@ -473,17 +474,15 @@ export function DaintreeAssistantSettingsTab() {
     const agentId = preferredAgentId;
     let cancelled = false;
     setModelCatalog(null);
-    setModelCatalogFailed(false);
     agentCapabilitiesClient
       .getResolvedModelList(preferredAgentId)
       .then((catalog) => {
         if (cancelled) return;
-        setModelCatalog({ agentId, models: catalog?.models ?? [] });
+        setModelCatalog({ agentId, models: catalog?.models ?? [], failed: false });
       })
       .catch((err) => {
         if (cancelled) return;
-        setModelCatalog({ agentId, models: [] });
-        setModelCatalogFailed(true);
+        setModelCatalog({ agentId, models: [], failed: true });
         logError("Failed to load model catalog for assistant tab", err);
       });
     return () => {
