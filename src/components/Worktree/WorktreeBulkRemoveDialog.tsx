@@ -1,20 +1,26 @@
-import { AlertTriangle, GitBranch, Trash2 } from "lucide-react";
+import { AlertTriangle, GitBranch } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { cn } from "@/lib/utils";
+import { PathText } from "./PathText";
 import {
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
   buildWorktreeChangeRows,
+  groupAtRiskCommits,
   splitDisplayChanges,
   submoduleCommitsAreCapped,
+  type SubmoduleCommitRow,
   type WorktreeChangeRow,
 } from "./worktreeDeletePreview";
 import {
+  bulkRemoveAheadCount,
   bulkRemoveExclusion,
-  describeBulkRemoveRisks,
+  describeBulkRemoveLosses,
   isBulkRemoveEligible,
+  isBulkRemoveRetryable,
+  type BulkRemoveExclusion,
   type BulkRemoveTarget,
   type UseWorktreeBulkRemoveReturn,
 } from "./useWorktreeBulkRemove";
@@ -33,37 +39,58 @@ const PREVIEW_HINT_THRESHOLD_MS = 5_000;
  * The D2 duty is to show actual content rather than a count, and five rows
  * plus an "…and N more" tail discharges it. Twelve does not survive contact
  * with a twenty-worktree selection: the row the user needs to read scrolls
- * out of a fixed-height list, which is the same "warning nobody saw" failure
- * the count-only preview had.
+ * out of view, which is the same "warning nobody saw" failure the count-only
+ * preview had.
  */
 const BULK_PREVIEW_FILE_LIMIT = 5;
 
-/** Max at-risk commit rows on a blocked target. */
+/** Max at-risk commit rows per submodule on a blocked target. */
 const BULK_COMMIT_LIMIT = 3;
+
+const SECTION_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
+
+/** The detail block under a target's name, aligned past the branch glyph. */
+const DETAIL = "ml-5.5 mt-1 space-y-1.5";
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
 
 /**
  * The teardown this row's delete runs first. A batch confirm is one consent
  * for every operation it runs, so a teardown it would run, skip, or couldn't
- * read is named on the row it belongs to.
+ * read is named on the row it belongs to — after the loss, which is what the
+ * row is read for.
  */
-function TeardownLine({ teardown }: { teardown: BulkRemoveTarget["teardown"] }) {
+function TeardownBlock({
+  teardown,
+  branch,
+}: {
+  teardown: BulkRemoveTarget["teardown"];
+  branch: string;
+}) {
   if (teardown === undefined || teardown === null) return null;
   if (teardown === "unreadable") {
     return (
-      <p className="mt-1 text-xs text-text-secondary" data-testid="bulk-remove-teardown">
+      <p className="text-xs text-text-secondary" data-testid="bulk-remove-teardown">
         Project teardown may also run — its commands couldn&apos;t be read
       </p>
     );
   }
   if (teardown.phases.length === 0) return null;
   return (
-    <div className="mt-1 text-xs text-text-secondary" data-testid="bulk-remove-teardown">
+    <div className="space-y-1.5" data-testid="bulk-remove-teardown">
       {teardown.phases.map((phase) => {
         const noun = phase.phase === "resource-teardown" ? "Resource teardown" : "Project teardown";
         return phase.approved ? (
           <div key={phase.phase}>
-            {noun} runs first, and the removal continues if it fails:
-            <ul className="mt-0.5 space-y-0.5 font-mono text-2xs">
+            <p className="text-xs text-text-secondary">
+              {noun} runs first — the removal continues if it fails
+            </p>
+            <ul
+              aria-label={`${noun} commands for ${branch}`}
+              className="mt-0.5 space-y-0.5 font-mono text-xs text-text-primary"
+            >
               {phase.commands.map((command, index) => (
                 <li key={index} className="[overflow-wrap:anywhere]">
                   {command}
@@ -72,117 +99,119 @@ function TeardownLine({ teardown }: { teardown: BulkRemoveTarget["teardown"] }) 
             </ul>
           </div>
         ) : (
-          <p key={phase.phase}>{noun} will be skipped — its commands haven&apos;t been approved</p>
+          <p key={phase.phase} className="text-xs text-text-secondary">
+            {noun} is skipped — its commands haven&apos;t been approved
+          </p>
         );
       })}
     </div>
   );
 }
 
-function FileRows({ rows, label }: { rows: WorktreeChangeRow[]; label: string }) {
+function FileRows({
+  rows,
+  label,
+  heading,
+  descriptions,
+}: {
+  rows: WorktreeChangeRow[];
+  label: string;
+  /** Visible label, for a list whose relationship to the one above isn't obvious. */
+  heading?: string;
+  /** Submodule pointer rows, labelled with what they are so they don't read as files. */
+  descriptions?: Map<string, string>;
+}) {
   if (rows.length === 0) return null;
   return (
-    <ul
-      aria-label={label}
-      className="mt-1 space-y-0.5 font-mono text-2xs text-text-secondary"
-      data-testid="bulk-remove-file-list"
-    >
+    <div>
+      {heading && <p className="text-xs text-text-secondary">{heading}</p>}
+      <ul
+        aria-label={label}
+        className={cn("space-y-0.5 font-mono text-xs text-text-primary", heading && "mt-0.5")}
+        data-testid="bulk-remove-file-list"
+      >
+        {rows.map((row) => {
+          const description = row.isOverflow ? undefined : descriptions?.get(row.label);
+          return (
+            <li
+              key={row.isOverflow ? "__overflow" : `${row.glyph}:${row.label}`}
+              className={cn("flex gap-2", row.isOverflow && "font-sans text-text-secondary")}
+            >
+              {!row.isOverflow && (
+                <>
+                  <span aria-hidden="true" className="w-3 shrink-0 text-text-secondary">
+                    {row.glyph}
+                  </span>
+                  {/* The glyph column is right for scanning and useless to a
+                      screen reader, which would otherwise hear a list of paths
+                      with no way to tell a deletion from an addition. */}
+                  <span className="sr-only">
+                    {description ? `${row.statusLabel} submodule` : row.statusLabel}:{" "}
+                  </span>
+                </>
+              )}
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {row.isOverflow ? row.label : <PathText value={row.label} />}
+                {description && (
+                  <span aria-hidden="true" className="ml-2 font-sans text-text-secondary">
+                    {description}
+                  </span>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function CommitRows({ rows, label }: { rows: SubmoduleCommitRow[]; label: string }) {
+  return (
+    <ul aria-label={label} className="space-y-0.5 font-mono text-xs text-text-primary">
       {rows.map((row) => (
         <li
-          key={row.isOverflow ? "__overflow" : `${row.glyph}:${row.label}`}
-          className={cn("flex gap-2", row.isOverflow && "italic")}
+          key={row.isOverflow ? "__overflow" : row.oid}
+          className={cn("flex gap-2", row.isOverflow && "font-sans text-text-secondary")}
         >
-          {!row.isOverflow && (
-            <>
-              <span aria-hidden="true" className="w-3 shrink-0">
-                {row.glyph}
-              </span>
-              {/* The glyph column is right for scanning and useless to a
-                  screen reader, which would otherwise hear a list of paths
-                  with no way to tell a deletion from an addition. */}
-              <span className="sr-only">{row.statusLabel}: </span>
-            </>
-          )}
-          <span className="[overflow-wrap:anywhere]">{row.label}</span>
+          {!row.isOverflow && <span className="shrink-0 text-text-secondary">{row.shortOid}</span>}
+          <span className="min-w-0 [overflow-wrap:anywhere]">{row.subject}</span>
         </li>
       ))}
     </ul>
   );
 }
 
-/** The evidence body for one snapshotted target, keyed on its preview state. */
-function TargetBody({ target }: { target: BulkRemoveTarget }) {
+function targetLabel(target: BulkRemoveTarget): string {
+  return target.branch ?? target.name;
+}
+
+/** The name every row leads with, wrapped at separators rather than clipped. */
+function TargetName({ target }: { target: BulkRemoveTarget }) {
+  return (
+    <div className="flex items-start gap-2 text-sm text-text-primary">
+      <GitBranch className="w-3.5 h-3.5 mt-[3px] shrink-0 text-text-secondary" aria-hidden="true" />
+      <span className="min-w-0 font-mono [overflow-wrap:anywhere]">
+        <PathText value={targetLabel(target)} />
+      </span>
+    </div>
+  );
+}
+
+/** What an eligible target's removal discards, then what it runs first. */
+function EligibleBody({ target }: { target: BulkRemoveTarget }) {
   const status = target.status;
-
-  // Deliberately NO `useSkeletonDisplayFloor` here. A minimum-dwell floor holds
-  // the placeholder up after the preview has landed, while `canConfirm` flips
-  // the moment the last row settles — so the primary goes live over a row still
-  // showing a skeleton, which is the "consent without evidence" this whole
-  // surface exists to close. The flash a floor guards against is already
-  // covered: `SkeletonBone`'s pulse carries a 400ms delay, so a fast preview
-  // never renders a visibly animating bone in the first place.
-  if (status.state === "pending") {
-    return (
-      <Skeleton label="Checking for uncommitted work" className="mt-1">
-        <SkeletonBone className="h-3 w-40" />
-      </Skeleton>
-    );
-  }
-
-  const exclusion = bulkRemoveExclusion(target);
-  if (exclusion) {
-    const text =
-      exclusion.kind === "gone"
-        ? "Already removed — excluded"
-        : exclusion.kind === "verify-failed"
-          ? "Couldn't read this worktree's changes — excluded"
-          : exclusion.block === "at-risk-commits"
-            ? // What the check actually measures, so the sentence promises exactly
-              // what clears it: the inventory reads this clone's remote-tracking
-              // refs, so a fetch that proves the remote already has them works
-              // as well as a push.
-              "Excluded — holds submodule commits this clone can't find on a remote"
-            : "The submodule check didn't finish — excluded";
-
-    // A failed parent fetch still carries whatever the submodule arm settled
-    // to, and half an inventory is real evidence — naming the commits is what
-    // tells the user why a retry will not clear this one.
-    const submodules =
-      status.state === "verified"
-        ? status.preview.submodules
-        : status.state === "failed"
-          ? status.submodules
-          : null;
-    const commitRows = buildSubmoduleCommitRows(submodules?.risk ?? null, BULK_COMMIT_LIMIT);
-    const capped = submodules ? submoduleCommitsAreCapped(submodules) : false;
-
-    return (
-      <div className="mt-1 text-xs text-text-secondary" data-testid="bulk-remove-excluded">
-        <span>{text}</span>
-        {commitRows.length > 0 && (
-          <ul
-            aria-label={
-              capped ? "At least these submodule commits are at risk" : "Submodule commits at risk"
-            }
-            className="mt-1 space-y-0.5 font-mono text-2xs"
-          >
-            {commitRows.map((row) => (
-              <li key={row.isOverflow ? "__overflow" : row.oid} className="flex gap-2">
-                {!row.isOverflow && <span className="shrink-0">{row.shortOid}</span>}
-                <span className="[overflow-wrap:anywhere]">{row.subject}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    );
-  }
-
-  // Eligible. `status.state` is "verified" here — `bulkRemoveExclusion`
-  // returns non-null for every other settled state.
   if (status.state !== "verified") return null;
-  const risks = describeBulkRemoveRisks(target);
-  const { files, submoduleRows } = splitDisplayChanges(
+  const branch = targetLabel(target);
+  const losses = describeBulkRemoveLosses(target);
+  const ahead = bulkRemoveAheadCount(target);
+  // A named branch outlives the worktree (`deleteBranch: false`), so its
+  // unpushed commits are kept, not lost; a detached worktree has no branch to
+  // keep them on, so there they are part of the loss.
+  const commitsKept = ahead > 0 && target.branch !== null;
+  if (ahead > 0 && !commitsKept) losses.push(plural(ahead, "unpushed commit"));
+
+  const { files, submoduleRows, pointerDescriptions } = splitDisplayChanges(
     status.preview.changes,
     status.preview.rootPath,
     status.preview.submodules
@@ -196,31 +225,184 @@ function TargetBody({ target }: { target: BulkRemoveTarget }) {
     status.preview.submodules.risk,
     BULK_PREVIEW_FILE_LIMIT
   );
+  const teardown = <TeardownBlock teardown={target.teardown} branch={branch} />;
+  const hasTeardown =
+    target.teardown === "unreadable" ||
+    (target.teardown != null && target.teardown.phases.length > 0);
 
-  const teardownLine = <TeardownLine teardown={target.teardown} />;
-  if (risks.length === 0) return teardownLine;
+  if (losses.length === 0 && !commitsKept && !hasTeardown) return null;
 
   return (
-    <div className="mt-1">
-      {teardownLine}
-      <div
-        className="flex items-start gap-1.5 text-xs text-status-warning"
-        data-testid="bulk-remove-risks"
-      >
-        <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
-        <span>{risks.join(" · ")}</span>
-      </div>
+    <div className={DETAIL}>
+      {losses.length > 0 && (
+        <p
+          className="flex items-start gap-1.5 text-xs text-text-primary"
+          data-testid="bulk-remove-risks"
+        >
+          {/* The glyph is the severity; the sentence stays neutral so it keeps
+              its contrast on every theme. */}
+          <AlertTriangle
+            className="w-3 h-3 mt-0.5 shrink-0 text-status-warning"
+            aria-hidden="true"
+          />
+          <span>
+            <span className="sr-only">Discards </span>
+            {losses.join(" · ")}
+          </span>
+        </p>
+      )}
       {/* A D2 confirm owes a preview of real content; a count alone is
-          insufficient, and the aggregate counts above are exactly what this
-          surface used to stop at. */}
-      <FileRows rows={changeRows} label="Uncommitted work" />
+          insufficient. */}
+      <FileRows
+        rows={changeRows}
+        label={`Uncommitted work in ${branch}`}
+        descriptions={pointerDescriptions}
+      />
       {/* The parent's own status collapses a submodule holding two hundred
           dirty files into one ` M vendor/lib` row, so these cannot be derived
           from the list above. */}
-      <FileRows rows={nestedRows} label="Files inside submodules" />
+      <FileRows
+        rows={nestedRows}
+        label={`Files inside submodules in ${branch}`}
+        heading={changeRows.length > 0 ? "Inside submodules" : undefined}
+      />
+      {commitsKept && (
+        <p className="text-xs text-text-secondary" data-testid="bulk-remove-commits-kept">
+          {plural(ahead, "unpushed commit")} stay on the branch
+        </p>
+      )}
+      {teardown}
     </div>
   );
 }
+
+function exclusionReason(exclusion: BulkRemoveExclusion): string {
+  if (exclusion.kind === "gone") return "Already removed";
+  if (exclusion.kind === "verify-failed") return "Couldn't read this worktree's changes";
+  return exclusion.block === "at-risk-commits"
+    ? // What the check actually measures, so the sentence promises exactly what
+      // clears it: the inventory reads this clone's remote-tracking refs, so a
+      // fetch that proves the remote already has them works as well as a push.
+      "Holds submodule commits this clone can't find on a remote"
+    : "The submodule check didn't finish";
+}
+
+/** Why an excluded target is out of the batch, and what would bring it back. */
+function ExcludedBody({
+  target,
+  exclusion,
+}: {
+  target: BulkRemoveTarget;
+  exclusion: BulkRemoveExclusion;
+}) {
+  const status = target.status;
+  const branch = targetLabel(target);
+  // A failed parent fetch still carries whatever the submodule arm settled
+  // to, and half an inventory is real evidence — naming the commits is what
+  // tells the user why a retry will not clear this one.
+  const submodules =
+    status.state === "verified"
+      ? status.preview.submodules
+      : status.state === "failed"
+        ? status.submodules
+        : null;
+  const risk = submodules?.risk ?? null;
+  const capped = submodules ? submoduleCommitsAreCapped(submodules) : false;
+  // Grouped per submodule before capping, so every module that needs a push
+  // keeps its place in the list.
+  const groups = groupAtRiskCommits(risk).map((group) => ({
+    path: group.path,
+    rows: buildSubmoduleCommitRows(
+      risk
+        ? {
+            ...risk,
+            atRiskCommits: risk.atRiskCommits.filter((commit) =>
+              group.path === null
+                ? !commit.submodulePaths?.length
+                : commit.submodulePaths?.includes(group.path)
+            ),
+          }
+        : null,
+      BULK_COMMIT_LIMIT
+    ),
+  }));
+  const paths = groups.flatMap((group) => (group.path ? [group.path] : []));
+  const isAtRisk = exclusion.kind === "blocked" && exclusion.block === "at-risk-commits";
+
+  return (
+    <div className={DETAIL} data-testid="bulk-remove-excluded">
+      <p className="text-xs text-text-secondary">
+        {exclusionReason(exclusion)}
+        {isAtRisk && groups.length > 0 && (
+          <>
+            {" — push them from inside "}
+            {paths.length === 1 ? (
+              <code className="font-mono text-text-primary [overflow-wrap:anywhere]">
+                <PathText value={paths[0]!} />
+              </code>
+            ) : paths.length > 1 ? (
+              "each submodule below"
+            ) : (
+              "the submodule"
+            )}
+            , or fetch if they&apos;re already there, then remove it again
+          </>
+        )}
+      </p>
+      {groups.map((group) => (
+        <div key={group.path ?? "__unbound"}>
+          {groups.length > 1 && (
+            <p className="font-mono text-xs text-text-secondary [overflow-wrap:anywhere]">
+              {group.path ? (
+                <PathText value={group.path} />
+              ) : (
+                <span className="font-sans">A module store with no checkout</span>
+              )}
+            </p>
+          )}
+          <CommitRows
+            rows={group.rows}
+            label={
+              capped
+                ? `At least these submodule commits are at risk in ${branch}`
+                : `Submodule commits at risk in ${branch}`
+            }
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Section({
+  id,
+  label,
+  count,
+  children,
+  testId,
+}: {
+  id: string;
+  label: string;
+  count: number;
+  children: React.ReactNode;
+  testId: string;
+}) {
+  return (
+    <section aria-labelledby={id} data-testid={testId}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span id={id} role="heading" aria-level={3} className={SECTION_LABEL}>
+          {label}
+        </span>
+        <span className="text-2xs tabular-nums text-text-secondary">{count}</span>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+const TARGET_LIST =
+  "mt-2 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-[var(--border-divider)]";
+const TARGET_ROW = "px-3 py-2.5";
 
 export interface WorktreeBulkRemoveDialogProps {
   bulkRemove: UseWorktreeBulkRemoveReturn;
@@ -239,6 +421,11 @@ export interface WorktreeBulkRemoveDialogProps {
  * (#12416): the evidence body branches on three settled preview states per
  * target, which is a DOM suite's worth of behaviour and does not belong inside
  * a 1,500-line modal.
+ *
+ * The body is grouped by outcome — what will be removed, what is still being
+ * checked, what was left out — because a single list with the exclusions
+ * mixed in made the user reconcile each row against the button's count to
+ * learn what the typed consent was actually for.
  */
 export function WorktreeBulkRemoveDialog({
   bulkRemove,
@@ -251,15 +438,24 @@ export function WorktreeBulkRemoveDialog({
     isPreviewPending,
     hasRetryablePreviews,
     isRetryingPreviews,
+    isExecuting,
     consentKey,
   } = bulkRemove;
 
+  const eligible = targets.filter(isBulkRemoveEligible);
+  const pending = targets.filter((t) => t.status.state === "pending");
+  const excluded = targets.flatMap((target) => {
+    if (target.status.state === "pending") return [];
+    const exclusion = bulkRemoveExclusion(target);
+    return exclusion ? [{ target, exclusion }] : [];
+  });
+  const retryableCount = targets.filter(isBulkRemoveRetryable).length;
   // Everything the user selected that will NOT be removed — the main worktrees
   // filtered out before the dialog opened, plus the targets their own preview
   // excluded. Counting only the latter understated it.
-  const settledExcluded =
-    excludedMainCount +
-    targets.filter((t) => t.status.state !== "pending" && bulkRemoveExclusion(t) !== null).length;
+  const excludedTotal = excludedMainCount + excluded.length;
+  const settled = !isPreviewPending;
+  const nothingToRun = settled && eligibleCount === 0;
 
   // The title names the batch that will actually run, so it cannot promise
   // three removals over a button offering one. While previews are pending the
@@ -268,41 +464,56 @@ export function WorktreeBulkRemoveDialog({
   // Name the entity whenever exactly one will run — including when it is one
   // of several rows, where "1 worktree" over a list of three is the least
   // useful thing the title could say.
-  const namedTarget =
-    titleCount !== 1
-      ? undefined
-      : isPreviewPending
-        ? targets[0]
-        : targets.find(isBulkRemoveEligible);
+  const namedTarget = titleCount !== 1 ? undefined : isPreviewPending ? targets[0] : eligible[0];
   const title = namedTarget
-    ? `Remove '${namedTarget.branch ?? namedTarget.name}'?`
+    ? `Remove '${targetLabel(namedTarget)}'?`
     : titleCount === 0
       ? "Nothing left to remove"
       : `Remove ${titleCount} worktrees?`;
 
   // States the consequence, not generic irreversibility copy: what leaves the
-  // disk is the working tree, and the branch is explicitly what does not.
-  const baseDescription =
-    "Each worktree directory is deleted from disk and the branch worktree association is removed. Uncommitted and untracked files are discarded, including files inside submodules. Branches are kept.";
-  const description =
-    excludedMainCount > 0
-      ? `${baseDescription} ${excludedMainCount} main worktree${excludedMainCount === 1 ? " is" : "s are"} excluded — only non-main worktrees can be removed here.`
-      : baseDescription;
+  // disk is the working tree, the dev server goes with it (the run stops it
+  // first), and the branch is explicitly what does not.
+  const description = `${
+    titleCount === 1 ? "The worktree's directory is" : "Each worktree directory is"
+  } deleted from disk. Uncommitted and untracked files are discarded, including files inside submodules, and a running dev server is stopped first. Branches are kept.`;
 
+  // A count on the button is a promise, so it only carries one once the
+  // previews have settled on it.
   const confirmLabel =
-    eligibleCount === 1 ? "Remove worktree" : `Remove ${eligibleCount} worktrees`;
+    settled && eligibleCount === 1
+      ? "Remove worktree"
+      : settled && eligibleCount > 1
+        ? `Remove ${eligibleCount} worktrees`
+        : "Remove worktrees";
 
   // Says what the primary is waiting on, in the place the user is looking when
-  // they ask — a body-level note is not that place.
-  const hint = isPreviewPending
-    ? "Checking each worktree for uncommitted work"
-    : eligibleCount === 0
-      ? targets.length === 0
-        ? null
-        : "Every selected worktree was excluded"
-      : settledExcluded > 0
-        ? `${settledExcluded} excluded — ${eligibleCount} will be removed`
+  // they ask. The typed gate's own hint comes from `ConfirmDialog`.
+  const hint = isExecuting
+    ? `Removing ${plural(eligibleCount, "worktree")}`
+    : isPreviewPending
+      ? "Checking each worktree for uncommitted work"
+      : nothingToRun && (targets.length > 0 || excludedMainCount > 0)
+        ? "Every selected worktree was excluded"
         : null;
+
+  // The typed attestation is for the work listed above it, so it names that
+  // work rather than repeating that the action is irreversible.
+  const discardsWork = eligible.some(
+    (target) =>
+      describeBulkRemoveLosses(target).length > 0 ||
+      (target.branch === null && bulkRemoveAheadCount(target) > 0)
+  );
+  const preamble = discardsWork
+    ? `Removing ${eligibleCount === 1 ? "this worktree" : `these ${eligibleCount} worktrees`} permanently discards the uncommitted work listed above.`
+    : undefined;
+
+  // One polite line for the whole batch as it settles, so the scope change is
+  // heard without walking the list. Row skeletons carry `aria-busy`, so this
+  // sits outside them.
+  const scopeStatus = isPreviewPending
+    ? `Checking ${plural(targets.length, "worktree")}`
+    : `${eligibleCount} will be removed, ${excludedTotal} excluded`;
 
   return (
     <ConfirmDialog
@@ -314,95 +525,138 @@ export function WorktreeBulkRemoveDialog({
       confirmLabel={confirmLabel}
       cancelLabel="Cancel"
       variant="destructive"
-      // Scrollable per-worktree table of what is about to be deleted — a
-      // dialog, not an alertdialog.
-      hasPreview={targets.length > 0}
+      size="md"
+      // Per-worktree lists of what is about to be deleted — a dialog, not an
+      // alertdialog.
+      hasPreview={targets.length > 0 || excludedMainCount > 0}
       zIndex="nested"
-      // No gate when nothing can run: the typed-name gate is the most emphatic
-      // confirmation the app has, and offering it for a batch of zero asks the
-      // user to attest to an action that has no targets.
-      typedNameTarget={eligibleCount > 0 ? bulkRemove.typedNameTarget : undefined}
-      // Clears a count typed against the skeletons once the evidence that
-      // replaced them is on screen. No cooldown timer is set, so this is purely
-      // the consent reset.
+      // Offered only once every preview has settled on at least one target:
+      // the typed-name gate is the most emphatic confirmation the app has, and
+      // a count typed against skeletons would attest to evidence nobody has
+      // seen yet — including a count the retry may still change.
+      typedNameTarget={settled && eligibleCount > 0 ? bulkRemove.typedNameTarget : undefined}
+      typedNamePreamble={preamble}
+      // Clears a count typed before the evidence last changed. No cooldown
+      // timer is set, so this is purely the consent reset.
       cooldownKey={consentKey}
       confirmDisabled={!bulkRemove.canConfirm}
       hint={hint}
       onConfirm={bulkRemove.handleConfirm}
-      isConfirmLoading={bulkRemove.isExecuting}
+      isConfirmLoading={isExecuting}
     >
-      {targets.length > 0 && (
-        <div
-          className="border border-divider rounded-[var(--radius-md)] max-h-64 overflow-y-auto divide-y divide-[var(--border-divider)]"
-          data-testid="bulk-remove-target-list"
-        >
-          {targets.map((target) => {
-            const excluded = target.status.state !== "pending" && bulkRemoveExclusion(target);
-            return (
-              <div
-                key={target.id}
-                data-testid="bulk-remove-target"
-                className={cn(
-                  "flex flex-col gap-1 px-3 py-2 bg-surface-canvas/40",
-                  excluded && "opacity-60"
-                )}
-              >
-                <div className="flex items-center gap-2 text-sm text-text-primary">
-                  <GitBranch className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
-                  {/* The branch is what truncates, so the branch is what the
-                      tooltip has to reveal — it used to show the path, which
-                      is not the string being clipped. */}
-                  <span
-                    className="font-mono truncate"
-                    title={`${target.branch ?? target.name}\n${target.path}`}
-                  >
-                    {target.branch ?? target.name}
-                  </span>
-                </div>
-                <TargetBody target={target} />
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {/* Sibling to the rows' own `<Skeleton>` wrappers, never inside one:
-          their `aria-busy="true"` silences live-region updates in its subtree.
-          No Cancel of its own: the footer already carries one that is always
-          present, and a second one here vanished out from under the user's
-          focus the moment the previews settled. */}
-      {isPreviewPending && (
-        <SkeletonHint
-          firstThreshold={PREVIEW_HINT_THRESHOLD_MS}
-          data-testid="bulk-remove-preview-hint"
-        />
-      )}
-      {/* `isRetryingPreviews` keeps this mounted through its own re-run: a retry
-          drops every row to pending, clearing `hasRetryablePreviews`, and
-          unmounting the button under the user's click strands focus on
-          `document.body` inside an open dialog. */}
-      {(hasRetryablePreviews || isRetryingPreviews) && (
-        <div className="flex items-center justify-between gap-2 text-xs text-text-secondary">
-          <span>Some worktrees couldn&apos;t be checked and were excluded</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={bulkRemove.handleRetryPreviews}
-            // The handler refuses mid-run anyway; leaving the button live would
-            // report an affordance that silently does nothing.
-            disabled={bulkRemove.isExecuting || isPreviewPending}
-            data-testid="bulk-remove-retry-previews"
+      <span className="sr-only" role="status" aria-live="polite" data-testid="bulk-remove-scope">
+        {scopeStatus}
+      </span>
+      <div className="space-y-5 pt-1">
+        {eligible.length > 0 && (
+          <Section
+            id="bulk-remove-eligible-heading"
+            label="Will be removed"
+            count={eligible.length}
+            testId="bulk-remove-eligible"
           >
-            Retry
-          </Button>
-        </div>
-      )}
-      <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs">
-        <Trash2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-        <span>
-          {eligibleCount > 0
-            ? "This is irreversible. Type the count to confirm."
-            : "Nothing here can be removed. Close this and check the excluded worktrees."}
-        </span>
+            <ul aria-labelledby="bulk-remove-eligible-heading" className={TARGET_LIST}>
+              {eligible.map((target) => (
+                <li key={target.id} data-testid="bulk-remove-target" className={TARGET_ROW}>
+                  <TargetName target={target} />
+                  <EligibleBody target={target} />
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
+
+        {pending.length > 0 && (
+          <Section
+            id="bulk-remove-pending-heading"
+            label="Checking"
+            count={pending.length}
+            testId="bulk-remove-pending"
+          >
+            {/* Deliberately NO `useSkeletonDisplayFloor` here. A minimum-dwell
+                floor holds the placeholder up after the preview has landed,
+                while `canConfirm` flips the moment the last row settles — so
+                the primary goes live over a row still showing a skeleton,
+                which is the "consent without evidence" this surface exists to
+                close. `SkeletonBone`'s pulse carries a 400ms delay, so a fast
+                preview never renders a visibly animating bone anyway. */}
+            <ul aria-labelledby="bulk-remove-pending-heading" className={TARGET_LIST}>
+              {pending.map((target) => (
+                <li key={target.id} data-testid="bulk-remove-target" className={TARGET_ROW}>
+                  <TargetName target={target} />
+                  <Skeleton label="Checking for uncommitted work" className="ml-5.5 mt-1.5">
+                    <SkeletonBone className="h-3 w-40" />
+                  </Skeleton>
+                </li>
+              ))}
+            </ul>
+            {/* Sibling to the rows' own `<Skeleton>` wrappers, never inside
+                one: their `aria-busy="true"` silences live-region updates in
+                its subtree. */}
+            <SkeletonHint
+              firstThreshold={PREVIEW_HINT_THRESHOLD_MS}
+              data-testid="bulk-remove-preview-hint"
+            />
+          </Section>
+        )}
+
+        {(excludedTotal > 0 || isRetryingPreviews) && (
+          <Section
+            id="bulk-remove-excluded-heading"
+            label="Excluded"
+            count={excludedTotal}
+            testId="bulk-remove-excluded-group"
+          >
+            {/* `isRetryingPreviews` keeps this mounted through its own re-run:
+                a retry drops every row to pending, clearing
+                `hasRetryablePreviews`, and unmounting the control under the
+                user's click strands focus inside an open dialog. The banner
+                keeps its action `aria-disabled` (still focusable) while it
+                can't run, and hands focus on if it leaves. */}
+            {(hasRetryablePreviews || isRetryingPreviews) && (
+              <InlineStatusBanner
+                severity="warning"
+                role="status"
+                animated={false}
+                className="mt-2 rounded-[var(--radius-md)]"
+                title={
+                  isRetryingPreviews
+                    ? "Checking again"
+                    : `Couldn't finish checking ${plural(retryableCount, "worktree")}`
+                }
+                action={{
+                  id: "retry-previews",
+                  label: "Retry",
+                  onClick: bulkRemove.handleRetryPreviews,
+                  // The handler refuses mid-run anyway; a live button would
+                  // report an affordance that silently does nothing.
+                  disabled: isExecuting || isPreviewPending,
+                  loading: isRetryingPreviews,
+                }}
+              />
+            )}
+            {(excluded.length > 0 || excludedMainCount > 0) && (
+              <ul aria-labelledby="bulk-remove-excluded-heading" className={TARGET_LIST}>
+                {excluded.map(({ target, exclusion }) => (
+                  <li key={target.id} data-testid="bulk-remove-target" className={TARGET_ROW}>
+                    <TargetName target={target} />
+                    <ExcludedBody target={target} exclusion={exclusion} />
+                  </li>
+                ))}
+                {excludedMainCount > 0 && (
+                  <li className={TARGET_ROW} data-testid="bulk-remove-excluded-main">
+                    <p className="text-sm text-text-primary">
+                      {plural(excludedMainCount, "main worktree")}
+                    </p>
+                    <p className="mt-1 text-xs text-text-secondary">
+                      Only linked worktrees can be removed here
+                    </p>
+                  </li>
+                )}
+              </ul>
+            )}
+          </Section>
+        )}
       </div>
     </ConfirmDialog>
   );

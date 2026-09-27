@@ -130,6 +130,22 @@ function confirmButton(): HTMLButtonElement | null {
     null) as HTMLButtonElement | null;
 }
 
+/** The count each outcome group states beside its heading. */
+function scopeCounts(): { eligible: number; excluded: number } {
+  const count = (testId: string) =>
+    Number(
+      document.querySelector(`[data-testid="${testId}"] [role="heading"] + span`)?.textContent ?? 0
+    );
+  return { eligible: count("bulk-remove-eligible"), excluded: count("bulk-remove-excluded-group") };
+}
+
+/** The banner's Retry, found by its accessible name. */
+function retryButton(): HTMLButtonElement | null {
+  const buttons = Array.from(document.querySelectorAll("button"));
+  return (buttons.find((b) => (b.textContent ?? "").trim() === "Retry") ??
+    null) as HTMLButtonElement | null;
+}
+
 /**
  * `AppDialog.Footer` disables its primary with `aria-disabled` rather than the
  * DOM property, so the button stays focusable and its name stays announced.
@@ -240,7 +256,7 @@ describe("WorktreeBulkRemoveDialog — the preview is the consent (#12416)", () 
     expect(row.querySelector("svg.text-status-warning")).toBeNull();
     expect(document.querySelector('[data-testid="bulk-remove-file-list"]')).toBeNull();
     expect(document.querySelector('[data-testid="bulk-remove-excluded"]')).toBeNull();
-    expect(document.querySelector('[role="status"]')).toBeNull();
+    expect(row.querySelector('[role="status"]')).toBeNull();
     expect((row.textContent ?? "").trim()).toBe("feature/a");
   });
 
@@ -327,17 +343,32 @@ describe("WorktreeBulkRemoveDialog — gating", () => {
     expect(document.body.textContent).toContain("Checking each worktree for uncommitted work");
   });
 
-  it("holds the primary shut on a part-settled batch even once the count is typed", () => {
-    // One target cleared, one still checking — so a typed gate IS on screen
-    // and can be satisfied. The primary must stay closed anyway: consent given
-    // before the last row's evidence lands is consent to something unseen.
+  it("offers no typed gate on a part-settled batch", () => {
+    // One target cleared, one still checking. Consent given before the last
+    // row's evidence lands is consent to something unseen — and the count it
+    // would name can still change when the last row settles.
     const value = renderDialog({
       targets: [target("a"), target("b", { status: { state: "pending" } })],
     });
 
     expect(value.eligibleCount).toBe(1);
-    typeTheCount(value.typedNameTarget);
+    expect(document.querySelector("input")).toBeNull();
     expect(confirmIsDisabled()).toBe(true);
+  });
+
+  it("never states a settled outcome while any preview is still pending", () => {
+    renderDialog({
+      targets: [
+        target("a", { status: { state: "pending" } }),
+        target("b", { status: { state: "pending" } }),
+      ],
+    });
+
+    const body = document.body.textContent ?? "";
+    expect(body).not.toContain("Every selected worktree was excluded");
+    expect(body).not.toContain("Nothing left to remove");
+    // No count on the button until the previews have settled on one.
+    expect(confirmButton()?.textContent ?? "").not.toMatch(/\d/);
   });
 
   it("renders a loading status rather than an empty row while pending", () => {
@@ -376,7 +407,7 @@ describe("WorktreeBulkRemoveDialog — gating", () => {
     // Three rows are listed, but the consent is for the one that will run.
     expect(document.querySelectorAll('[data-testid="bulk-remove-target"]')).toHaveLength(3);
     expect(confirmButton()?.textContent).toContain("Remove worktree");
-    expect(document.body.textContent).toContain("2 excluded — 1 will be removed");
+    expect(scopeCounts()).toEqual({ eligible: 1, excluded: 2 });
 
     // Typing the SELECTED count must not open the gate — only the eligible
     // count does, so the number the user types is the number that runs.
@@ -403,9 +434,7 @@ describe("WorktreeBulkRemoveDialog — exclusions state their reason", () => {
     expect(document.querySelector('[data-testid="bulk-remove-excluded"]')?.textContent).toContain(
       "Couldn't read this worktree's changes"
     );
-    const retry = document.querySelector(
-      '[data-testid="bulk-remove-retry-previews"]'
-    ) as HTMLButtonElement | null;
+    const retry = retryButton();
     expect(retry).not.toBeNull();
     act(() => retry!.click());
     expect(value.handleRetryPreviews).toHaveBeenCalled();
@@ -428,9 +457,7 @@ describe("WorktreeBulkRemoveDialog — exclusions state their reason", () => {
     expect(document.querySelector('[data-testid="bulk-remove-excluded"]')?.textContent).toContain(
       "submodule check didn't finish"
     );
-    const retry = document.querySelector(
-      '[data-testid="bulk-remove-retry-previews"]'
-    ) as HTMLButtonElement | null;
+    const retry = retryButton();
     expect(retry, "a submodule check that never answered has to be retryable").not.toBeNull();
     act(() => retry!.click());
     expect(value.handleRetryPreviews).toHaveBeenCalled();
@@ -452,7 +479,59 @@ describe("WorktreeBulkRemoveDialog — exclusions state their reason", () => {
 
     // That inventory DID answer. Offering Retry would promise a recovery the
     // button does not have.
-    expect(document.querySelector('[data-testid="bulk-remove-retry-previews"]')).toBeNull();
+    expect(retryButton()).toBeNull();
+  });
+
+  it("offers no retry for commits a failed parent read still observed", () => {
+    // The parent status failed, but the submodule walk had already found
+    // commits on no remote. Those refuse the delete whatever a retry of the
+    // parent says, so the row states the push remedy instead.
+    renderDialog({
+      targets: [
+        target("a", {
+          status: {
+            state: "failed",
+            submodules: {
+              status: "unverified",
+              risk: risk({
+                atRiskCommits: [
+                  { oid: "abc1234def", subject: "wip", submodulePaths: ["vendor/lib"] },
+                ],
+              }),
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(retryButton()).toBeNull();
+    const excluded = document.querySelector('[data-testid="bulk-remove-excluded"]')!;
+    expect(excluded.textContent).toContain("can't find on a remote");
+    expect(excluded.textContent).not.toContain("Couldn't read");
+  });
+
+  it("says where to push the commits behind a blocked target", () => {
+    renderDialog({
+      targets: [
+        target("a", {
+          status: verified({
+            submodules: {
+              status: "verified",
+              risk: risk({
+                atRiskCommits: [
+                  { oid: "abc1234def", subject: "wip", submodulePaths: ["vendor/lib"] },
+                ],
+              }),
+            },
+          }),
+        }),
+      ],
+    });
+
+    const excluded = document.querySelector('[data-testid="bulk-remove-excluded"]')!;
+    const text = (excluded.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toMatch(/push them from inside vendor\/lib/);
+    expect(text).toContain("fetch");
   });
 
   it("names the at-risk commits behind a blocked target", () => {
@@ -512,7 +591,10 @@ describe("WorktreeBulkRemoveDialog — the title and the button agree", () => {
       excludedMainCount: 1,
       targets: [target("a"), target("b", { status: { state: "gone" } })],
     });
-    expect(document.body.textContent).toContain("2 excluded — 1 will be removed");
+    expect(scopeCounts()).toEqual({ eligible: 1, excluded: 2 });
+    expect(
+      document.querySelector('[data-testid="bulk-remove-excluded-group"]')?.textContent
+    ).toContain("1 main worktree");
   });
 
   it("offers no typed gate and no removal question when nothing can run", () => {
@@ -524,9 +606,12 @@ describe("WorktreeBulkRemoveDialog — the title and the button agree", () => {
     expect(document.querySelector("input")).toBeNull();
   });
 
-  it("says nothing extra when the whole batch is eligible", () => {
+  it("says only what enables the primary when the whole batch is eligible", () => {
     renderDialog({ targets: [target("a"), target("b")] });
-    expect(document.querySelector('[data-testid="app-dialog-hint"]')).toBeNull();
+    const hint = () => document.querySelector('[data-testid="app-dialog-hint"]');
+    expect(hint()?.textContent).toBe("Type the confirmation above to enable");
+    typeTheCount("2 worktrees");
+    expect(hint()).toBeNull();
   });
 });
 
@@ -550,9 +635,7 @@ describe("WorktreeBulkRemoveDialog — activation", () => {
     const value = renderDialog({
       targets: [target("a", { status: { state: "failed", submodules: null } })],
     });
-    const retry = document.querySelector(
-      '[data-testid="bulk-remove-retry-previews"]'
-    ) as HTMLButtonElement;
+    const retry = retryButton()!;
     act(() => retry.click());
     expect(value.handleRetryPreviews).toHaveBeenCalled();
 
@@ -563,23 +646,24 @@ describe("WorktreeBulkRemoveDialog — activation", () => {
       isPreviewPending: true,
       isRetryingPreviews: true,
     });
-    const afterRetry = document.querySelector(
-      '[data-testid="bulk-remove-retry-previews"]'
-    ) as HTMLButtonElement | null;
+    const afterRetry = retryButton();
     expect(afterRetry, "Retry must survive its own click").not.toBeNull();
-    expect(afterRetry!.disabled).toBe(true);
+    // `aria-disabled`, not `disabled`: a natively disabled button drops the
+    // focus the user's own click put on it.
+    expect(afterRetry!.disabled).toBe(false);
+    expect(afterRetry!.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("disables Retry while the batch is executing", () => {
-    renderDialog({
+    const value = renderDialog({
       targets: [target("a", { status: { state: "failed", submodules: null } })],
       isExecuting: true,
     });
-    const retry = document.querySelector(
-      '[data-testid="bulk-remove-retry-previews"]'
-    ) as HTMLButtonElement | null;
+    const retry = retryButton();
     // The handler refuses mid-run; a live button would advertise a no-op.
-    expect(retry?.disabled).toBe(true);
+    expect(retry?.getAttribute("aria-disabled")).toBe("true");
+    act(() => retry!.click());
+    expect(value.handleRetryPreviews).not.toHaveBeenCalled();
   });
 });
 
@@ -595,7 +679,7 @@ describe("WorktreeBulkRemoveDialog — settled evidence clears earlier consent",
     } as WorktreeState;
   }
 
-  it("clears a count typed against the skeletons when the previews land", async () => {
+  it("offers no typed gate until the last preview lands, then an empty one", async () => {
     // Driven through the REAL hook, because the thing under test is the
     // `consentKey` flip. A static hook value would keep passing if
     // `cooldownKey` were dropped from the dialog entirely.
@@ -636,10 +720,9 @@ describe("WorktreeBulkRemoveDialog — settled evidence clears earlier consent",
     });
     rerender(<WorktreeBulkRemoveDialog bulkRemove={hook.result.current} />);
 
-    // "a" is eligible, "b" is still pending. Type the count now.
+    // "a" is eligible, "b" is still pending: no count can be typed yet.
     expect(hook.result.current.eligibleCount).toBe(1);
-    typeTheCount("1 worktree");
-    expect((document.querySelector("input") as HTMLInputElement).value).toBe("1 worktree");
+    expect(document.querySelector("input")).toBeNull();
 
     // "b" comes back unverifiable, so the eligible count stays 1.
     await act(async () => {
@@ -667,8 +750,129 @@ describe("WorktreeBulkRemoveDialog — copy", () => {
     expect(body).toContain("Branches are kept");
   });
 
-  it("names the excluded main worktrees", () => {
+  it("names the excluded main worktrees in the excluded group", () => {
     renderDialog({ excludedMainCount: 1 });
-    expect(document.body.textContent).toContain("1 main worktree is excluded");
+    const group = document.querySelector('[data-testid="bulk-remove-excluded-group"]');
+    expect(group?.textContent).toContain("1 main worktree");
+    expect(group?.textContent).toContain("Only linked worktrees can be removed here");
+  });
+
+  it("names the dev server the run stops first", () => {
+    renderDialog();
+    expect(document.body.textContent).toContain("a running dev server is stopped first");
+  });
+});
+
+describe("WorktreeBulkRemoveDialog — outcome groups", () => {
+  const mixed = () =>
+    renderDialog({
+      excludedMainCount: 1,
+      targets: [
+        target("a"),
+        target("b", { status: { state: "gone" } }),
+        target("c", { status: { state: "failed", submodules: null } }),
+        target("d", { status: { state: "pending" } }),
+      ],
+    });
+
+  it("files every target under exactly the group its outcome puts it in", () => {
+    const value = mixed();
+    const names = (testId: string) =>
+      Array.from(
+        document.querySelectorAll(`[data-testid="${testId}"] [data-testid="bulk-remove-target"]`)
+      ).map((row) => row.textContent ?? "");
+    const eligible = names("bulk-remove-eligible");
+    const pending = names("bulk-remove-pending");
+    const excluded = names("bulk-remove-excluded-group");
+
+    // Derived from the hook's own classification, not restated per fixture.
+    for (const t of value.targets) {
+      const label = t.branch ?? t.name;
+      const where = [eligible, pending, excluded].filter((group) =>
+        group.some((row) => row.startsWith(label))
+      );
+      expect(where, `${label} must sit in exactly one group`).toHaveLength(1);
+    }
+    expect(eligible).toHaveLength(value.targets.filter(isBulkRemoveEligible).length);
+    expect(pending).toHaveLength(value.targets.filter((t) => t.status.state === "pending").length);
+  });
+
+  it("never fades an excluded row: grouping carries membership, not opacity", () => {
+    mixed();
+    const group = document.querySelector('[data-testid="bulk-remove-excluded-group"]')!;
+    const faded = [group, ...Array.from(group.querySelectorAll("*"))].filter((el) =>
+      /(^|\s)opacity-/.test(el.getAttribute("class") ?? "")
+    );
+    expect(faded).toEqual([]);
+  });
+
+  it("keeps a named branch's unpushed commits out of the loss line", () => {
+    renderDialog({
+      targets: [
+        target("a", {
+          status: verified({ ahead: 2, changes: [change("/repo/a/x.ts", "modified")] }),
+        }),
+      ],
+    });
+    // The branch outlives the worktree, so its commits are not part of what
+    // the removal discards.
+    expect(document.querySelector('[data-testid="bulk-remove-risks"]')?.textContent).not.toMatch(
+      /unpushed/
+    );
+    expect(
+      document.querySelector('[data-testid="bulk-remove-commits-kept"]')?.textContent
+    ).toContain("2 unpushed commits");
+  });
+
+  it("counts a detached worktree's unpushed commits as lost", () => {
+    renderDialog({
+      targets: [target("a", { branch: null, status: verified({ ahead: 2 }) })],
+    });
+    expect(document.querySelector('[data-testid="bulk-remove-risks"]')?.textContent).toContain(
+      "2 unpushed commits"
+    );
+    expect(document.querySelector('[data-testid="bulk-remove-commits-kept"]')).toBeNull();
+  });
+
+  it("labels a submodule pointer row with what it is, so it doesn't read as a file", () => {
+    renderDialog({
+      targets: [
+        target("a", {
+          status: verified({
+            changes: [change("/repo/a/vendor/lib", "modified")],
+            submodules: {
+              status: "verified",
+              risk: risk({
+                entries: [
+                  {
+                    path: "vendor/lib",
+                    state: "moved",
+                    recordedOid: "a".repeat(40),
+                    hasModifiedContent: false,
+                    hasUntrackedContent: false,
+                  },
+                ],
+              }),
+            },
+          }),
+        }),
+      ],
+    });
+    const list = document.querySelector('[data-testid="bulk-remove-file-list"]')!;
+    expect(list.querySelector(".sr-only")?.textContent).toContain("submodule");
+  });
+
+  it("announces the settled scope in one polite line", () => {
+    mixed();
+    const status = document.querySelector('[data-testid="bulk-remove-scope"]')!;
+    expect(status.getAttribute("role")).toBe("status");
+    expect(status.textContent).toBe("Checking 4 worktrees");
+    rerenderDialog({
+      excludedMainCount: 1,
+      targets: [target("a"), target("b", { status: { state: "gone" } })],
+    });
+    expect(document.querySelector('[data-testid="bulk-remove-scope"]')!.textContent).toBe(
+      "1 will be removed, 2 excluded"
+    );
   });
 });

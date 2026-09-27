@@ -10,6 +10,7 @@ import { isMac, isWindows } from "@/lib/platform";
 import {
   buildWorktreeDeletePreview,
   fetchWorktreeTeardownPreview,
+  observedAtRiskCommits,
   settleWorktreeDeleteOutcome,
   splitDisplayChanges,
   submoduleFileCount,
@@ -81,7 +82,14 @@ export function bulkRemoveExclusion(target: BulkRemoveTarget): BulkRemoveExclusi
   // confirm owes a preview of the content it destroys. Falling back to the
   // cached snapshot here is the exact bug this surface is fixing, so the target
   // leaves the batch instead — the rest of the selection still runs.
-  if (status.state === "failed") return { kind: "verify-failed" };
+  if (status.state === "failed") {
+    // Commits the submodule walk DID observe before the parent read failed
+    // refuse the delete on their own, whatever a retry of the parent says — so
+    // this is the push-or-fetch exclusion, not a retryable one.
+    return observedAtRiskCommits(status)
+      ? { kind: "blocked", block: "at-risk-commits" }
+      : { kind: "verify-failed" };
+  }
   const block = worktreeDeleteBlockedBy(status);
   // `force` does not reach these: `guardSubmoduleDelete` throws on both before
   // it reads the flag, so sending them would spend the typed-count consent on a
@@ -127,12 +135,33 @@ export function isBulkRemoveRetryable(target: BulkRemoveTarget): boolean {
  * just written into rendered with no warning at all.
  */
 export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
+  const risks = describeBulkRemoveLosses(target);
+  const aheadCount = bulkRemoveAheadCount(target);
+  if (aheadCount > 0) {
+    risks.push(`${aheadCount} unpushed commit${aheadCount === 1 ? "" : "s"}`);
+  }
+  return risks;
+}
+
+/**
+ * Unpushed commits on this target: fresh when the same `git status
+ * --porcelain -b` reported it, the seed only where git named no upstream, in
+ * which case `ahead` is absent rather than 0.
+ */
+export function bulkRemoveAheadCount(target: BulkRemoveTarget): number {
+  const status = target.status;
+  return status.state === "verified"
+    ? (status.preview.ahead ?? target.aheadCount)
+    : target.aheadCount;
+}
+
+/**
+ * The content the removal itself discards — {@link describeBulkRemoveRisks}
+ * without the unpushed-commit count, which a named branch keeps.
+ */
+export function describeBulkRemoveLosses(target: BulkRemoveTarget): string[] {
   const risks: string[] = [];
   const status = target.status;
-  // Fresh when the same `git status --porcelain -b` reported it; the seed only
-  // where git named no upstream, in which case `ahead` is absent rather than 0.
-  const aheadCount =
-    status.state === "verified" ? (status.preview.ahead ?? target.aheadCount) : target.aheadCount;
   if (status.state === "verified") {
     const { changes, rootPath, submodules } = status.preview;
     // Counted over files only: a submodule's own parent row stands for the
@@ -155,9 +184,6 @@ export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
     if (pointerOnly.length > 0) {
       risks.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
     }
-  }
-  if (aheadCount > 0) {
-    risks.push(`${aheadCount} unpushed commit${aheadCount === 1 ? "" : "s"}`);
   }
   return risks;
 }

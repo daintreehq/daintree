@@ -4,6 +4,7 @@ import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 import { TitleEntity } from "@/components/ui/TitleEntity";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
+import { PathText } from "@/components/Worktree/PathText";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
@@ -1404,25 +1405,6 @@ const SUBMIT_CHECK_LABEL = "Checking current work before deleting";
 
 const CHECKBOX_CLASSES =
   "checkbox-neutral mt-0.5 rounded-[var(--radius-xs)] border-border-strong bg-surface-canvas disabled:opacity-50";
-
-/**
- * A path or branch with a line-break opportunity after every separator, so a
- * long one wraps at a directory boundary instead of mid-name. The wrapper's
- * `overflow-wrap: anywhere` still catches a single segment wider than the box.
- */
-function PathText({ value }: { value: string }) {
-  const parts = value.split(/(?<=[/\\])/);
-  return (
-    <>
-      {parts.map((part, index) => (
-        <Fragment key={index}>
-          {part}
-          {index < parts.length - 1 && <wbr />}
-        </Fragment>
-      ))}
-    </>
-  );
-}
 
 const TEARDOWN_COMMAND_LIMIT = 4;
 

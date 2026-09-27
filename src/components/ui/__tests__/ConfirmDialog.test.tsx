@@ -405,6 +405,78 @@ describe("ConfirmDialog — typed-name gate", () => {
     expect(button.hasAttribute("aria-disabled")).toBe(false);
   });
 
+  it("freezes the typed field while the confirm runs", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="my-repo"
+        isConfirmLoading={true}
+      />
+    );
+    // The attestation on screen has to stay the one that was submitted.
+    expect(findTypedInput().disabled).toBe(true);
+  });
+
+  it("says what enables the primary while the typed gate is unmatched, and only then", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="my-repo"
+      />
+    );
+    const hint = () => document.querySelector('[data-testid="app-dialog-hint"]');
+    expect(hint()?.textContent).toMatch(/above to enable/);
+    fireEvent.change(findTypedInput(), { target: { value: "my-repo" } });
+    expect(hint()).toBeNull();
+  });
+
+  it("lets a caller's own hint outrank the typed-gate hint", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="my-repo"
+        hint="Checking first"
+      />
+    );
+    expect(document.querySelector('[data-testid="app-dialog-hint"]')?.textContent).toBe(
+      "Checking first"
+    );
+  });
+
+  it("states the typed gate's preamble inside the gate", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="my-repo"
+        typedNamePreamble="This discards the work listed above."
+      />
+    );
+    const input = findTypedInput();
+    const describedBy = (input.getAttribute("aria-describedby") ?? "").split(" ");
+    const texts = describedBy.map((id) => document.getElementById(id)?.textContent ?? "");
+    expect(texts).toContain("This discards the work listed above.");
+  });
+
   /**
    * A queue-driven singleton (`McpConfirmDialog`) stays mounted and OPEN while
    * it promotes the next request, so a typed value that survived the swap would

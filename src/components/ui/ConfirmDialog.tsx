@@ -19,6 +19,9 @@ const ARE_YOU_SURE_TITLE_RE = /^\s*are\s+you\s+sure/i;
 
 const CANNOT_BE_UNDONE_BODY_RE = /cannot be undone|can['’]t be undone/i;
 
+/** No identifier interpolated: the gate right above shows the exact string. */
+const TYPED_GATE_HINT = "Type the confirmation above to enable";
+
 const devWarnedKeys = new Set<string>();
 
 export const __devWarnedKeys = devWarnedKeys;
@@ -114,6 +117,12 @@ export type ConfirmDialogProps =
   | (ConfirmDialogBaseProps & {
       variant: "destructive";
       typedNameTarget?: string;
+      /**
+       * Forwarded to {@link TypedNameConfirmInput.preamble}: the concrete
+       * consequence the typed attestation is for, stated inside the gate so it
+       * isn't a second warning box beside it.
+       */
+      typedNamePreamble?: React.ReactNode;
     })
   | (ConfirmDialogBaseProps & {
       variant: "default" | "info";
@@ -145,6 +154,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
+  const typedNamePreamble = props.variant === "destructive" ? props.typedNamePreamble : undefined;
 
   const handleClose = onClose ?? (() => {});
   const [typedValue, setTypedValue] = useState("");
@@ -268,12 +278,18 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             onMatchSubmit={() => {
               void handleConfirm();
             }}
+            preamble={typedNamePreamble}
+            // Frozen while the confirm runs, so the attestation on screen is the
+            // one that was submitted.
+            disabled={isConfirmLoading}
           />
         )}
       </AppDialog.Body>
 
       <AppDialog.Footer
-        hint={hint}
+        // An unmatched gate is the one reason for a disabled primary the caller
+        // can't see, since the typed value lives here.
+        hint={hint ?? (hasTypedNameGate && !isTypedMatched ? TYPED_GATE_HINT : undefined)}
         secondaryAction={{
           label: cancelLabel,
           onClick: handleClose,

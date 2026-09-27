@@ -116,7 +116,10 @@ async function drive(page: Page, name: BulkRemoveFixtureName): Promise<void> {
   await expect(card.getByText(spec.expectText, { exact: true }).first()).toBeVisible();
   if ("typeGate" in spec && spec.typeGate) {
     const input = card.locator('input[type="text"]');
-    await input.fill(spec.value.typedNameTarget);
+    // The field is frozen while a confirm runs, so a snapshot that opens
+    // mid-run can only show it as it stands.
+    if (await input.isDisabled()) return;
+    await input.fill(spec.value.typedNameTarget, { timeout: 10_000 });
     // Blur so the capture shows the resting matched field, not a focus ring.
     await input.evaluate((el) => (el as HTMLInputElement).blur());
   }
@@ -147,16 +150,28 @@ async function shoot(page: Page, file: string): Promise<string> {
   return out;
 }
 
-/** Every body scroll position the list needs, so no row is only reachable in code. */
+/**
+ * The bottom of whatever scrolls the target lists, so no row is only reachable
+ * in code. Walks up from the list to the first ancestor that actually scrolls,
+ * so the shot follows the scroll container wherever the dialog puts it.
+ */
 async function shootScrolled(page: Page, stem: string, written: string[]): Promise<void> {
-  const body = page.locator('[data-testid="bulk-remove-target-list"]').first();
-  if ((await body.count()) === 0) return;
-  const { scrollHeight, clientHeight } = await body.evaluate((el) => ({
-    scrollHeight: el.scrollHeight,
-    clientHeight: el.clientHeight,
-  }));
-  if (scrollHeight <= clientHeight + 4) return;
-  await body.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
+  const scrolled = await page.evaluate(() => {
+    let el = document.querySelector<HTMLElement>('[data-testid="bulk-remove-scope"]');
+    while (el) {
+      const overflowY = getComputedStyle(el).overflowY;
+      if (
+        (overflowY === "auto" || overflowY === "scroll") &&
+        el.scrollHeight > el.clientHeight + 4
+      ) {
+        el.scrollTo({ top: el.scrollHeight });
+        return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  });
+  if (!scrolled) return;
   await page.waitForTimeout(100);
   written.push(await shoot(page, `${stem}--scrolled.png`));
 }
