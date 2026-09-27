@@ -87,7 +87,6 @@ export interface WorktreePaletteProps {
   onQueryChange: (query: string) => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
-  onSelectIndex?: (index: number) => void;
   onSelect: (worktree: WorktreeState) => void;
   onConfirm: () => void;
   onClose: () => void;
@@ -106,7 +105,6 @@ export function WorktreePalette({
   onQueryChange,
   onSelectPrevious,
   onSelectNext,
-  onSelectIndex,
   onSelect,
   onConfirm,
   onClose,
