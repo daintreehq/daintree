@@ -494,6 +494,61 @@ test("terminal info review — diagnostic states", async () => {
       await snap(page, "12-agent-full-tail", { marker: TID.body, locator: DIALOG });
     });
 
+    // 2b. Both disclosures expanded, at the tail. Every other state shows them closed, so
+    //     nothing else proves the revealed rows share the static groups' rail, or that
+    //     the open chevron and count still read as one header.
+    await step("disclosures-open", async () => {
+      await openInfo(page, ids.agentFull);
+      await page.locator(TID.body).first().waitFor({ state: "visible", timeout: 10_000 });
+      for (const name of [/Terminal internals/, /Performance/]) {
+        const header = page.locator(DIALOG).getByRole("button", { name }).first();
+        if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
+        if ((await header.getAttribute("aria-expanded")) !== "true") {
+          throw new Error(`disclosure ${name} did not open`);
+        }
+      }
+      await page.mouse.move(0, 0);
+      await page.evaluate(() => {
+        const scroller = document
+          .querySelector("[data-app-dialog-surface]")
+          ?.querySelector<HTMLElement>(".overflow-y-auto");
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      });
+      await snap(page, "13-disclosures-open", {
+        marker: TID.body,
+        text: "Synchronized output",
+        locator: DIALOG,
+      });
+    });
+
+    // 2c. A collapsed disclosure header under keyboard focus, then under the pointer —
+    //     the two states that decide whether it reads as a control or as a label.
+    await step("disclosure-focus", async () => {
+      await openInfo(page, ids.agentFull);
+      await page.locator(TID.body).first().waitFor({ state: "visible", timeout: 10_000 });
+      const header = page
+        .locator(DIALOG)
+        .getByRole("button", { name: /Terminal internals/ })
+        .first();
+      // Programmatic focus alone does not always paint :focus-visible; a real Tab does.
+      await page.locator(TID.copy).first().focus();
+      await header.focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      await header.scrollIntoViewIfNeeded();
+      const focused = await header.evaluate((el) => el === document.activeElement);
+      if (!focused) throw new Error("disclosure header did not take focus");
+      // Every open starts collapsed; a header that arrives expanded means the previous
+      // step's disclosure state leaked into this opening, and the shot would be mislabelled.
+      if ((await header.getAttribute("aria-expanded")) !== "false") {
+        throw new Error("disclosure arrived expanded on a fresh open");
+      }
+      await snap(page, "14-disclosure-focus", { marker: TID.body, locator: DIALOG });
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await header.hover();
+      await snap(page, "15-disclosure-hover", { marker: TID.body, locator: DIALOG });
+    });
+
     // 3. Sparse plain shell — where the unavailable-value treatment is the whole design.
     await step("plain-sparse", async () => {
       await openInfo(page, ids.plain);
