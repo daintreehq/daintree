@@ -66,3 +66,22 @@ export function buildRunbooksAddendum(): string {
     "",
   ].join("\n");
 }
+
+export const CONFIRMATIONS_BLOCK_START = "<!-- DAINTREE_CONFIRMATIONS_START -->";
+export const CONFIRMATIONS_BLOCK_END = "<!-- DAINTREE_CONFIRMATIONS_END -->";
+
+/**
+ * The session-start correction for the skip preference (#12874). The shared
+ * prompt says confirm-gated actions wait for the user, and it is at its size
+ * budget, so the exception is written here rather than there. It can go stale
+ * if the user changes the setting mid-session; the assistant still sees each
+ * call either run or wait.
+ */
+export function buildConfirmationsAddendum(): string {
+  return [
+    "## Daintree Confirmations",
+    "",
+    "The user has told Daintree not to ask before your actions. Confirm-gated Daintree actions, deleting a worktree included, run as soon as you call them: no dialog, no typed-name check, so don't tell the user to watch for one. This overrides anything above about those actions waiting for the user. Refusals still apply. If a call does wait for a dialog, the user has turned asking back on.",
+    "",
+  ].join("\n");
+}

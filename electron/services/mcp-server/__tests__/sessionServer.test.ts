@@ -150,6 +150,7 @@ function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionS
     sessionTierMap: new Map(),
     sessionWebContentsMap: new Map(),
     sessionOriginMap,
+    getOrigin: vi.fn((sessionId: string) => sessionOriginMap.get(sessionId) ?? "external"),
     isRendererOwnedOrigin: vi.fn((sessionId: string) => {
       const origin = sessionOriginMap.get(sessionId) ?? "external";
       return origin === "help" || origin === "assistant-pane";
@@ -10905,5 +10906,148 @@ describe("assistant close approval (#12881)", () => {
 
     expect(requestCloseApproval).not.toHaveBeenCalled();
     expect(dispatchAction).toHaveBeenCalledWith("terminal.close", { terminalId: "t-a" }, false);
+  });
+});
+
+describe("assistant skip preference (#12874)", () => {
+  function confirmEntry(id: string): ActionManifestEntry {
+    return { ...makeManifestEntry(id), kind: "command", danger: "confirm" };
+  }
+
+  function skipServer(options: {
+    origin: string;
+    skipped: boolean;
+    tier?: "core" | "full";
+    entries?: ActionManifestEntry[];
+  }) {
+    const sessionStore = fakeSessionStore(options.tier ?? "full");
+    sessionStore.sessionOriginMap.set("s", options.origin as never);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const appendAuditRecord = vi.fn();
+    const notifyToolCallStarted = vi.fn();
+    const readAssistantConfirmationsSkipped = vi.fn(() => options.skipped);
+    const deps = fakeDeps({
+      sessionStore,
+      dispatchAction,
+      appendAuditRecord,
+      notifyToolCallStarted,
+      readAssistantConfirmationsSkipped,
+      getCachedManifest: vi.fn(
+        () =>
+          options.entries ?? [confirmEntry("worktree.delete"), makeManifestEntry("worktree.list")]
+      ),
+    });
+    const server = createSessionServer("s", deps);
+    return {
+      server,
+      sessionStore,
+      dispatchAction,
+      appendAuditRecord,
+      notifyToolCallStarted,
+      readAssistantConfirmationsSkipped,
+    };
+  }
+
+  function lastAudit(appendAuditRecord: ReturnType<typeof vi.fn>) {
+    return appendAuditRecord.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+  }
+
+  it("runs a help session's confirm-gated call pre-confirmed and audits it as the skip preference", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    await help.server.connect(makeMockTransport());
+
+    const result = await callTool(help.server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1", force: true },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(help.dispatchAction).toHaveBeenCalledWith(
+      "worktree.delete",
+      expect.objectContaining({ worktreeId: "wt-1", force: true }),
+      true,
+      "skip-preference"
+    );
+    expect(lastAudit(help.appendAuditRecord)).toMatchObject({ authorization: "skip-preference" });
+    // Never going to wait, so the strip must not say it is.
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "worktree.delete", danger: false })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("keeps the dialog while the preference resolves to ask", async () => {
+    const help = skipServer({ origin: "help", skipped: false });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    const call = help.dispatchAction.mock.calls.at(-1)!;
+    expect(call[2]).toBe(false);
+    expect(call[3]).toBeUndefined();
+    expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "worktree.delete", danger: true })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("reads the preference on every call, so switching to always ask applies to the next one", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+    help.readAssistantConfirmationsSkipped.mockReturnValue(false);
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-2" } });
+
+    expect(help.dispatchAction.mock.calls[0][2]).toBe(true);
+    expect(help.dispatchAction.mock.calls[1][2]).toBe(false);
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it.each(["assistant-pane", "external"])(
+    "never applies to a %s session, whatever the preference says",
+    async (origin) => {
+      const other = skipServer({ origin, skipped: true, tier: "core" });
+      await other.server.connect(makeMockTransport());
+
+      await callTool(other.server, { name: "worktree.list", arguments: {} });
+      await callTool(other.server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "wt-1" },
+      });
+
+      expect(other.readAssistantConfirmationsSkipped).not.toHaveBeenCalled();
+      for (const call of other.dispatchAction.mock.calls) {
+        expect(call[3]).not.toBe("skip-preference");
+      }
+      other.sessionStore.grantCache.dispose();
+    }
+  );
+
+  it("does not stamp a safe call, which could never have asked", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.list", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.[2]).toBe(false);
+    expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("fails closed to the dialog when the preference cannot be read", async () => {
+    const help = skipServer({ origin: "help", skipped: true });
+    help.readAssistantConfirmationsSkipped.mockImplementation(() => {
+      throw new Error("store unavailable");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.[2]).toBe(false);
+    consoleError.mockRestore();
+    help.sessionStore.grantCache.dispose();
   });
 });

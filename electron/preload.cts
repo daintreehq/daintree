@@ -20,6 +20,7 @@ import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
   McpBearerIdentity,
+  McpDispatchAuthorization,
   McpSessionOrigin,
   McpApprovalReason,
   McpToolCallStartedPayload,
@@ -3213,6 +3214,7 @@ function buildElectronApi(): ElectronAPI {
           offerSessionApproval?: boolean;
           approvalOnly?: boolean;
           approvalReason?: McpApprovalReason;
+          authorization?: McpDispatchAuthorization;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 

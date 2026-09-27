@@ -11,6 +11,7 @@ import type {
   McpApprovalScope,
   McpAuditResult,
   McpConfirmationDecision,
+  McpDispatchAuthorization,
   McpRuntimeSnapshot,
   McpRuntimeState,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -174,6 +175,8 @@ export interface WorkspaceDispatchOptions {
    * truthfully. Absent reads as `above-tier`, the only reason a pane asks.
    */
   approvalReason?: McpApprovalReason;
+  /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
+  authorization?: McpDispatchAuthorization;
 }
 export type { HelpAssistantTier };
 

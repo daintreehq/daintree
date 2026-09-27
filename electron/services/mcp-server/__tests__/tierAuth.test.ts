@@ -1660,6 +1660,32 @@ describe("filterIntrospectionResultForSession", () => {
         expect(perToolGranted.requiresConfirmation).toBe(true);
       });
 
+      // Mirrors the dispatch gate's skip preference (#12874): a help session
+      // told its confirm-gated calls run straight away must not be told they wait.
+      it("clears requiresConfirmation under the skip preference, except for a per-resolved-target tool", () => {
+        const skipped = policyOf(
+          lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
+            policySnapshot: snapshot({ confirmationsSkipped: true }),
+          })
+        );
+        expect(skipped.requiresConfirmation).toBe(false);
+
+        const asking = policyOf(
+          lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
+            policySnapshot: snapshot({ confirmationsSkipped: false }),
+          })
+        );
+        expect(asking.requiresConfirmation).toBe(true);
+
+        const fanOut = policyOf(
+          lookup(makeEntry({ id: "terminal.closeAll", danger: "confirm" }), {
+            permittedActionIds: new Set([...permitted, "terminal.closeAll"]),
+            policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
+          })
+        );
+        expect(fanOut.requiresConfirmation).toBe(true);
+      });
+
       it("keeps requiresConfirmation set for a per-resolved-target tool (#12121)", () => {
         // `peekNativeGrant` refuses terminal.closeAll, so a grant listing it
         // buys no bypass. Reading the allowlist alone would advertise one the

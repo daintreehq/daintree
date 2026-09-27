@@ -88,9 +88,11 @@ export type McpApprovalReason = "above-tier" | "protected-close";
  * - `user`: the user approved this call in the dialog.
  * - `session-grant`: an earlier "Allow for this session" covered it.
  * - `native-grant`: a native automation grant covered it (#10648).
+ * - `skip-preference`: a help session ran it without asking because the
+ *   assistant inherits "Skip permission prompts" (#12874). Not a confirmation.
  */
 export type McpDispatchAuthorization =
-  "tier" | "project-setting" | "user" | "session-grant" | "native-grant";
+  "tier" | "project-setting" | "user" | "session-grant" | "native-grant" | "skip-preference";
 
 /**
  * Audit-record severity tier. Derived from the dispatch result at record-write

@@ -37,7 +37,10 @@ import {
   type AgentModelConfig,
 } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { assistantSkipsDaintreeConfirmations } from "@shared/utils/assistantDaintreeConfirmations";
 import type {
+  HelpAssistantDaintreeConfirmations,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
   HelpAssistantTier,
@@ -68,6 +71,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   idleHibernateMinutes: "launch",
   tier: "security",
   bypassPermissions: "security",
+  daintreeConfirmations: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
 };
@@ -82,6 +86,7 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "idleHibernateMinutes",
   "tier",
   "bypassPermissions",
+  "daintreeConfirmations",
   "auditRetention",
   "loadGlobalHooksAndServers",
 ];
@@ -180,6 +185,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   idleHibernateMinutes: 5,
   debugLogging: false,
   loadGlobalHooksAndServers: false,
+  daintreeConfirmations: "inherit",
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -282,8 +288,22 @@ interface BypassCopy {
 // Scoped to new sessions because both the tier and the bypass preference are
 // provision-time snapshots — a session already running keeps the tier it was
 // minted with, which the live-status card reports.
-const tierBoundsNewSessions = (tier: HelpAssistantTier): string =>
-  `New sessions are limited to the Daintree actions in the ${TIER_SHORT_LABEL[tier]} tool set. Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them.`;
+// While the assistant inherits "Skip permission prompts" (#12874) those
+// confirmations are skipped too, so the second sentence says that instead.
+const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: boolean): string =>
+  `New sessions are limited to the Daintree actions in the ${TIER_SHORT_LABEL[tier]} tool set. ${
+    confirmationsSkipped
+      ? "Daintree's own confirmations are skipped as well, because Daintree confirmations follows Skip permission prompts."
+      : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
+  }`;
+
+const daintreeConfirmationOptions = (globalSkipPermissions: boolean) => [
+  {
+    value: "inherit",
+    label: `Use Skip permission prompts (currently: ${globalSkipPermissions ? "on" : "off"})`,
+  },
+  { value: "always-ask", label: "Always ask" },
+];
 
 /**
  * Per-agent wording for the one stored `bypassPermissions` preference. The
@@ -319,10 +339,14 @@ const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: strin
  * path appends from (`electron/ipc/handlers/terminal/lifecycle.ts`) — so the
  * subtitle can't drift from what actually reaches the command line.
  */
-function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassCopy | null {
+function getBypassCopy(
+  agentId: string | null,
+  tier: HelpAssistantTier,
+  confirmationsSkipped: boolean
+): BypassCopy | null {
   if (!agentId) return null;
 
-  const safeguard = tierBoundsNewSessions(tier);
+  const safeguard = tierBoundsNewSessions(tier, confirmationsSkipped);
 
   // The assistant has no CLI flag: bypass skips its own confirm sheet via
   // DAINTREE_ASSISTANT_AUTO_APPROVE, which is why it carries no
@@ -444,9 +468,16 @@ export function DaintreeAssistantSettingsTab() {
   // panel still in its empty state. The placeholder makes "no selection" explicit.
   const agentSelectValue = preferredAgentId ?? "";
 
+  const globalSkipPermissions = useAgentSettingsStore(
+    (state) => state.settings?.globalSkipPermissions === true
+  );
+  const confirmationsSkipped = assistantSkipsDaintreeConfirmations(
+    settings.daintreeConfirmations,
+    globalSkipPermissions
+  );
   const bypassCopy = useMemo(
-    () => getBypassCopy(preferredAgentId, settings.tier),
-    [preferredAgentId, settings.tier]
+    () => getBypassCopy(preferredAgentId, settings.tier, confirmationsSkipped),
+    [preferredAgentId, settings.tier, confirmationsSkipped]
   );
 
   // Resolved model catalog for the currently-preferred agent. `null` means "not
@@ -859,6 +890,11 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ bypassPermissions: !settings.bypassPermissions });
   };
 
+  const setDaintreeConfirmations = (value: string) => {
+    if (value !== "inherit" && value !== "always-ask") return;
+    void persist({ daintreeConfirmations: value as HelpAssistantDaintreeConfirmations });
+  };
+
   const toggleDebugLogging = () => {
     void persist({ debugLogging: !settings.debugLogging });
   };
@@ -1210,7 +1246,7 @@ export function DaintreeAssistantSettingsTab() {
 
       <SettingsSection
         title="Security"
-        description="How much of Daintree the assistant can reach, and whether to bypass the agent's own confirmation gate"
+        description="How much of Daintree the assistant can reach, and which confirmations it skips"
       >
         {saveError("security")}
         <SettingsGroup>
@@ -1253,6 +1289,17 @@ export function DaintreeAssistantSettingsTab() {
               <div className="text-xs text-text-secondary select-text">{bypassCopy.warning}</div>
             </div>
           )}
+
+          <SettingsSelect
+            label="Daintree confirmations"
+            description="Whether Daintree asks before the assistant runs an action like deleting a worktree. Following Skip permission prompts, those actions run without asking while it's on and ask while it's off."
+            value={settings.daintreeConfirmations}
+            onValueChange={setDaintreeConfirmations}
+            options={daintreeConfirmationOptions(globalSkipPermissions)}
+            disabled={settingsUnavailable}
+            isModified={settings.daintreeConfirmations !== DEFAULT_SETTINGS.daintreeConfirmations}
+            onReset={() => setDaintreeConfirmations(DEFAULT_SETTINGS.daintreeConfirmations)}
+          />
 
           {/* The inventory comes last so opening it never pushes the bypass switch away
               from the tier it works with. */}

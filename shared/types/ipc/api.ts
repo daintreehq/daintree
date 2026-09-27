@@ -2132,6 +2132,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * `above-tier`.
          */
         approvalReason?: import("./mcpServer.js").McpApprovalReason;
+        /**
+         * What pre-authorized a `confirmed` dispatch, set only by main. Only
+         * `skip-preference` also waives the typed-name gate on a force delete
+         * (#12874); anything else keeps it.
+         */
+        authorization?: import("./mcpServer.js").McpDispatchAuthorization;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2559,6 +2565,14 @@ export type HelpAssistantAuditRetention = 7 | 30 | 0;
 
 export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
 
+/**
+ * Whether the assistant's confirm-gated Daintree actions ask first (#12874).
+ * `inherit` follows the global "Skip permission prompts" setting; `always-ask`
+ * keeps Daintree's dialog regardless. There is deliberately no value that
+ * skips while the global setting is off.
+ */
+export type HelpAssistantDaintreeConfirmations = "inherit" | "always-ask";
+
 export interface HelpAssistantSettings {
   /** Allow the help assistant to search Daintree documentation. Defaults to true. */
   docSearch: boolean;
@@ -2628,6 +2642,12 @@ export interface HelpAssistantSettings {
    * Defaults to false.
    */
   loadGlobalHooksAndServers: boolean;
+  /**
+   * Whether help sessions' `danger: "confirm"` Daintree actions skip the host
+   * confirmation while the global "Skip permission prompts" is on. Read per
+   * dispatch, not snapshotted at launch. Defaults to `"inherit"`.
+   */
+  daintreeConfirmations: HelpAssistantDaintreeConfirmations;
 }
 
 /**

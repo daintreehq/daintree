@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DAINTREE_RUNBOOKS_MCP_URL,
   RUNBOOKS_MCP_URL_ENV_VAR,
+  buildConfirmationsAddendum,
   buildRunbooksAddendum,
   resolveRunbooksMcpUrl,
 } from "../helpSessionRunbooks.js";
@@ -70,5 +71,14 @@ describe("buildRunbooksAddendum", () => {
   it("follows only selected runbooks", () => {
     expect(text).toContain("`selected: true`");
     expect(text).toContain("None selected");
+  });
+});
+
+describe("buildConfirmationsAddendum (#12874)", () => {
+  it("overrides the shared prompt's promise that confirm-gated actions wait", () => {
+    const note = buildConfirmationsAddendum();
+    expect(note).toContain("## Daintree Confirmations");
+    expect(note).toContain("no typed-name check");
+    expect(note).toContain("Refusals still apply");
   });
 });

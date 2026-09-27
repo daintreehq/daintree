@@ -16,6 +16,8 @@ import {
   hasAssistantMcpImplementation,
 } from "../../shared/config/agentRegistry.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
+import type { HelpAssistantDaintreeConfirmations } from "../../shared/types/ipc/api.js";
+import { assistantSkipsDaintreeConfirmations } from "../../shared/utils/assistantDaintreeConfirmations.js";
 import {
   DEFAULT_HELP_ASSISTANT_TIER,
   normalizeHelpAssistantTier,
@@ -28,10 +30,13 @@ import {
   getScratchDirForSession,
 } from "./AssistantScratchService.js";
 import {
+  CONFIRMATIONS_BLOCK_END,
+  CONFIRMATIONS_BLOCK_START,
   DAINTREE_DOCS_MCP_URL,
   RUNBOOKS_BLOCK_END,
   RUNBOOKS_BLOCK_START,
   RUNBOOKS_MCP_SERVER_NAME,
+  buildConfirmationsAddendum,
   buildRunbooksAddendum,
   resolveRunbooksMcpUrl,
 } from "./helpSessionRunbooks.js";
@@ -1317,6 +1322,14 @@ export class HelpSessionService {
         // of accumulating duplicate stanzas.
         await this.writeScratchAddendum(sessionPath, scratchPath);
         await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings));
+        await this.writeConfirmationsAddendum(
+          sessionPath,
+          settings.daintreeControl &&
+            assistantSkipsDaintreeConfirmations(
+              settings.daintreeConfirmations,
+              store.get("agentSettings")?.globalSkipPermissions
+            )
+        );
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
         // only project-level observations go in — never a lane's focus.
@@ -2306,6 +2319,7 @@ export class HelpSessionService {
     bypassPermissions: boolean;
     debugLogging: boolean;
     loadGlobalHooksAndServers: boolean;
+    daintreeConfirmations: HelpAssistantDaintreeConfirmations;
   } {
     const stored = (store.get("helpAssistant") as Record<string, unknown> | undefined) ?? {};
     // Read-time migration from the legacy `skipPermissions` boolean. This
@@ -2337,6 +2351,8 @@ export class HelpSessionService {
       // Opt-in only: anything but an explicit stored `true` keeps user MCP
       // servers and hooks out of the session.
       loadGlobalHooksAndServers: stored.loadGlobalHooksAndServers === true,
+      daintreeConfirmations:
+        stored.daintreeConfirmations === "always-ask" ? "always-ask" : "inherit",
     };
   }
 
@@ -2868,6 +2884,21 @@ export class HelpSessionService {
   private async writeRunbooksAddendum(sessionPath: string, enabled: boolean): Promise<void> {
     const markers = { start: RUNBOOKS_BLOCK_START, end: RUNBOOKS_BLOCK_END };
     const body = enabled ? buildRunbooksAddendum() : "";
+    await Promise.all(
+      ["CLAUDE.md", "AGENTS.md"].map((name) =>
+        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
+      )
+    );
+  }
+
+  /**
+   * Tells a session whose confirm-gated calls will skip the dialog that they
+   * will (#12874), and drops the note when they won't. Unlike the runbook
+   * slot it has no position to hold: it overrides by what it says, not where.
+   */
+  private async writeConfirmationsAddendum(sessionPath: string, skipped: boolean): Promise<void> {
+    const markers = { start: CONFIRMATIONS_BLOCK_START, end: CONFIRMATIONS_BLOCK_END };
+    const body = skipped ? buildConfirmationsAddendum() : null;
     await Promise.all(
       ["CLAUDE.md", "AGENTS.md"].map((name) =>
         this.writeManagedBlock(path.join(sessionPath, name), markers, body)

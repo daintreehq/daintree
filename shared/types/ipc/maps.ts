@@ -1565,6 +1565,8 @@ export interface IpcEventMap {
     offerSessionApproval?: boolean;
     approvalOnly?: boolean;
     approvalReason?: import("./mcpServer.js").McpApprovalReason;
+    /** What pre-authorized a `confirmed` dispatch (#12874); set only by main. */
+    authorization?: import("./mcpServer.js").McpDispatchAuthorization;
   };
 
   /**

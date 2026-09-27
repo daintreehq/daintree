@@ -177,6 +177,8 @@ import {
   DaintreeAssistantSettingsTab,
   formatGrantRemaining,
 } from "../DaintreeAssistantSettingsTab";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { DEFAULT_AGENT_SETTINGS } from "@shared/types/agentSettings";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
 import {
   HELP_TIER_CUMULATIVE,
@@ -491,6 +493,74 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "unless an automation grant covers them");
     expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
       bypassPermissions: true,
+    });
+  });
+
+  describe("Daintree confirmations (#12874)", () => {
+    afterEach(() => {
+      useAgentSettingsStore.setState({ settings: null });
+    });
+
+    it("names the live global setting in the inherit option", async () => {
+      useAgentSettingsStore.setState({
+        settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: true },
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree confirmations");
+      expect(container.textContent).toContain("Use Skip permission prompts (currently: on)");
+    });
+
+    it("says Daintree's confirmations are skipped too when that is in effect", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      useAgentSettingsStore.setState({
+        settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: true },
+      });
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: true,
+          auditRetention: 7,
+          customArgs: "",
+        }),
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree's own confirmations are skipped as well");
+      expect(container.textContent).not.toContain("unless an automation grant covers them");
+    });
+
+    it("keeps the dialog copy while the assistant is set to always ask", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      useAgentSettingsStore.setState({
+        settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: true },
+      });
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: true,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "always-ask",
+        }),
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "unless an automation grant covers them");
+      expect(container.textContent).toContain("Always ask");
     });
   });
 
