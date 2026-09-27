@@ -35,6 +35,14 @@ export const MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL = 8;
  * local client sends at once; plugin activation and roster discovery come after.
  */
 const PLUGIN_MCP_HANDSHAKE_TIMEOUT_MS = 10_000;
+/**
+ * How long a request on a credential held by a plugin reload waits for the
+ * reload to be judged. A rebuild normally settles well inside this; past it the
+ * request is answered 503 and the client retries.
+ */
+const PLUGIN_MCP_RELOAD_WAIT_MS = 15_000;
+/** Requests one credential may have parked on a reload at once; the rest get 503 now. */
+export const MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL = 8;
 
 export interface PluginMcpRouteDeps {
   /** Whether the plugin instance is loaded right now (`PluginService.hasPlugin`). */
@@ -47,6 +55,7 @@ export interface PluginMcpRouteDeps {
   endpointRegistry?: AgentMcpEndpointRegistry;
   idleTimeoutMs?: number;
   handshakeTimeoutMs?: number;
+  reloadWaitMs?: number;
   callTimeoutMs?: number;
   maxResultBytes?: number;
 }
@@ -144,9 +153,13 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly endpoints: AgentMcpEndpointRegistry;
   private readonly idleTimeoutMs: number;
   private readonly handshakeTimeoutMs: number;
+  private readonly reloadWaitMs: number;
+  /** Requests parked on a reload, by credential, each with its way out. */
+  private readonly parked = new Map<string, Set<AbortController>>();
   private readonly callTimeoutMs: number | undefined;
   private readonly maxResultBytes: number | undefined;
   private readonly offRevoked: () => void;
+  private readonly offKept: () => void;
   /**
    * Bumped by {@link closeAllSessions}, so a handshake still in flight when the
    * listener stops cannot file a session after the sweep that should have
@@ -162,12 +175,26 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     this.endpoints = deps.endpointRegistry ?? agentMcpEndpointRegistry;
     this.idleTimeoutMs = deps.idleTimeoutMs ?? MCP_SSE_IDLE_TIMEOUT_MS;
     this.handshakeTimeoutMs = deps.handshakeTimeoutMs ?? PLUGIN_MCP_HANDSHAKE_TIMEOUT_MS;
+    this.reloadWaitMs = deps.reloadWaitMs ?? PLUGIN_MCP_RELOAD_WAIT_MS;
     this.callTimeoutMs = deps.callTimeoutMs;
     this.maxResultBytes = deps.maxResultBytes;
     // Grants are deleted before this fires, so any request racing the close
     // already fails authentication; this only has to reap what is open.
     this.offRevoked = this.grants.onRevoked((revoked) => {
       for (const grant of revoked) this.closeCredentialSessions(grant.credentialId);
+    });
+    // The reload's roster changes may have reached a client while its
+    // credential was held, or not at all (a lazy plugin registers nothing until
+    // asked). Once the credential is kept, tell its sessions to list again.
+    this.offKept = this.grants.onKept((kept) => {
+      for (const grant of kept) {
+        for (const sessionId of this.sessionsByCredential.get(grant.credentialId) ?? []) {
+          this.sessions
+            .get(sessionId)
+            ?.server.sendToolListChanged()
+            .catch(() => {});
+        }
+      }
     });
   }
 
@@ -188,6 +215,10 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
 
   closeAllSessions(): void {
     this.epoch += 1;
+    // Parked requests wake to the epoch bump and the re-checks after it.
+    for (const waits of this.parked.values()) {
+      for (const wait of waits) wait.abort();
+    }
     for (const credentialId of [...this.pendingByCredential.keys()]) {
       this.abandonHandshakes(credentialId);
     }
@@ -197,6 +228,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   /** Stop listening for revocations and close everything. For tests and shutdown. */
   dispose(): void {
     this.offRevoked();
+    this.offKept();
     this.closeAllSessions();
   }
 
@@ -234,6 +266,15 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       return;
     }
 
+    // Mid-reload: the plugin is between generations and the credential is
+    // waiting to be judged against the new one. Park the request rather than
+    // fail it — a client refetching its tool list on the reload's
+    // list_changed then gets the new roster, not an error. The re-reads below
+    // catch a credential the reload revoked.
+    if (this.grants.isHeld(grant.credentialId)) {
+      await this.park(grant.credentialId, res);
+    }
+
     let loaded = false;
     try {
       loaded = await this.isPluginLoaded(grant.pluginInstanceId);
@@ -246,6 +287,12 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       writeText(res, 401, "Unauthorized", {
         "WWW-Authenticate": 'Bearer realm="Daintree plugin MCP"',
       });
+      return;
+    }
+    // Still (or newly) held: neither generation may serve this credential until
+    // the new one has been judged. Transient, so its sessions stay open.
+    if (this.grants.isHeld(grant.credentialId)) {
+      writeText(res, 503, "Plugin is reloading", { "Retry-After": "1" });
       return;
     }
     if (!loaded || !this.isGrantAllowed(grant)) {
@@ -327,6 +374,33 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     }
   }
 
+  /**
+   * Wait out a reload holding this credential, bounded in time and in how many
+   * of its requests may wait at once, and given up when the client goes away or
+   * the listener stops. The caller re-checks everything afterwards.
+   */
+  private async park(credentialId: string, res: http.ServerResponse): Promise<void> {
+    let waits = this.parked.get(credentialId);
+    if (!waits) {
+      waits = new Set();
+      this.parked.set(credentialId, waits);
+    }
+    if (waits.size >= MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL) return;
+    const wait = new AbortController();
+    const onClose = (): void => wait.abort();
+    res.once("close", onClose);
+    waits.add(wait);
+    try {
+      await this.grants.whenNotHeld(credentialId, this.reloadWaitMs, wait.signal);
+    } finally {
+      res.off("close", onClose);
+      waits.delete(wait);
+      if (waits.size === 0 && this.parked.get(credentialId) === waits) {
+        this.parked.delete(credentialId);
+      }
+    }
+  }
+
   private authenticate(req: http.IncomingMessage): PluginMcpGrant | null {
     const token = extractBearerToken(req.headers.authorization ?? "");
     if (token === null) return null;
@@ -356,6 +430,8 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       serverName: grant.serverName,
       caller,
       sessionSignal: lifetime.signal,
+      isCallerServable: () =>
+        this.grants.isLive(grant.credentialId) && !this.grants.isHeld(grant.credentialId),
       activatePlugin: this.activatePlugin,
       endpointRegistry: this.endpoints,
       ...(this.callTimeoutMs !== undefined ? { callTimeoutMs: this.callTimeoutMs } : {}),

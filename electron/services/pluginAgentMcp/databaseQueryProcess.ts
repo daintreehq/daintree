@@ -9,6 +9,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Children alive at once, across every plugin and session. */
 export const MAX_CONCURRENT_DATABASE_PROCESSES = 2;
 
+/**
+ * Calls that may wait for a slot at once. A waiting call gives up with its own
+ * signal (the tool call's timeout), so this only bounds how many can pile up.
+ */
+export const MAX_QUEUED_DATABASE_CALLS = 8;
+
 /** How long a child that already answered gets to exit before it is killed. */
 const EXIT_GRACE_MS = 2_000;
 
@@ -65,6 +71,18 @@ const defaultDeps: DatabaseProcessDeps = {
 
 let alive = 0;
 
+interface QueuedCall {
+  start: () => void;
+}
+
+const queued: QueuedCall[] = [];
+
+/** Start the longest-waiting call if a slot is free. Same turn, so nothing jumps the queue. */
+function admitNext(): void {
+  if (alive >= MAX_CONCURRENT_DATABASE_PROCESSES) return;
+  queued.shift()?.start();
+}
+
 function codedError(code: string | null, message: string): Error {
   const error = new Error(message) as Error & { code?: string };
   if (code) error.code = code;
@@ -79,6 +97,9 @@ function abortReason(signal: AbortSignal): Error {
  * Run one database tool call in a fresh child and settle with its value. The
  * child is killed as soon as `signal` aborts, and its slot is held until it has
  * actually exited, so an aborted runaway query still counts against the limit.
+ *
+ * With every slot taken the call waits its turn, first come first served, for
+ * as long as `signal` allows; only a full queue answers `DB_BUSY` straight away.
  */
 export function runDatabaseToolInProcess(
   request: DatabaseToolRequest,
@@ -86,18 +107,49 @@ export function runDatabaseToolInProcess(
   deps: DatabaseProcessDeps = defaultDeps
 ): Promise<unknown> {
   if (signal.aborted) return Promise.reject(abortReason(signal));
-  if (alive >= MAX_CONCURRENT_DATABASE_PROCESSES) {
+  if (alive < MAX_CONCURRENT_DATABASE_PROCESSES && queued.length === 0) {
+    return startInProcess(request, signal, deps);
+  }
+  if (queued.length >= MAX_QUEUED_DATABASE_CALLS) {
     return Promise.reject(
       codedError(
         "DB_BUSY",
-        "DB_BUSY: other database queries are still running. Wait for them to finish and retry."
+        "DB_BUSY: too many database queries are already running or waiting. Wait for them to finish and retry."
       )
     );
+  }
+  return new Promise<unknown>((resolve, reject) => {
+    const call: QueuedCall = {
+      start: () => {
+        signal.removeEventListener("abort", onAbort);
+        startInProcess(request, signal, deps).then(resolve, reject);
+      },
+    };
+    const onAbort = (): void => {
+      const index = queued.indexOf(call);
+      if (index !== -1) queued.splice(index, 1);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    queued.push(call);
+  });
+}
+
+function startInProcess(
+  request: DatabaseToolRequest,
+  signal: AbortSignal,
+  deps: DatabaseProcessDeps
+): Promise<unknown> {
+  // Either early exit leaves the slot this call was handed unused; pass it on.
+  if (signal.aborted) {
+    admitNext();
+    return Promise.reject(abortReason(signal));
   }
   let child: DatabaseChildProcess;
   try {
     child = deps.fork();
   } catch (error) {
+    admitNext();
     return Promise.reject(error);
   }
   alive += 1;
@@ -113,6 +165,7 @@ export function runDatabaseToolInProcess(
       if (released) return;
       released = true;
       alive -= 1;
+      admitNext();
     };
 
     const kill = (): void => {

@@ -57,6 +57,15 @@ export class PluginMcpGrantRegistry {
   private readonly byDigest = new Map<string, PluginMcpGrant>();
   private readonly byCredentialId = new Map<string, PluginMcpGrant>();
   private readonly listeners = new Set<RevokeListener>();
+  /**
+   * Grants whose plugin instance is mid-reload, by instance: the declared agent
+   * surface of the generation they were issued against, and which credentials
+   * the hold covers. A held grant still authenticates — its sessions stay open —
+   * but reaches no plugin code until the next generation has been judged.
+   */
+  private readonly held = new Map<string, { surface: string; credentialIds: Set<string> }>();
+  private readonly heldWaiters = new Set<() => void>();
+  private readonly keptListeners = new Set<(grants: readonly PluginMcpGrant[]) => void>();
 
   /** Mint a grant. The returned token is the only copy of the bearer; hand it to the launch and drop it. */
   issue(
@@ -126,6 +135,104 @@ export class PluginMcpGrantRegistry {
     return this.revokeWhere((grant) => grant.terminalId === terminalId, "terminal-exited");
   }
 
+  /**
+   * Suspend every grant for an instance that is about to reload, instead of
+   * revoking it. The next generation inherits nothing on its own:
+   * {@link releasePlugin} must judge it, and anything but the same declared
+   * surface revokes. A second hold before the release keeps the first surface —
+   * the credentials were issued against that one, not an intermediate.
+   */
+  holdPlugin(pluginInstanceId: string, surface: string): void {
+    const credentialIds = new Set(
+      this.filter((grant) => grant.pluginInstanceId === pluginInstanceId).map(
+        (grant) => grant.credentialId
+      )
+    );
+    const existing = this.held.get(pluginInstanceId);
+    if (existing) {
+      for (const id of credentialIds) existing.credentialIds.add(id);
+      return;
+    }
+    if (credentialIds.size === 0) return;
+    this.held.set(pluginInstanceId, { surface, credentialIds });
+  }
+
+  /**
+   * Settle a hold. `surface` is the reloaded generation's declared agent
+   * surface, or null when no generation came back; the held grants survive only
+   * when it matches the one they were issued against. Returns what was revoked.
+   */
+  releasePlugin(pluginInstanceId: string, surface: string | null): PluginMcpGrant[] {
+    const hold = this.held.get(pluginInstanceId);
+    if (!hold) return [];
+    this.held.delete(pluginInstanceId);
+    // Revoked before any waiter resumes, so a request parked on the hold wakes
+    // to a dead credential rather than slipping through first.
+    const kept = surface !== null && surface === hold.surface;
+    const revoked = kept
+      ? []
+      : this.revokeWhere((grant) => hold.credentialIds.has(grant.credentialId), "plugin-unloaded");
+    this.wakeHeldWaiters();
+    if (kept) {
+      const survivors = this.filter((grant) => hold.credentialIds.has(grant.credentialId));
+      if (survivors.length > 0) {
+        for (const listener of this.keptListeners) {
+          try {
+            listener(survivors);
+          } catch (err) {
+            console.error("[PluginAgentMcp] kept listener threw:", err);
+          }
+        }
+      }
+    }
+    return revoked;
+  }
+
+  /**
+   * Resolves once `credentialId` is no longer held — kept or revoked — or after
+   * `timeoutMs`, or when `signal` aborts, whichever is first. Re-check {@link isHeld} and
+   * {@link isLive} afterwards; this only says the wait is over.
+   */
+  whenNotHeld(credentialId: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (!this.isHeld(credentialId) || signal?.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (!this.isHeld(credentialId)) done();
+      };
+      const done = (): void => {
+        clearTimeout(timer);
+        this.heldWaiters.delete(check);
+        signal?.removeEventListener("abort", done);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      timer.unref?.();
+      this.heldWaiters.add(check);
+      signal?.addEventListener("abort", done, { once: true });
+    });
+  }
+
+  /**
+   * Settle every hold on an instance `matches` as "nothing came back", without
+   * waiting for the reload that placed it. For teardown that cannot wait on a
+   * reload stuck behind filesystem work: a close, or the service going away.
+   */
+  revokeHeld(matches: (pluginInstanceId: string) => boolean): PluginMcpGrant[] {
+    const revoked: PluginMcpGrant[] = [];
+    for (const pluginInstanceId of [...this.held.keys()]) {
+      if (matches(pluginInstanceId)) revoked.push(...this.releasePlugin(pluginInstanceId, null));
+    }
+    return revoked;
+  }
+
+  /** Whether a live credential is suspended by a reload still in progress. */
+  isHeld(credentialId: string): boolean {
+    for (const hold of this.held.values()) {
+      if (hold.credentialIds.has(credentialId)) return true;
+    }
+    return false;
+  }
+
   revokePlugin(pluginInstanceId: string): PluginMcpGrant[] {
     return this.revokeWhere(
       (grant) => grant.pluginInstanceId === pluginInstanceId,
@@ -159,12 +266,24 @@ export class PluginMcpGrantRegistry {
     return this.revokeWhere(() => true, reason);
   }
 
+  /** Fires once per release that kept a reload's held grants, with the grants it kept. */
+  onKept(listener: (grants: readonly PluginMcpGrant[]) => void): () => void {
+    this.keptListeners.add(listener);
+    return () => {
+      this.keptListeners.delete(listener);
+    };
+  }
+
   /** Fires after grants are deleted, once per revocation batch, only when the batch is non-empty. */
   onRevoked(listener: RevokeListener): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  private wakeHeldWaiters(): void {
+    for (const check of [...this.heldWaiters]) check();
   }
 
   private filter(predicate: (grant: PluginMcpGrant) => boolean): PluginMcpGrant[] {
@@ -180,7 +299,12 @@ export class PluginMcpGrantRegistry {
     for (const grant of revoked) {
       this.byDigest.delete(grant.bearerSha256);
       this.byCredentialId.delete(grant.credentialId);
+      const hold = this.held.get(grant.pluginInstanceId);
+      if (hold?.credentialIds.delete(grant.credentialId) && hold.credentialIds.size === 0) {
+        this.held.delete(grant.pluginInstanceId);
+      }
     }
+    this.wakeHeldWaiters();
     for (const listener of this.listeners) {
       try {
         listener(revoked, reason);

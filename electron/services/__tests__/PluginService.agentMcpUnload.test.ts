@@ -19,6 +19,7 @@ import type { LoadedPlugin } from "../plugin/PluginServiceTypes.js";
 import { makeProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
+import type { ProjectPluginControllerDeps } from "../plugin/ProjectPluginController.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -135,5 +136,183 @@ describe("PluginService agent MCP teardown", () => {
     // comes back when the worker next activates and re-registers it.
     expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(true);
     expect(agentMcpEndpointRegistry.get(KEY_A, "data")).toBeUndefined();
+  });
+
+  describe("across a reload", () => {
+    function settle(service: PluginService, instanceKey: string, kept: boolean): void {
+      (
+        service as unknown as { projectPluginDeps: ProjectPluginControllerDeps }
+      ).projectPluginDeps.settleProjectPluginReload(instanceKey, kept);
+    }
+
+    it("holds the grants instead of revoking them, while the roster still goes", async () => {
+      const { service, grants } = await loadTwoInstances();
+      const revoked = vi.fn();
+      const stop = pluginMcpGrantRegistry.onRevoked(revoked);
+
+      service.unloadPlugin(KEY_A, { reload: true });
+      stop();
+
+      expect(revoked).not.toHaveBeenCalled();
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(true);
+      expect(pluginMcpGrantRegistry.isHeld(grants[KEY_A])).toBe(true);
+      expect(pluginMcpGrantRegistry.isHeld(grants[KEY_B])).toBe(false);
+      expect(agentMcpEndpointRegistry.get(KEY_A, "data")).toBeUndefined();
+    });
+
+    it("keeps held grants when the reloaded generation declares the same surface", async () => {
+      const { service, grants } = await loadTwoInstances();
+      service.unloadPlugin(KEY_A, { reload: true });
+      service._registerFakePluginForTests(fakePlugin(), KEY_A);
+
+      settle(service, KEY_A, true);
+
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(true);
+      expect(pluginMcpGrantRegistry.isHeld(grants[KEY_A])).toBe(false);
+    });
+
+    it("revokes held grants when the reloaded generation declares something new", async () => {
+      const { service, grants } = await loadTwoInstances();
+      service.unloadPlugin(KEY_A, { reload: true });
+      const next = fakePlugin();
+      (next.manifest as { capabilities: string[] }).capabilities = ["mcp:expose", "network"];
+      service._registerFakePluginForTests(next, KEY_A);
+
+      settle(service, KEY_A, true);
+
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(false);
+    });
+
+    it("revokes a project's held grants as soon as it closes, not when its reload settles", async () => {
+      const { service, grants } = await loadTwoInstances();
+      service.unloadPlugin(KEY_A, { reload: true });
+      service.unloadPlugin(KEY_B, { reload: true });
+
+      void service.onProjectClosed(PROJECT_A);
+
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(false);
+      expect(pluginMcpGrantRegistry.isHeld(grants[KEY_B])).toBe(true);
+      service.dispose();
+    });
+
+    it("revokes every held grant when the service is disposed", async () => {
+      const { service, grants } = await loadTwoInstances();
+      service.unloadPlugin(KEY_A, { reload: true });
+
+      service.dispose();
+
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(false);
+    });
+
+    it("revokes held grants when nothing came back, or the reload was overtaken", async () => {
+      const { service, grants } = await loadTwoInstances();
+      service.unloadPlugin(KEY_A, { reload: true });
+      service.unloadPlugin(KEY_B, { reload: true });
+      service._registerFakePluginForTests(fakePlugin(), KEY_B);
+
+      settle(service, KEY_A, true);
+      settle(service, KEY_B, false);
+
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(false);
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_B])).toBe(false);
+    });
+  });
+
+  describe("waitForProjectPlugins", () => {
+    interface FakeController {
+      queued: Set<string>;
+      settle: () => void;
+      controller: {
+        hasQueuedWork: (projectId: string) => boolean;
+        whenSettled: (projectId: string) => Promise<void>;
+        onProjectOpened: (projectId: string, root: string) => Promise<void>;
+        dispose: () => void;
+      };
+    }
+
+    function fakeController(): FakeController {
+      const queued = new Set<string>();
+      let settle!: () => void;
+      const settled = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      return {
+        queued,
+        settle: () => settle(),
+        controller: {
+          hasQueuedWork: (projectId) => queued.has(projectId),
+          whenSettled: () => settled,
+          onProjectOpened: async (projectId) => {
+            queued.add(projectId);
+            await settled;
+          },
+          dispose: () => {},
+        },
+      };
+    }
+
+    function serviceWith(fake: FakeController): PluginService {
+      const service = new PluginService("/tmp/daintree-agent-mcp-unload-root", "0.0.0");
+      (service as unknown as { projectPluginController: unknown }).projectPluginController =
+        fake.controller;
+      (service as unknown as { pushSnapshotToProject: () => Promise<void> }).pushSnapshotToProject =
+        async () => {};
+      (
+        service as unknown as { syncProjectPluginWatcher: () => Promise<void> }
+      ).syncProjectPluginWatcher = async () => {};
+      return service;
+    }
+
+    it("waits for a project that has not opened yet, then for its queued work", async () => {
+      const fake = fakeController();
+      const service = serviceWith(fake);
+      let result: boolean | undefined;
+      const waiting = service.waitForProjectPlugins(PROJECT_A, 60_000).then((ready) => {
+        result = ready;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(result).toBeUndefined();
+
+      const opening = service.onProjectOpened(PROJECT_A, "/tmp/project-a");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(result).toBeUndefined();
+      fake.settle();
+      await waiting;
+      await opening;
+      expect(result).toBe(true);
+    });
+
+    it("wakes a waiting launch as not ready when the service is disposed", async () => {
+      const fake = fakeController();
+      const service = serviceWith(fake);
+      const waiting = service.waitForProjectPlugins(PROJECT_A, 60_000);
+
+      service.dispose();
+
+      await expect(waiting).resolves.toBe(false);
+      await expect(service.waitForProjectPlugins(PROJECT_A, 60_000)).resolves.toBe(false);
+    });
+
+    it("reports not ready when the service is disposed while queued work runs", async () => {
+      const fake = fakeController();
+      const service = serviceWith(fake);
+      fake.queued.add(PROJECT_A);
+      const waiting = service.waitForProjectPlugins(PROJECT_A, 60_000);
+
+      service.dispose();
+      fake.settle();
+
+      await expect(waiting).resolves.toBe(false);
+    });
+
+    it("gives up after the timeout and forgets the waiter", async () => {
+      const fake = fakeController();
+      const service = serviceWith(fake);
+
+      await expect(service.waitForProjectPlugins(PROJECT_A, 5)).resolves.toBe(false);
+      expect(
+        (service as unknown as { projectOpenWaiters: Map<string, unknown> }).projectOpenWaiters.size
+      ).toBe(0);
+    });
   });
 });

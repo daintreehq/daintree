@@ -5,6 +5,7 @@ vi.mock("electron", () => ({ utilityProcess: { fork: vi.fn() } }));
 
 import {
   MAX_CONCURRENT_DATABASE_PROCESSES,
+  MAX_QUEUED_DATABASE_CALLS,
   SPAWN_DEADLINE_MS,
   runDatabaseToolInProcess,
   type DatabaseChildProcess,
@@ -13,6 +14,11 @@ import {
 import { DATABASE_SCHEMA_TOOL, type DatabaseToolRequest } from "../databaseTools.js";
 
 const request: DatabaseToolRequest = { tool: DATABASE_SCHEMA_TOOL, targets: [] };
+
+/** A request told apart by a marker in `targets`; the fake child never reads it as a target. */
+function tagged(label: string): DatabaseToolRequest {
+  return { ...request, targets: [label] } as unknown as DatabaseToolRequest;
+}
 
 class FakeChild extends EventEmitter {
   pid: number | undefined = undefined;
@@ -30,6 +36,14 @@ class FakeChild extends EventEmitter {
 }
 
 const children: FakeChild[] = [];
+const waiting: AbortController[] = [];
+
+/** A signal the suite aborts afterwards, so a call left queued never leaks into the next test. */
+function queuedSignal(): AbortSignal {
+  const controller = new AbortController();
+  waiting.push(controller);
+  return controller.signal;
+}
 
 function deps(): DatabaseProcessDeps & { kill: ReturnType<typeof vi.fn>; child: () => FakeChild } {
   const kill = vi.fn();
@@ -45,7 +59,8 @@ function deps(): DatabaseProcessDeps & { kill: ReturnType<typeof vi.fn>; child: 
 }
 
 afterEach(() => {
-  // Free every slot a test left held.
+  // Drop every call a test left queued, then free every slot it left held.
+  for (const controller of waiting.splice(0)) controller.abort();
   for (const child of children.splice(0)) child.exit();
   vi.useRealTimers();
 });
@@ -101,11 +116,10 @@ describe("runDatabaseToolInProcess", () => {
       return controller;
     });
     for (const controller of controllers) controller.abort();
-    await expect(
-      runDatabaseToolInProcess(request, new AbortController().signal, d)
-    ).rejects.toMatchObject({ code: "DB_BUSY" });
+    const next = runDatabaseToolInProcess(request, queuedSignal(), d);
+    expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
     children[0]!.exit();
-    const next = runDatabaseToolInProcess(request, new AbortController().signal, d);
+    expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES + 1);
     d.child().emit("message", { ok: true, value: 1 });
     await expect(next).resolves.toBe(1);
   });
@@ -146,12 +160,115 @@ describe("runDatabaseToolInProcess", () => {
     expect(d.kill).toHaveBeenCalledWith(55);
     children[0]!.exit();
     children[1]!.exit();
-    const held = Array.from({ length: MAX_CONCURRENT_DATABASE_PROCESSES }, () =>
-      runDatabaseToolInProcess(request, new AbortController().signal, d).catch(() => {})
-    );
-    await expect(
-      runDatabaseToolInProcess(request, new AbortController().signal, d)
-    ).rejects.toMatchObject({ code: "DB_BUSY" });
-    for (const child of children.slice(-held.length)) child.exit();
+    // `next`'s child still holds one slot, so exactly one more starts and the
+    // one after it waits — the late exits gave nothing back a second time.
+    const before = children.length;
+    runDatabaseToolInProcess(request, queuedSignal(), d).catch(() => {});
+    runDatabaseToolInProcess(request, queuedSignal(), d).catch(() => {});
+    expect(children).toHaveLength(before + 1);
+  });
+
+  describe("when every slot is taken", () => {
+    function fillSlots(d: ReturnType<typeof deps>): Array<Promise<unknown>> {
+      return Array.from({ length: MAX_CONCURRENT_DATABASE_PROCESSES }, () =>
+        runDatabaseToolInProcess(request, new AbortController().signal, d).catch(() => {})
+      );
+    }
+
+    it("waits for a slot instead of failing, and starts when one frees", async () => {
+      const d = deps();
+      fillSlots(d);
+      const waiter = runDatabaseToolInProcess(request, queuedSignal(), d);
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
+      children[1]!.exit();
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES + 1);
+      d.child().emit("message", { ok: true, value: "late" });
+      await expect(waiter).resolves.toBe("late");
+    });
+
+    it("admits waiters first come first served", async () => {
+      const d = deps();
+      fillSlots(d);
+      const first = runDatabaseToolInProcess(tagged("first"), queuedSignal(), d);
+      const second = runDatabaseToolInProcess(tagged("second"), queuedSignal(), d);
+      children[0]!.exit();
+      expect(d.child().posted[0]).toMatchObject({ targets: ["first"] });
+      children[1]!.exit();
+      expect(d.child().posted[0]).toMatchObject({ targets: ["second"] });
+      first.catch(() => {});
+      second.catch(() => {});
+    });
+
+    it("drops a waiter whose call is aborted, without taking a slot", async () => {
+      const d = deps();
+      fillSlots(d);
+      const controller = new AbortController();
+      const waiter = runDatabaseToolInProcess(request, controller.signal, d);
+      controller.abort(new Error("Tool call timed out after 60000 ms."));
+      await expect(waiter).rejects.toThrow(/timed out/);
+      const next = runDatabaseToolInProcess(request, queuedSignal(), d);
+      children[0]!.exit();
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES + 1);
+      d.child().emit("message", { ok: true, value: 3 });
+      await expect(next).resolves.toBe(3);
+    });
+
+    it("answers DB_BUSY only once the queue is full, and admits again after a queued abort", async () => {
+      const d = deps();
+      fillSlots(d);
+      const controllers = Array.from({ length: MAX_QUEUED_DATABASE_CALLS }, () => {
+        const controller = new AbortController();
+        waiting.push(controller);
+        runDatabaseToolInProcess(request, controller.signal, d).catch(() => {});
+        return controller;
+      });
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
+      await expect(
+        runDatabaseToolInProcess(request, new AbortController().signal, d)
+      ).rejects.toMatchObject({ code: "DB_BUSY" });
+
+      controllers[3]!.abort();
+      const replacement = runDatabaseToolInProcess(tagged("replacement"), queuedSignal(), d);
+      replacement.catch(() => {});
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
+      // The replacement waits behind every earlier waiter still queued.
+      for (let i = 0; i < MAX_QUEUED_DATABASE_CALLS; i++) children[i]!.exit();
+      expect(d.child().posted[0]).toMatchObject({ targets: ["replacement"] });
+    });
+
+    it("hands a slot freed by the spawn deadline to the oldest waiter", async () => {
+      vi.useFakeTimers();
+      const d = deps();
+      const stuck = Array.from({ length: MAX_CONCURRENT_DATABASE_PROCESSES }, () =>
+        runDatabaseToolInProcess(request, new AbortController().signal, d).catch(() => {})
+      );
+      const waiter = runDatabaseToolInProcess(tagged("waiter"), queuedSignal(), d);
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
+
+      vi.advanceTimersByTime(SPAWN_DEADLINE_MS);
+      await Promise.all(stuck);
+
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES + 1);
+      expect(d.child().posted[0]).toMatchObject({ targets: ["waiter"] });
+      d.child().emit("message", { ok: true, value: 5 });
+      await expect(waiter).resolves.toBe(5);
+    });
+
+    it("passes the slot on when a waiter's launch throws", async () => {
+      const d = deps();
+      fillSlots(d);
+      const fork = d.fork;
+      const failing = runDatabaseToolInProcess(request, queuedSignal(), {
+        ...d,
+        fork: () => {
+          throw new Error("fork failed");
+        },
+      });
+      const next = runDatabaseToolInProcess(request, queuedSignal(), { ...d, fork });
+      children[0]!.exit();
+      await expect(failing).rejects.toThrow("fork failed");
+      d.child().emit("message", { ok: true, value: 4 });
+      await expect(next).resolves.toBe(4);
+    });
   });
 });

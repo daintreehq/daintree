@@ -155,17 +155,24 @@ vi.mock("../../../../services/McpServerService.js", () => ({
   },
 }));
 
-const { mockListPlugins, mockHasPlugin, mockWaitForInit } = vi.hoisted(() => ({
-  mockListPlugins: vi.fn<() => unknown[]>(() => []),
-  mockHasPlugin: vi.fn<(instanceId: string) => boolean>(() => true),
-  mockWaitForInit: vi.fn<() => Promise<void>>(() => Promise.resolve()),
-}));
+const { mockListPlugins, mockHasPlugin, mockWaitForInit, mockWaitForProjectPlugins } = vi.hoisted(
+  () => ({
+    mockListPlugins: vi.fn<() => unknown[]>(() => []),
+    mockHasPlugin: vi.fn<(instanceId: string) => boolean>(() => true),
+    mockWaitForInit: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+    mockWaitForProjectPlugins: vi.fn<(projectId: string, timeoutMs: number) => Promise<boolean>>(
+      () => Promise.resolve(true)
+    ),
+  })
+);
 
 vi.mock("../../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: () => mockListPlugins(),
     hasPlugin: (instanceId: string) => mockHasPlugin(instanceId),
     waitForInit: () => mockWaitForInit(),
+    waitForProjectPlugins: (projectId: string, timeoutMs: number) =>
+      mockWaitForProjectPlugins(projectId, timeoutMs),
     resolveSettingTemplate: vi.fn(),
   },
 }));
@@ -283,6 +290,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     mockListPlugins.mockReturnValue([plugin()]);
     mockHasPlugin.mockReturnValue(true);
     mockWaitForInit.mockImplementation(() => Promise.resolve());
+    mockWaitForProjectPlugins.mockImplementation(() => Promise.resolve(true));
   });
 
   afterEach(async () => {
@@ -393,6 +401,48 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(ptyClient.spawn.mock.calls[0][1].command).toBe("claude");
     expect(mockListPlugins).not.toHaveBeenCalled();
     expect(pluginMcpGrantRegistry.listForTerminal("term-init-timeout")).toEqual([]);
+  });
+
+  it("waits for the project's plugins to finish loading before resolving its servers", async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+    let loaded = false;
+    let settleProject!: () => void;
+    mockWaitForProjectPlugins.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settleProject = () => {
+            loaded = true;
+            resolve(true);
+          };
+        })
+    );
+    mockListPlugins.mockImplementation(() => (loaded ? [plugin()] : []));
+    mockHasPlugin.mockImplementation(() => loaded);
+
+    const pending = spawn({ id: "term-restored" });
+    await vi.waitFor(() => expect(mockWaitForProjectPlugins).toHaveBeenCalledWith(PROJECT_A, 5000));
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    settleProject();
+    await pending;
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    const servers = await readServers(configPathFromCommand(spawnArgs.command));
+    expect(Object.values(servers)).toHaveLength(1);
+    expect(pluginMcpGrantRegistry.listForTerminal("term-restored")).toHaveLength(1);
+  });
+
+  it("launches with whatever has loaded when the project's plugins do not settle in time", async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+    mockWaitForProjectPlugins.mockImplementation(() => Promise.resolve(false));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await spawn({ id: "term-project-timeout" });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Project plugins not settled"));
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(pluginMcpGrantRegistry.listForTerminal("term-project-timeout")).toHaveLength(1);
   });
 
   it("mints nothing for a plugin with access that is not running", async () => {

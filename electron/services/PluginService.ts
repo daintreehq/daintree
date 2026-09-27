@@ -165,6 +165,7 @@ import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js
 import { agentMcpEndpointRegistry } from "./pluginAgentMcp/endpointRegistry.js";
 import { registerPluginDatabaseEndpoint } from "./pluginAgentMcp/databaseEndpoint.js";
 import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
+import { agentMcpSurfaceOf } from "./pluginAgentMcp/declaredEndpoints.js";
 import {
   buildPluginPermissionExecArgv,
   classifyPluginPermissionPaths,
@@ -1280,6 +1281,14 @@ export class PluginService {
     // so the controller cannot re-load into a service that is going away.
     this.projectPluginController?.dispose();
     this.projectPluginController = null;
+    // A reload can be parked on discovery with its instance absent from every
+    // map the sweep below walks; its held credentials go now rather than
+    // whenever that filesystem work settles.
+    pluginMcpGrantRegistry.revokeHeld(() => true);
+    for (const waiters of this.projectOpenWaiters.values()) {
+      for (const wake of waiters) wake();
+    }
+    this.projectOpenWaiters.clear();
     // Run each loaded plugin's full disposer cascade (cleanupMap, event-cleanups,
     // contribution unregisters, best-effort MCP shutdown) so service teardown
     // honors the Disposable contract. App-quit MCP teardown remains owned by
@@ -5083,6 +5092,8 @@ export class PluginService {
    * and so tests can drive discovery/trust without a project view.
    */
   private projectPluginController: ProjectPluginController | null = null;
+  /** Launches waiting for a project's first open, by project. */
+  private readonly projectOpenWaiters = new Map<string, Set<() => void>>();
 
   private get projectPlugins(): ProjectPluginController {
     if (!this.projectPluginController) {
@@ -5095,7 +5106,17 @@ export class PluginService {
     return {
       discover: (projectRoot) => discoverProjectPlugins(projectRoot),
       loadProjectPlugin: (args) => this.loadProjectPluginInstance(args),
-      unloadProjectPlugin: (instanceKey) => this.unloadPlugin(instanceKey),
+      unloadProjectPlugin: (instanceKey, options) => this.unloadPlugin(instanceKey, options),
+      settleProjectPluginReload: (instanceKey, kept) => {
+        // A credential held across the reload keeps working only against a
+        // generation that is loaded now, still current, and declares the same
+        // agent surface it was issued against.
+        const current = kept ? this.plugins.get(instanceKey) : undefined;
+        pluginMcpGrantRegistry.releasePlugin(
+          instanceKey,
+          current ? agentMcpSurfaceOf(current.manifest) : null
+        );
+      },
       // Grants are held per plugin instance and an instance key names its
       // project, so revoking by instance key purges exactly this project's
       // grants — never another project's copy of the same manifest id.
@@ -5149,9 +5170,65 @@ export class PluginService {
    */
   async onProjectOpened(projectId: string, projectRoot: string): Promise<void> {
     if (this.disposed) return;
-    await this.projectPlugins.onProjectOpened(projectId, projectRoot);
+    const opening = this.projectPlugins.onProjectOpened(projectId, projectRoot);
+    // The open is queued now, so a launch that was waiting for it can wait on
+    // the queue instead.
+    const waiters = this.projectOpenWaiters.get(projectId);
+    if (waiters) {
+      this.projectOpenWaiters.delete(projectId);
+      for (const wake of waiters) wake();
+    }
+    await opening;
+    // Disposed meanwhile: the watcher sync below would build a fresh controller.
+    if (this.disposed) return;
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId, projectRoot);
+  }
+
+  /**
+   * Resolves true once the project's queued plugin work — an open, a reload, a
+   * trust change — has run, so a launch can see what that work loaded; false
+   * after `timeoutMs`. Open is fire-and-forget from the switch path, so this is
+   * the only way to wait on it. A project with nothing queued yet waits for its
+   * first open.
+   */
+  async waitForProjectPlugins(projectId: string, timeoutMs: number): Promise<boolean> {
+    if (this.disposed) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: (() => void) | undefined;
+    const timedOut = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref?.();
+    });
+    const settled = (async (): Promise<boolean> => {
+      // A background restore signals the open only after its view has loaded,
+      // so a pane restored into it can ask before the project is known at all.
+      if (!this.projectPlugins.hasQueuedWork(projectId)) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          let waiters = this.projectOpenWaiters.get(projectId);
+          if (!waiters) {
+            waiters = new Set();
+            this.projectOpenWaiters.set(projectId, waiters);
+          }
+          waiters.add(resolve);
+        });
+      }
+      // Woken by dispose: the getter would build a fresh controller.
+      if (this.disposed) return false;
+      await this.projectPlugins.whenSettled(projectId);
+      return !this.disposed;
+    })();
+    try {
+      return await Promise.race([settled, timedOut]);
+    } finally {
+      clearTimeout(timer);
+      if (wake) {
+        const waiters = this.projectOpenWaiters.get(projectId);
+        waiters?.delete(wake);
+        if (waiters?.size === 0) this.projectOpenWaiters.delete(projectId);
+      }
+    }
   }
 
   /** This project stopped being live: unload everything it owns. */
@@ -5159,6 +5236,12 @@ export class PluginService {
     // Stop the watcher first: it is the one thing that could otherwise queue a
     // reload behind the teardown.
     this.projectPluginWatcherRegistry?.stop(projectId);
+    // A reload of this project's plugins may be held up behind discovery, and
+    // the close queues behind it; its held credentials must not outlive the
+    // close by however long that takes.
+    pluginMcpGrantRegistry.revokeHeld(
+      (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
+    );
     if (!this.projectPluginController) return;
     await this.projectPluginController.onProjectClosed(projectId);
     await this.pushSnapshotToProject(projectId);
@@ -5464,8 +5547,9 @@ export class PluginService {
     }
   }
 
-  unloadPlugin(pluginId: string): void {
-    if (!this.plugins.has(pluginId)) return;
+  unloadPlugin(pluginId: string, options?: { reload: true }): void {
+    const unloading = this.plugins.get(pluginId);
+    if (!unloading) return;
     // First, before anything else can run plugin code or yield: every agent
     // credential for this instance dies, and only then do its rosters go. The
     // other order leaves a window where a live grant resolves to an endpoint
@@ -5473,8 +5557,17 @@ export class PluginService {
     // which inherits no authority. Idle worker disposal (`deactivateWorker`)
     // deliberately skips this: the instance is still loaded, its grants stay
     // valid, and the roster returns when the worker re-activates.
+    //
+    // A reload holds them instead: they reach no plugin code until the
+    // controller settles the reload, and survive only if the generation it
+    // leaves loaded declares the same agent surface. Running agents cannot be
+    // handed a new bearer, so revoking here would cut them off for good.
     runUnloadStep(pluginId, "revokeAgentMcpGrants", () => {
-      pluginMcpGrantRegistry.revokePlugin(pluginId);
+      if (options?.reload) {
+        pluginMcpGrantRegistry.holdPlugin(pluginId, agentMcpSurfaceOf(unloading.manifest));
+      } else {
+        pluginMcpGrantRegistry.revokePlugin(pluginId);
+      }
       agentMcpEndpointRegistry.unregisterPlugin(pluginId);
     });
     // Drop activation state so a runtime reload (e.g. dev-mode re-scan) can
