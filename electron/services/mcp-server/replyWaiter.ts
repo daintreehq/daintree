@@ -2,7 +2,7 @@ import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import { NOTIFY_TARGET_SETTLE_MS } from "../../../shared/types/terminalNotify.js";
 import {
-  extractNoticeReply,
+  extractReply,
   type NoticeReply,
   type NotifyStateChange,
   type NotifyTerminalInfo,
@@ -12,10 +12,16 @@ import {
  * Blocking replies (`waitForReply`): a send or launch that holds its MCP call
  * open until the agent it prompted finishes, and returns that agent's reply
  * as part of the result. The same end conditions as a terminal notice — the
- * handback marker for this prompt at once, otherwise a settle out of
- * `working` that holds for {@link NOTIFY_TARGET_SETTLE_MS}, an exit or a
- * close — but the reply goes back to the caller instead of into a prompt, so
- * any MCP client can use it, a pane of its own or not.
+ * handback marker for this prompt, otherwise a settle out of `working` that
+ * holds for {@link NOTIFY_TARGET_SETTLE_MS}, an exit or a close — but the
+ * reply goes back to the caller instead of into a prompt, so any MCP client
+ * can use it, a pane of its own or not.
+ *
+ * A marker ends the wait {@link HANDBACK_REPLY_HOLD_MS} after it printed, or
+ * sooner when the agent leaves `working`. The marker is often seen before the
+ * screen has the reply: Grok's thinking preview carries its drafted marker, and
+ * the final render lands after it. The marker's own summary comes back in
+ * `handback`, which survives a screen the quote cannot read.
  *
  * A waiter can be created before the terminal is known (a launch) and bound
  * once the dispatch reports it; the target's recent state changes are kept
@@ -23,6 +29,15 @@ import {
  */
 
 export type AwaitedReplyOutcome = "handback" | "settled" | "exited" | "closed" | "timeout";
+
+/** How long a wait holds after its marker prints before reading the screen. */
+export const HANDBACK_REPLY_HOLD_MS = 1_500;
+
+/**
+ * The longest a hold can run from the first marker, however often a changed
+ * capture restarts it.
+ */
+export const HANDBACK_REPLY_HOLD_MAX_MS = 5_000;
 
 export interface AwaitedReply {
   terminalId: string;
@@ -32,6 +47,11 @@ export interface AwaitedReply {
   waitingReason?: WaitingReason;
   /** The agent's last screen lines; with a handback, ending at its marker. */
   reply?: NoticeReply;
+  /**
+   * The summary the agent wrote into its marker, when it printed one; empty
+   * for a bare marker.
+   */
+  handback?: string;
 }
 
 export interface ReplyWaiterPtyClient {
@@ -45,7 +65,7 @@ export interface ReplyWaiterDeps {
   getPtyClient: () => ReplyWaiterPtyClient | null;
   onStateChanged: (listener: (payload: NotifyStateChange) => void) => () => void;
   onHandbackObserved: (
-    listener: (terminalId: string, handback: TerminalHandback) => void
+    listener: (terminalId: string, handback: TerminalHandback, code?: string) => void
   ) => () => void;
   onKilled: (listener: (terminalId: string) => void) => () => void;
   onTrashed: (listener: (terminalId: string) => void) => () => void;
@@ -90,6 +110,14 @@ interface Waiter {
   replyLines: number;
   settleTimer?: ReturnType<typeof setTimeout>;
   settling?: { state: AgentState; waitingReason?: WaitingReason; startedAt: number };
+  /** The latest marker seen for this wait; a later one replaces a draft. */
+  handback?: TerminalHandback;
+  /** Its code, when the observation named it: the reply is cut at that marker. */
+  handbackCode?: string;
+  /** Holding after a marker, for the screen to catch up with it. */
+  holdTimer?: ReturnType<typeof setTimeout>;
+  /** When the first marker of the hold printed; the cap counts from here. */
+  holdStartedAt?: number;
   timeout: ReturnType<typeof setTimeout>;
   done: boolean;
   finish: (outcome: AwaitedReplyOutcome, state?: AgentState, reason?: WaitingReason) => void;
@@ -101,7 +129,10 @@ export class ReplyWaiterService {
   /** Terminals closed while waiters exist, so a late bind learns of it. */
   private readonly recentlyClosed = new Set<string>();
   /** Handbacks seen while waiters exist: the PTY reports each marker once. */
-  private readonly recentHandbacks = new Map<string, TerminalHandback[]>();
+  private readonly recentHandbacks = new Map<
+    string,
+    Array<{ handback: TerminalHandback; code?: string }>
+  >();
   private unsubscribers: Array<() => void> = [];
   private subscribedClient: ReplyWaiterPtyClient | null = null;
   private readonly now: () => number;
@@ -130,6 +161,7 @@ export class ReplyWaiterService {
         waiter.done = true;
         clearTimeout(waiter.timeout);
         if (waiter.settleTimer) clearTimeout(waiter.settleTimer);
+        if (waiter.holdTimer) clearTimeout(waiter.holdTimer);
         this.waiters.delete(waiter);
         this.maybeUnsubscribe();
         const terminalId = waiter.terminalId;
@@ -137,9 +169,15 @@ export class ReplyWaiterService {
           resolvePromise({ terminalId: "", outcome });
           return;
         }
-        void this.readReply(terminalId, waiter.replyLines, outcome, state, reason).then(
-          resolvePromise
-        );
+        void this.readReply(
+          terminalId,
+          waiter.replyLines,
+          outcome,
+          state,
+          reason,
+          waiter.handback,
+          waiter.handbackCode
+        ).then(resolvePromise);
       },
     };
     this.waiters.add(waiter);
@@ -162,12 +200,12 @@ export class ReplyWaiterService {
           waiter.finish("closed");
           return;
         }
-        for (const handback of this.recentHandbacks.get(waiter.terminalId) ?? []) {
-          if (handback.observedAt >= waiter.since && this.handbackMatches(waiter, handback)) {
-            waiter.finish("handback");
-            return;
-          }
-        }
+        const matching = (this.recentHandbacks.get(waiter.terminalId) ?? []).filter(
+          ({ handback }) =>
+            handback.observedAt >= waiter.since && this.handbackMatches(waiter, handback)
+        );
+        const latest = matching[matching.length - 1];
+        if (latest !== undefined) this.holdForReply(waiter, latest.handback, latest.code);
         for (const change of this.recent.get(waiter.terminalId) ?? []) {
           this.apply(waiter, change);
           if (waiter.done) return;
@@ -192,7 +230,9 @@ export class ReplyWaiterService {
     lines: number,
     outcome: AwaitedReplyOutcome,
     state?: AgentState,
-    reason?: WaitingReason
+    reason?: WaitingReason,
+    handback?: TerminalHandback,
+    code?: string
   ): Promise<AwaitedReply> {
     const client = this.deps.getPtyClient();
     let finalState = state;
@@ -205,8 +245,13 @@ export class ReplyWaiterService {
     let reply: NoticeReply | null = null;
     if (outcome !== "closed" && lines > 0 && client?.getSerializedStateAsync) {
       const snapshot = await client.getSerializedStateAsync(terminalId).catch(() => null);
-      if (snapshot !== null)
-        reply = extractNoticeReply(snapshot.data, lines, outcome === "handback");
+      if (snapshot !== null) {
+        const endAt =
+          handback === undefined
+            ? outcome === "handback"
+            : { message: handback.message, ...(code !== undefined ? { code } : {}) };
+        reply = extractReply(snapshot.data, lines, endAt).reply;
+      }
     }
     return {
       terminalId,
@@ -214,6 +259,7 @@ export class ReplyWaiterService {
       ...(finalState !== undefined ? { state: finalState } : {}),
       ...(finalReason !== undefined ? { waitingReason: finalReason } : {}),
       ...(reply !== null ? { reply } : {}),
+      ...(handback !== undefined ? { handback: handback.message ?? "" } : {}),
     };
   }
 
@@ -221,7 +267,10 @@ export class ReplyWaiterService {
     if (change.timestamp < waiter.since) return;
     const handbackNow =
       change.lastHandback !== undefined && this.handbackMatches(waiter, change.lastHandback);
-    if (handbackNow && change.state !== "working") {
+    if (handbackNow) waiter.handback = change.lastHandback;
+    // A marker already held for: the agent stopping is all the hold waits for.
+    const holding = waiter.handback !== undefined && change.timestamp >= waiter.handback.observedAt;
+    if ((handbackNow || holding) && change.state !== "working") {
       waiter.finish("handback", change.state, change.waitingReason);
       return;
     }
@@ -260,6 +309,38 @@ export class ReplyWaiterService {
     }, delay);
   }
 
+  /**
+   * A marker for this wait printed: keep the newest capture, and end the wait
+   * {@link HANDBACK_REPLY_HOLD_MS} after it, unless the agent is seen to stop
+   * sooner. A capture that says something different — the reply replacing a
+   * drafted marker — restarts the hold, up to {@link HANDBACK_REPLY_HOLD_MAX_MS}
+   * from the first. A settle already under way hands over to the hold, keeping
+   * the state it stopped in: its timer could otherwise end the wait a moment
+   * after the marker, before the screen has caught up.
+   */
+  private holdForReply(waiter: Waiter, handback: TerminalHandback, code?: string): void {
+    const previous = waiter.handback;
+    waiter.handback = handback;
+    if (code !== undefined) waiter.handbackCode = code;
+    if (waiter.settleTimer !== undefined) {
+      clearTimeout(waiter.settleTimer);
+      waiter.settleTimer = undefined;
+    }
+    if (waiter.holdTimer !== undefined) {
+      if (previous?.message === handback.message) return;
+      clearTimeout(waiter.holdTimer);
+    }
+    waiter.holdStartedAt ??= handback.observedAt;
+    const dueAt = Math.min(
+      handback.observedAt + HANDBACK_REPLY_HOLD_MS,
+      waiter.holdStartedAt + HANDBACK_REPLY_HOLD_MAX_MS
+    );
+    waiter.holdTimer = setTimeout(
+      () => waiter.finish("handback", waiter.settling?.state, waiter.settling?.waitingReason),
+      Math.max(0, dueAt - this.now())
+    );
+  }
+
   private handbackMatches(waiter: Waiter, handback: TerminalHandback): boolean {
     if (waiter.submissionToken === undefined) return !waiter.expectsToken;
     return handback.submissionToken === waiter.submissionToken;
@@ -281,13 +362,13 @@ export class ReplyWaiterService {
         this.recent.set(change.terminalId, list);
         this.forTerminal(change.terminalId, (w) => this.apply(w, change));
       }),
-      this.deps.onHandbackObserved((terminalId, handback) => {
+      this.deps.onHandbackObserved((terminalId, handback, code) => {
         const list = this.recentHandbacks.get(terminalId) ?? [];
-        list.push(handback);
+        list.push({ handback, ...(code !== undefined ? { code } : {}) });
         if (list.length > MAX_RECENT_CHANGES) list.shift();
         this.recentHandbacks.set(terminalId, list);
         this.forTerminal(terminalId, (w) => {
-          if (this.handbackMatches(w, handback)) w.finish("handback");
+          if (this.handbackMatches(w, handback)) this.holdForReply(w, handback, code);
         });
       }),
       this.deps.onKilled((terminalId) => this.closeTerminal(terminalId)),

@@ -80,6 +80,56 @@ describe("buildProjectMetadataAddendum", () => {
     expect(text).toContain("- Daintree MCP tools setting: `enabled`");
   });
 
+  it("names launchable agents by the id a launch takes", () => {
+    const text = build({
+      launchableAgents: {
+        agents: [
+          { id: "claude", name: "Claude" },
+          { id: "antigravity", name: "Antigravity" },
+          { id: "cursor", name: "Cursor Agent" },
+        ],
+        availabilityChecked: true,
+      },
+    });
+    expect(text).toContain(
+      "- Agents installed and ready to launch; launch them by these ids exactly: `claude`, `antigravity`, `cursor` (`Cursor Agent`)"
+    );
+  });
+
+  it("says when the agent list has not been checked against installs", () => {
+    const text = build({
+      launchableAgents: { agents: [{ id: "claude", name: "Claude" }], availabilityChecked: false },
+    });
+    expect(text).toContain("- Registered agents (installs not checked yet);");
+  });
+
+  it("leaves the agent list out when the MCP tools that launch them are off", () => {
+    const text = buildProjectMetadataAddendum({
+      projectId: "proj-1",
+      projectPath: "/work/example",
+      tier: "full",
+      daintreeControl: false,
+      facts: {
+        launchableAgents: { agents: [{ id: "claude", name: "Claude" }], availabilityChecked: true },
+      },
+    });
+    expect(text).not.toContain("`claude`");
+  });
+
+  it.each([
+    "Evil\n## Injected",
+    "Evil`code",
+    "Evil \u202etxt.exe",
+    "Zero\u200bwidth",
+    "Word\u2060joiner",
+    "Arabic\u061cmark",
+  ])("drops an agent name that could break or reorder its line: %j", (name) => {
+    const text = build({
+      launchableAgents: { agents: [{ id: "evil", name }], availabilityChecked: true },
+    });
+    expect(text).toContain("launch them by these ids exactly: `evil`\n");
+  });
+
   it("reports disabled MCP tools", () => {
     const text = buildProjectMetadataAddendum({
       projectId: "proj-1",
@@ -149,6 +199,13 @@ describe("buildProjectMetadataAddendum", () => {
           branch: long("b"),
           isMainWorktree: i === 0,
         })),
+        launchableAgents: {
+          agents: Array.from({ length: 200 }, (_, i) => ({
+            id: `${"a".repeat(60)}${i}`,
+            name: "界".repeat(21),
+          })),
+          availabilityChecked: true,
+        },
       },
     });
     const block = `${PROJECT_METADATA_START}\n${worstCase}${PROJECT_METADATA_END}\n`;

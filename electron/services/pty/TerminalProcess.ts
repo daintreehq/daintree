@@ -2128,8 +2128,13 @@ export class TerminalProcess {
    * for some CLIs that settle lags the reply by a minute or more, and the
    * orchestrator waiting on this marker waits with it. Runs only while a
    * delivered request is outstanding; the detector rejects the echoed
-   * instruction and a marker still streaming, and a hit retires its code, so
-   * the settle-time check can never report it twice.
+   * instruction, a marker still streaming and one on a spinner's status line.
+   *
+   * A hit while the agent still reads as working leaves its code open: Grok's
+   * thinking preview carries its drafted marker, and a status line can quote
+   * one, before the reply itself prints. A later capture that says something
+   * different is reported again, and the settle-time check has the last look
+   * and retires the code. A hit outside `working` retires it at once.
    */
   private observeHandback(now: number): void {
     const t = this.terminalInfo;
@@ -2146,12 +2151,17 @@ export class TerminalProcess {
       now
     );
     if (hit === undefined) return;
+    const changed = tracker.noteReported(hit.code, hit.handback.message);
+    // Retired outside `working` even when the capture repeats one already
+    // reported, or the code would stay open until the next submission.
+    if (t.agentState !== "working") tracker.retire(hit.code);
+    if (!changed) return;
     t.lastHandback = hit.handback;
     t.lastHandbackUnpublished = true;
-    tracker.retire(hit.code);
     events.emit("agent:handback-observed", {
       terminalId: this.id,
       handback: hit.handback,
+      code: hit.code,
       timestamp: now,
     });
   }

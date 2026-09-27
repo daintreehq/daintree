@@ -138,12 +138,15 @@ import {
   NOTIFY_NOT_ELIGIBLE,
   NOTIFY_CLOSE_TOOLS,
   NOTIFY_KEY_TOOLS,
+  NOTIFY_PROMPT_TOOLS,
   NOTIFY_SEND_TOOLS,
   NOTIFY_VALIDATION_ERROR,
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
   TerminalNotifyError,
   auditCodeForNotifyRefusal,
+  createNoticeHold,
   runNotifyWhenIdleTool,
+  type NoticeHold,
   type OwnPane,
   type PendingNotify,
   type TerminalNotifyHandlers,
@@ -556,10 +559,10 @@ const BATCH_TOOLS: Record<string, BatchTool<unknown>> = {
 
 /**
  * Tie a waiter to the terminal and submission a dispatch reported, or settle
- * it at once when the send or launch did not happen.
+ * it at once when the send or launch did not happen. Returns the terminal it
+ * bound to; undefined when the dispatch failed and the wait was cancelled.
  */
-/** Binds the wait to what the dispatch reported; false when it failed and the wait was cancelled. */
-function bindWait(result: CallToolResult, wait: ReplyWait): boolean {
+function bindWait(result: CallToolResult, wait: ReplyWait): string | undefined {
   const parsed = resultValue(result);
   const value =
     parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
@@ -571,18 +574,32 @@ function bindWait(result: CallToolResult, wait: ReplyWait): boolean {
     (value?.spawnStatus !== undefined && value.spawnStatus !== null);
   if (failed) {
     wait.cancel();
-    return false;
+    return undefined;
   }
   const token = typeof value?.submissionToken === "string" ? value.submissionToken : undefined;
   wait.bind(terminalId, token);
-  return true;
+  return terminalId;
+}
+
+/**
+ * Settle a call's held notice by how its reply wait ended: an answered wait
+ * already told the caller, and one that ran out leaves the notice as the word
+ * of the end.
+ */
+function releaseNoticeAfter(wait: ReplyWait, release: (answered: boolean) => void): void {
+  void wait.promise.then((reply) => release(reply.outcome !== "timeout"));
 }
 
 /** A send's or launch's result with the reply it waited for. */
-async function attachReply(result: CallToolResult, wait: ReplyWait): Promise<CallToolResult> {
+async function attachReply(
+  result: CallToolResult,
+  wait: ReplyWait,
+  releaseNotice?: (answered: boolean) => void
+): Promise<CallToolResult> {
+  if (releaseNotice !== undefined) releaseNoticeAfter(wait, releaseNotice);
   // A failed dispatch is returned as it came, even when its wait had already
   // ended: rebuilding it around a reply would drop `isError`.
-  if (!bindWait(result, wait)) return result;
+  if (bindWait(result, wait) === undefined) return result;
   const reply = await wait.promise;
   if (reply.terminalId === "") return result;
   const base = resultValue(result);
@@ -1283,7 +1300,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   // Named so a batch tool can run each item through this same gate.
   const handleCallTool = async (
     request: CallToolRequest,
-    extra: RequestHandlerExtra<ServerRequest, ServerNotification>
+    extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+    // A batch item whose reply the batch waits for: its notice holds on this.
+    batchItem?: { noticeHold: NoticeHold }
   ): Promise<CallToolResult> => {
     const actionId = request.params.name;
     const { args, requestKey } = parseToolArguments(request.params.arguments);
@@ -1482,6 +1501,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // `finally` on every other way out, so a refused or failed call never
     // leaves a notice behind.
     let pendingNotify: PendingNotify | undefined;
+    // A call with `notify` and `waitForReply` both holds its notice while the
+    // wait runs, since the wait answers the caller itself when it can; this
+    // settles it once the wait ends.
+    let releaseNotice: ((answered: boolean) => void) | undefined;
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
@@ -2506,7 +2529,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             waitForReply?: boolean;
             waitSeconds?: number;
             replyLines?: number;
+            notify?: boolean;
           };
+          // Each item's notice holds while its reply wait runs.
+          const noticePane =
+            batchArgs.notify === true && terminalNotify !== undefined && tier !== "external"
+              ? (resolveOwnPane?.() ?? null)
+              : null;
           // Every item is sent first and waited on together, so the call lasts
           // as long as the slowest agent, not the sum of them.
           const waits: Array<ReplyWait | undefined> = [];
@@ -2525,15 +2554,26 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                     signal: extra.signal,
                   })
                 : undefined;
+            const noticeHold =
+              wait !== undefined && noticePane !== null ? createNoticeHold() : undefined;
+            // Settled once the item is back, so the launch's notice exists by then.
+            const releaseItemNotice = () => {
+              if (wait === undefined || noticeHold === undefined || noticePane === null) return;
+              releaseNoticeAfter(wait, (answered) =>
+                terminalNotify?.releaseHold(noticePane, noticeHold, answered)
+              );
+            };
             let itemResult: CallToolResult;
             try {
               itemResult = await handleCallTool(
                 { method: "tools/call", params: { name: item.tool, arguments: item.args } },
-                extra
+                extra,
+                noticeHold !== undefined ? { noticeHold } : undefined
               );
             } catch (error) {
               // One item's refusal is its own outcome, not the batch's.
               wait?.cancel();
+              releaseItemNotice();
               waits.push(undefined);
               results.push({
                 target: item.target,
@@ -2543,6 +2583,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               continue;
             }
             if (wait !== undefined) bindWait(itemResult, wait);
+            releaseItemNotice();
             waits.push(wait);
             results.push(batchItemOutcome(item.target, itemResult));
           }
@@ -2605,6 +2646,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               "`notify` types into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for it. Nothing was sent."
             );
           }
+          const hold =
+            batchItem?.noticeHold ??
+            (waitForReply && replyWaiter !== undefined ? createNoticeHold() : undefined);
+          const noticeOptions = { replyLines, ...(hold !== undefined ? { hold } : {}) };
           try {
             if (actionId === AGENT_LAUNCH_TOOL) {
               if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
@@ -2613,7 +2658,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   "`notify` needs a `prompt`: there is no work to finish without one. Nothing was launched."
                 );
               }
-              pendingNotify = await terminalNotify.prepareLaunch(pane, { replyLines });
+              pendingNotify = await terminalNotify.prepareLaunch(pane, noticeOptions);
             } else if (NOTIFY_KEY_TOOLS.has(actionId)) {
               const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
               if (targetId === undefined || targetId.length === 0) {
@@ -2625,11 +2670,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               if (targetId === undefined || targetId.length === 0) {
                 return refuse(NOTIFY_VALIDATION_ERROR, "`notify` needs a `terminalId`.");
               }
-              pendingNotify = await terminalNotify.prepareSend(pane, targetId, { replyLines });
+              pendingNotify = await terminalNotify.prepareSend(pane, targetId, noticeOptions);
             }
           } catch (err) {
             if (err instanceof TerminalNotifyError) return refuse(err.code, err.message);
             throw err;
+          }
+          // A batch settles its items' holds itself, as each item's wait ends.
+          if (hold !== undefined && batchItem === undefined) {
+            releaseNotice = (answered) => terminalNotify.releaseHold(pane, hold, answered);
           }
         }
 
@@ -3179,6 +3228,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             pendingNotify = undefined;
             if (envelope.result.ok) follow.complete(envelope.result.result);
             else follow.cancel();
+          } else if (
+            envelope.result.ok &&
+            NOTIFY_PROMPT_TOOLS.has(actionId) &&
+            terminalNotify !== undefined &&
+            tier !== "external"
+          ) {
+            // A prompt without `notify` still makes the pane's undelivered
+            // notice about the target stale: typed after this prompt, it
+            // would read as the answer to it.
+            const pane = resolveOwnPane?.() ?? null;
+            const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
+            if (pane !== null && targetId !== undefined) terminalNotify.supersede(pane, targetId);
           }
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           // "Allow for this session" on the ordinary confirm dialog of a pane's
@@ -3367,7 +3428,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const answerPromise: Promise<CallToolResultLike> =
       replyWait === undefined
         ? dispatchPromise
-        : dispatchPromise.then((result) => attachReply(result as CallToolResult, replyWait!));
+        : dispatchPromise.then((result) =>
+            attachReply(result as CallToolResult, replyWait!, releaseNotice)
+          );
 
     if (dedupKey !== undefined) {
       let inFlight = sessionStore.dedupInFlight.get(sessionId);

@@ -859,6 +859,8 @@ describe("terminal notices", () => {
       prepareLaunch: vi.fn().mockResolvedValue(pending),
       prepareKeys: vi.fn().mockResolvedValue(pending),
       forgetTarget: vi.fn(),
+      supersede: vi.fn(),
+      releaseHold: vi.fn(),
     };
     const dispatchAction = vi.fn().mockResolvedValue({
       result: { ok: true, result: { sent: true, terminalId: "t-a", submissionToken: "tok-1" } },
@@ -1010,6 +1012,87 @@ describe("terminal notices", () => {
         sent: true,
         reply: { outcome: "handback", reply: { text: "Fact: honey" } },
       });
+    });
+
+    it("drops the pane's undelivered notice about a target it prompts without notify", async () => {
+      const { terminalNotify, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-supersede");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "now vote" },
+      });
+      expect(terminalNotify.supersede).toHaveBeenCalledWith(OWN_PANE, "t-a");
+
+      terminalNotify.supersede.mockClear();
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "now vote", notify: true },
+      });
+      expect(terminalNotify.supersede).not.toHaveBeenCalled();
+      expect(terminalNotify.prepareSend).toHaveBeenCalled();
+    });
+
+    it("holds a notice behind the same call's reply wait, and drops it once answered", async () => {
+      const wait = vi.fn(() => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({ terminalId: "t-a", outcome: "handback" as const }),
+      }));
+      const { terminalNotify, start } = notifyDeps({ origin: "help" }, { replyWaiter: { wait } });
+      const server = await start("session-wait-notify");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "one fact", notify: true, waitForReply: true },
+      });
+      await Promise.resolve();
+
+      const hold = terminalNotify.prepareSend.mock.calls[0]?.[2]?.hold;
+      expect(hold).toBeDefined();
+      expect(terminalNotify.releaseHold).toHaveBeenCalledWith(OWN_PANE, hold, true);
+    });
+
+    it("gives each batch item's notice its own hold, released when its wait runs out", async () => {
+      const dispatchAction = vi.fn().mockImplementation(async (_id: string, args: unknown) => ({
+        result: {
+          ok: true,
+          result: {
+            launched: true,
+            terminalId: `t-${(args as { agentId: string }).agentId}`,
+            spawnStatus: null,
+          },
+        },
+      }));
+      const wait = vi.fn(() => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({ terminalId: "t-claude", outcome: "timeout" as const }),
+      }));
+      const { terminalNotify, start } = notifyDeps(
+        { origin: "help" },
+        { dispatchAction, replyWaiter: { wait } }
+      );
+      const server = await start("session-batch-wait-notify");
+
+      await callTool(server, {
+        name: "agent.launchMany",
+        arguments: {
+          agentIds: ["claude", "codex"],
+          prompt: "one fact",
+          notify: true,
+          waitForReply: true,
+        },
+      });
+
+      const holds = terminalNotify.prepareLaunch.mock.calls.map((call) => call[1]?.hold);
+      expect(holds).toHaveLength(2);
+      expect(holds[0]).toBeDefined();
+      expect(holds[0]).not.toBe(holds[1]);
+      expect(terminalNotify.releaseHold.mock.calls).toEqual([
+        [OWN_PANE, holds[0], false],
+        [OWN_PANE, holds[1], false],
+      ]);
     });
 
     it("gives a duplicate waited launch the reply, not a bare receipt", async () => {

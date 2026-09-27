@@ -109,6 +109,7 @@ import {
   setAgentNotificationServiceRef,
   setWindowsStoreNotifierServiceRef,
   setGlobalServicesInitialized,
+  getCliAvailabilityServiceRef,
 } from "./serviceRefs.js";
 
 /**
@@ -1189,7 +1190,11 @@ export async function initGlobalServices(
     helpSessionService.setProjectMetadataReader(async (projectId, projectPath) => {
       const { readHelpSessionProjectFacts } =
         await import("../services/helpSessionProjectMetadataReader.js");
-      return readHelpSessionProjectFacts(projectId, projectPath);
+      return readHelpSessionProjectFacts(
+        projectId,
+        projectPath,
+        () => getCliAvailabilityServiceRef()?.getAvailability() ?? null
+      );
     });
 
     // Arm the periodic orphan-bearer sweep (#10698): a defense-in-depth bound

@@ -337,6 +337,28 @@ describe("agentActions adversarial", () => {
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 
+  it("agent.launch names a misspelt agent id as unknown when handback or notify rides with it", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    for (const flags of [{ handback: true }, { notify: true }]) {
+      await expect(
+        callAction(actions, "agent.launch", { agentId: "anti-gravity", prompt: "do it", ...flags })
+      ).rejects.toThrow(/Unknown agent ID 'anti-gravity'\. Call agent\.listAvailable/);
+    }
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "terminal", prompt: "do it", handback: true })
+    ).rejects.toThrow(/not a registered agent/);
+    await expect(
+      callAction(actions, "agent.launch", {
+        agentId: "anti\u202e\u2060\u061cgravity",
+        prompt: "do it",
+        handback: true,
+      })
+    ).rejects.toThrow("Unknown agent ID 'antigravity'.");
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
   it("agent.launch refuses handback for a panel id even when a registry entry shares it", async () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);

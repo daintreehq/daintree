@@ -1526,6 +1526,7 @@ events.on("agent:handback-observed", (payload) => {
     type: "agent-handback-observed",
     terminalId: payload.terminalId,
     handback: payload.handback,
+    ...(payload.code !== undefined ? { code: payload.code } : {}),
     timestamp: payload.timestamp,
   });
 });

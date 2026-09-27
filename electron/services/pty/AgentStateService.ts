@@ -361,8 +361,9 @@ export class AgentStateService {
           }
         : {}),
       ...(newCheckResult ? { lastCheckResult: newCheckResult } : {}),
-      // An early observation retired its code, so the settle finds nothing to
-      // detect; it still owes the renderer the marker it saw.
+      // An early observation made outside `working` retired its code, so the
+      // settle finds nothing to detect; it still owes the renderer the marker
+      // it saw. One made while working left the code open for this check.
       ...(handbackHit
         ? { lastHandback: handbackHit.handback }
         : terminal.lastHandbackUnpublished && newState !== "working" && terminal.lastHandback
