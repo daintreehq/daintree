@@ -3,7 +3,12 @@ import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
 } from "@shared/types/ipc/agentSubagents";
-import { FIXTURES, isFixtureName, transcriptFor } from "./subagentChipFixtures";
+import {
+  FIXTURES,
+  isFixtureName,
+  transcriptFor,
+  type SubagentChipFixture,
+} from "./subagentChipFixtures";
 
 // Imported first by `subagentChip.tsx`, so the bridge is on `window` before any
 // store or client module evaluates.
@@ -16,7 +21,7 @@ import { FIXTURES, isFixtureName, transcriptFor } from "./subagentChipFixtures";
 const params = new URLSearchParams(window.location.search);
 const fixtureParam = params.get("fixture") ?? "codex-mixed";
 if (!isFixtureName(fixtureParam)) throw new Error(`unknown fixture "${fixtureParam}"`);
-const fixture = FIXTURES[fixtureParam];
+const fixture: SubagentChipFixture = FIXTURES[fixtureParam];
 
 const NOW = Date.now();
 let listCalls = 0;
@@ -26,6 +31,9 @@ const never = <T>() => new Promise<T>(() => {});
 function list(): Promise<AgentSubagentsResult> {
   listCalls += 1;
   if (fixture.hangRefresh && listCalls > 1) return never();
+  if (fixture.refreshFails && listCalls > 1) {
+    return Promise.resolve({ status: "unavailable", reason: "timeout" });
+  }
   return Promise.resolve({
     status: "ok",
     provider: fixture.provider,

@@ -21,6 +21,8 @@ export interface SubagentChipFixture {
   transcript: "ok" | "long" | "empty" | "unavailable" | "hang";
   /** Every list call after the first never answers — the popover's refreshing state. */
   hangRefresh?: boolean;
+  /** Every list call after the first answers a timeout — the retained-list state. */
+  refreshFails?: boolean;
 }
 
 const minute = 60_000;
@@ -171,6 +173,14 @@ export const FIXTURES = {
     subagents: CODEX_FLEET,
     transcript: "ok",
     hangRefresh: true,
+  },
+  "codex-refresh-failed": {
+    what: "a manual refresh that timed out after the list had been read",
+    provider: "codex",
+    width: 560,
+    subagents: CODEX_FLEET,
+    transcript: "ok",
+    refreshFails: true,
   },
   "claude-single": {
     what: "Claude pane with one completed child (singular copy, depth, long label)",

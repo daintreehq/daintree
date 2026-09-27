@@ -4,7 +4,11 @@ import { isElectronAvailable } from "./useElectron";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { AgentState } from "@/types";
-import type { AgentSubagentsResult, SubagentProvider } from "@shared/types/ipc/agentSubagents";
+import type {
+  AgentSubagentUnavailableReason,
+  AgentSubagentsResult,
+  SubagentProvider,
+} from "@shared/types/ipc/agentSubagents";
 
 /**
  * Floor between automatic refreshes. A Codex lookup spawns a short-lived
@@ -28,7 +32,27 @@ export interface UseSubagentsResult {
   result: AgentSubagentsResult | null;
   isLoading: boolean;
   refresh: () => void;
+  /**
+   * Set when the latest lookup failed for a reason that says nothing about
+   * which children exist (a timeout, an unreadable store), while `result` still
+   * holds the last list that did answer. Cleared by the next lookup that does.
+   */
+  refreshError: AgentSubagentUnavailableReason | null;
 }
+
+/**
+ * Failures of the lookup itself rather than answers about the session. A list
+ * that was already read stays on screen through these, because nothing about
+ * them contradicts it. Every other reason — the session can't be matched, is
+ * ambiguous, or belongs to another agent — does, so it replaces the list and
+ * the chip fails closed.
+ */
+const TRANSIENT_REASONS: ReadonlySet<AgentSubagentUnavailableReason> = new Set([
+  "timeout",
+  "protocol-error",
+  "store-unreadable",
+  "cli-missing",
+]);
 
 /**
  * Last answer per terminal, outliving the hook instance on purpose. Refs reset
@@ -94,7 +118,11 @@ export function useSubagents(
 ): UseSubagentsResult {
   const { provider, agentState, generation } = options;
   const key = cacheKey(provider ?? "codex", terminalId, generation);
-  const [entry, setEntry] = useState<{ key: string; result: AgentSubagentsResult } | null>(() => {
+  const [entry, setEntry] = useState<{
+    key: string;
+    result: AgentSubagentsResult;
+    refreshError?: AgentSubagentUnavailableReason;
+  } | null>(() => {
     const cached = lookupCache.get(key)?.result;
     return cached ? { key, result: cached } : null;
   });
@@ -133,21 +161,48 @@ export function useSubagents(
       const adapter = SUBAGENT_PROVIDERS[provider];
       inFlightKeys.add(key);
       setIsLoading(true);
+      const settle = (next: AgentSubagentsResult) => {
+        // Answers the key it was asked under. Without this an in-flight
+        // lookup that outlives an agent switch overwrites the new agent's
+        // list with the old one's, and stays wrong until something refetches.
+        if (!mountedRef.current || committedKeyRef.current !== key) return;
+        setEntry((current) => {
+          if (
+            next.status === "unavailable" &&
+            TRANSIENT_REASONS.has(next.reason) &&
+            current?.key === key &&
+            current.result.status === "ok"
+          ) {
+            return { key, result: current.result, refreshError: next.reason };
+          }
+          return { key, result: next };
+        });
+      };
+      // A transient failure still stamps the throttle, or a pane that keeps
+      // settling would retry on every settle, but it keeps the last good list
+      // as what a remount rehydrates to.
+      const remember = (next: AgentSubagentsResult) => {
+        const previous = lookupCache.get(key)?.result;
+        const keepPrevious =
+          next.status === "unavailable" &&
+          TRANSIENT_REASONS.has(next.reason) &&
+          previous?.status === "ok";
+        rememberLookup(key, keepPrevious ? previous : next, Date.now());
+      };
       void adapter
         .list({ terminalId })
         .then((next) => {
-          rememberLookup(key, next, Date.now());
-          // Answers the key it was asked under. Without this an in-flight
-          // lookup that outlives an agent switch overwrites the new agent's
-          // list with the old one's, and stays wrong until something refetches.
-          if (mountedRef.current && committedKeyRef.current === key)
-            setEntry({ key, result: next });
+          remember(next);
+          settle(next);
         })
         .catch((error: unknown) => {
           logWarn(`[useSubagents] list failed: ${formatErrorMessage(error, "unknown error")}`);
-          if (mountedRef.current && committedKeyRef.current === key) {
-            setEntry({ key, result: { status: "unavailable", reason: adapter.fallbackReason } });
-          }
+          const failed: AgentSubagentsResult = {
+            status: "unavailable",
+            reason: adapter.fallbackReason,
+          };
+          remember(failed);
+          settle(failed);
         })
         .finally(() => {
           inFlightKeys.delete(key);
@@ -173,7 +228,13 @@ export function useSubagents(
   // An answer for a key that is no longer current is not this session's answer.
   // Reporting null rather than the stale list is what keeps a respawned pane
   // from showing the dead process's children until the new lookup returns.
-  return { result: entry?.key === key ? entry.result : null, isLoading, refresh };
+  const current = entry?.key === key ? entry : null;
+  return {
+    result: current?.result ?? null,
+    isLoading,
+    refresh,
+    refreshError: current?.refreshError ?? null,
+  };
 }
 
 /** Test-only: the lookup cache is module state and outlives a render tree. */

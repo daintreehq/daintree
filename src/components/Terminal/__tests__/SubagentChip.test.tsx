@@ -43,6 +43,14 @@ vi.mock("@/components/ui/popover", () => ({
   PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+// The app mounts one TooltipProvider at the root; the trigger renders inline here
+// and the hover text, which this suite does not assert on, not at all.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+}));
+
 import { SubagentChip } from "../SubagentChip";
 import { __resetSubagentThrottle } from "@/hooks/useSubagents";
 
@@ -246,5 +254,93 @@ describe("SubagentChip", () => {
     fireEvent.click(await screen.findByText("Meitner"));
 
     expect(await screen.findByText(/latest messages/i)).toBeTruthy();
+  });
+
+  it("lists the children that need the user ahead of the rest, in provider order otherwise", async () => {
+    listSubagents.mockResolvedValue(
+      ok([
+        subagent({ id: "a", label: "Quiet one" }),
+        subagent({ id: "b", label: "Broken", status: { type: "error" } }),
+        subagent({ id: "c", label: "Quiet two", status: { type: "working" } }),
+        subagent({ id: "d", label: "Asking", status: { type: "blocked", reason: "approval" } }),
+      ])
+    );
+    render(<SubagentChip terminalId="t1" />);
+    await screen.findByText("Asking");
+
+    const order = screen
+      .getAllByRole("button", { expanded: false })
+      .map((row) => row.textContent ?? "")
+      .map((text) => ["Asking", "Broken", "Quiet one", "Quiet two"].find((n) => text.includes(n)));
+    expect(order).toEqual(["Asking", "Broken", "Quiet one", "Quiet two"]);
+  });
+
+  it("says on the chip itself when a child is waiting on the user", async () => {
+    listSubagents.mockResolvedValue(
+      ok([subagent(), subagent({ id: "c2", status: { type: "blocked", reason: "input" } })])
+    );
+    render(<SubagentChip terminalId="t1" />);
+    const chip = await screen.findByRole("button", { name: /^2 Codex subagents/ });
+    expect(chip.getAttribute("aria-label")).toMatch(/1 waiting/);
+  });
+
+  it("keeps the refresh button focusable while its lookup is in flight", async () => {
+    listSubagents.mockResolvedValueOnce(ok([subagent()]));
+    render(<SubagentChip terminalId="t1" />);
+    const refresh = await screen.findByRole("button", { name: "Refresh subagents" });
+
+    listSubagents.mockReturnValueOnce(new Promise(() => {}));
+    refresh.focus();
+    fireEvent.click(refresh);
+
+    await waitFor(() => expect(refresh.getAttribute("aria-disabled")).toBe("true"));
+    // A natively disabled button would have thrown focus to the page.
+    expect(refresh.hasAttribute("disabled")).toBe(false);
+    expect(document.activeElement).toBe(refresh);
+  });
+
+  it("keeps showing the children it found when a refresh fails, and says so", async () => {
+    listSubagents.mockResolvedValueOnce(ok([subagent()]));
+    render(<SubagentChip terminalId="t1" />);
+    const refresh = await screen.findByRole("button", { name: "Refresh subagents" });
+
+    listSubagents.mockResolvedValueOnce({ status: "unavailable", reason: "timeout" });
+    fireEvent.click(refresh);
+
+    expect(await screen.findByText(/Couldn't refresh/)).toBeTruthy();
+    expect(screen.getByText("Meitner")).toBeTruthy();
+  });
+
+  it("does not turn each open transcript into a landmark", async () => {
+    listSubagents.mockResolvedValue(ok([subagent(), subagent({ id: "child-2", label: "Kant" })]));
+    readSubagentTranscript.mockResolvedValue({
+      status: "ok",
+      subagentId: "child-1",
+      messages: [{ role: "reply", text: "All good" }],
+      truncated: false,
+    });
+    render(<SubagentChip terminalId="t1" />);
+    fireEvent.click(await screen.findByText("Meitner"));
+    fireEvent.click(screen.getByText("Kant"));
+    await screen.findAllByText("All good");
+
+    expect(screen.queryAllByRole("region")).toHaveLength(0);
+    // The disclosure still points at the panel it shows.
+    const row = screen.getByText("Meitner").closest("button")!;
+    expect(document.getElementById(row.getAttribute("aria-controls")!)).not.toBeNull();
+  });
+
+  it("shows a retried transcript read in progress instead of leaving the error up", async () => {
+    listSubagents.mockResolvedValue(ok([subagent()]));
+    readSubagentTranscript.mockResolvedValueOnce({ status: "unavailable", reason: "timeout" });
+    render(<SubagentChip terminalId="t1" />);
+    fireEvent.click(await screen.findByText("Meitner"));
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    readSubagentTranscript.mockReturnValueOnce(new Promise(() => {}));
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(screen.queryByText(/took too long/)).toBeNull());
+    expect(await screen.findByText("Loading transcript")).toBeTruthy();
   });
 });

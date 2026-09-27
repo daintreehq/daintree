@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Network } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Spinner } from "@/components/ui/Spinner";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
@@ -14,6 +18,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SUBAGENT_PROVIDERS, toSubagentProvider } from "@/clients/subagentProviders";
 import { useSubagents } from "@/hooks/useSubagents";
 import {
+  subagentAttentionRank,
   subagentStatusLabel,
   subagentStatusTone,
   subagentSubtitle,
@@ -27,11 +32,31 @@ import type {
 } from "@shared/types/ipc/agentSubagents";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
-const TONE_CLASSES: Record<"error" | "active" | "muted", string> = {
+const TONE_CLASSES: Record<"error" | "waiting" | "muted", string> = {
   error: "text-status-error",
-  active: "text-status-info",
+  waiting: "text-state-waiting",
   muted: "text-text-secondary",
 };
+
+/** The header's own control ring (see `PanelHeader`), so the chip focuses like its neighbours. */
+const CHIP_FOCUS_CLASS =
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary";
+
+/**
+ * Children that need the user first, the provider's order otherwise. Sorting
+ * is stable, and the list only changes when a lookup answers, so nothing moves
+ * under the pointer while the popover is being read.
+ */
+function byAttention(subagents: AgentSubagent[]): AgentSubagent[] {
+  return subagents
+    .map((subagent, index) => ({ subagent, index }))
+    .sort(
+      (a, b) =>
+        subagentAttentionRank(a.subagent.status) - subagentAttentionRank(b.subagent.status) ||
+        a.index - b.index
+    )
+    .map(({ subagent }) => subagent);
+}
 
 function TranscriptBody({
   transcript,
@@ -51,7 +76,10 @@ function TranscriptBody({
         <button
           type="button"
           onClick={onRetry}
-          className="text-xs text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors"
+          className={cn(
+            "rounded-sm text-xs text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors",
+            CHIP_FOCUS_CLASS
+          )}
         >
           Retry
         </button>
@@ -96,7 +124,7 @@ function SubagentRow({
   // rather than a boolean is what makes a child that ran again reload instead
   // of showing messages from before its latest run.
   const [loadedFor, setLoadedFor] = useState<number | null>(null);
-  const showSpinner = useDohertyGate(isLoading);
+  const showSpinner = useDeferredLoading(isLoading, UI_INLINE_LOADING_GATE_MS);
   const subtitle = subagentSubtitle(subagent);
   const tone = subagentStatusTone(subagent.status);
   const panelId = `subagent-${terminalId}-${provider}-${subagent.id}`;
@@ -130,7 +158,12 @@ function SubagentRow({
 
   // Clearing the version is the retry: the effect above sees the mismatch and
   // refetches, so there is one load path rather than two.
-  const retry = useCallback(() => setLoadedFor(null), []);
+  // The failed answer is dropped with it, so the retry shows its own progress
+  // rather than leaving the old error standing while the read runs.
+  const retry = useCallback(() => {
+    setTranscript(null);
+    setLoadedFor(null);
+  }, []);
 
   const Chevron = isOpen ? ChevronDown : ChevronRight;
 
@@ -146,42 +179,53 @@ function SubagentRow({
           PALETTE_ROW_FOCUS_CLASS
         )}
       >
-        <Chevron className="w-3 h-3 mt-0.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
+        <Chevron className="w-3 h-3 mt-0.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        {/* Two lines, two columns: what the child is on the left, what state
+            it is in and when on the right, so the status sits in one column
+            the eye can run down whatever each name's length. */}
         <span className="flex-1 min-w-0 flex flex-col gap-0.5">
-          <span className="flex items-center gap-2">
-            <span className="text-xs font-medium text-text-primary truncate">
+          <span className="flex items-baseline gap-3">
+            <span className="flex-1 min-w-0 text-xs font-medium text-text-primary truncate">
               {subagentTitle(subagent)}
             </span>
-            <span className={cn("text-3xs shrink-0", TONE_CLASSES[tone])}>
+            <span className={cn("shrink-0 text-2xs font-medium", TONE_CLASSES[tone])}>
               {subagentStatusLabel(subagent.status)}
             </span>
           </span>
-          {subtitle && <span className="text-2xs text-text-secondary truncate">{subtitle}</span>}
-        </span>
-        {subagent.updatedAt > 0 && (
-          <span className="text-3xs text-text-placeholder shrink-0 mt-0.5 tabular-nums">
-            {formatTimeAgo(subagent.updatedAt)}
-          </span>
-        )}
-      </button>
-      <div
-        id={panelId}
-        role="region"
-        aria-label={`${subagentTitle(subagent)} transcript`}
-        hidden={!isOpen}
-        className="px-3 pb-3 pl-8"
-      >
-        {isOpen &&
-          (transcript === null ? (
-            showSpinner ? (
-              <span className="flex items-center gap-2 text-xs text-text-secondary" role="status">
-                <Spinner size="sm" />
-                Loading transcript
+          {(subtitle || subagent.updatedAt > 0) && (
+            <span className="flex items-baseline gap-3">
+              <span className="flex-1 min-w-0 text-2xs text-text-secondary truncate">
+                {subtitle}
               </span>
-            ) : null
-          ) : (
-            <TranscriptBody transcript={transcript} provider={provider} onRetry={retry} />
-          ))}
+              {subagent.updatedAt > 0 && (
+                <span className="shrink-0 text-3xs text-text-secondary tabular-nums">
+                  {formatTimeAgo(subagent.updatedAt)}
+                </span>
+              )}
+            </span>
+          )}
+        </span>
+      </button>
+      {/* No `role="region"`: a landmark per expanded child floods the
+          landmark list once a few are open, and `aria-controls` already ties
+          each panel to its row. */}
+      <div id={panelId} hidden={!isOpen} className="px-3 pb-3 pl-8">
+        {isOpen && (
+          <>
+            {showSpinner && (
+              <span
+                className="mb-2 flex items-center gap-2 text-xs text-text-secondary"
+                role="status"
+              >
+                <Spinner size="sm" />
+                {transcript === null ? "Loading transcript" : "Loading newer messages"}
+              </span>
+            )}
+            {transcript !== null && (
+              <TranscriptBody transcript={transcript} provider={provider} onRetry={retry} />
+            )}
+          </>
+        )}
       </div>
     </li>
   );
@@ -219,7 +263,8 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   );
 
   const active = hasPty ? provider : null;
-  const { result, isLoading, refresh } = useSubagents(terminalId, {
+  const headingId = useId();
+  const { result, isLoading, refresh, refreshError } = useSubagents(terminalId, {
     provider: active,
     agentState,
     generation,
@@ -230,44 +275,85 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   if (!active || result?.status !== "ok" || result.provider !== active) return null;
   if (result.subagents.length === 0) return null;
 
-  const { subagents } = result;
+  const subagents = byAttention(result.subagents);
   const label = SUBAGENT_PROVIDERS[result.provider].label;
+  const count = subagents.length;
+  const waiting = subagents.filter((subagent) => subagent.status.type === "blocked").length;
+  const summary = `${count} ${label} subagent${count === 1 ? "" : "s"}`;
+  const waitingNote = waiting > 0 ? `${waiting} waiting on you` : null;
 
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider hover:text-text-primary transition-colors"
-          aria-label={`${subagents.length} ${label} subagent${subagents.length === 1 ? "" : "s"}`}
-        >
-          <Network className="w-3 h-3" aria-hidden="true" />
-          <span className="tabular-nums">{subagents.length}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
-          <span className="text-xs font-medium text-text-primary">{label} subagents</span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                "inline-flex items-center gap-1 shrink-0 text-xs font-sans bg-overlay-soft px-1.5 py-0.5 rounded-full border border-divider hover:text-text-primary transition-colors",
+                // The chip borrows the waiting hue only while a child is
+                // blocked on the user — the one thing worth seeing from the
+                // header without opening anything.
+                waiting > 0 ? "text-state-waiting" : "text-text-secondary",
+                CHIP_FOCUS_CLASS
+              )}
+              aria-label={waitingNote ? `${summary}, ${waitingNote}` : summary}
+            >
+              <Network className="w-3 h-3" aria-hidden="true" />
+              <span className="tabular-nums">{count}</span>
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          <div className="flex flex-col gap-0.5">
+            <span className="font-medium">{summary}</span>
+            <span>{waitingNote ? `${waitingNote}. Click to review.` : "Click to review."}</span>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+      <PopoverContent align="end" className="w-80 p-0" aria-labelledby={headingId}>
+        <div className="flex items-center justify-between gap-2 pl-3 pr-1.5 py-1.5 border-b border-divider">
+          <span id={headingId} className="text-xs font-medium text-text-primary">
+            {label} subagents
+          </span>
           <button
             type="button"
-            onClick={refresh}
-            disabled={isLoading}
-            className="text-daintree-text/40 hover:text-text-primary transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            onClick={() => {
+              if (!isLoading) refresh();
+            }}
+            // Not `disabled`: that would drop keyboard focus to the page the
+            // moment the button is pressed. The spin is the busy state.
+            aria-disabled={isLoading}
+            className={cn(
+              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
+              CHIP_FOCUS_CLASS
+            )}
             aria-label="Refresh subagents"
           >
-            <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} aria-hidden="true" />
+            <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3.5 h-3.5" aria-hidden />
           </button>
         </div>
-        <ul className="max-h-80 overflow-y-auto">
-          {subagents.map((subagent) => (
-            <SubagentRow
-              key={`${result.provider}:${subagent.id}`}
-              terminalId={terminalId}
-              provider={result.provider}
-              subagent={subagent}
-            />
-          ))}
-        </ul>
+        {/* Always mounted, so a failed refresh is announced when it lands. */}
+        <div role="status" aria-live="polite">
+          {refreshError && (
+            <p className="px-3 py-2 border-b border-divider text-2xs text-text-secondary">
+              Couldn't refresh: {subagentUnavailableMessage(refreshError, label)}. Showing the last
+              list.
+            </p>
+          )}
+        </div>
+        <ScrollShadow compact className="max-h-80">
+          <ul>
+            {subagents.map((subagent) => (
+              <SubagentRow
+                key={`${result.provider}:${subagent.id}`}
+                terminalId={terminalId}
+                provider={result.provider}
+                subagent={subagent}
+              />
+            ))}
+          </ul>
+        </ScrollShadow>
       </PopoverContent>
     </Popover>
   );

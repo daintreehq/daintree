@@ -57,6 +57,7 @@ const PLAN: Record<string, State[]> = {
   "codex-transcript-unavailable": ["expanded"],
   "codex-transcript-loading": ["expanded"],
   "codex-refreshing": ["refreshing"],
+  "codex-refresh-failed": ["refresh-failed"],
   "claude-single": ["header", "open", "expanded"],
   "codex-dense": ["open"],
   "codex-narrow": ["header", "open"],
@@ -182,7 +183,17 @@ async function capture(page: Page, fixture: string, state: State, theme: string)
     case "refreshing": {
       const content = await openPopover(page, chip);
       await content.getByRole("button", { name: /^Refresh/ }).click();
-      await expect(content.getByRole("button", { name: /^Refresh/ })).toBeDisabled();
+      await expect(content.getByRole("button", { name: /^Refresh/ })).toHaveAttribute(
+        "aria-disabled",
+        "true"
+      );
+      return shoot(page, [pane, content], file);
+    }
+    case "refresh-failed": {
+      const content = await openPopover(page, chip);
+      await content.getByRole("button", { name: /^Refresh/ }).click();
+      await expect(content).toContainText(/Couldn't refresh/);
+      await expect(content).toContainText(/Meitner/);
       return shoot(page, [pane, content], file);
     }
   }
