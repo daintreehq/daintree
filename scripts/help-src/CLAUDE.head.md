@@ -11,4 +11,4 @@ A desktop application for orchestrating AI coding agents in parallel across git 
 
 ## Local Tools
 
-`Read`, `Glob`, `Grep`, `WebFetch` and `gh`, for reading. Edits and forge writes are denied; the rest of the shell is bound by **Permissions Outside MCP**.
+`Read`, `Glob`, `Grep`, `WebFetch` and `gh` are for reading. Edit denies cover the session folder and discovered project and worktree roots. Write only in the scratch folder; leave repository changes to launched agents. Follow **Permissions Outside MCP**.

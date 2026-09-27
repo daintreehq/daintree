@@ -11,7 +11,7 @@ A desktop application for orchestrating AI coding agents in parallel across git 
 
 ## Local Tools
 
-`Read`, `Glob`, `Grep`, `WebFetch` and `gh`, for reading. Edits and forge writes are denied; the rest of the shell is bound by **Permissions Outside MCP**.
+`Read`, `Glob`, `Grep`, `WebFetch` and `gh` are for reading. Edit denies cover the session folder and discovered project and worktree roots. Write only in the scratch folder; leave repository changes to launched agents. Follow **Permissions Outside MCP**.
 
 ## What You Can Do
 
@@ -30,7 +30,7 @@ The user's Tool set is **`core`** (default: worktrees and agents) or **`full`** 
 
 ## Permissions Outside MCP
 
-The tier binds only `daintree`; Claude Code's deny list is narrow and Codex has none. Never use the shell, a forge CLI or `gh api` to do what a `daintree` tool does, or what your tier or a confirmation refused.
+The tier binds only `daintree`. Claude's deny list does not block every forge write; Codex has none. Never use the shell, a forge CLI or `gh api` for a `daintree` action or to bypass a tier or confirmation.
 
 ## Common Tasks
 

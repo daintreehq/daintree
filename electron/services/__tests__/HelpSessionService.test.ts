@@ -143,7 +143,12 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
   };
 });
 
-import { HelpSessionService, codexTrustArgs, projectRuleRoots } from "../HelpSessionService.js";
+import {
+  HelpSessionService,
+  codexTrustArgs,
+  projectRuleRoots,
+  editDenyRuleRoots,
+} from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
@@ -790,6 +795,123 @@ describe("HelpSessionService", () => {
     expect(settings.permissions.deny).toContain("Edit(**)");
   });
 
+  it("denies edits in every known project and worktree without granting reads there (#12879)", async () => {
+    const reader = vi.fn(async () => [
+      "/tmp/project",
+      "/work/other-project",
+      "/work/project-worktrees/fix",
+    ]);
+    service.setKnownProjectRootsReader(reader);
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(reader).toHaveBeenCalledWith("/tmp/project");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    expect(deny).toContain("Edit(**)");
+    expect(deny).toContain("Edit(//work/other-project/**)");
+    expect(deny).toContain("Edit(//work/project-worktrees/fix/**)");
+    expect(deny.filter((rule) => rule === "Edit(//tmp/project/**)")).toHaveLength(1);
+    expect(settings.permissions.allow).not.toContain("Read(//work/other-project/**)");
+    expect(settings.permissions.additionalDirectories).toEqual(["/tmp/project"]);
+  });
+
+  it("never denies edits over the assistant's own scratch and session folders", async () => {
+    service.setKnownProjectRootsReader(async () => [tmpRoot, userData, "/work/other-project"]);
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    expect(deny).toContain("Edit(//work/other-project/**)");
+    for (const covering of [tmpRoot, userData, await fs.realpath(tmpRoot)]) {
+      expect(deny).not.toContain(`Edit(/${covering}/**)`);
+    }
+  });
+
+  it("keeps the served project's deny when the known-roots reader fails", async () => {
+    service.setKnownProjectRootsReader(async () => {
+      throw new Error("sqlite is gone");
+    });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    expect(settings.permissions.deny).toContain("Edit(//tmp/project/**)");
+  });
+
+  it("only gathers known roots for Claude sessions", async () => {
+    const reader = vi.fn(async () => ["/work/other-project"]);
+    service.setKnownProjectRootsReader(reader);
+
+    await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it("never denies edits over the scratch folder even when serving a project that contains it", async () => {
+    const result = await service.provisionSession({ ...provisionInput(), projectPath: tmpRoot });
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    for (const covering of [tmpRoot, await fs.realpath(tmpRoot)]) {
+      expect(deny).not.toContain(`Edit(/${covering}/**)`);
+    }
+    expect(deny).toContain("Edit(**)");
+  });
+
+  it("drops roots that equal or contain a protected folder, but not prefix neighbours", async () => {
+    await expect(
+      editDenyRuleRoots(
+        ["/data", "/data/app", "/data/app-sibling", "/elsewhere", "/elsewhere"],
+        ["/data/app/help-sessions"],
+        "darwin"
+      )
+    ).resolves.toEqual(["//data/app-sibling", "//elsewhere"]);
+  });
+
+  it("still denies a root by its given path when resolving it stalls", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const realpath = vi.spyOn(fs, "realpath");
+    try {
+      realpath.mockImplementation(((p: string) =>
+        p === "/stalled/mount"
+          ? new Promise(() => {})
+          : Promise.reject(new Error("ENOENT"))) as never);
+      const pending = editDenyRuleRoots(["/stalled/mount", "/elsewhere"], ["/data/app"], "darwin");
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(pending).resolves.toEqual(["//stalled/mount", "//elsewhere"]);
+    } finally {
+      realpath.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("sees a protected folder through a symlinked parent before it exists", async () => {
+    const real = path.join(tmpRoot, "real");
+    const link = path.join(tmpRoot, "link");
+    await fs.mkdir(real);
+    await fs.symlink(real, link);
+
+    const rules = await editDenyRuleRoots(
+      [real, "/elsewhere"],
+      [path.join(link, "app", "assistant-scratch")],
+      "darwin"
+    );
+    expect(rules).toEqual(["//elsewhere"]);
+  });
+
   it("writes project rules as literal paths, escaping glob characters", async () => {
     await expect(projectRuleRoots("/work/repo[1]/*", "darwin")).resolves.toEqual([
       "//work/repo\\[1\\]/\\*",
@@ -826,8 +948,8 @@ describe("HelpSessionService", () => {
     expect(settings.permissions.allow).toContain("Bash(gh *)");
     expect(settings.permissions.allow).toContain("Bash(glab *)");
     expect(settings.permissions.allow).toContain("Bash(tea *)");
-    // All destructive write paths stay hard-blocked — a partial drop of
-    // this list must fail the test, not slip through.
+    // The bundled forge creates, merges and repo deletes stay denied — a
+    // partial drop of this list must fail the test, not slip through.
     for (const denied of [
       "Bash(gh issue create*)",
       "Bash(gh pr create*)",
