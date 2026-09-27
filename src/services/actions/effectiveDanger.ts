@@ -89,12 +89,13 @@ export function resolveEffectiveActionDanger(
 export const CLOSE_ALL_ACTION_ID = "terminal.closeAll";
 
 /**
- * Why a safe dispatch was elevated, in the resolver's own precedence, for the
- * host confirm dialog. Only read when the elevation actually fired.
+ * Why a safe dispatch was elevated, for the host confirm dialog. Only read
+ * when the elevation actually fired. A close-all names its sweep whatever else
+ * its arguments carry, since that is the consequence being approved.
  */
 export function elevatedDangerRationale(actionId: string, args: unknown): string {
-  if (dispatchCarriesRecipeId(args)) return RECIPE_DISPATCH_DANGER_RATIONALE;
   if (actionId === CLOSE_ALL_ACTION_ID) return CLOSE_ALL_DISPATCH_DANGER_RATIONALE;
+  if (dispatchCarriesRecipeId(args)) return RECIPE_DISPATCH_DANGER_RATIONALE;
   return terminalLaunchDangerRationale(args) ?? RECIPE_DISPATCH_DANGER_RATIONALE;
 }
 

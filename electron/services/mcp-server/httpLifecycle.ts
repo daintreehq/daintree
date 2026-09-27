@@ -178,6 +178,7 @@ export interface HttpLifecycleDeps {
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   isTerminalIdInUse: (terminalId: string) => boolean;
+  readTerminalAgentState?: import("./sessionServer.js").SessionServerDeps["readTerminalAgentState"];
   /** Terminal notices. Absent, `terminal.notifyWhenIdle` and `notify: true` answer not-eligible. */
   terminalNotify?: import("./terminalNotify.js").TerminalNotifyHandlers;
   replyWaiter?: Pick<import("./replyWaiter.js").ReplyWaiterService, "wait">;
@@ -2176,6 +2177,9 @@ export class HttpLifecycle {
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
+      ...(this.deps.readTerminalAgentState !== undefined
+        ? { readTerminalAgentState: this.deps.readTerminalAgentState }
+        : {}),
       ...(this.deps.replyWaiter !== undefined ? { replyWaiter: this.deps.replyWaiter } : {}),
       ...(this.deps.terminalNotify !== undefined
         ? { terminalNotify: this.deps.terminalNotify }

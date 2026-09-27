@@ -942,6 +942,16 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   isTerminalIdInUse: (terminalId: string) => boolean;
   /**
+   * The pty-host's own agent state for a terminal (#12881): `null` for an id
+   * it does not track, such as a browser panel. Rejects when the state cannot
+   * be read. Asked rather than the AgentAvailabilityStore mirror, which each
+   * window's startup replaces with an empty one, so a missing entry there says
+   * nothing about the agent. Absent, every close of a busy-capable panel asks.
+   */
+  readTerminalAgentState?: (
+    terminalId: string
+  ) => Promise<import("../../../shared/types/agent.js").AgentState | null>;
+  /**
    * Terminal notices. Optional so fixtures that never exercise them need not
    * stub them; absent, `terminal.notifyWhenIdle` and `notify: true` answer
    * not-eligible.
@@ -1151,6 +1161,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     resolveOwnPane,
     requestApproval,
     requestCloseApproval,
+    readTerminalAgentState,
   } = deps;
 
   /**
@@ -1432,13 +1443,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * still mid-task, is a different authority and needs the user.
      *
      * A hand-over does not count as creation: it lends the right to drive an
-     * agent, not to discard it. No ownership record reads as "not created",
-     * so a missing record asks rather than closes.
+     * agent, not to discard it. Anything unknown asks: no ownership record, or
+     * an agent state that could not be read.
      */
-    const closeNeedsApproval = (terminalId: string): boolean => {
+    const closeNeedsApproval = async (terminalId: string): Promise<boolean> => {
       if (ownedRecordFor("terminal", terminalId) === undefined) return true;
-      const state = getAgentAvailabilityStore().getTerminalSnapshot(terminalId)?.state;
-      return state !== undefined && ASSISTANT_CLOSE_CONFIRM_AGENT_STATES.has(state);
+      if (readTerminalAgentState === undefined) return true;
+      try {
+        const state = await readTerminalAgentState(terminalId);
+        return state !== null && ASSISTANT_CLOSE_CONFIRM_AGENT_STATES.has(state);
+      } catch {
+        return true;
+      }
     };
 
     const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
@@ -2542,7 +2558,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           batchItem?.closeApproved !== true
         ) {
           const terminalId = readStringArg(args, "terminalId");
-          if (terminalId !== undefined && terminalId.length > 0 && closeNeedsApproval(terminalId)) {
+          if (
+            terminalId !== undefined &&
+            terminalId.length > 0 &&
+            (await closeNeedsApproval(terminalId))
+          ) {
+            // Announced before the wait, so the strip shows the call awaiting
+            // the user rather than nothing at all until they answer.
+            emitToolCallStarted(true);
             const asked = await askToClose([terminalId]);
             if ("refusal" in asked) return asked.refusal;
             if (!asked.approved.has(terminalId)) {
@@ -2681,7 +2704,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             actionId === "terminal.closeMany" && rendererOwnedOrigin
               ? [...new Set((parsed.data as TerminalCloseManyArgs).terminalIds)]
               : [];
-          const closeNeedsAsking = closeIds.some(closeNeedsApproval);
+          const closeNeedsAsking = (await Promise.all(closeIds.map(closeNeedsApproval))).some(
+            Boolean
+          );
           emitToolCallStarted(closeNeedsAsking);
           if (closeNeedsAsking) {
             const asked = await askToClose(closeIds);
@@ -2714,7 +2739,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 error: {
                   code: USER_REJECTED_CODE,
                   message:
-                    "The user unchecked this panel, so it was not closed. Do not retry it or ask again on its behalf.",
+                    "This panel was not approved for closing, so it was not closed. Do not retry it or ask again on its behalf.",
                 },
               });
               continue;
@@ -3297,7 +3322,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // proof of human authorization — a headless/agentic client could
         // otherwise self-approve its own destructive call (#11342). Only a
         // host-issued native grant (`nativeGrantId`) pre-authorizes a dispatch.
-        emitToolCallStarted(entry?.danger === "confirm");
+        // A protected close already announced itself before asking (#12881).
+        // An agent's close-all always raises the dialog, whatever it declares.
+        if (!toolCallStartedEmitted) {
+          emitToolCallStarted(entry?.danger === "confirm" || actionId === "terminal.closeAll");
+        }
 
         // The workspace the dispatch actually landed on, resolved renderer-side
         // at response time (#11536). Only ever set from a completed dispatch, so

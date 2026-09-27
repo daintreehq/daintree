@@ -318,7 +318,7 @@ function terminalIdsArg(args: unknown): readonly string[] | undefined {
 }
 
 /** Why the assistant's close is being put to the user (#12881). */
-export const PROTECTED_CLOSE_RATIONALE = `The assistant didn't open some of these panels, or their agent was last seen working or waiting. Closed panels stay in the trash for ${TRASH_TTL_MS / 1000} seconds; after that their processes are gone.`;
+export const PROTECTED_CLOSE_RATIONALE = `The assistant didn't open some of these panels, or their agent was last seen working or waiting. Most closed panels stay in the trash for ${TRASH_TTL_MS / 1000} seconds, and some are discarded at once; after that their processes are gone.`;
 
 /**
  * The checklist for an assistant close main has put to the user (#12881), or

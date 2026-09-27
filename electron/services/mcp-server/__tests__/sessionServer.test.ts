@@ -66,6 +66,7 @@ import {
   RendererBridgeUnavailableError,
 } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
+import type { AgentState } from "../../../../shared/types/agent.js";
 import { events } from "../../events.js";
 import {
   MCP_EXTERNAL_OMITTED_ARGS,
@@ -1432,8 +1433,11 @@ describe("terminal notices", () => {
     });
 
     it("drops the pane's own notice for a terminal it closes", async () => {
-      const { deps, terminalNotify, start } = notifyDeps({ origin: "help" });
-      // One the session launched, so the close runs without asking (#12881).
+      const { deps, terminalNotify, start } = notifyDeps(
+        { origin: "help" },
+        { readTerminalAgentState: vi.fn(async () => null) }
+      );
+      // One the session launched, idle, so the close runs without asking (#12881).
       deps.sessionStore.resourceOwnership.record("session-close-forgets", [
         { kind: "terminal", id: "t-a" },
       ]);
@@ -10658,9 +10662,11 @@ describe("assistant close approval (#12881)", () => {
 
   function closeDeps(
     origin: string,
-    requestCloseApproval: SessionServerDeps["requestCloseApproval"] | undefined
+    requestCloseApproval: SessionServerDeps["requestCloseApproval"] | undefined,
+    agentStates: Record<string, AgentState> = {}
   ) {
     const sessionStore = fakeSessionStore("core");
+    const readTerminalAgentState = vi.fn(async (id: string) => agentStates[id] ?? null);
     const dispatchAction = vi.fn(async (_id: string, args: unknown) => ({
       result: {
         ok: true,
@@ -10670,6 +10676,7 @@ describe("assistant close approval (#12881)", () => {
     const deps = fakeDeps({
       sessionStore,
       dispatchAction,
+      readTerminalAgentState,
       ...(requestCloseApproval !== undefined ? { requestCloseApproval } : {}),
     });
     const start = async (sessionId: string, owned: string[] = []) => {
@@ -10687,25 +10694,8 @@ describe("assistant close approval (#12881)", () => {
       await server.connect(makeMockTransport());
       return server;
     };
-    return { dispatchAction, start };
+    return { dispatchAction, readTerminalAgentState, start };
   }
-
-  function markAgent(terminalId: string, state: "working" | "waiting" | "idle"): void {
-    events.emit("agent:spawned", { agentId: "claude", terminalId, timestamp: 1_000 });
-    events.emit("agent:state-changed", {
-      agentId: "claude",
-      terminalId,
-      state,
-      previousState: "idle",
-      trigger: "output",
-      confidence: 1,
-      timestamp: 2_000,
-    });
-  }
-
-  afterEach(() => {
-    getAgentAvailabilityStore().clear();
-  });
 
   it("asks before the assistant closes a panel it did not open, then closes it", async () => {
     const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-user"]));
@@ -10746,9 +10736,8 @@ describe("assistant close approval (#12881)", () => {
 
   it("closes a panel the session launched, once its agent is idle, without asking", async () => {
     const requestCloseApproval = vi.fn();
-    const { dispatchAction, start } = closeDeps("help", requestCloseApproval);
+    const { dispatchAction, start } = closeDeps("help", requestCloseApproval, { "t-own": "idle" });
     const server = await start("s-close-own-idle", ["t-own"]);
-    markAgent("t-own", "idle");
 
     await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
 
@@ -10760,15 +10749,77 @@ describe("assistant close approval (#12881)", () => {
     "asks before closing its own panel whose agent is %s",
     async (state) => {
       const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-own"]));
-      const { start } = closeDeps("assistant-pane", requestCloseApproval);
+      const { start } = closeDeps("assistant-pane", requestCloseApproval, { "t-own": state });
       const server = await start(`s-close-own-${state}`, ["t-own"]);
-      markAgent("t-own", state);
 
       await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
 
       expect(requestCloseApproval).toHaveBeenCalledTimes(1);
     }
   );
+
+  it.each(["directing", "completed", "exited"] as const)(
+    "closes its own panel whose agent is %s without asking",
+    async (state) => {
+      const requestCloseApproval = vi.fn();
+      const { dispatchAction, start } = closeDeps("help", requestCloseApproval, {
+        "t-own": state,
+      });
+      const server = await start(`s-close-own-${state}`, ["t-own"]);
+
+      await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
+
+      expect(requestCloseApproval).not.toHaveBeenCalled();
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("asks when its own panel's agent state cannot be read", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-own"]));
+    const { readTerminalAgentState, start } = closeDeps("help", requestCloseApproval);
+    readTerminalAgentState.mockRejectedValue(new Error("pty host gone"));
+    const server = await start("s-close-own-unreadable", ["t-own"]);
+
+    await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
+
+    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes nothing when an approval reports no selection", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+    });
+    const { dispatchAction, start } = closeDeps("help", requestCloseApproval);
+    const server = await start("s-close-no-selection");
+
+    const result = await callTool(server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: ["t-user", "t-other"] },
+    });
+
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(result.structuredContent).toMatchObject({
+      results: [
+        { target: "t-user", ok: false, error: { code: "USER_REJECTED" } },
+        { target: "t-other", ok: false, error: { code: "USER_REJECTED" } },
+      ],
+    });
+  });
+
+  it("refuses when the dialog cannot be raised, without closing", async () => {
+    const requestCloseApproval = vi.fn().mockRejectedValue(new Error("window gone"));
+    const { dispatchAction, start } = closeDeps("help", requestCloseApproval);
+    const server = await start("s-close-route-throws");
+
+    const result = await callTool(server, {
+      name: "terminal.close",
+      arguments: { terminalId: "t-user" },
+    });
+
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(toolErrorPayload(result).code).toBe("CONFIRMATION_REQUIRED");
+  });
 
   it("refuses when there is no way to ask, rather than closing unasked", async () => {
     const { dispatchAction, start } = closeDeps("help", undefined);

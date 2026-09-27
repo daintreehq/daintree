@@ -700,6 +700,26 @@ describe("useMcpBridge", () => {
     });
   });
 
+  it("keeps an above-tier close as a plain approval, without the close checklist", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.closeMany", title: "Close" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-above-close",
+      actionId: "terminal.closeMany",
+      args: { terminalIds: ["p1"] },
+      sessionOrigin: "external",
+      approvalOnly: true,
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.approvalReason).toBe("above-tier");
+    expect(pending?.selectableTargets).toBeUndefined();
+    expect(pending?.dangerRationale).toBeUndefined();
+  });
+
   it("refuses an approval-only request for an action this view does not know", async () => {
     mocks.get.mockReturnValue(null);
 

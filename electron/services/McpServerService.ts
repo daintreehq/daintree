@@ -356,6 +356,17 @@ export class McpServerService {
       // The pty-host's own spawn tracking spans every view, which is what a
       // collision check needs: a panel store only knows its own (#12407).
       isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
+      // `getTerminalAsync` answers null for a failed read as well as an unknown
+      // id, so the id is checked first: null for a tracked terminal is a read
+      // that failed, and the assistant's close must ask rather than assume idle.
+      readTerminalAgentState: async (terminalId) => {
+        const client = getPtyClient();
+        if (!client) throw new Error("The pty host is not available.");
+        if (!client.hasTerminal(terminalId)) return null;
+        const info = await client.getTerminalAsync(terminalId);
+        if (info === null) throw new Error(`Could not read terminal '${terminalId}'.`);
+        return info.agentState ?? null;
+      },
       terminalNotify: this.terminalNotify,
       replyWaiter: this.replyWaiter,
       getCachedManifest: () => this.bridge.getCachedManifest(),
