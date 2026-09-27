@@ -178,9 +178,12 @@ export function evictDeadView(
  * destroy one — possibly the one just restored — which converts a memory
  * budget into renderer churn.
  *
- * Reads the same numbers the eviction pass converges toward, so restore and
- * reclaim cannot disagree: the configured cap, and the pressure ladder's
- * target when a policy and a reading are both available. The cap counts the
+ * Reads the same numbers the eviction pass converges toward: the configured
+ * cap, and the pressure ladder's target when a policy and a reading are both
+ * available. Deliberately without the assistant allowance (#12885) — that slot
+ * is for a project the user just left, not one the previous session left cold
+ * — so restore is at most stricter than reclaim and never admits a view the
+ * next pass would destroy. The cap counts the
  * active view, so a window at the ceiling reports `"capacity"` rather than
  * evicting a sibling to make room — a project the user is rotating through is
  * worth more than one the previous session left cold.
@@ -463,7 +466,7 @@ export function evictStaleViews(
   // the bridges, the leases and the assistant floor) is by construction never
   // reached — the loop always converges before it needs a reserved view — so
   // the arithmetic produces this same ordering with more code. Sized any larger
-  // it stops being safe: with a cap of 2, an active view, a live assistant's
+  // it stops being safe: with a cap of 1, an active view, a live assistant's
   // floor and one grant, a reservation leaves the pass nothing it may evict and
   // pins three views indefinitely, where the plain tier settles at two.
   //
@@ -471,8 +474,8 @@ export function evictStaleViews(
   // branch for either. Residency can never carry the cache over the configured
   // cap, because a candidate is always available to take. And it yields at
   // critical pressure for the same reason — a forced reclaim converges on the
-  // active view alone, and a grant is not exempt from that, it is merely the
-  // last thing surrendered.
+  // active view plus the assistant floor, and a grant is not exempt from that,
+  // it is merely the last thing surrendered.
   //
   // What the user gets over `boundMcpSessionFallback` is precedence, which is
   // the right shape: that tier is ordering a client earns just by connecting,
@@ -490,8 +493,8 @@ export function evictStaleViews(
   // Non-forced passes keep room for one ordinary warm view beside them. Bounded
   // on purpose: it adds at most one renderer over the floor the assistants
   // already impose, and only when they are what fills the cap. A configured
-  // (or pressure-stepped) cap of one keeps meaning "active view only", and the
-  // forced reclaim still converges on the active view alone.
+  // (or pressure-stepped) cap of one reserves no ordinary slot, and the forced
+  // reclaim still converges on the active view plus the assistant floor.
   //
   // Counted over every non-active view rather than `assistantProtected`, which
   // omits views a bridge or an MCP lease is holding — those still occupy a slot.
@@ -779,12 +782,13 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
     clearSoftPressureBackoff(host);
     return;
   }
-  // A pending judgement or a held backoff still needs readings once the cache
-  // is down to the active view: the first to settle the last eviction, the
-  // second to see the recovery that releases it.
+  // Pending or accumulated backoff state still needs readings once the cache
+  // is down to the active view: to settle the last eviction, and to see the
+  // recovery that clears the count, or a later episode would inherit it.
   const needsReading =
     host.views.size > 1 ||
     host.pendingSoftPressureEviction != null ||
+    host.softPressureUnproductivePasses > 0 ||
     host.softPressureBackoffLatched;
   const availableMb = needsReading ? getAvailableMemoryMb() : null;
   if (availableMb == null || availableMb >= policy.warningMb) {

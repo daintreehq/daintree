@@ -877,6 +877,19 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(
         managerWithLimit.getAllViews().find((v) => v.projectId === "proj-c")!.view.webContents
       ).toBe(wcC);
+      // Held at the raised target with an ordinary candidate still queued, and
+      // said so — the cache is over the configured cap because of the assistants.
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+        "projectview.eviction-skipped",
+        expect.objectContaining({
+          reason: "lru",
+          viewCount: 4,
+          baseMax: 3,
+          effectiveMax: 4,
+          overflow: 1,
+          protectedProjectIds: ["proj-a", "proj-b"],
+        })
+      );
       expect(wcC.close).not.toHaveBeenCalled();
 
       // One warm ordinary view, not unbounded: the next project displaces the
@@ -3815,6 +3828,8 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     });
 
     it("holds a critical-band tick to the shorter grace", async () => {
+      expect(MIN_PRESSURE_EVICTION_AGE_MS).toBe(300_000);
+      expect(MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS).toBe(60_000);
       setAvailableMb(2500);
       await seedThreeViews(manager);
       viewOf("proj-a").lastUsed -= MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS;
@@ -3936,6 +3951,72 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
         "unproductive",
       ]);
       expect(mgr.softPressureBackoffLatched).toBe(false);
+    });
+
+    it("scales the gain it needs with the footprint it destroyed", async () => {
+      setAvailableMb(2500);
+      const mgr = await seedFiveViews();
+      const pidA = mgr
+        .getAllViews()
+        .find((v) => v.projectId === "proj-a")!
+        .view.webContents.getOSProcessId() as number;
+      mockGetAppMetrics.mockReturnValue([
+        { pid: pidA, memory: { workingSetSize: 800 * 1024, privateBytes: 0 } },
+      ] as unknown as Electron.ProcessMetric[]);
+      resetAppMetricsSnapshotForTesting();
+      setAvailableMb(1200);
+      armPressureLadder(mgr);
+      tickPressureCheck(mgr);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+
+      // 100 MB clears the fixed floor but not a quarter of an 800 MB renderer.
+      setAvailableMb(1300);
+      tickPressureCheck(mgr);
+      expect(logged("projectview.pressure-eviction-outcome")[0]).toMatchObject({
+        outcome: "unproductive",
+        gainMb: 100,
+        requiredGainMb: 200,
+        evictedFootprintMb: 800,
+      });
+    });
+
+    it("drops a pending judgement another pass has superseded", async () => {
+      setAvailableMb(2500);
+      const mgr = await seedFiveViews();
+      setAvailableMb(1200);
+      armPressureLadder(mgr);
+      tickPressureCheck(mgr);
+      expect(mgr.pendingSoftPressureEviction).not.toBeNull();
+
+      // A limit-change pass evicts too, so the next reading no longer measures
+      // the soft eviction alone.
+      mgr.setCachedViewLimit(3);
+      expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+      expect(mgr.pendingSoftPressureEviction).toBeNull();
+      tickPressureCheck(mgr);
+      expect(logged("projectview.pressure-eviction-outcome")).toEqual([]);
+      expect(mgr.softPressureUnproductivePasses).toBe(0);
+    });
+
+    it("clears a partial count on recovery even with nothing left to take", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      setAvailableMb(1200);
+      armPressureLadder(manager);
+      tickPressureCheck(manager);
+      setAvailableMb(1300);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(1);
+      // The last eviction freed nothing: one unproductive pass, no latch.
+      tickPressureCheck(manager);
+      expect(manager.softPressureUnproductivePasses).toBe(1);
+      expect(manager.softPressureBackoffLatched).toBe(false);
+
+      // Recovery must still be read, or the next episode would latch after a
+      // single unproductive eviction.
+      setAvailableMb(2500);
+      tickPressureCheck(manager);
+      expect(manager.softPressureUnproductivePasses).toBe(0);
     });
 
     it("sees the recovery that releases the latch once only the active view is left", async () => {
