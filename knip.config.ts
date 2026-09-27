@@ -126,6 +126,7 @@ const baseConfig: KnipConfig = {
     "src/components/Project/__preview__/preview.tsx",
     "src/components/Project/__preview__/projectIdentityEditor.tsx",
     "src/components/Settings/__preview__/toolbarSettings.tsx",
+    "src/components/Settings/__preview__/diagnosticsReviewDialogPreview.tsx",
     "src/components/TerminalRecipe/__preview__/recipes.tsx",
     "src/components/Tour/__preview__/preview.tsx",
     "src/components/Panel/__preview__/preview.tsx",
