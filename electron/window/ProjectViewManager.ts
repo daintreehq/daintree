@@ -330,6 +330,17 @@ export class ProjectViewManager {
   /** Consecutive sampler readings below the warning edge — see `maybeEvictUnderPressure`. */
   pressureSampleStreak = 0;
   /**
+   * Soft-pressure backoff (#12885) — see `maybeEvictUnderPressure`. The last
+   * soft-band eviction awaiting the next reading's verdict, how many in a row
+   * freed nothing measurable, and whether that has held further soft
+   * evictions until a reading reaches the warning edge. Per window, and
+   * deliberately separate from ProcessMemoryMonitor's global tier backoff.
+   */
+  pendingSoftPressureEviction: { availableMbBefore: number; evictedFootprintMb: number } | null =
+    null;
+  softPressureUnproductivePasses = 0;
+  softPressureBackoffLatched = false;
+  /**
    * What the last `projectview.pressure-override` and `projectview.eviction-skipped`
    * lines said, so an unchanged pass logs nothing — see `evictStaleViews` (#12517).
    */
@@ -1174,6 +1185,7 @@ export class ProjectViewManager {
     // Readings counted against the previous band say nothing about this one.
     this.pressureSampleStreak = 0;
     this.lastPressureOverrideLog = null;
+    EvictionController.clearSoftPressureBackoff(this);
     if (
       policy == null ||
       !Number.isFinite(policy.criticalMb) ||
@@ -1202,6 +1214,7 @@ export class ProjectViewManager {
   setLowMemoryFreeThresholdMb(mb: number | null): void {
     this.pressureSampleStreak = 0;
     this.lastPressureOverrideLog = null;
+    EvictionController.clearSoftPressureBackoff(this);
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {
       this.memoryPressurePolicy = null;
     } else {

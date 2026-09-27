@@ -38,13 +38,39 @@ type EvictionCandidate = {
 export const PRESSURE_SAMPLES_TO_CONFIRM = 2;
 
 /**
- * How long a view must have sat unused before a gradual pressure pass may take
- * it (#12363). The view the user just left is the likeliest next switch, so
- * destroying it trades a ~60ms warm reveal for a cold reload exactly while they
- * are moving between projects. Measured from `lastUsed`, the stamp LRU order
- * already sorts on.
+ * How long a view must have sat unused before a soft-band pressure pass may
+ * take it (#12363). The view the user just left is the likeliest next switch,
+ * so destroying it trades a ~60ms warm reveal for a cold reload exactly while
+ * they are moving between projects. Measured from `lastUsed`, the stamp LRU
+ * order already sorts on. Five minutes because a minute was shorter than most
+ * real returns: a field log put the median gap before switching back at 199s
+ * (#12885).
  */
-export const MIN_PRESSURE_EVICTION_AGE_MS = 60_000;
+export const MIN_PRESSURE_EVICTION_AGE_MS = 300_000;
+
+/**
+ * The same floor for a sampler tick reading below `criticalMb`. Kept short:
+ * there the cache is converging on the active view alone, and holding a view
+ * for five minutes would leave only tier 2's much slower escalation.
+ */
+export const MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS = 60_000;
+
+/**
+ * Consecutive soft-band evictions that failed to move available memory before
+ * the sampler stops evicting for the rest of the episode (#12885). A cached
+ * renderer's pages are often already compressed or swapped, so destroying one
+ * can free next to nothing the OS reports — a field log showed a median change
+ * of −39 MB after ~112 MB evictions, while every eviction cost a cold reload.
+ */
+export const SOFT_PRESSURE_UNPRODUCTIVE_LIMIT = 2;
+
+/**
+ * An eviction counts as productive when the next reading's availability rose
+ * by at least this much, or by this fraction of the evicted footprint if that
+ * is larger. Readings are noisy, so a token gain is not progress.
+ */
+export const MIN_SOFT_PRESSURE_GAIN_MB = 32;
+export const SOFT_PRESSURE_GAIN_FRACTION = 0.25;
 
 /**
  * workingSetSize is the only cross-platform field — privateBytes is
@@ -223,27 +249,30 @@ export function evictStaleViews(
   // where it matters most, leaving only tier 2's 3-poll/10-minute escalation.
   const gradualPressure = !criticalPressure && level !== "none" && reason === "pressure";
 
-  // `effectiveMax` is the settled target this pass converges toward;
-  // `evictionBudget` is how many views it may actually destroy. They are
+  // `baseMax` is the settled target this pass converges toward (before the
+  // assistant allowance below raises it to `effectiveMax`); `evictionBudget` is
+  // how many views it may actually destroy. They are
   // separate because "shed one at a time" has to hold even when the cache sits
   // ABOVE its configured cap (assistant protection, or a paint-gate exclusion
   // deferring a previous pass) — deriving the budget from the cap would let one
   // soft tick destroy several renderers.
-  let effectiveMax: number;
+  let baseMax: number;
   let evictionBudget: number;
   if (criticalPressure) {
-    effectiveMax = 1;
+    baseMax = 1;
     evictionBudget = Number.POSITIVE_INFINITY;
   } else if (gradualPressure) {
-    effectiveMax = targetMax;
+    baseMax = targetMax;
     evictionBudget = 1;
   } else {
-    effectiveMax = host.maxCachedViews;
+    baseMax = host.maxCachedViews;
     evictionBudget = Number.POSITIVE_INFINITY;
   }
   const effectiveReason: EvictionReason = criticalPressure || gradualPressure ? "pressure" : reason;
+  const minimumAgeMs =
+    level === "critical" ? MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS : MIN_PRESSURE_EVICTION_AGE_MS;
 
-  if (host.views.size <= effectiveMax || host.activeProjectId === null) {
+  if (host.views.size <= baseMax || host.activeProjectId === null) {
     // Nothing is over target, so whatever the last pass reported has ended; a
     // later pass that finds the cache over it again is a new episode.
     host.lastEvictionSkippedLog = null;
@@ -455,7 +484,31 @@ export function evictStaleViews(
     ...residentGranted,
   ];
 
+  // Assistant-pinned views still count toward the cache, so without an
+  // allowance two running assistants plus the active view fill a cap of three
+  // and every other project is evicted the moment the user leaves it (#12885).
+  // Non-forced passes keep room for one ordinary warm view beside them. Bounded
+  // on purpose: it adds at most one renderer over the floor the assistants
+  // already impose, and only when they are what fills the cap. A configured
+  // (or pressure-stepped) cap of one keeps meaning "active view only", and the
+  // forced reclaim still converges on the active view alone.
+  //
+  // Counted over every non-active view rather than `assistantProtected`, which
+  // omits views a bridge or an MCP lease is holding — those still occupy a slot.
+  let pinnedAssistantCount = 0;
+  if (!criticalPressure) {
+    for (const [projectId, entry] of host.views) {
+      if (projectId === host.activeProjectId) continue;
+      if (hasLiveAssistantBackend(host, projectId, entry)) pinnedAssistantCount++;
+    }
+  }
+  const effectiveMax =
+    pinnedAssistantCount > 0
+      ? Math.max(baseMax, pinnedAssistantCount + 1 + Math.min(1, baseMax - 1))
+      : baseMax;
+
   let evictedCount = 0;
+  let evictedFootprintKb = 0;
   while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
     const next = candidates[0];
     const ageMs = Date.now() - next.entry.lastUsed;
@@ -465,12 +518,12 @@ export function evictStaleViews(
     // — an agent's, a bound session's, or a workspace the user granted
     // residency. Gradual passes only: the forced reclaim is the OOM escape
     // hatch, and LRU and limit-change passes enforce a cap the user chose.
-    if (gradualPressure && ageMs < MIN_PRESSURE_EVICTION_AGE_MS) {
+    if (gradualPressure && ageMs < minimumAgeMs) {
       logInfo("projectview.eviction-deferred", {
         projectId: next.projectId,
         reason: effectiveReason,
         ageMs,
-        minimumAgeMs: MIN_PRESSURE_EVICTION_AGE_MS,
+        minimumAgeMs,
       });
       break;
     }
@@ -505,6 +558,17 @@ export function evictStaleViews(
     // liveness — see `readWorkspaceBindingState` (#12313).
     recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
+    evictedFootprintKb += memoryKb + guestMemoryKb;
+  }
+
+  // A soft-band sampler eviction is judged by the next reading — see
+  // `maybeEvictUnderPressure`. Any other pass supersedes a pending judgement:
+  // its own evictions would be credited to, or blamed on, the soft one.
+  if (evictedCount > 0) {
+    host.pendingSoftPressureEviction =
+      gradualPressure && level === "soft" && availableMb != null
+        ? { availableMbBefore: availableMb, evictedFootprintMb: evictedFootprintKb / 1024 }
+        : null;
   }
 
   // Logged after the pass rather than before it, so it can say what the pass
@@ -548,17 +612,23 @@ export function evictStaleViews(
   // per request, but a session dispatching continuously renews one, so a
   // lease-only stall can persist — exactly the case where an over-cap cache
   // would otherwise sit in the logs with nothing explaining it.
+  //
+  // The assistant allowance opens it as well (#12885): a pass that stopped at
+  // the raised target rather than on an empty queue has still left the cache
+  // over `baseMax` because of the assistants, so it is reported the same way.
   if (
-    host.views.size > effectiveMax &&
-    candidates.length === 0 &&
-    (assistantProtected.length > 0 || mcpLeasedProjectIds.size > 0)
+    host.views.size > baseMax &&
+    (candidates.length === 0 || host.views.size <= effectiveMax) &&
+    (assistantProtected.length > 0 || pinnedAssistantCount > 0 || mcpLeasedProjectIds.size > 0)
   ) {
-    // `overflow` counts views over target; the two counts beside it say what is
-    // holding them, so a reader can tell a pinned assistant (persistent, this
-    // pass will never take it) from a paint-gate/cold-switch bridge (temporary,
-    // resolves on its own). Deliberately NOT a partition of `overflow` —
-    // counted directly rather than derived by subtraction, because with an
-    // `effectiveMax` above 1 the protected views need not all be over the cap,
+    // `overflow` counts views over `baseMax`, the cap before the assistant
+    // allowance; `effectiveMax` is the target the pass settled on. The counts
+    // beside them say what is holding the cache over, so a reader can tell a
+    // pinned assistant (persistent, this pass will never take it) from a
+    // paint-gate/cold-switch bridge (temporary, resolves on its own).
+    // Deliberately NOT a partition of `overflow` — counted directly rather
+    // than derived by subtraction, because with a `baseMax` above 1 the
+    // protected views need not all be over the cap,
     // and subtracting would report a bigger protected share than the overflow.
     const transientlyExcludedProjectIds = new Set(
       [gateOutgoingProjectId, switchOutgoingProjectId].filter(
@@ -569,8 +639,9 @@ export function evictStaleViews(
       reason: effectiveReason,
       forced: criticalPressure,
       viewCount: host.views.size,
+      baseMax,
       effectiveMax,
-      overflow: host.views.size - effectiveMax,
+      overflow: host.views.size - baseMax,
       protectedCount: assistantProtected.length,
       transientlyExcludedCount: transientlyExcludedProjectIds.size,
       // Reported as its own reason rather than folded into the transient count
@@ -686,26 +757,120 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
  * not a readable low sample — at or above the edge, unreadable, unarmed, or
  * with nothing cached to take — starts the count over.
  *
+ * Each soft-band eviction is judged by the next reading, and once
+ * SOFT_PRESSURE_UNPRODUCTIVE_LIMIT in a row freed nothing measurable, soft
+ * evictions stop until a reading reaches the warning edge again (#12885).
+ * Destroying renderers that free no memory the OS will report only buys cold
+ * reloads.
+ *
  * Never escalates to a one-pass collapse, at any band. This sampler is
- * per-window, holds no cooldown, and has no view of whether a cheaper
- * mitigation is already in flight — the combination that let it destroy a
+ * per-window, holds no cooldown of its own beyond that latch, and has no view
+ * of whether a cheaper mitigation is already in flight — the combination that let it destroy a
  * live assistant's view 560ms into a tier-1 pass that resolved the pressure
  * without it (#11477). Collapse is `ProcessMemoryMonitor`'s tier 2 alone,
  * which owns all of that state globally and arrives via `forcePressure`.
  */
 export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   const policy = host.memoryPressurePolicy;
-  const availableMb = policy != null && host.views.size > 1 ? getAvailableMemoryMb() : null;
-  if (policy == null || availableMb == null || availableMb >= policy.warningMb) {
+  if (policy == null) {
+    host.pressureSampleStreak = 0;
+    host.lastPressureOverrideLog = null;
+    host.lastEvictionSkippedLog = null;
+    clearSoftPressureBackoff(host);
+    return;
+  }
+  // A pending judgement or a held backoff still needs readings once the cache
+  // is down to the active view: the first to settle the last eviction, the
+  // second to see the recovery that releases it.
+  const needsReading =
+    host.views.size > 1 ||
+    host.pendingSoftPressureEviction != null ||
+    host.softPressureBackoffLatched;
+  const availableMb = needsReading ? getAvailableMemoryMb() : null;
+  if (availableMb == null || availableMb >= policy.warningMb) {
     host.pressureSampleStreak = 0;
     // The episode is over; the next one reports afresh even if it looks the same.
     host.lastPressureOverrideLog = null;
     host.lastEvictionSkippedLog = null;
+    if (availableMb == null) {
+      // No evidence either way: drop the comparison, keep the verdict so far.
+      host.pendingSoftPressureEviction = null;
+    } else {
+      if (host.softPressureBackoffLatched) {
+        logInfo("projectview.pressure-backoff-cleared", {
+          availableMb,
+          warningThresholdMb: policy.warningMb,
+        });
+      }
+      clearSoftPressureBackoff(host);
+    }
+    return;
+  }
+
+  settleSoftPressureEviction(host, availableMb, policy.warningMb);
+
+  if (host.views.size <= 1) {
+    host.pressureSampleStreak = 0;
     return;
   }
   host.pressureSampleStreak = Math.min(host.pressureSampleStreak + 1, PRESSURE_SAMPLES_TO_CONFIRM);
   if (host.pressureSampleStreak < PRESSURE_SAMPLES_TO_CONFIRM) return;
+  // Held for the rest of a soft episode once evictions stopped helping
+  // (#12885). A critical reading is not held back: there the cache converges on
+  // the active view whatever the last evictions achieved, and tier 2 — not this
+  // latch — decides whether a harder reclaim is worth it.
+  if (host.softPressureBackoffLatched && availableMb >= policy.criticalMb) return;
   evictStaleViews(host, "pressure", false, availableMb);
+}
+
+/**
+ * Judge the previous soft-band eviction against this reading. Productive when
+ * availability rose by a meaningful share of what was destroyed; otherwise it
+ * counts toward the latch that holds further soft evictions until a reading
+ * reaches the warning edge again.
+ */
+function settleSoftPressureEviction(
+  host: ProjectViewManager,
+  availableMb: number,
+  warningMb: number
+): void {
+  const pending = host.pendingSoftPressureEviction;
+  if (pending == null) return;
+  host.pendingSoftPressureEviction = null;
+  const gainMb = availableMb - pending.availableMbBefore;
+  const requiredGainMb = Math.max(
+    MIN_SOFT_PRESSURE_GAIN_MB,
+    pending.evictedFootprintMb * SOFT_PRESSURE_GAIN_FRACTION
+  );
+  const productive = gainMb >= requiredGainMb;
+  host.softPressureUnproductivePasses = productive ? 0 : host.softPressureUnproductivePasses + 1;
+  const latch =
+    !host.softPressureBackoffLatched &&
+    host.softPressureUnproductivePasses >= SOFT_PRESSURE_UNPRODUCTIVE_LIMIT;
+  if (latch) host.softPressureBackoffLatched = true;
+  logInfo("projectview.pressure-eviction-outcome", {
+    outcome: productive ? "productive" : "unproductive",
+    availableMbBefore: pending.availableMbBefore,
+    availableMb,
+    gainMb,
+    requiredGainMb,
+    evictedFootprintMb: Math.round(pending.evictedFootprintMb),
+    unproductivePasses: host.softPressureUnproductivePasses,
+  });
+  if (latch) {
+    logInfo("projectview.pressure-backoff", {
+      unproductivePasses: host.softPressureUnproductivePasses,
+      availableMb,
+      warningThresholdMb: warningMb,
+    });
+  }
+}
+
+/** Forget the soft-pressure backoff — a recovered reading or a new band. */
+export function clearSoftPressureBackoff(host: ProjectViewManager): void {
+  host.pendingSoftPressureEviction = null;
+  host.softPressureUnproductivePasses = 0;
+  host.softPressureBackoffLatched = false;
 }
 
 /**
