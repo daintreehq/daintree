@@ -189,10 +189,22 @@ test("image diff viewer — modes, states and themes", async ({ page }) => {
     shell = await open(page, "too-large", theme, NARROW_WIDTH);
     await imagesSettled(page, 1);
     written.push(await snap(shell, `too-large-${theme}-narrow.png`));
+    // The longest facts line — a resize plus a byte delta — at the narrowest width.
+    shell = await open(page, "resized", theme, NARROW_WIDTH);
+    await imagesSettled(page, 2);
+    written.push(await snap(shell, `two-up-resized-${theme}-narrow.png`));
+    // Divider pinned to an end, where a centred handle would be clipped.
+    await selectMode(page, "Swipe");
+    await imagesSettled(page, 2);
+    await page.getByRole("slider", { name: /divider/i }).focus();
+    await page.keyboard.press("End");
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(200);
+    written.push(await snap(shell, `swipe-end-${theme}-narrow.png`));
   }
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * 12 + 3);
+  expect(onDisk.length).toBe(THEMES.length * 12 + 5);
   console.log(`[image-diff-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

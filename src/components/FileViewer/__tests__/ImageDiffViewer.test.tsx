@@ -298,7 +298,9 @@ describe("ImageDiffViewer", () => {
       render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
 
       // HEAD failed to decode → its pane shows the fallback; working still renders.
-      expect(await screen.findByText("Couldn't display this version")).toBeDefined();
+      expect(
+        await screen.findByText("Couldn't decode this version — the file may be damaged")
+      ).toBeDefined();
       expect(screen.getByAltText("Working tree version of logo.png")).toBeDefined();
       expect(screen.queryByAltText("HEAD version of logo.png")).toBeNull();
       // Compare modes are hidden while a side is un-decodable.
@@ -431,7 +433,9 @@ describe("ImageDiffViewer", () => {
         <ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />
       );
       // First a: HEAD failed to decode → fallback, no HEAD img.
-      expect(await screen.findByText("Couldn't display this version")).toBeDefined();
+      expect(
+        await screen.findByText("Couldn't decode this version — the file may be damaged")
+      ).toBeDefined();
       expect(screen.queryByAltText("HEAD version of a.png")).toBeNull();
 
       // Visit b, whose fetch never commits, so a remains the committed snapshot.
@@ -442,7 +446,9 @@ describe("ImageDiffViewer", () => {
       rerender(<ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />);
 
       await screen.findByAltText("HEAD version of a.png");
-      expect(screen.queryByText("Couldn't display this version")).toBeNull();
+      expect(
+        screen.queryByText("Couldn't decode this version — the file may be damaged")
+      ).toBeNull();
     });
 
     it("marks the held frame aria-busy but never inert while loading, and clears it after the swap", async () => {
@@ -481,7 +487,9 @@ describe("ImageDiffViewer", () => {
 
       // The working side (the only visible one) failed to decode → fallback text,
       // its <img> is not rendered, and the single-pane layout is intact.
-      expect(await screen.findByText("Couldn't display this version")).toBeDefined();
+      expect(
+        await screen.findByText("Couldn't decode this version — the file may be damaged")
+      ).toBeDefined();
       expect(screen.queryByAltText("Working tree version of new.png")).toBeNull();
       expect(screen.getByText("Added — no previous version")).toBeDefined();
     });

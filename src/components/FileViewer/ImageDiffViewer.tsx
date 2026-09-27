@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { GripVertical, ImageOff } from "lucide-react";
 import type { DiffMediaFileVersions, DiffMediaSide, GitStatus } from "@shared/types";
 import { getDiffMediaImageMime } from "@shared/types/ipc/diffMedia";
@@ -108,11 +101,11 @@ function formatSignedBytes(delta: number): string {
  * reader never has to subtract two captions. Only the working tree carries a
  * baseline — HEAD is what it changed from.
  */
-export function describeImageFacts(
+export function imageFactParts(
   side: OkSide,
   dims: ImageDims | null,
   baseline?: { side: OkSide; dims: ImageDims | null }
-): string {
+): string[] {
   const parts: string[] = [];
   if (dims) {
     const was =
@@ -127,7 +120,11 @@ export function describeImageFacts(
       ? formatBytes(side.byteSize)
       : `${formatBytes(side.byteSize)} (${formatSignedBytes(byteDelta)})`
   );
-  return parts.join(" · ");
+  return parts;
+}
+
+export function describeImageFacts(...args: Parameters<typeof imageFactParts>): string {
+  return imageFactParts(...args).join(" · ");
 }
 
 /** The smallest box both versions fit in, anchored at a shared top-left origin. */
@@ -174,14 +171,25 @@ function SideChip({ label }: { label: string }) {
   );
 }
 
-/** Always rendered, so a pane with nothing to report keeps its frame aligned with its neighbour's. */
-function FactsLine({ children, className }: { children?: ReactNode; className?: string }) {
+/**
+ * Always rendered, so a pane with nothing to report keeps its frame aligned
+ * with its neighbour's. Wraps between facts rather than truncating: the change
+ * it reports is the part a narrow pane would otherwise clip first.
+ */
+function FactsLine({ parts, className }: { parts?: string[]; className?: string }) {
   return (
     <p
-      className={cn("min-h-4 truncate text-2xs tabular-nums text-text-secondary", className)}
-      aria-hidden={children ? undefined : true}
+      className={cn("min-h-4 min-w-0 text-2xs tabular-nums text-text-secondary", className)}
+      aria-hidden={parts ? undefined : true}
     >
-      {children ?? " "}
+      {parts
+        ? parts.map((part, index) => (
+            <span key={part}>
+              {index > 0 ? " · " : null}
+              <span className="whitespace-nowrap">{part}</span>
+            </span>
+          ))
+        : " "}
     </p>
   );
 }
@@ -301,14 +309,17 @@ function ImagePane({
   const showImage = side.ok && !decodeFailed;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
+    // A subgrid of the caller's three rows (label, frame, facts), so a facts
+    // line that wraps in one pane grows that row in both and the frames stay
+    // the same height.
+    <div className="row-span-3 grid min-h-0 min-w-0 grid-rows-subgrid">
       <div className="flex min-w-0 items-center gap-2">
         <SideChip label={label} />
         {caption ? <span className="truncate text-xs text-text-secondary">{caption}</span> : null}
       </div>
       <div
         ref={frameRef}
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-border-default"
+        className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-md border border-border-default"
       >
         {showImage ? (
           <img
@@ -333,7 +344,9 @@ function ImagePane({
         ) : (
           <div className="flex flex-col items-center gap-2 px-4">
             <p className="text-center text-xs text-text-secondary">
-              {side.ok ? "Couldn't display this version" : sideErrorMessage(side.error)}
+              {side.ok
+                ? "Couldn't decode this version — the file may be damaged"
+                : sideErrorMessage(side.error)}
             </p>
             {!side.ok && side.error === "ERROR" && onRetry ? (
               <Button variant="outline" size="sm" onClick={onRetry}>
@@ -343,7 +356,7 @@ function ImagePane({
           </div>
         )}
       </div>
-      <FactsLine>{showImage ? describeImageFacts(side, dims, baseline) : null}</FactsLine>
+      <FactsLine parts={showImage ? imageFactParts(side, dims, baseline) : undefined} />
     </div>
   );
 }
@@ -402,16 +415,17 @@ function OverlayChips() {
 function OverlayFacts({ sides, dims }: { sides: OkSides; dims: SideDims }) {
   return (
     <div className="flex shrink-0 justify-between gap-3 pt-1.5">
-      <FactsLine>{describeImageFacts(sides.head, dims.head)}</FactsLine>
-      <FactsLine className="text-right">
-        {describeImageFacts(sides.working, dims.working, {
-          side: sides.head,
-          dims: dims.head,
-        })}
-      </FactsLine>
+      <FactsLine parts={imageFactParts(sides.head, dims.head)} />
+      <FactsLine
+        className="text-right"
+        parts={imageFactParts(sides.working, dims.working, { side: sides.head, dims: dims.head })}
+      />
     </div>
   );
 }
+
+/** Label, frame, facts — shared by every pane in the row so their frames align. */
+const PANE_ROWS_CLASS = "grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-x-3 gap-y-1.5";
 
 const OVERLAY_FRAME_CLASS =
   "relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-border-default";
@@ -434,6 +448,9 @@ function SwipeCompare({ sides, dims, relPath }: OverlayProps) {
   const head = layerImg("head");
   const working = layerImg("working");
   const dividerLeft = `round(nearest, ${position}%, 1px)`;
+  // The line reaches both edges; the handle stops short of them, so it and its
+  // focus ring are never clipped by a frame the image fills edge to edge.
+  const handleLeft = `clamp(12px, ${dividerLeft}, calc(100% - 12px))`;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -484,7 +501,7 @@ function SwipeCompare({ sides, dims, relPath }: OverlayProps) {
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-y-0 z-10 -ml-px w-[3px] border-x border-surface-canvas bg-text-primary forced-colors:border-[Canvas] forced-colors:bg-[CanvasText]"
-            style={{ left: dividerLeft }}
+            style={{ left: `clamp(1px, ${dividerLeft}, calc(100% - 2px))` }}
           />
           {/* The handle is the slider, so its focus ring is its own and sits on
               the handle rather than on a full-height column. The frame behind
@@ -500,8 +517,8 @@ function SwipeCompare({ sides, dims, relPath }: OverlayProps) {
             aria-valuemax={100}
             aria-valuenow={Math.round(position)}
             aria-valuetext={swipeValueText(position)}
-            className="absolute top-1/2 z-10 -ml-[7px] -mt-4 flex h-8 w-[15px] cursor-ew-resize items-center justify-center rounded-sm border border-text-secondary bg-surface-panel-elevated text-text-secondary before:absolute before:inset-y-0 before:-inset-x-1 before:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-            style={{ left: dividerLeft }}
+            className="absolute top-1/2 z-10 -ml-[7px] -mt-4 flex h-8 w-[15px] cursor-ew-resize items-center justify-center rounded-sm border border-text-secondary bg-surface-panel-elevated text-text-secondary before:absolute before:inset-y-0 before:-inset-x-[5px] before:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            style={{ left: handleLeft }}
             onKeyDown={(event) => {
               const next = nextSwipePosition(event.key, position);
               if (next === null) return;
@@ -712,17 +729,19 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
       singleSide === "working" ? "Added — no previous version" : "Deleted — no working version";
     return (
       <div className="flex h-full min-h-0 w-full flex-col p-3" aria-busy={isHolding || undefined}>
-        <ImagePane
-          key={`${view.attempt}:${singleSide}`}
-          label={singleSide === "working" ? "Working tree" : "HEAD"}
-          side={view.versions[singleSide]}
-          relPath={view.relPath}
-          caption={caption}
-          dims={view.dims[singleSide]}
-          fitBox={view.dims[singleSide]}
-          initialDecodeFailed={view.decodeFailures[singleSide]}
-          onRetry={retry}
-        />
+        <div className={PANE_ROWS_CLASS}>
+          <ImagePane
+            key={`${view.attempt}:${singleSide}`}
+            label={singleSide === "working" ? "Working tree" : "HEAD"}
+            side={view.versions[singleSide]}
+            relPath={view.relPath}
+            caption={caption}
+            dims={view.dims[singleSide]}
+            fitBox={view.dims[singleSide]}
+            initialDecodeFailed={view.decodeFailures[singleSide]}
+            onRetry={retry}
+          />
+        </div>
       </div>
     );
   }
@@ -770,7 +789,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
 
       <div className="flex min-h-0 flex-1 flex-col p-3">
         {effectiveMode === "two-up" || okSides === null ? (
-          <div className="flex min-h-0 flex-1 gap-3">
+          <div className={cn(PANE_ROWS_CLASS, "grid-cols-2")}>
             <ImagePane
               key={`${view.attempt}:head`}
               label="HEAD"
