@@ -1123,6 +1123,31 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(screen.queryByTestId("review-hub-commit-panel")).toBeNull());
     });
 
+    it("announces a completed push even after the composer has gone", async () => {
+      usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      fireEvent.change(screen.getByLabelText("Commit message"), {
+        target: { value: "feat: thing" },
+      });
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ hasRemote: true, staged: [], unstaged: [] })
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Commit & push/i }));
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-push-announcement").textContent).toMatch(/^Push/)
+      );
+      expect(screen.getByTestId("review-hub-push-announcement").getAttribute("role")).toBe(
+        "status"
+      );
+    });
+
     it("does not call push when commit itself fails", async () => {
       commitMock.mockRejectedValueOnce(new Error("nothing to commit"));
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));

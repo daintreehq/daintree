@@ -29,6 +29,8 @@ const DISABLED_CTA_CLASSES = cn(
 );
 
 const PRIMARY_SHORTCUT = "Cmd+Enter";
+// How long a push can go without a progress event before the composer says so.
+const PUSH_QUIET_MS = 15_000;
 
 // simple-git reports the first word of git's progress line as the stage.
 const PUSH_STAGE_LABELS: Record<string, string> = {
@@ -156,6 +158,15 @@ export function CommitPanel({
   const actionInFlightRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const statusRef = useRef<HTMLParagraphElement>(null);
+  // Reset by every progress event: an observation that nothing new has arrived,
+  // never a claim that the push is stuck.
+  const [isPushQuiet, setIsPushQuiet] = useState(false);
+  useEffect(() => {
+    setIsPushQuiet(false);
+    if (!isPushing) return;
+    const timer = setTimeout(() => setIsPushQuiet(true), PUSH_QUIET_MS);
+    return () => clearTimeout(timer);
+  }, [isPushing, pushProgress]);
   const messageId = useId();
   const counterId = useId();
   const statusId = useId();
@@ -465,6 +476,13 @@ export function CommitPanel({
       "Pushing…"
     );
     statusTitle = pushTarget ? `Pushing to ${pushTarget}` : undefined;
+    if (isPushQuiet) {
+      statusContent = (
+        <>
+          {statusContent} · no new progress in the last {PUSH_QUIET_MS / 1000}s
+        </>
+      );
+    }
   } else if (isCommitting) {
     statusContent = `Committing ${formatFileCount(pendingCount)}…`;
   } else if (isBlocked) {
@@ -575,7 +593,11 @@ export function CommitPanel({
             data-severity-glyph=""
           />
         )}
-        <span className="min-w-0 truncate">{statusContent}</span>
+        {/* A blocker wraps so every requirement stays readable at any width; the
+            ready and pushing lines truncate a long destination instead. */}
+        <span className={cn("min-w-0", isBlocked && !isBusy ? "break-words" : "truncate")}>
+          {statusContent}
+        </span>
         {showShortcut && (
           <KbdChord
             shortcut={PRIMARY_SHORTCUT}

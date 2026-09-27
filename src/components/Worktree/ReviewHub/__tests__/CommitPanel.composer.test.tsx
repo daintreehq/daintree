@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 
@@ -90,6 +90,29 @@ describe("CommitPanel composer", () => {
     // A stage with no percentage is still activity the user should see, but never
     // as a bar reading 0%.
     expect(screen.getByText("Remote")).toBeTruthy();
+  });
+
+  it("notes a push that has gone quiet, and drops the note when progress resumes", () => {
+    vi.useFakeTimers();
+    try {
+      const first = new Map([["writing", progress("writing", 10)]]);
+      const { rerender, props } = renderPanel({
+        isPushing: true,
+        pushProgress: first,
+        pushTargetBranch: "origin/feature/x",
+      });
+      const status = () => screen.getByTestId("review-hub-commit-status").textContent ?? "";
+      expect(status()).not.toMatch(/no new progress/);
+
+      act(() => vi.advanceTimersByTime(20_000));
+      expect(status()).toMatch(/no new progress/);
+
+      const next = new Map([["writing", progress("writing", 40)]]);
+      rerender(<CommitPanel {...props} pushProgress={next} />);
+      expect(status()).not.toMatch(/no new progress/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("names every unmet requirement, not just the first", () => {

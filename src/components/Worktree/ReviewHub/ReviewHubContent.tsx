@@ -226,6 +226,9 @@ export function ReviewHubContent({
   // A commit that empties the tree would otherwise unmount the composer before
   // its push starts, taking the push target and progress with it.
   const [isCommitPushInFlight, setIsCommitPushInFlight] = useState(false);
+  // Spoken once when a push lands. The composer that showed its progress may
+  // already be gone (a clean tree unmounts it), so the result lives here.
+  const [pushAnnouncement, setPushAnnouncement] = useState("");
   const [isPushing, setIsPushing] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
@@ -1305,10 +1308,13 @@ export function ReviewHubContent({
     setPushError(null);
     setPushProgress(new Map());
     setPushTargetBranch(null);
+    setPushAnnouncement("");
+    let announcedTarget: string | null = null;
 
     const cleanup = window.electron.git.onPushProgress((event) => {
       if (event.cwd !== worktreePath) return;
       if (event.stage === "target") {
+        announcedTarget = event.targetBranch ?? null;
         setPushTargetBranch(event.targetBranch ?? null);
         return;
       }
@@ -1328,6 +1334,7 @@ export function ReviewHubContent({
     try {
       await window.electron.git.push(worktreePath);
       setPushError(null);
+      setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
     } catch (err) {
       // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
       // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
@@ -1997,6 +2004,9 @@ export function ReviewHubContent({
             }}
           />
         )}
+        <span role="status" className="sr-only" data-testid="review-hub-push-announcement">
+          {pushAnnouncement}
+        </span>
         {pushError && showPushBanner && (
           <PushErrorBanner
             pushError={pushError}
