@@ -710,6 +710,9 @@ async function run() {
       "electron/pty-host/analysisWorker.ts",
       "electron/services/persistence/dbMaintenanceWorker.ts",
       "electron/workspace-host/copytreeWorker.ts",
+      // Agent reads of a plugin's database (#12845): one utilityProcess per
+      // call, so a runaway query can be killed without touching main.
+      "electron/services/pluginAgentMcp/databaseQueryWorker.ts",
       ...discoverBuiltInPluginMainEntries(),
       // Sample plugins compiled for the host-contract e2e harness (#9286, #9592).
       // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod because

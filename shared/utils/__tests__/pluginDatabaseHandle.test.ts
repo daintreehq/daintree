@@ -3,7 +3,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileAccessAuthorizer, openPluginDatabase } from "../pluginDatabaseHandle.js";
+import {
+  fileAccessAuthorizer,
+  openPluginDatabase,
+  readPluginDatabaseRows,
+} from "../pluginDatabaseHandle.js";
 import type { PluginDatabase, PluginDatabaseLocation } from "../../types/plugin.js";
 
 // A second connection standing in for an agent's `sqlite3` session: a separate
@@ -764,5 +768,122 @@ describe("openPluginDatabase backup destinations", () => {
     const alias = path.join(dir, "alias.db");
     fs.linkSync(location.path, alias);
     await expect(db.backup(alias)).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+});
+
+describe("readPluginDatabaseRows", () => {
+  // The resolver hands over canonical directories; so does this fixture.
+  beforeEach(() => {
+    location = { ...location, path: path.join(fs.realpathSync(dir), "ledger.db") };
+  });
+
+  function codeOf(fn: () => unknown): unknown {
+    try {
+      fn();
+    } catch (error) {
+      return (error as { code?: unknown }).code;
+    }
+    return "no error";
+  }
+
+  function seed(sql: string): void {
+    const raw = new DatabaseSync(location.path);
+    raw.exec(sql);
+    raw.close();
+  }
+
+  function readAll(sql: string, params?: Parameters<typeof readPluginDatabaseRows>[2]) {
+    const rows: unknown[][] = [];
+    const { columns } = readPluginDatabaseRows(location, sql, params, (row) => {
+      rows.push(row);
+      return true;
+    });
+    return { columns, rows };
+  }
+
+  it("streams rows as arrays aligned with the column names, duplicates kept", () => {
+    seed("CREATE TABLE t (a, b); INSERT INTO t VALUES (1, 'x'), (2, 'y');");
+    expect(readAll("SELECT a, b, a FROM t ORDER BY a")).toEqual({
+      columns: ["a", "b", "a"],
+      rows: [
+        [1n, "x", 1n],
+        [2n, "y", 2n],
+      ],
+    });
+    expect(readAll("SELECT b FROM t WHERE a = ?", [2]).rows).toEqual([["y"]]);
+    expect(readAll("SELECT b FROM t WHERE a = :a", { ":a": 1 }).rows).toEqual([["x"]]);
+  });
+
+  it("stops when the callback returns false", () => {
+    seed("CREATE TABLE t (a); INSERT INTO t VALUES (1), (2), (3);");
+    const seen: unknown[][] = [];
+    readPluginDatabaseRows(location, "SELECT a FROM t", undefined, (row) => {
+      seen.push(row);
+      return seen.length < 2;
+    });
+    expect(seen).toHaveLength(2);
+  });
+
+  it("allows row-returning pragmas and refuses statements that return nothing", () => {
+    seed("CREATE TABLE t (a INTEGER);");
+    expect(readAll("PRAGMA table_info(t)").columns).toContain("name");
+    expect(codeOf(() => readAll("CREATE TABLE u (b)"))).toBe("DB_NOT_A_QUERY");
+  });
+
+  it("cannot write, even through a statement that returns rows", () => {
+    seed("CREATE TABLE t (a);");
+    expect(() => readAll("INSERT INTO t VALUES (1) RETURNING a")).toThrow();
+    const raw = new DatabaseSync(location.path);
+    expect(raw.prepare("SELECT count(*) AS n FROM t").get()).toEqual({ n: 0 });
+    raw.close();
+  });
+
+  it("applies the handle's file-access and single-statement refusals", () => {
+    seed("CREATE TABLE t (a);");
+    const outside = path.join(dir, "copy.db");
+    expect(codeOf(() => readAll(`ATTACH '${outside}' AS o`))).toBe("DB_STATEMENT_NOT_ALLOWED");
+    expect(codeOf(() => readAll(`SELECT 1; VACUUM INTO '${outside}'`))).toBe(
+      "DB_STATEMENT_NOT_ALLOWED"
+    );
+    expect(codeOf(() => readAll("SELECT 1; SELECT 2"))).toBe("DB_MULTIPLE_STATEMENTS");
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a directory that no longer canonicalises to where it was resolved",
+    () => {
+      const real = path.join(fs.realpathSync(dir), "real");
+      fs.mkdirSync(real);
+      new DatabaseSync(path.join(real, "ledger.db")).close();
+      fs.symlinkSync(real, path.join(fs.realpathSync(dir), "link"));
+      location = { ...location, path: path.join(fs.realpathSync(dir), "link", "ledger.db") };
+      expect(codeOf(() => readAll("SELECT 1"))).toBe("PATH_NOT_ALLOWED");
+    }
+  );
+
+  const probe = new DatabaseSync(":memory:");
+  const HAS_LIMITS = "limits" in probe;
+  probe.close();
+
+  it.skipIf(!HAS_LIMITS)("caps the size of any value a statement builds", () => {
+    seed("CREATE TABLE t (a);");
+    expect(() => readAll("SELECT zeroblob(64 * 1024 * 1024)")).toThrow(/too big/);
+  });
+
+  it("reads a WAL database's uncheckpointed rows", () => {
+    const raw = new DatabaseSync(location.path);
+    raw.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+    raw.exec("CREATE TABLE t (a); INSERT INTO t VALUES (1), (2);");
+    expect(readAll("SELECT count(*) AS n FROM t").rows).toEqual([[2n]]);
+    raw.close();
+  });
+
+  it("refuses a missing file without creating it, and a symlinked one", () => {
+    expect(codeOf(() => readAll("SELECT 1"))).toBe("DB_NOT_FOUND");
+    expect(fs.existsSync(location.path)).toBe(false);
+    const real = path.join(dir, "real.db");
+    new DatabaseSync(real).close();
+    fs.symlinkSync(real, location.path);
+    expect(codeOf(() => readAll("SELECT 1"))).toBe("TARGET_IS_SYMLINK");
   });
 });

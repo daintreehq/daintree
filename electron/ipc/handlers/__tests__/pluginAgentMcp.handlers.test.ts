@@ -18,6 +18,13 @@ const mocks = vi.hoisted(() => ({
     (projectId: string) => Array<{ pluginInstanceId: string; endpointId: string }>
   >(() => []),
   setEnabled: vi.fn(),
+  isProjectDefault: vi.fn<(projectId: string, instanceId: string, endpointId: string) => boolean>(
+    () => false
+  ),
+  hasUserAnswer: vi.fn<(projectId: string, instanceId: string, endpointId: string) => boolean>(
+    () => false
+  ),
+  refreshDefaults: vi.fn((_projectId: string, _root: string | undefined) => Promise.resolve()),
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
@@ -41,6 +48,28 @@ vi.mock("../../../services/McpServerService.js", () => ({
 vi.mock("../../../services/pluginAgentMcp/projectEnablement.js", () => ({
   listEnabledAgentMcpEndpoints: (projectId: string) => mocks.listEnabled(projectId),
   setAgentMcpEndpointEnabled: (...args: unknown[]) => mocks.setEnabled(...args),
+  // The real rule, over the mocked inputs: the user's answer, else the default.
+  isAgentMcpEndpointEnabled: (projectId: string, instanceId: string, endpointId: string) =>
+    mocks
+      .listEnabled(projectId)
+      .some((e) => e.pluginInstanceId === instanceId && e.endpointId === endpointId) ||
+    (!mocks.hasUserAnswer(projectId, instanceId, endpointId) &&
+      mocks.isProjectDefault(projectId, instanceId, endpointId)),
+  hasUserAgentMcpAnswer: (projectId: string, instanceId: string, endpointId: string) =>
+    mocks.hasUserAnswer(projectId, instanceId, endpointId),
+  refreshProjectAgentMcpDefaults: (projectId: string, root: string | undefined) =>
+    mocks.refreshDefaults(projectId, root),
+}));
+
+vi.mock("../../../services/pluginAgentMcp/projectDefaults.js", () => ({
+  isProjectDefaultEndpoint: (projectId: string, instanceId: string, endpointId: string) =>
+    mocks.isProjectDefault(projectId, instanceId, endpointId),
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: {
+    getProjectById: (id: string) => ({ id, path: `/projects/${id.slice(0, 4)}` }),
+  },
 }));
 
 import { ipcMain } from "electron";
@@ -98,6 +127,8 @@ beforeEach(() => {
   mocks.hasPlugin.mockReturnValue(true);
   mocks.isMcpEnabled.mockReturnValue(true);
   mocks.listEnabled.mockReturnValue([]);
+  mocks.isProjectDefault.mockReturnValue(false);
+  mocks.hasUserAnswer.mockReturnValue(false);
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
   dispose = registerPluginAgentMcpHandlers();
@@ -130,6 +161,34 @@ describe("plugin agent MCP consent IPC", () => {
     });
   });
 
+  it("shows a project plugin's endpoint the repository turns on by default as on", async () => {
+    const instanceId = `project__${PROJECT}__acme.ledger`;
+    mocks.listPlugins.mockReturnValue([
+      plugin({ instanceId, origin: "project", projectId: PROJECT }),
+    ]);
+    mocks.isProjectDefault.mockImplementation(
+      (_p, id, endpointId) => id === instanceId && endpointId === "data"
+    );
+
+    const result = (await getHandler(LIST)(EVENT)) as {
+      endpoints: Array<{ enabled: boolean; projectDefault?: boolean; userAnswered?: boolean }>;
+    };
+
+    expect(mocks.refreshDefaults).toHaveBeenCalledWith(PROJECT, `/projects/${PROJECT.slice(0, 4)}`);
+    expect(result.endpoints).toEqual([
+      expect.objectContaining({ enabled: true, projectDefault: true }),
+    ]);
+    expect(result.endpoints[0].userAnswered).toBeUndefined();
+
+    mocks.hasUserAnswer.mockReturnValue(true);
+    const overridden = (await getHandler(LIST)(EVENT)) as {
+      endpoints: Array<{ enabled: boolean; projectDefault?: boolean; userAnswered?: boolean }>;
+    };
+    expect(overridden.endpoints).toEqual([
+      expect.objectContaining({ enabled: false, projectDefault: true, userAnswered: true }),
+    ]);
+  });
+
   it("reports a declared endpoint that was never turned on as off", async () => {
     const result = (await getHandler(LIST)(EVENT)) as { endpoints: Array<{ enabled: boolean }> };
 
@@ -146,6 +205,25 @@ describe("plugin agent MCP consent IPC", () => {
 
     expect(result.endpoints).toEqual([
       expect.objectContaining({ name: "Household ledger", enabled: true, available: false }),
+    ]);
+  });
+
+  it("names a stale database-endpoint answer the way the live row is named", async () => {
+    mocks.hasPlugin.mockReturnValue(false);
+    mocks.listEnabled.mockReturnValue([
+      { pluginInstanceId: "acme.ledger", endpointId: "@databases" },
+    ]);
+
+    const result = (await getHandler(LIST)(EVENT)) as {
+      endpoints: Array<{ name: string; enabled: boolean; available: boolean }>;
+    };
+
+    expect(result.endpoints).toEqual([
+      expect.objectContaining({
+        name: "Databases (read-only)",
+        enabled: true,
+        available: false,
+      }),
     ]);
   });
 

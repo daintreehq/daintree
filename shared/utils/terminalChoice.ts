@@ -13,6 +13,9 @@
 const HIGHLIGHT_MARKER = /^\s*[❯›>▶➜→●]\s*/;
 const OPTION_PREFIX = /^\s*(?:[❯›>▶➜→●]\s*)?(?:\d+[.)]\s*)?/;
 
+const BOX_LEFT = /^\s*[│┃║]/;
+const BOX_RIGHT = /\s*[│┃║]\s*$/;
+
 /** Rows within this distance of the label are searched for the highlight. */
 const MAX_LIST_ROWS = 12;
 
@@ -24,10 +27,22 @@ function indentOf(row: string): number {
   return row.length - body.trimStart().length;
 }
 
+/**
+ * A row with the frame of a boxed dialog taken off — Gemini CLI draws its
+ * choices inside `│ … │` — so the option text and its indent are measured
+ * from inside the box, the same as an unframed list. A row framed on one side
+ * only is left alone.
+ */
+function unframe(row: string): string {
+  // Both sides, or it is not a frame: a tree or a quote can start a row with `│`.
+  if (!BOX_LEFT.test(row) || !BOX_RIGHT.test(row)) return row;
+  return row.replace(BOX_LEFT, "").replace(BOX_RIGHT, "");
+}
+
 export function planChoice(screen: string, label: string): ChoicePlan {
   const wanted = label.trim().toLowerCase();
   if (wanted.length === 0) return { ok: false, reason: "The option label is empty." };
-  const lines = screen.split("\n");
+  const lines = screen.split("\n").map(unframe);
   const rows = (i: number): string => lines[i] ?? "";
 
   // An option row starts with its label, after any marker or number; a

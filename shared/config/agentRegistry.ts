@@ -1,5 +1,6 @@
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
 import type { CompletionSourceConfig } from "../types/completionSources.js";
+import type { LaunchMcpInjection } from "./launchMcp.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -678,6 +679,14 @@ export interface AgentConfig {
      * the Settings copy for the toggle.
      */
     decorations?: { offArgs: string[]; label: string; description: string };
+    /**
+     * How a launch hands this agent Daintree's MCP servers: the orchestration
+     * server when the project's tier is not `off`, and the plugin endpoints the
+     * project turned on. Every format adds beside the user's own servers and
+     * writes nothing into the agent's config or the repository (see
+     * `launchMcp.ts`). Absent means the agent launches without them.
+     */
+    launchMcp?: LaunchMcpInjection;
     /**
      * How the CLI takes a standing instruction appended to its own system
      * prompt — the agent-neutral `systemPrompt` argument of `agent.launch`

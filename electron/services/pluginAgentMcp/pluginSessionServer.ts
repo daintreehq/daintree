@@ -14,6 +14,7 @@ import {
 } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { agentMcpEndpointRegistry, type AgentMcpEndpointRegistry } from "./endpointRegistry.js";
+import { DATABASE_ENDPOINT_ID } from "./types.js";
 
 export const PLUGIN_MCP_SESSION_SERVER_VERSION = "1.0.0";
 
@@ -116,6 +117,9 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
   if (sessionSignal.aborted) offRosterChange();
 
   const ensureActivated = async (): Promise<void> => {
+    // The host serves the database endpoint from load, not the plugin from
+    // activation, so reading a plugin's data never starts its code.
+    if (endpointId === DATABASE_ENDPOINT_ID) return;
     try {
       await activatePlugin(pluginInstanceId);
     } catch (err) {
@@ -160,6 +164,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       description: tool.description,
       inputSchema: tool.inputSchema,
       ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
+      ...(tool.readOnly === true ? { annotations: { readOnlyHint: true } } : {}),
     }));
     return { tools };
   });

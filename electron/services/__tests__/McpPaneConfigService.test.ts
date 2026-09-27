@@ -94,7 +94,7 @@ describe("McpPaneConfigService", () => {
     expect(configPath).toBe(path.join(testUserData, "mcp-pane-configs", "pane-001.json"));
     expect(token).toMatch(/^[0-9a-f-]{36}$/);
 
-    const raw = await fs.readFile(configPath, "utf-8");
+    const raw = await fs.readFile(configPath!, "utf-8");
     const parsed = JSON.parse(raw);
 
     expect(parsed.mcpServers.daintree.type).toBe("sse");
@@ -122,7 +122,7 @@ describe("McpPaneConfigService", () => {
       port: 45454,
       tier: "core",
     });
-    const stat = await fs.stat(configPath);
+    const stat = await fs.stat(configPath!);
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
@@ -149,7 +149,7 @@ describe("McpPaneConfigService", () => {
     await service.revokePaneConfig("pane-005");
 
     expect(service.isValidPaneToken(token)).toBe(false);
-    await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(configPath!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("is idempotent — revokePaneConfig tolerates missing files and unknown panes", async () => {
@@ -177,7 +177,7 @@ describe("McpPaneConfigService", () => {
     expect(service.isValidPaneToken(first.token)).toBe(false);
     expect(service.isValidPaneToken(second.token)).toBe(true);
 
-    const raw = await fs.readFile(second.configPath, "utf-8");
+    const raw = await fs.readFile(second.configPath!, "utf-8");
     const parsed = JSON.parse(raw);
     expect(parsed.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${second.token}`);
   });
@@ -609,7 +609,7 @@ describe("McpPaneConfigService", () => {
       await service.revokePaneConfig("pane-throw");
 
       expect(service.isValidPaneToken(token)).toBe(false);
-      await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(configPath!)).rejects.toMatchObject({ code: "ENOENT" });
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
     });
@@ -634,8 +634,8 @@ describe("McpPaneConfigService", () => {
 
     expect(service.isValidPaneToken(a.token)).toBe(false);
     expect(service.isValidPaneToken(b.token)).toBe(false);
-    await expect(fs.stat(a.configPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(b.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(a.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(b.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   describe("plugin MCP endpoints", () => {
@@ -666,7 +666,7 @@ describe("McpPaneConfigService", () => {
 
       expect(prepared).not.toBeNull();
       expect(prepared!.token).toBeNull();
-      const servers = await readServers(prepared!.configPath);
+      const servers = await readServers(prepared!.configPath!);
       expect(Object.keys(servers)).toEqual(prepared!.pluginServerKeys);
       expect(servers.daintree).toBeUndefined();
 
@@ -677,6 +677,119 @@ describe("McpPaneConfigService", () => {
       expect(service.isValidPaneToken(bearerOf(Object.values(servers)[0]))).toBe(false);
     });
 
+    it("hands Codex its servers as -c overrides and env bearers, writing no file", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-codex",
+        port: 45454,
+        tier: "core",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger], launchAgentIdHint: "codex" },
+        injection: { format: "codex-config-overrides" },
+      });
+
+      expect(prepared!.configPath).toBeNull();
+      await expect(
+        fs.stat(path.join(testUserData, "mcp-pane-configs", "pane-codex.json"))
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      const [key] = prepared!.pluginServerKeys;
+      expect(prepared!.args).toEqual([
+        "-c",
+        'mcp_servers.daintree.url="http://127.0.0.1:45454/mcp"',
+        "-c",
+        'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
+        "-c",
+        `mcp_servers.${key}.url="http://127.0.0.1:45454${pluginMcpRoutePath("acme.ledger", "data")}"`,
+        "-c",
+        `mcp_servers.${key}.bearer_token_env_var="DAINTREE_PLUGIN_MCP_TOKEN_1"`,
+      ]);
+      expect(prepared!.env.DAINTREE_MCP_TOKEN).toBe(prepared!.token);
+      expect(service.isValidPaneToken(prepared!.env.DAINTREE_MCP_TOKEN)).toBe(true);
+      expect(grants.authenticate(prepared!.env.DAINTREE_PLUGIN_MCP_TOKEN_1)?.endpointId).toBe(
+        "data"
+      );
+
+      await service.revokePaneConfig("pane-codex");
+      expect(service.isValidPaneToken(prepared!.env.DAINTREE_MCP_TOKEN)).toBe(false);
+      expect(grants.authenticate(prepared!.env.DAINTREE_PLUGIN_MCP_TOKEN_1)).toBeNull();
+    });
+
+    it("switches a relaunched pane between file and env formats, leaving only the new wiring live", async () => {
+      const claude = await service.preparePaneConfig({
+        paneId: "pane-switch",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+      const claudeBearer = bearerOf(Object.values(await readServers(claude!.configPath!))[0]);
+
+      const codex = await service.preparePaneConfig({
+        paneId: "pane-switch",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        injection: { format: "codex-config-overrides" },
+      });
+      expect(grants.authenticate(claudeBearer)).toBeNull();
+      await expect(fs.stat(claude!.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
+      const codexBearer = codex!.env.DAINTREE_PLUGIN_MCP_TOKEN_1;
+      expect(grants.authenticate(codexBearer)?.endpointId).toBe("data");
+
+      const again = await service.preparePaneConfig({
+        paneId: "pane-switch",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+      });
+      expect(grants.authenticate(codexBearer)).toBeNull();
+      expect(grants.listForTerminal("pane-switch")).toHaveLength(1);
+      await expect(fs.stat(again!.configPath!)).resolves.toBeDefined();
+    });
+
+    it("mints nothing when the configuration a format would replace cannot be carried forward", async () => {
+      await fs.mkdir(testUserData, { recursive: true });
+      const broken = path.join(testUserData, "broken-defaults.json");
+      await fs.writeFile(broken, "{ not json");
+
+      await expect(
+        service.preparePaneConfig({
+          paneId: "pane-broken-base",
+          port: 45454,
+          tier: "core",
+          plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+          injection: {
+            format: "gemini-system-defaults",
+            envVar: "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+          },
+          inheritedEnv: { GEMINI_CLI_SYSTEM_DEFAULTS_PATH: broken },
+        })
+      ).rejects.toThrow(/cannot parse/);
+      expect(grants.listForTerminal("pane-broken-base")).toEqual([]);
+      expect(service.getOrchestratorPane("pane-broken-base")).toBeNull();
+    });
+
+    it("writes Gemini's settings file and names it in the env, carrying an admin's defaults forward", async () => {
+      const adminDefaults = path.join(testUserData, "admin-defaults.json");
+      await fs.mkdir(testUserData, { recursive: true });
+      await fs.writeFile(adminDefaults, JSON.stringify({ general: { vimMode: true } }));
+
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-gemini",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        injection: { format: "gemini-system-defaults", envVar: "GEMINI_CLI_SYSTEM_DEFAULTS_PATH" },
+        inheritedEnv: { GEMINI_CLI_SYSTEM_DEFAULTS_PATH: adminDefaults },
+      });
+
+      expect(prepared!.args).toEqual([]);
+      expect(prepared!.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH).toBe(prepared!.configPath);
+      const written = JSON.parse(await fs.readFile(prepared!.configPath!, "utf-8"));
+      expect(written.general).toEqual({ vimMode: true });
+      const entry = written.mcpServers[prepared!.pluginServerKeys[0]];
+      expect(entry.type).toBe("http");
+      expect(grants.authenticate(bearerOf(entry))?.endpointId).toBe("data");
+      expect((await fs.stat(prepared!.configPath!)).mode & 0o777).toBe(0o600);
+    });
+
     it("a non-off tier keeps the Daintree entry and pane token, with the plugin entries alongside", async () => {
       const prepared = await service.preparePaneConfig({
         paneId: "pane-plugin-core",
@@ -685,7 +798,7 @@ describe("McpPaneConfigService", () => {
         plugin: { projectId: PROJECT_A, endpoints: [ledger] },
       });
 
-      const servers = await readServers(prepared!.configPath);
+      const servers = await readServers(prepared!.configPath!);
       expect(servers.daintree.headers.Authorization).toBe(`Bearer ${prepared!.token}`);
       expect(service.getTierForToken(prepared!.token!)).toBe("core");
       expect(prepared!.pluginServerKeys).toHaveLength(1);
@@ -703,7 +816,7 @@ describe("McpPaneConfigService", () => {
         plugin: { projectId: PROJECT_A, endpoints: [ledger] },
       });
 
-      const entry = (await readServers(prepared!.configPath))[prepared!.pluginServerKeys[0]];
+      const entry = (await readServers(prepared!.configPath!))[prepared!.pluginServerKeys[0]];
       expect(entry.type).toBe("http");
       expect(entry.url).toBe(`http://127.0.0.1:45460${pluginMcpRoutePath("acme.ledger", "data")}`);
       expect(entry.headers.Authorization).not.toContain("${");
@@ -725,7 +838,7 @@ describe("McpPaneConfigService", () => {
         tier: "off",
         plugin: { projectId: PROJECT_A, endpoints: [ledger] },
       });
-      const stat = await fs.stat(prepared!.configPath);
+      const stat = await fs.stat(prepared!.configPath!);
       expect(stat.mode & 0o777).toBe(0o600);
     });
 
@@ -766,7 +879,7 @@ describe("McpPaneConfigService", () => {
         plugin: { projectId: PROJECT_A, endpoints: [ledger] },
       });
       const bearer = bearerOf(
-        (await readServers(prepared!.configPath))[prepared!.pluginServerKeys[0]]
+        (await readServers(prepared!.configPath!))[prepared!.pluginServerKeys[0]]
       );
 
       await service.revokePaneConfig("pane-plugin-revoke");
@@ -796,7 +909,7 @@ describe("McpPaneConfigService", () => {
         plugin: { projectId: PROJECT_A, endpoints: [ledger] },
       });
       const firstBearer = bearerOf(
-        (await readServers(first!.configPath))[first!.pluginServerKeys[0]]
+        (await readServers(first!.configPath!))[first!.pluginServerKeys[0]]
       );
 
       await service.preparePaneConfig({
@@ -889,7 +1002,7 @@ describe("McpPaneConfigService", () => {
 
       const prepared = await pending;
       expect(service.isValidPaneToken(prepared.token)).toBe(true);
-      await expect(fs.stat(prepared.configPath)).resolves.toBeDefined();
+      await expect(fs.stat(prepared.configPath!)).resolves.toBeDefined();
     });
 
     it("runs overlapping preparations for one pane in order, so the newer file wins", async () => {
@@ -928,7 +1041,7 @@ describe("McpPaneConfigService", () => {
       ]);
       const olderServers = JSON.parse(writeControl.written[0].data).mcpServers;
       const olderBearer = bearerOf(olderServers[olderPrepared!.pluginServerKeys[0]]);
-      const onDisk = await fs.readFile(newer!.configPath, "utf-8");
+      const onDisk = await fs.readFile(newer!.configPath!, "utf-8");
       expect(onDisk).toBe(writeControl.written[1].data);
       const newerBearer = bearerOf(JSON.parse(onDisk).mcpServers[newer!.pluginServerKeys[0]]);
 

@@ -41,6 +41,12 @@ describe("validateAgentMcpTools", () => {
     for (const descriptor of descriptors) expect(descriptor).not.toHaveProperty("execute");
   });
 
+  it("never lets a plugin's own roster claim to be read-only", () => {
+    const [descriptor] = validateAgentMcpTools({ drop_everything: tool({ readOnly: true }) });
+
+    expect(descriptor).not.toHaveProperty("readOnly");
+  });
+
   it("detaches advertised schemas from the plugin's objects", () => {
     const inputSchema: Record<string, unknown> = { type: "object", properties: {} };
     const [descriptor] = validateAgentMcpTools({ list: tool({ inputSchema }) });

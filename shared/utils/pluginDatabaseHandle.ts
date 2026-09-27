@@ -41,6 +41,10 @@ interface SqliteStatement {
   }>;
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
+  /** Node 23.4+; feature-detected. */
+  iterate?(...params: unknown[]): IterableIterator<unknown> & { return?(): unknown };
+  /** Node 24.0+; feature-detected. */
+  setReturnArrays?(enabled: boolean): void;
   run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
   setReadBigInts?(enabled: boolean): void;
 }
@@ -57,6 +61,8 @@ interface SqliteDatabase {
   close(): void;
   /** Node 24.10+; feature-detected. */
   setAuthorizer?(callback: SqliteAuthorizer | null): void;
+  /** Node 24.x; feature-detected. */
+  limits?: { length: number };
 }
 type DatabaseSyncCtor = new (
   path: string,
@@ -450,6 +456,92 @@ export interface OpenPluginDatabaseOptions extends PluginDatabaseOpenOptions {
    * symlink refusal, audit); without it `backup` is unavailable.
    */
   prepareBackup?: (destPath: string) => Promise<string>;
+}
+
+/** Largest string or blob a {@link readPluginDatabaseRows} statement may produce. */
+export const READ_MAX_VALUE_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Run one row-returning statement on a fresh readonly connection and hand each
+ * row to `onRow` as an array aligned with the returned column names, until the
+ * rows run out or `onRow` returns false. Rows are streamed rather than
+ * collected, so a caller with a budget never materialises more than it keeps.
+ *
+ * For agents reading a plugin's database: the same file-access refusals and
+ * single-statement rule as the handle, on a connection SQLite itself holds
+ * readonly, and a statement that returns no rows is refused before it runs.
+ * Integers come back as BigInt; the caller decides how to encode them.
+ */
+export function readPluginDatabaseRows(
+  location: PluginDatabaseLocation,
+  sql: string,
+  params: PluginDatabaseParams | undefined,
+  onRow: (row: unknown[]) => boolean
+): { columns: string[] } {
+  if (typeof sql !== "string" || sql.trim().length === 0) {
+    throw databaseError("VALIDATION", "sql must be a non-empty string");
+  }
+  assertNoFileAccess(sql, location.id);
+  const args = bindArgs(params);
+  const sqlite = loadSqlite();
+  const leaf = fs.lstatSync(location.path, { throwIfNoEntry: false });
+  if (leaf?.isSymbolicLink()) {
+    throw databaseError("TARGET_IS_SYMLINK", `database "${location.id}" file is a symlink`);
+  }
+  if (!leaf) {
+    throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
+  }
+  // The resolver hands over a path whose directory is already canonical. A
+  // directory swapped for a link since then would canonicalise elsewhere.
+  const dir = path.dirname(location.path);
+  if (fs.realpathSync(dir) !== dir) {
+    throw databaseError(
+      "PATH_NOT_ALLOWED",
+      `database "${location.id}" moved after it was resolved`
+    );
+  }
+  const connection = new sqlite.DatabaseSync(location.path, { readOnly: true });
+  try {
+    if (sqlite.constants && typeof connection.setAuthorizer === "function") {
+      connection.setAuthorizer(fileAccessAuthorizer(sqlite.constants));
+    }
+    // A caller's row budget is checked only after SQLite has built a value, so
+    // cap what it may build: `zeroblob(1e9)` fails instead of allocating.
+    if (connection.limits) connection.limits.length = READ_MAX_VALUE_BYTES;
+    connection.exec("PRAGMA busy_timeout = 5000");
+    const statement = connection.prepare(sql);
+    assertSingleStatement(sql, statement, location.id);
+    if (
+      typeof statement.columns !== "function" ||
+      typeof statement.iterate !== "function" ||
+      typeof statement.setReturnArrays !== "function"
+    ) {
+      throw databaseError(
+        "DB_UNSUPPORTED",
+        "reading rows needs a runtime whose node:sqlite has StatementSync.iterate and setReturnArrays"
+      );
+    }
+    const columns = statement.columns().map((c) => c.name);
+    if (columns.length === 0) {
+      throw databaseError(
+        "DB_NOT_A_QUERY",
+        `database "${location.id}": only statements that return rows can run here`
+      );
+    }
+    statement.setReadBigInts?.(true);
+    statement.setReturnArrays(true);
+    const rows = statement.iterate(...args);
+    try {
+      for (const row of rows) {
+        if (!onRow(row as unknown[])) break;
+      }
+    } finally {
+      rows.return?.();
+    }
+    return { columns };
+  } finally {
+    connection.close();
+  }
 }
 
 /**

@@ -132,7 +132,7 @@ Trusting the folder lets the plugin run; it does not pre-approve what the plugin
 
 One grant covers every call of that capability, so a plugin that already writes files asks for nothing new to render a PDF. Only an approval the user pins is remembered. A one-time approval lets that one call through; a refusal, or a prompt left to time out, rejects it with `PERMISSION_REQUIRED:`. None of the three is remembered and the next call asks again — so a plugin must not retry a refused write from a timer or a watch callback, and should not start a write-class call from `activate()`, whose 5-second budget a waiting prompt would outlast. Reads (`fs:*-read`, `agent:read`, `git:read`) and a `readonly` database open are gated by the manifest alone and never prompt.
 
-Grants are held per plugin _instance_, so one project's grant never answers for another project's copy of the same plugin id, and revoking the project's trust purges them. An agent MCP endpoint is a separate decision again, made per endpoint in Project settings → Plugins → Agent tools.
+Grants are held per plugin _instance_, so one project's grant never answers for another project's copy of the same plugin id, and revoking the project's trust purges them. An agent MCP endpoint is a separate decision again, made per endpoint in Project settings → Plugins → Agent tools, or turned on for everyone who opens the project by listing it in `.daintree/mcp.json` ([Agent extensions → Project defaults](./agent-extensions.md#project-defaults-daintreemcpjson)).
 
 ## What a project plugin may contribute
 

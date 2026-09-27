@@ -13,10 +13,23 @@ import {
   type PluginMcpGrantRegistry,
 } from "./pluginAgentMcp/grantRegistry.js";
 import { pluginMcpRoutePath } from "./pluginAgentMcp/types.js";
+import type { LaunchMcpInjection } from "../../shared/config/launchMcp.js";
+import {
+  LAUNCH_MCP_FILE_PLACEHOLDER,
+  renderLaunchMcp,
+  type LaunchMcpServer,
+} from "./launchMcp/renderLaunchMcp.js";
+import { resolveLaunchMcpBase } from "./launchMcp/resolveLaunchMcpBase.js";
+
+const CLAUDE_INJECTION: LaunchMcpInjection = { format: "claude-mcp-config" };
 
 const PANE_CONFIG_DIR_NAME = "mcp-pane-configs";
 const MCP_SERVER_KEY = "daintree";
 const PLUGIN_SERVER_KEY_PREFIX = "daintree-";
+const DAINTREE_MCP_TOKEN_ENV = "DAINTREE_MCP_TOKEN";
+// Plugin bearers never share the orchestration bearer's name: that one also
+// marks a help-session launch in the spawn path.
+const PLUGIN_MCP_TOKEN_ENV_PREFIX = "DAINTREE_PLUGIN_MCP_TOKEN_";
 // Claude names a server's tools `mcp__<server>__<tool>` under a 64-character
 // tool-name limit. Tool names are capped at 32 (AGENT_MCP_TOOL_NAME_PATTERN),
 // which leaves 25 for the key, so a long manifest id is truncated and
@@ -25,7 +38,8 @@ const MAX_PLUGIN_SERVER_KEY_LENGTH = 25;
 const SERVER_KEY_HASH_LENGTH = 8;
 
 interface PaneRecord {
-  configPath: string;
+  /** Null for a format that hands the agent everything through args and env. */
+  configPath: string | null;
   /** Null when the tier is "off" and the file carries plugin entries only. */
   token: string | null;
   tier: DaintreeMcpTier;
@@ -85,25 +99,30 @@ export interface PreparePaneConfigParams {
   tier: DaintreeMcpTier;
   /** Plugin endpoints the user enabled for this project, each given its own grant and server entry. */
   plugin?: PreparePanePluginEndpoints;
+  /** The launching agent's dialect; Claude's `--mcp-config` file when omitted. */
+  injection?: LaunchMcpInjection;
+  /** The env the agent will inherit, for formats that must carry an existing value forward. */
+  inheritedEnv?: Readonly<Record<string, string | undefined>>;
+  /** The agent's working directory, for a relative path in `inheritedEnv`. */
+  cwd?: string;
 }
 
 export interface PreparedPaneConfig {
-  configPath: string;
+  /** The 0600 file written for this launch, or null when the format needs none. */
+  configPath: string | null;
   /** The Daintree orchestration bearer, or null when no Daintree entry was written. */
   token: string | null;
   /** Server keys of the plugin entries written, one per grant minted. */
   pluginServerKeys: string[];
+  /** Args to append to the agent command, unquoted, file path already substituted. */
+  args: string[];
+  /** Env to merge into the PTY spawn env. */
+  env: Record<string, string>;
 }
 
-/** What a call without plugin endpoints gets back: always a file with the Daintree entry. */
+/** What a call without plugin endpoints gets back: always carries the Daintree entry. */
 export interface PreparedDaintreePaneConfig extends PreparedPaneConfig {
   token: string;
-}
-
-interface PluginServerEntry {
-  type: "http";
-  url: string;
-  headers: { Authorization: string };
 }
 
 function sanitiseServerKeyPart(value: string): string {
@@ -198,12 +217,14 @@ export class McpPaneConfigService {
   }
 
   /**
-   * Write the pane's managed `--mcp-config` file. One file carries the Daintree
-   * orchestration entry (unless the tier is "off") and one Streamable HTTP entry
-   * per enabled plugin endpoint, each with its own freshly minted grant.
+   * Mint the pane's MCP wiring and render it in the launching agent's dialect:
+   * the Daintree orchestration entry (unless the tier is "off") and one
+   * Streamable HTTP entry per enabled plugin endpoint, each with its own freshly
+   * minted grant. Formats that need a file get one, written 0600 under
+   * userData; the rest come back as args and env for the spawn.
    *
    * Returns null when the tier is "off" and no plugin grant could be minted:
-   * there is nothing to hand the agent, so no file is written. Any grant minted
+   * there is nothing to hand the agent, so nothing is written. Any grant minted
    * here is revoked again before a failure propagates.
    */
   preparePaneConfig(
@@ -226,6 +247,9 @@ export class McpPaneConfigService {
     port,
     tier,
     plugin,
+    injection = CLAUDE_INJECTION,
+    inheritedEnv = {},
+    cwd,
   }: PreparePaneConfigParams): Promise<PreparedPaneConfig | null> {
     if (!paneId) {
       throw new Error("paneId is required");
@@ -257,6 +281,20 @@ export class McpPaneConfigService {
       });
     }
 
+    // Read before anything is minted, like every other await here. A base that
+    // cannot be carried forward fails the preparation, and the launch goes on
+    // without Daintree's servers instead of hiding the user's configuration.
+    let base: Awaited<ReturnType<typeof resolveLaunchMcpBase>>;
+    try {
+      base = await resolveLaunchMcpBase(injection, inheritedEnv, {
+        ...(cwd !== undefined ? { cwd } : {}),
+        managedDir: this.baseDir,
+      });
+    } catch (err) {
+      if (isCurrent()) this.attempts.delete(paneId);
+      throw err;
+    }
+
     // A revocation with no successor is the previous launch's exit landing
     // late. Before anything is minted it costs nothing, so re-claim the pane
     // and carry on, as this path always has.
@@ -266,43 +304,45 @@ export class McpPaneConfigService {
     this.attempts.set(paneId, attempt);
 
     const token = tier === "off" ? null : randomUUID();
-    const pluginServers = plugin ? this.mintPluginServers(paneId, port, plugin) : {};
-    const pluginServerKeys = Object.keys(pluginServers);
+    const pluginServers = plugin ? this.mintPluginServers(paneId, port, plugin) : [];
+    const pluginServerKeys = pluginServers.map((server) => server.key);
 
     if (token === null && pluginServerKeys.length === 0) {
       this.attempts.delete(paneId);
       return null;
     }
 
-    // Bake the token literal into the file rather than using ${VAR} substitution.
-    // Claude Code's `${VAR}` substitution in `headers` is still broken as of
-    // v2.1.83 through v2.1.133 (tested May 2026): placeholders aren't forwarded
-    // to the wire (anthropics/claude-code#6204). `claude mcp add`/`remove` also
-    // rewrite `${VAR}` to its literal env value (#18692, #57131), which would
-    // leak the session bearer to disk — the literal-token path sidesteps that
-    // leak class. (#28293 separately drops headers on SSE POSTs regardless of
-    // value; neither path fixes it.) Same reason as HelpSessionService.ts.
-    // Plugin grants follow the same rule, and this 0600 file is the only place
-    // one is ever written.
-    const payload = {
-      mcpServers: {
-        ...(token !== null
-          ? {
-              [MCP_SERVER_KEY]: {
-                type: "sse",
-                url: `http://127.0.0.1:${port}/sse`,
-                headers: { Authorization: `Bearer ${token}` },
-              },
-            }
-          : {}),
-        ...pluginServers,
-      },
-    };
+    // Bearers are literals wherever a format carries them: Claude Code's
+    // `${VAR}` substitution in `headers` is still broken as of v2.1.83 through
+    // v2.1.133 (tested May 2026): placeholders aren't forwarded to the wire
+    // (anthropics/claude-code#6204). `claude mcp add`/`remove` also rewrite
+    // `${VAR}` to its literal env value (#18692, #57131), which would leak the
+    // session bearer to disk — the literal-token path sidesteps that leak
+    // class. (#28293 separately drops headers on SSE POSTs regardless of value;
+    // neither path fixes it.) Same reason as HelpSessionService.ts. A file is
+    // written 0600 under userData and is the only place one lands on disk;
+    // formats without a file carry them in the PTY env, never in argv.
+    const servers: LaunchMcpServer[] = [
+      ...(token !== null
+        ? [
+            {
+              key: MCP_SERVER_KEY,
+              url: `http://127.0.0.1:${port}/mcp`,
+              claudeSseUrl: `http://127.0.0.1:${port}/sse`,
+              bearer: token,
+              bearerEnvVar: DAINTREE_MCP_TOKEN_ENV,
+            },
+          ]
+        : []),
+      ...pluginServers,
+    ];
 
+    let rendered: ReturnType<typeof renderLaunchMcp>;
     try {
-      await resilientAtomicWriteFile(configPath, JSON.stringify(payload, null, 2) + "\n", "utf-8", {
-        mode: 0o600,
-      });
+      rendered = renderLaunchMcp(injection, servers, base);
+      if (rendered.file !== null) {
+        await resilientAtomicWriteFile(configPath, rendered.file, "utf-8", { mode: 0o600 });
+      }
     } catch (err) {
       if (isCurrent()) {
         this.attempts.delete(paneId);
@@ -310,6 +350,13 @@ export class McpPaneConfigService {
       }
       throw err;
     }
+    const writtenPath = rendered.file !== null ? configPath : null;
+    const substitute = (value: string) =>
+      writtenPath !== null ? value.split(LAUNCH_MCP_FILE_PLACEHOLDER).join(writtenPath) : value;
+    const args = rendered.args.map(substitute);
+    const env = Object.fromEntries(
+      Object.entries(rendered.env).map(([key, value]) => [key, substitute(value)])
+    );
 
     if (hasSuccessor()) {
       // The successor owns the path and whatever grants the pane now holds.
@@ -321,20 +368,22 @@ export class McpPaneConfigService {
       // plugin grants were live and are gone now, so that file would hand the
       // agent dead bearers.
       if (pluginServerKeys.length > 0) {
-        await resilientUnlink(configPath).catch(() => {
-          // best-effort cleanup
-        });
+        if (writtenPath !== null) {
+          await resilientUnlink(writtenPath).catch(() => {
+            // best-effort cleanup
+          });
+        }
         throw new Error(`Pane config for ${paneId} was revoked while preparing`);
       }
       this.attempts.set(paneId, attempt);
     }
 
-    this.records.set(paneId, { configPath, token, tier });
+    this.records.set(paneId, { configPath: writtenPath, token, tier });
     if (token !== null) {
       this.tokens.set(token, { paneId, tier, ownershipPrincipal: randomUUID() });
     }
 
-    return { configPath, token, pluginServerKeys };
+    return { configPath: writtenPath, token, pluginServerKeys, args, env };
   }
 
   /**
@@ -346,7 +395,7 @@ export class McpPaneConfigService {
     paneId: string,
     port: number,
     { projectId, endpoints, launchAgentIdHint, isEligible }: PreparePanePluginEndpoints
-  ): Record<string, PluginServerEntry> {
+  ): LaunchMcpServer[] {
     const seen = new Set<string>();
     const minted: Array<{ endpoint: PanePluginEndpoint; token: string }> = [];
     for (const endpoint of endpoints) {
@@ -373,16 +422,13 @@ export class McpPaneConfigService {
     }
 
     const keys = pluginServerKeysFor(minted.map((m) => m.endpoint));
-    const servers: Record<string, PluginServerEntry> = {};
-    minted.forEach(({ endpoint, token }, i) => {
-      servers[keys[i]] = {
-        // Streamable HTTP: the plugin route does not serve SSE.
-        type: "http",
-        url: `http://127.0.0.1:${port}${pluginMcpRoutePath(endpoint.pluginInstanceId, endpoint.endpointId)}`,
-        headers: { Authorization: `Bearer ${token}` },
-      };
-    });
-    return servers;
+    // Streamable HTTP only: the plugin route does not serve SSE.
+    return minted.map(({ endpoint, token }, i) => ({
+      key: keys[i],
+      url: `http://127.0.0.1:${port}${pluginMcpRoutePath(endpoint.pluginInstanceId, endpoint.endpointId)}`,
+      bearer: token,
+      bearerEnvVar: `${PLUGIN_MCP_TOKEN_ENV_PREFIX}${i + 1}`,
+    }));
   }
 
   private revokePluginGrants(paneId: string): void {
@@ -422,7 +468,9 @@ export class McpPaneConfigService {
     }
 
     try {
-      await resilientUnlink(record.configPath);
+      // A launch without a file still clears the pane's path, in case an
+      // earlier launch of this pane left one behind.
+      await resilientUnlink(record.configPath ?? this.configPathFor(paneId));
     } catch (err) {
       const code =
         err != null && typeof err === "object" && "code" in err

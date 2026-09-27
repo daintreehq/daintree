@@ -5,6 +5,16 @@ import type { AgentMcpSchemaCheck } from "./schemaValidation.js";
 /** Path prefix of the plugin-only MCP surface on the host's loopback listener. */
 export const PLUGIN_MCP_ROUTE_PREFIX = "/mcp/plugin/";
 
+/**
+ * The endpoint the host serves for every plugin that declares databases. `@`
+ * is outside the manifest's id grammar, so no plugin-declared `agentMcp`
+ * endpoint can take this id, and its per-project consent is its own.
+ */
+export const DATABASE_ENDPOINT_ID = "@databases";
+export const DATABASE_ENDPOINT_NAME = "Databases (read-only)";
+export const DATABASE_ENDPOINT_DESCRIPTION =
+  "Lets agents see the schema of this plugin's declared databases and run read-only queries against them.";
+
 /** The agent-facing URL path for one endpoint of one plugin instance. */
 export function pluginMcpRoutePath(pluginInstanceId: string, endpointId: string): string {
   return `${PLUGIN_MCP_ROUTE_PREFIX}${encodeURIComponent(pluginInstanceId)}/${encodeURIComponent(endpointId)}`;
@@ -16,6 +26,12 @@ export interface AgentMcpToolDescriptor {
   readonly description: string;
   readonly inputSchema: PluginMcpJsonSchema;
   readonly outputSchema?: PluginMcpJsonSchema;
+  /**
+   * Host-owned tools only: advertised as `readOnlyHint`, which lets a client
+   * such as Codex run the call without an approval prompt. Never taken from a
+   * plugin's own roster, where it would be the plugin vouching for itself.
+   */
+  readonly readOnly?: true;
 }
 
 /**

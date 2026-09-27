@@ -17,6 +17,10 @@ export interface ProjectAgentToolEndpoint {
    * turned off; it can't be turned back on until the plugin offers it again.
    */
   available: boolean;
+  /** The repository's `.daintree/mcp.json` turns this endpoint on by default. */
+  projectDefault?: boolean;
+  /** The user answered for this endpoint here, so the project default no longer applies. */
+  userAnswered?: boolean;
 }
 
 export interface ProjectAgentToolsSnapshot {

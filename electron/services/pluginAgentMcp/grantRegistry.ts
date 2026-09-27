@@ -135,6 +135,17 @@ export class PluginMcpGrantRegistry {
     );
   }
 
+  /** Revoke every grant in a project whose endpoint `isEnabled` no longer allows. */
+  revokeDisabledInProject(
+    projectId: string,
+    isEnabled: (grant: PluginMcpGrant) => boolean
+  ): PluginMcpGrant[] {
+    return this.revokeWhere(
+      (grant) => grant.projectId === projectId && !isEnabled(grant),
+      "endpoint-disabled"
+    );
+  }
+
   revokeAll(reason: PluginMcpGrantRevokeReason = "server-stopped"): PluginMcpGrant[] {
     return this.revokeWhere(() => true, reason);
   }

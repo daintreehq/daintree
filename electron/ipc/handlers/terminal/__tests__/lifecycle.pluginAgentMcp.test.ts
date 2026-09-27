@@ -229,7 +229,9 @@ async function readServers(configPath: string) {
 }
 
 function configPathFromCommand(command: string): string {
-  const match = /--mcp-config '([^']+)'/.exec(command) ?? /--mcp-config (\S+)/.exec(command);
+  // Every appended arg is shell-quoted, the flag included.
+  const match =
+    /'?--mcp-config'? '([^']+)'/.exec(command) ?? /'?--mcp-config'? (\S+)/.exec(command);
   if (!match) throw new Error(`No --mcp-config in: ${command}`);
   return match[1];
 }
@@ -434,13 +436,29 @@ describe("terminal spawn handler - plugin MCP endpoints for Claude launches", ()
     expect(pluginMcpGrantRegistry.isLive(grant.credentialId)).toBe(true);
   });
 
-  it("mints nothing for a non-Claude launch", async () => {
+  it("hands a Codex launch the endpoint as a -c override, its bearer in the env", async () => {
     setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
 
     await spawn({ id: "term-codex", command: "codex", launchAgentId: "codex" });
 
-    expect(ptyClient.spawn.mock.calls[0][1].command).not.toContain("--mcp-config");
-    expect(pluginMcpGrantRegistry.listForTerminal("term-codex")).toEqual([]);
+    const { command, env } = ptyClient.spawn.mock.calls[0][1];
+    expect(command).not.toContain("--mcp-config");
+    expect(command).toMatch(/mcp_servers\.daintree-acme_ledger-data\.url=/);
+    expect(command).toContain('bearer_token_env_var="DAINTREE_PLUGIN_MCP_TOKEN_1"');
+    const bearer = env?.DAINTREE_PLUGIN_MCP_TOKEN_1 as string;
+    expect(command).not.toContain(bearer);
+    const [grant] = pluginMcpGrantRegistry.listForTerminal("term-codex");
+    expect(grant).toMatchObject({ endpointId: "data", launchAgentIdHint: "codex" });
+    expect(pluginMcpGrantRegistry.authenticate(bearer)).toBe(grant);
+  });
+
+  it("mints nothing for an agent with no launch mechanism", async () => {
+    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+
+    await spawn({ id: "term-cursor", command: "cursor-agent", launchAgentId: "cursor" });
+
+    expect(ptyClient.spawn.mock.calls[0][1].command).toBe("cursor-agent");
+    expect(pluginMcpGrantRegistry.listForTerminal("term-cursor")).toEqual([]);
   });
 
   it("mints nothing for a Claude help-session launch", async () => {

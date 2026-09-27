@@ -19,6 +19,7 @@ const baseConfig: KnipConfig = {
     "electron/preload.cts",
     "electron/pty-host/analysisWorker.ts",
     "electron/services/persistence/dbMaintenanceWorker.ts",
+    "electron/services/pluginAgentMcp/databaseQueryWorker.ts",
     "electron/services/voice/openaiVadWorker.ts",
     "electron/workspace-host/copytreeWorker.ts",
 
