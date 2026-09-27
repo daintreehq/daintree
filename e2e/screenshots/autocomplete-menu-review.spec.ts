@@ -146,7 +146,11 @@ async function capture(page: Page, caseName: string, theme: string): Promise<str
     await expect(
       menu.getByRole("listbox", { name: TRIGGER_COPY[spec.trigger].ariaLabel })
     ).toBeVisible();
-    await expect(options.nth(spec.selectedIndex)).toHaveAttribute("aria-selected", "true");
+    // A stale row is never shown as the one Enter acts on.
+    await expect(options.nth(spec.selectedIndex)).toHaveAttribute(
+      "aria-selected",
+      spec.stale ? "false" : "true"
+    );
   }
   if (spec.isLoading) {
     await expect(menu, `${caseName}: no loading line`).toContainText(/Searching/);

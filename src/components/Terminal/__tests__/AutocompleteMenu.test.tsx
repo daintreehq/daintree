@@ -13,7 +13,12 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-import { AutocompleteMenu, autocompleteOptionId, type AutocompleteItem } from "../AutocompleteMenu";
+import {
+  AutocompleteMenu,
+  autocompleteOptionId,
+  getComboboxState,
+  type AutocompleteItem,
+} from "../AutocompleteMenu";
 
 const noop = () => {};
 
@@ -46,7 +51,9 @@ describe("AutocompleteMenu", () => {
     expect(status.textContent).toBe("No files match");
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.getAttribute("aria-atomic")).toBe("true");
-    expect(screen.queryByRole("listbox")).toBeNull();
+    // The listbox stays while the menu is open so the editor's aria-controls
+    // names one element throughout; it simply has no options.
+    expect(screen.getByRole("listbox").getAttribute("aria-label")).toBeTruthy();
     expect(screen.queryByRole("option")).toBeNull();
   });
 
@@ -253,6 +260,41 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull();
   });
 
+  it("never shows a stale row as the one Enter acts on, and says results are updating", () => {
+    const items: AutocompleteItem[] = [
+      { key: "a", label: "alpha", insertText: "alpha" },
+      { key: "b", label: "beta", insertText: "beta" },
+    ];
+    const { rerender } = render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        staleKeys={new Set(["a", "b"])}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+    const selectedCount = () =>
+      screen.getAllByRole("option").filter((o) => o.getAttribute("aria-selected") === "true")
+        .length;
+    expect(selectedCount()).toBe(0);
+    expect(screen.getByRole("status").textContent).toMatch(/updating/i);
+
+    rerender(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        staleKeys={new Set()}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+    expect(selectedCount()).toBe(1);
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
   it("marks only stale rows disabled and ignores clicks on them", () => {
     const onSelect = vi.fn();
     const items: AutocompleteItem[] = [
@@ -419,5 +461,30 @@ describe("AutocompleteMenu", () => {
         Element.prototype.scrollIntoView = original;
       }
     }
+  });
+
+  describe("getComboboxState", () => {
+    const items: AutocompleteItem[] = [
+      { key: "a", label: "alpha", insertText: "alpha" },
+      { key: "b", label: "beta", insertText: "beta" },
+    ];
+    const base = { items, selectedIndex: 1, staleKeys: new Set<string>(), listboxId: "lb" };
+
+    it("reports expanded for as long as the menu is open, rows or not", () => {
+      expect(getComboboxState({ ...base, isOpen: true }).expanded).toBe(true);
+      expect(getComboboxState({ ...base, isOpen: true, items: [] }).expanded).toBe(true);
+      expect(getComboboxState({ ...base, isOpen: false }).expanded).toBe(false);
+    });
+
+    it("names the selected option only when Enter would act on it", () => {
+      expect(getComboboxState({ ...base, isOpen: true }).activeOptionId).toBe(
+        autocompleteOptionId("lb", 1)
+      );
+      expect(
+        getComboboxState({ ...base, isOpen: true, staleKeys: new Set(["b"]) }).activeOptionId
+      ).toBeNull();
+      expect(getComboboxState({ ...base, isOpen: true, items: [] }).activeOptionId).toBeNull();
+      expect(getComboboxState({ ...base, isOpen: false }).activeOptionId).toBeNull();
+    });
   });
 });

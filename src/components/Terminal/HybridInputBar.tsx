@@ -20,7 +20,7 @@ import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { AutocompleteMenu, autocompleteOptionId, type AutocompleteItem } from "./AutocompleteMenu";
+import { AutocompleteMenu, getComboboxState, type AutocompleteItem } from "./AutocompleteMenu";
 import {
   getDaintreeAtClaim,
   fileSearchQuery,
@@ -928,11 +928,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isAutocompleteOpen,
     });
 
-    const isListboxExpanded = isAutocompleteOpen && autocompleteItems.length > 0;
-    const activeOptionId =
-      isListboxExpanded && selectedIndex < autocompleteItems.length
-        ? autocompleteOptionId(listboxId, selectedIndex)
-        : null;
+    const { expanded: isListboxExpanded, activeOptionId } = getComboboxState({
+      isOpen: isAutocompleteOpen,
+      items: autocompleteItems,
+      selectedIndex,
+      staleKeys: staleItemKeys,
+      listboxId,
+    });
     useEffect(() => {
       editorViewRef.current?.dispatch({
         effects: compartments.comboboxCompartmentRef.current.reconfigure(

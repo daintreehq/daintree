@@ -71,6 +71,34 @@ export function autocompleteOptionId(listboxId: string, index: number): string {
   return `${listboxId}-option-${index}`;
 }
 
+/**
+ * What the composer's editor, as this menu's combobox, reports. Expanded
+ * whenever the menu is on screen — including while it only says "Searching…"
+ * or "No files match" — and pointing at no row while the selected one is stale,
+ * since Enter will not act on it.
+ */
+export function getComboboxState({
+  isOpen,
+  items,
+  selectedIndex,
+  staleKeys,
+  listboxId,
+}: {
+  isOpen: boolean;
+  items: readonly AutocompleteItem[];
+  selectedIndex: number;
+  staleKeys: ReadonlySet<string>;
+  listboxId: string;
+}): { listboxId: string; expanded: boolean; activeOptionId: string | null } {
+  const active = isOpen ? items[selectedIndex] : undefined;
+  return {
+    listboxId,
+    expanded: isOpen,
+    activeOptionId:
+      active && !staleKeys.has(active.key) ? autocompleteOptionId(listboxId, selectedIndex) : null,
+  };
+}
+
 interface KeyHint {
   key: string;
   label: string;
@@ -152,12 +180,20 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
 
     if (!shouldRender) return null;
 
-    const isEmpty = !isLoading && items.length === 0;
     const hasStaleRows = staleKeys !== undefined && staleKeys.size > 0;
     const selectedItem = items[selectedIndex];
     const isSelectedStale = selectedItem ? (staleKeys?.has(selectedItem.key) ?? false) : false;
     const keyHints = getKeyHints(selectedItem, isSelectedStale);
-    const statusText = isLoading && items.length === 0 ? "Searching…" : isEmpty ? emptyMessage : "";
+    const hasRows = items.length > 0;
+    // Spoken for every state, shown only when there are no rows to show instead:
+    // with rows on screen the header carries "Updating…" visibly.
+    const statusText = hasRows
+      ? isLoading || hasStaleRows
+        ? "Updating results…"
+        : ""
+      : isLoading
+        ? "Searching…"
+        : emptyMessage;
 
     return (
       <div
@@ -196,7 +232,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                 ))}
               </span>
             ) : (
-              hasStaleRows && (
+              (hasStaleRows || (isLoading && hasRows)) && (
                 <span aria-hidden="true" className="shrink-0 text-3xs text-text-secondary">
                   Updating…
                 </span>
@@ -213,7 +249,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             role="status"
             aria-live="polite"
             aria-atomic="true"
-            className={cn(statusText && "px-2 py-1.5 text-xs text-text-secondary")}
+            className={cn(hasRows ? "sr-only" : "px-2 py-1.5 text-xs text-text-secondary")}
           >
             {statusText}
           </div>
@@ -221,14 +257,18 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
           <div
             ref={listRef}
             id={listboxId}
-            role={isEmpty ? undefined : "listbox"}
-            aria-label={isEmpty ? undefined : (ariaLabel ?? title ?? "Autocomplete")}
+            // A listbox for as long as the menu is open, rows or not: the editor
+            // reports itself expanded whenever it is visible, and its
+            // `aria-controls` has to name the same element throughout.
+            role="listbox"
+            aria-label={ariaLabel ?? title ?? "Autocomplete"}
             aria-busy={isLoading || hasStaleRows || undefined}
           >
             {items.map((item, idx) => {
               const badge = item.category ? CATEGORY_LABEL[item.category] : undefined;
-              const isSelected = idx === selectedIndex;
               const isRowStale = staleKeys?.has(item.key) ?? false;
+              // Enter won't act on a stale row, so it doesn't wear the selection.
+              const isSelected = idx === selectedIndex && !isRowStale;
               const isPath = item.descriptionKind === "path";
 
               return (
