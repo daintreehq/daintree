@@ -70,11 +70,12 @@ export function PrStatusChip({
               state word beside it, but the glyph is what the eye reaches
               first, and it is shared with the card badge, which does not. */}
             <PrStateGlyph className={cn("w-3 h-3 shrink-0", prStateColor)} />
-            {/* The number keeps the PR-state token, like every other PR number
-                in the app — `pr-*` is contrast-gated as text. The CI word below
-                stays neutral: status tokens only promise the 3:1 non-text
-                floor, so there the colour rides on the glyph. */}
-            <span className={prStateColor}>#{worktreePR.prNumber}</span>
+            {/* Words and the number stay neutral; the glyphs carry the state
+                colour. Elsewhere a PR number wears its `pr-*` token, but that
+                token is only contrast-gated on bare panels — on this chip's
+                tinted fill a closed PR's red drops under 4.5:1 for small text,
+                and status tokens only promise the 3:1 non-text floor. */}
+            <span className="text-text-primary">#{worktreePR.prNumber}</span>
             <span className="text-text-muted">·</span>
             <span className="text-text-secondary">{prStateLabel}</span>
             {ciVisual && (
