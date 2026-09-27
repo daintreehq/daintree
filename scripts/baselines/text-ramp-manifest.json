@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-27",
-  "total": 80,
-  "files": 35,
+  "total": 78,
+  "files": 34,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -812,36 +812,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<Terminal> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/Terminal/SendToAgentPalette.tsx",
-      "ordinal": 0,
-      "line": 62,
-      "start": 2294,
-      "end": 2315,
-      "token": "text-daintree-text/70",
-      "variants": "",
-      "step": 70,
-      "group": "src/components/Terminal/SendToAgentPalette.tsx#2273",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<span> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
-      "file": "src/components/Terminal/SendToAgentPalette.tsx",
-      "ordinal": 1,
-      "line": 74,
-      "start": 2792,
-      "end": 2813,
-      "token": "text-daintree-text/40",
-      "variants": "",
-      "step": 40,
-      "group": "src/components/Terminal/SendToAgentPalette.tsx#2768",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<Lock> is an icon — the colour is an affordance, not prose"
     },
     {
       "file": "src/components/Terminal/TerminalPane.tsx",
