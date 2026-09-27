@@ -343,7 +343,7 @@ function CapabilitiesDisclosure({
           aria-hidden="true"
           data-animated-chevron
           className={cn(
-            "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            "w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
             expanded && "rotate-90"
           )}
         />
@@ -392,7 +392,7 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
           aria-hidden="true"
           data-animated-chevron
           className={cn(
-            "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            "w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
             expanded && "rotate-90"
           )}
         />
