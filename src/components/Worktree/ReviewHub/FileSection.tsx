@@ -363,10 +363,8 @@ export function FileSection({
                   <span aria-hidden="true" className="text-daintree-text/30">
                     ·
                   </span>
-                  {churn.ins > 0 && (
-                    <span className="text-status-success/80">{`+${churn.ins}`}</span>
-                  )}
-                  {churn.del > 0 && <span className="text-status-error/80">{`-${churn.del}`}</span>}
+                  {churn.ins > 0 && <span className="text-status-success">{`+${churn.ins}`}</span>}
+                  {churn.del > 0 && <span className="text-status-error">{`-${churn.del}`}</span>}
                 </span>
               )}
             </span>

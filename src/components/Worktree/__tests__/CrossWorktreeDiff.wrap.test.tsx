@@ -61,10 +61,7 @@ vi.mock("../DiffViewer", () => ({
 
 vi.mock("../WorktreeSelector", () => ({
   WorktreeSelector: ({ label, onChange }: { label: string; onChange: (id: string) => void }) => (
-    <button
-      type="button"
-      onClick={() => onChange(label.startsWith("Left") ? "wt-left" : "wt-right")}
-    >
+    <button type="button" onClick={() => onChange(label === "Base" ? "wt-left" : "wt-right")}>
       {label}
     </button>
   ),
@@ -100,8 +97,8 @@ async function setupComparison(files: { path: string; status: string }[]) {
       <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId={null} />
     </TooltipProvider>
   );
-  fireEvent.click(screen.getByText("Left (base)"));
-  fireEvent.click(screen.getByText("Right (compare)"));
+  fireEvent.click(screen.getByText("Base"));
+  fireEvent.click(screen.getByText("Compare"));
 
   const name = files[0]!.path.split("/").pop()!;
   await waitFor(() => {

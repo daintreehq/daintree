@@ -2123,10 +2123,10 @@ export function ReviewHubContent({
                           {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
                             <>
                               {" "}
-                              <span className="text-status-success/80">
+                              <span className="text-status-success">
                                 +{baseBranchChurn.ins}
                               </span>{" "}
-                              <span className="text-status-error/80">-{baseBranchChurn.del}</span>
+                              <span className="text-status-error">-{baseBranchChurn.del}</span>
                             </>
                           )}
                         </span>

@@ -184,10 +184,10 @@ function FileChangeRow({
 
               <div className="ml-2 flex items-center gap-2 shrink-0 text-2xs">
                 {(change.insertions ?? 0) > 0 && (
-                  <span className="text-status-success/80">+{change.insertions}</span>
+                  <span className="text-status-success">+{change.insertions}</span>
                 )}
                 {(change.deletions ?? 0) > 0 && (
-                  <span className="text-status-error/80">-{change.deletions}</span>
+                  <span className="text-status-error">-{change.deletions}</span>
                 )}
                 <FileDecorationBadge decoration={decoration} />
               </div>

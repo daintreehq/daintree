@@ -17,6 +17,14 @@ export const DIFF_STATUS_CONFIG: Record<GitStatus, { label: string; color: strin
   conflicted: { label: "!", color: "text-status-error" },
 };
 
+/** A directory band's label: the last few segments, so deep paths keep the part that differs. */
+export function formatDiffDir(dir: string, maxSegments = 3): string {
+  if (!dir || dir === ".") return "(root)";
+  const segments = dir.split("/");
+  if (segments.length <= maxSegments) return dir;
+  return "…/" + segments.slice(-maxSegments).join("/");
+}
+
 export function summarizeChangeSet(files: DiffChangeSetEntry[]): {
   insertions: number;
   deletions: number;

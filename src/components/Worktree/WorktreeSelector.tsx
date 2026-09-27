@@ -1,5 +1,9 @@
+import { useId } from "react";
+import { ChevronDown } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
+import { cn } from "@/lib/utils";
 import type { WorktreeSnapshot } from "@/types";
+import { worktreeOptionLabel } from "./crossWorktreeDiffUtils";
 
 interface WorktreeSelectorProps {
   label: string;
@@ -16,26 +20,42 @@ export function WorktreeSelector({
   disabledId,
   onChange,
 }: WorktreeSelectorProps) {
+  const id = useId();
   return (
-    <div className="flex flex-col gap-1 min-w-0">
-      <span className="text-xs font-medium text-text-muted uppercase tracking-wider">{label}</span>
+    <div className="flex flex-col gap-1.5 min-w-0">
+      <label
+        htmlFor={id}
+        className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+      >
+        {label}
+      </label>
       <div className="relative">
-        <FolderGit2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
+        <FolderGit2
+          aria-hidden="true"
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-secondary pointer-events-none"
+        />
         <select
+          id={id}
           value={selectedId ?? ""}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full appearance-none bg-surface-panel-elevated border border-border-default rounded-md pl-8 pr-3 py-2 text-sm text-text-primary focus:outline-hidden focus:border-border-default cursor-pointer"
+          className={cn(
+            "w-full appearance-none truncate bg-surface-panel-elevated border border-border-default rounded-[var(--radius-md)] pl-8 pr-8 py-1.5 text-sm cursor-pointer focus:outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary",
+            selectedId ? "text-text-primary" : "text-text-secondary"
+          )}
         >
           <option value="" disabled>
-            Select worktree…
+            Choose a worktree…
           </option>
           {worktrees.map((wt) => (
-            <option key={wt.id} value={wt.id} disabled={wt.id === disabledId}>
-              {wt.isMainWorktree ? wt.name : wt.branch || wt.name}{" "}
-              {wt.isMainWorktree ? "(main)" : ""}
+            <option key={wt.id} value={wt.id} disabled={wt.id === disabledId || !wt.branch}>
+              {worktreeOptionLabel(wt)}
             </option>
           ))}
         </select>
+        <ChevronDown
+          aria-hidden="true"
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-secondary pointer-events-none"
+        />
       </div>
     </div>
   );

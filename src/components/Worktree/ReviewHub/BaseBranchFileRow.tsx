@@ -88,8 +88,8 @@ export function BaseBranchFileRow({
             data-testid="base-branch-file-row-churn"
             className="ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums"
           >
-            {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
-            {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
+            {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
+            {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
           </div>
         )}
         {hasBadge && (
