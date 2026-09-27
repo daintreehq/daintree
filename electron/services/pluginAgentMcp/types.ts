@@ -26,6 +26,12 @@ export interface AgentMcpToolDescriptor {
   readonly description: string;
   readonly inputSchema: PluginMcpJsonSchema;
   readonly outputSchema?: PluginMcpJsonSchema;
+  /**
+   * Host-owned tools only: advertised as `readOnlyHint`, which lets a client
+   * such as Codex run the call without an approval prompt. Never taken from a
+   * plugin's own roster, where it would be the plugin vouching for itself.
+   */
+  readonly readOnly?: true;
 }
 
 /**

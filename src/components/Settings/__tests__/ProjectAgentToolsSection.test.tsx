@@ -121,6 +121,29 @@ describe("ProjectAgentToolsSection", () => {
     expect(switchFor("Team notes").getAttribute("aria-checked")).toBe("false");
   });
 
+  it("says when an endpoint is on by the project's default, and when the user's choice overrides it", async () => {
+    agentMcpApi.listProjectEndpoints.mockResolvedValue(
+      snapshot([
+        endpoint({ enabled: true, projectDefault: true }),
+        endpoint({
+          pluginInstanceId: "acme.notes",
+          pluginDisplayName: "Notes",
+          endpointId: "notes",
+          name: "Team notes",
+          projectDefault: true,
+          userAnswered: true,
+        }),
+      ])
+    );
+    render(<ProjectAgentToolsSection />);
+
+    await screen.findByTestId("project-agent-tools");
+    const rows = screen.getAllByTestId("project-agent-tool-row");
+    expect(rows[0]!.textContent).toContain("On by default in this project's .daintree/mcp.json");
+    expect(rows[1]!.textContent).toContain("your choice here overrides that");
+    expect(switchFor("Team notes").getAttribute("aria-checked")).toBe("false");
+  });
+
   it("renders nothing when no plugin offers agent tools here", async () => {
     agentMcpApi.listProjectEndpoints.mockResolvedValue(snapshot([]));
     const { container } = render(<ProjectAgentToolsSection />);

@@ -179,6 +179,12 @@ describe("the database endpoint behind a plugin session", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toEqual(["database_schema", "database_query"]);
+    // Read-only, and said so: a client like Codex runs such a call without an
+    // approval prompt.
+    expect(tools.map((t) => t.annotations)).toEqual([
+      { readOnlyHint: true },
+      { readOnlyHint: true },
+    ]);
     const result = await client.callTool({
       name: "database_query",
       arguments: { databaseId: "ledger", sql: "SELECT amount FROM entries" },

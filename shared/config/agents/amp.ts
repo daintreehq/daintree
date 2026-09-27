@@ -69,6 +69,7 @@ export const config: AgentConfig = {
   },
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "amp-mcp-config" },
     blockMouseReporting: true,
     resizeStrategy: "settled",
     supportsBracketedPaste: true,

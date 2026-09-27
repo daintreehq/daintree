@@ -83,6 +83,7 @@ export const config: AgentConfig = {
   contextWindow: 128_000,
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "codex-config-overrides" },
     // Mid-turn the composer queues a submitted message (see the quit note
     // below), so a terminal notice need not wait for this pane to settle.
     queuesInputWhileWorking: true,

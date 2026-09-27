@@ -71,6 +71,7 @@ export const config: AgentConfig = {
   ],
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "vibe-mcp-servers-env" },
     blockAltScreen: true,
     blockMouseReporting: true,
     resizeStrategy: "settled",

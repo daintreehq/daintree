@@ -37,9 +37,11 @@ export const DATABASE_TOOL_DESCRIPTORS: ReadonlyArray<{
   name: string;
   description: string;
   inputSchema: PluginMcpJsonSchema;
+  readOnly: true;
 }> = [
   {
     name: DATABASE_SCHEMA_TOOL,
+    readOnly: true,
     description:
       "List this plugin's declared SQLite databases and the CREATE statements of their tables, views, indexes and triggers. Pass databaseId to show one. A database that does not exist yet is reported, never created.",
     inputSchema: {
@@ -50,6 +52,7 @@ export const DATABASE_TOOL_DESCRIPTORS: ReadonlyArray<{
   },
   {
     name: DATABASE_QUERY_TOOL,
+    readOnly: true,
     description:
       "Run one read-only SQL statement that returns rows (SELECT, WITH, or a PRAGMA such as table_info) against a declared database. Bind values with ? and a params array, or :name and a params object keyed name or :name. Rows are arrays aligned with columns; blobs are base64. truncated is true when rows were cut off.",
     inputSchema: {

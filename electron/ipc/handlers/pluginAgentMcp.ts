@@ -4,9 +4,14 @@ import type { IpcContext } from "../types.js";
 import { PLUGIN_AGENT_MCP_METHOD_CHANNELS } from "./pluginAgentMcp.preload.js";
 import { listDeclaredAgentMcpEndpoints } from "../../services/pluginAgentMcp/declaredEndpoints.js";
 import {
+  hasUserAgentMcpAnswer,
+  isAgentMcpEndpointEnabled,
   listEnabledAgentMcpEndpoints,
+  refreshProjectAgentMcpDefaults,
   setAgentMcpEndpointEnabled,
 } from "../../services/pluginAgentMcp/projectEnablement.js";
+import { isProjectDefaultEndpoint } from "../../services/pluginAgentMcp/projectDefaults.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 import {
@@ -107,9 +112,8 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
   await svc.waitForInit();
 
   const plugins = svc.listPlugins();
+  await refreshProjectAgentMcpDefaults(projectId, projectStore.getProjectById(projectId)?.path);
   const enabled = listEnabledAgentMcpEndpoints(projectId);
-  const isOn = (instanceId: string, endpointId: string) =>
-    enabled.some((e) => e.pluginInstanceId === instanceId && e.endpointId === endpointId);
 
   const declared = listDeclaredAgentMcpEndpoints(plugins, projectId, (id) => svc.hasPlugin(id));
   const endpoints: ProjectAgentToolEndpoint[] = declared.map((d) => ({
@@ -118,8 +122,14 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
     endpointId: d.endpointId,
     name: displayName(d.name, d.endpointId),
     ...(d.description !== undefined ? { description: d.description } : {}),
-    enabled: isOn(d.pluginInstanceId, d.endpointId),
+    enabled: isAgentMcpEndpointEnabled(projectId, d.pluginInstanceId, d.endpointId),
     available: true,
+    ...(isProjectDefaultEndpoint(projectId, d.pluginInstanceId, d.endpointId)
+      ? { projectDefault: true }
+      : {}),
+    ...(hasUserAgentMcpAnswer(projectId, d.pluginInstanceId, d.endpointId)
+      ? { userAnswered: true }
+      : {}),
   }));
 
   // Consent outlives the plugin being loaded, so an answer left on by a plugin

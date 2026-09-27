@@ -228,6 +228,13 @@ export function ProjectAgentToolsSection() {
                       {endpoint.description && (
                         <span className="block">{endpoint.description}</span>
                       )}
+                      {endpoint.projectDefault && (
+                        <span className="block">
+                          {endpoint.userAnswered
+                            ? "This project's .daintree/mcp.json turns it on by default; your choice here overrides that"
+                            : "On by default in this project's .daintree/mcp.json"}
+                        </span>
+                      )}
                       {!endpoint.available && (
                         <span className="block">
                           {endpoint.enabled

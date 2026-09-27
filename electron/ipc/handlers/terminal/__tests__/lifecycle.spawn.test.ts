@@ -1932,6 +1932,8 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     });
     mockPreparePaneConfig.mockResolvedValue({
       configPath: "/tmp/pane-config.json",
+      args: ["--mcp-config", "/tmp/pane-config.json"],
+      env: {},
       token: "pane-token",
     });
     mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
@@ -1959,6 +1961,9 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       paneId: "restored-pane",
       port: 45454,
       tier: "core",
+      injection: { format: "claude-mcp-config" },
+      inheritedEnv: expect.any(Object),
+      cwd: expect.any(String),
     });
     expect(spawnArgs.command).toContain("--mcp-config");
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
@@ -1979,6 +1984,8 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       mockCurrentPort.mockReturnValue(45454);
       mockPreparePaneConfig.mockResolvedValue({
         configPath: "/tmp/pane-config.json",
+        args: ["--mcp-config", "/tmp/pane-config.json"],
+        env: {},
         token: "pane-token",
       });
       mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: stored });
@@ -2003,6 +2010,9 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         paneId: "legacy-tier-pane",
         port: 45454,
         tier: expected,
+        injection: { format: "claude-mcp-config" },
+        inheritedEnv: expect.any(Object),
+        cwd: expect.any(String),
       });
       expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
     }
@@ -2499,6 +2509,8 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
     mockPreparePaneConfig.mockReset();
     mockPreparePaneConfig.mockResolvedValue({
       configPath: "/tmp/pane-config.json",
+      args: ["--mcp-config", "/tmp/pane-config.json"],
+      env: {},
       token: "assistant-token",
     });
     mockRevokePaneConfig.mockReset();
@@ -2834,6 +2846,8 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     mockPreparePaneConfig.mockReset();
     mockPreparePaneConfig.mockResolvedValue({
       configPath: "/tmp/pane-config.json",
+      args: ["--mcp-config", "/tmp/pane-config.json"],
+      env: {},
       token: "pane-token",
       pluginServerKeys: [],
     });
@@ -2877,6 +2891,45 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     // An ordinary pane is never promoted to the assistant's renderer-owned pin.
     expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
     expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
+  });
+
+  it("hands a Codex launch its servers in Codex's own form: -c args and env bearers", async () => {
+    mockPreparePaneConfig.mockResolvedValue({
+      configPath: null,
+      args: ["-c", 'mcp_servers.daintree.url="http://127.0.0.1:45454/mcp"'],
+      env: { DAINTREE_MCP_TOKEN: "pane-token", DAINTREE_PLUGIN_MCP_TOKEN_1: "plugin-token" },
+      token: "pane-token",
+      pluginServerKeys: [],
+    });
+
+    await launchClaude(
+      { sender: { id: 42 }, projectId: "p1" },
+      { id: "codex-pane", command: "codex", launchAgentId: "codex" }
+    );
+
+    expect(mockPreparePaneConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paneId: "codex-pane",
+        injection: { format: "codex-config-overrides" },
+      })
+    );
+    const spawned = ptyClient.spawn.mock.calls[0][1];
+    expect(spawned.command).toContain("-c");
+    expect(spawned.command).toContain("mcp_servers.daintree.url=");
+    expect(spawned.command).not.toContain("--mcp-config");
+    expect(spawned.command).not.toContain("plugin-token");
+    expect(spawned.env?.DAINTREE_PLUGIN_MCP_TOKEN_1).toBe("plugin-token");
+    expect(spawned.env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
+  });
+
+  it("hands nothing to an agent whose registry entry declares no launch mechanism", async () => {
+    await launchClaude(
+      { sender: { id: 42 }, projectId: "p1" },
+      { id: "cursor-pane", command: "cursor-agent", launchAgentId: "cursor" }
+    );
+
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBeUndefined();
   });
 
   it("wires ownership to the pane bearer's principal before the PTY starts (#12487)", async () => {
@@ -2980,6 +3033,8 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     // Plugin-only config: a file with no Daintree entry and no pane token.
     mockPreparePaneConfig.mockResolvedValue({
       configPath: "/tmp/pane-config.json",
+      args: ["--mcp-config", "/tmp/pane-config.json"],
+      env: {},
       token: null,
       pluginServerKeys: ["daintree-plugin"],
     });

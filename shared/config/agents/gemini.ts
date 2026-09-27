@@ -80,6 +80,7 @@ export const config: AgentConfig = {
   contextWindow: 1_000_000,
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "gemini-system-defaults", envVar: "GEMINI_CLI_SYSTEM_DEFAULTS_PATH" },
     blockAltScreen: true,
     blockMouseReporting: true,
     resizeStrategy: "settled",

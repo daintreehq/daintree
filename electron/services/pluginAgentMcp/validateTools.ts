@@ -89,13 +89,22 @@ function compileSchema(
  * than refusing the roster.
  */
 export function compileAgentMcpTool(descriptor: AgentMcpToolDescriptor): AgentMcpRegisteredTool {
-  const { name, description, inputSchema, outputSchema } = descriptor;
+  const { name, description, inputSchema, outputSchema, readOnly } = descriptor;
   const checkInput = compileSchema(name, "inputSchema", inputSchema);
+  const flags = readOnly === true ? { readOnly } : {};
   if (outputSchema === undefined) {
-    return Object.freeze({ name, description, inputSchema, checkInput });
+    return Object.freeze({ name, description, inputSchema, checkInput, ...flags });
   }
   const checkOutput = compileSchema(name, "outputSchema", outputSchema);
-  return Object.freeze({ name, description, inputSchema, outputSchema, checkInput, checkOutput });
+  return Object.freeze({
+    name,
+    description,
+    inputSchema,
+    outputSchema,
+    checkInput,
+    checkOutput,
+    ...flags,
+  });
 }
 
 /**

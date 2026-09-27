@@ -77,4 +77,30 @@ describe("planChoice", () => {
     expect(planChoice("❯ No, exit\n  Maybe", "Yes")).toMatchObject({ ok: false });
     expect(planChoice("No, exit\nYes, I trust this folder", "Yes")).toMatchObject({ ok: false });
   });
+
+  it("reads a choice Gemini CLI draws inside a box", () => {
+    const screen = [
+      " ╭─────────────────────────────────────────────────────────────╮",
+      " │ Do you trust this folder?                                   │",
+      " │                                                             │",
+      " │ ● 1. Yes                                                    │",
+      " │   2. Yes, and remember the directories as trusted           │",
+      " │   3. No                                                     │",
+      " ╰─────────────────────────────────────────────────────────────╯",
+    ].join("\n");
+    expect(planChoice(screen, "Yes")).toEqual({ ok: true, keys: ["Enter"] });
+    expect(planChoice(screen, "No")).toEqual({ ok: true, keys: ["Down", "Down", "Enter"] });
+    expect(planChoice(screen, "Yes, and remember")).toEqual({
+      ok: true,
+      keys: ["Down", "Enter"],
+    });
+  });
+
+  it("leaves a row that only starts with a bar alone", () => {
+    const screen = ["❯ No", "│ Yes"].join("\n");
+    expect(planChoice(screen, "Yes")).toEqual({
+      ok: false,
+      reason: 'No option "Yes" is on the screen.',
+    });
+  });
 });

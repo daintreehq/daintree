@@ -103,6 +103,7 @@ export const config: AgentConfig = {
   contextWindow: 200_000,
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "claude-mcp-config" },
     resizeStrategy: "default",
     supportsBracketedPaste: true,
     // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).

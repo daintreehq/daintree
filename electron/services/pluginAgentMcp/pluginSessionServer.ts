@@ -164,6 +164,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       description: tool.description,
       inputSchema: tool.inputSchema,
       ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
+      ...(tool.readOnly === true ? { annotations: { readOnlyHint: true } } : {}),
     }));
     return { tools };
   });

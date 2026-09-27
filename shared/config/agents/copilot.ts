@@ -93,6 +93,7 @@ export const config: AgentConfig = {
   },
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "copilot-additional-mcp-config" },
     blockMouseReporting: true,
     resizeStrategy: "settled",
     supportsBracketedPaste: true,

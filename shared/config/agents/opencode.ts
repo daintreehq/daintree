@@ -85,6 +85,7 @@ export const config: AgentConfig = {
   },
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "opencode-config-content", envVar: "OPENCODE_CONFIG_CONTENT" },
     // Bubble Tea full-screen TUI — renderer-side `blockAltScreen` garbles it
     // (same constraint as Crush), so we can't strip the alt-screen escape.
     // Instead default it inline via OpenCode's own `--mini` (the minimal

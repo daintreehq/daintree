@@ -60,8 +60,9 @@ import {
 import type * as PluginServiceModule from "../../../services/PluginService.js";
 import { listDeclaredAgentMcpEndpoints } from "../../../services/pluginAgentMcp/declaredEndpoints.js";
 import {
+  hasAnyAgentMcpEnablement,
   isAgentMcpEndpointEnabled,
-  listEnabledAgentMcpEndpoints,
+  refreshProjectAgentMcpDefaults,
 } from "../../../services/pluginAgentMcp/projectEnablement.js";
 import type { DeclaredAgentMcpEndpoint } from "../../../services/pluginAgentMcp/types.js";
 import { isProjectWorkspaceId } from "../../../../shared/utils/workspaceIds.js";
@@ -213,18 +214,21 @@ import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 
-// The plugin MCP endpoints a Claude launch in this project should be handed:
-// enabled by the user for this project AND declared by a plugin instance that
-// is running and may serve it. Enablement is read first because it is a plain
-// store read, and an empty answer — every project that never turned a plugin
-// endpoint on — keeps the launch off the lazy PluginService load entirely.
+// The plugin MCP endpoints an agent launch in this project should be handed:
+// on for this project (the user's answer, else the repository's own
+// `.daintree/mcp.json` default) AND declared by a plugin instance that is
+// running and may serve it. Enablement is read first because it is a store read
+// and one small file, and an empty answer — every project that never turned a
+// plugin endpoint on — keeps the launch off the lazy PluginService load entirely.
 const PLUGIN_INIT_WAIT_MS = 5000;
 
 async function resolveEnabledPluginMcpEndpoints(
-  projectId: string
+  projectId: string,
+  projectRoot: string
 ): Promise<DeclaredAgentMcpEndpoint[]> {
   if (!isProjectWorkspaceId(projectId)) return [];
-  if (listEnabledAgentMcpEndpoints(projectId).length === 0) return [];
+  await refreshProjectAgentMcpDefaults(projectId, projectRoot);
+  if (!hasAnyAgentMcpEnablement(projectId)) return [];
   const pluginService = await getPluginService();
   // PluginService initialises as a deferred task after first-interactive, so
   // panes restored at startup would otherwise see no loaded plugins. Bounded so
@@ -247,6 +251,24 @@ async function resolveEnabledPluginMcpEndpoints(
   ).filter((endpoint) =>
     isAgentMcpEndpointEnabled(projectId, endpoint.pluginInstanceId, endpoint.endpointId)
   );
+}
+
+/**
+ * Layer the launch's MCP env over the spawn env. Windows env keys are
+ * case-insensitive, so a differently-cased copy of an injected key (a project's
+ * `opencode_config_content`) is dropped first, or the PTY would see both and
+ * pick one arbitrarily.
+ */
+function mergeLaunchEnv(
+  base: Record<string, string>,
+  injected: Record<string, string>
+): Record<string, string> {
+  if (process.platform !== "win32") return { ...base, ...injected };
+  const upper = new Set(Object.keys(injected).map((key) => key.toUpperCase()));
+  const kept = Object.fromEntries(
+    Object.entries(base).filter(([key]) => !upper.has(key.toUpperCase()))
+  );
+  return { ...kept, ...injected };
 }
 
 // Re-checked synchronously as each grant is minted: the endpoints above were
@@ -597,6 +619,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       projectsRoot: claudePaneStore ?? null,
     }).catch(() => undefined);
 
+    const launchMcp =
+      typeof launchAgentId === "string"
+        ? getEffectiveAgentConfig(launchAgentId)?.capabilities?.launchMcp
+        : undefined;
+
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
@@ -745,17 +772,19 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
         );
       }
-    } else if (launchAgentId === "claude" && safeCommand.length > 0 && resolvedProject) {
-      // Daintree MCP injection for normal Claude Code agent launches.
-      // Mints a per-pane bearer token, writes a managed --mcp-config JSON under
-      // userData, and injects the flag into the command + the token into env.
-      // Token is revoked and the file deleted on PTY exit (see registerTerminalEventHandlers).
+    } else if (launchMcp !== undefined && safeCommand.length > 0 && resolvedProject) {
+      // Daintree MCP injection for normal agent launches, in the dialect the
+      // agent's registry entry declares (`capabilities.launchMcp`): Claude's
+      // managed --mcp-config file, Codex's `-c` overrides, and so on. Mints a
+      // per-pane bearer token and hands the agent the servers through args,
+      // env and (for formats that need one) a 0600 file under userData. Token
+      // is revoked and any file deleted on PTY exit (see registerTerminalEventHandlers).
       //
-      // The same file carries one entry per plugin MCP endpoint the user enabled
+      // The wiring carries one entry per plugin MCP endpoint the user enabled
       // for this project, each with a grant minted for this launch alone. Those
       // are independent of the Daintree tier: a project with Daintree MCP "off"
-      // still gets its plugin endpoints, in a file with no Daintree entry and no
-      // pane token. The grants are keyed by this terminal id, so every path that
+      // still gets its plugin endpoints, with no Daintree entry and no pane
+      // token. The grants are keyed by this terminal id, so every path that
       // revokes the pane config (PTY exit, sync and async spawn failure, a
       // re-prepare on restart) revokes them too. Every await — settings, the
       // PluginService load, server readiness — happens before
@@ -786,7 +815,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       try {
         const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
         const tier = resolveDaintreeMcpTier(projSettings);
-        const pluginEndpoints = await resolveEnabledPluginMcpEndpoints(resolvedProject.id);
+        const pluginEndpoints = await resolveEnabledPluginMcpEndpoints(
+          resolvedProject.id,
+          resolvedProject.path
+        );
         if (tier !== "off" || pluginEndpoints.length > 0) {
           const mcpServerService = await getMcpServerService();
           const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
@@ -801,6 +833,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               paneId: id,
               port,
               tier,
+              injection: launchMcp,
+              inheritedEnv: { ...process.env, ...(spawnEnv ?? {}) },
+              cwd,
               ...(pluginEndpoints.length > 0
                 ? {
                     plugin: {
@@ -814,7 +849,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             });
             if (prepared) {
               preparedForThisLaunch = true;
-              safeCommand = `${safeCommand} --mcp-config ${quoteCommandArg(prepared.configPath, quotingShell)}`;
+              if (prepared.args.length > 0) {
+                safeCommand = `${safeCommand} ${prepared.args.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
+              }
+              if (Object.keys(prepared.env).length > 0) {
+                spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, prepared.env);
+              }
               if (prepared.token !== null) {
                 // Bind the bearer to the workspace this pane was launched in, so
                 // its MCP session acts there for its whole life instead of on
@@ -832,6 +872,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                     ? { actionContext: launchActionContext }
                     : {}),
                 });
+                // Every format's hook for the orchestration bearer, whether or
+                // not the agent reads it from here.
                 spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
               }
             }
