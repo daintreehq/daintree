@@ -101,6 +101,8 @@ export function getComboboxState({
 
 interface KeyHint {
   key: string;
+  /** Spoken name of the key; the glyph reads badly aloud. */
+  keyName: string;
   label: string;
 }
 
@@ -115,11 +117,11 @@ function getKeyHints(item: AutocompleteItem | undefined, isStale: boolean): KeyH
   if (!item || isStale) return [];
   if (item.enterAction === "execute") {
     return [
-      { key: "↵", label: "run" },
-      { key: "⇥", label: "complete" },
+      { key: "↵", keyName: "Enter", label: "run" },
+      { key: "⇥", keyName: "Tab", label: "complete" },
     ];
   }
-  return [{ key: "↵", label: "insert" }];
+  return [{ key: "↵", keyName: "Enter", label: "insert" }];
 }
 
 export interface AutocompleteMenuProps {
@@ -286,8 +288,9 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                     PALETTE_ROW_CLASS,
                     PALETTE_ROW_FOCUS_CLASS,
                     "flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left",
-                    "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
-                    isRowStale && "opacity-50"
+                    "text-text-secondary",
+                    // An inert row doesn't answer the pointer either.
+                    isRowStale ? "opacity-50" : "hover:bg-overlay-subtle hover:text-text-primary"
                   )}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
@@ -318,6 +321,13 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       )}
                     >
                       {isPath ? <bdi>{item.description}</bdi> : item.description}
+                    </span>
+                  )}
+                  {/* The header's hint band is hidden from assistive tech, so the
+                      row Enter acts on carries the same instruction in words. */}
+                  {isSelected && keyHints.length > 0 && (
+                    <span className="sr-only">
+                      {`, ${keyHints.map((h) => `${h.keyName} to ${h.label}`).join(", ")}`}
                     </span>
                   )}
                 </button>

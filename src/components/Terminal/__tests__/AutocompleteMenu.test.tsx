@@ -136,6 +136,39 @@ describe("AutocompleteMenu", () => {
     expect(hintText({ items: [] }).keys).toEqual([]);
   });
 
+  it("speaks the key action on the row Enter acts on, and only there", () => {
+    const items: AutocompleteItem[] = [
+      { key: "run", label: "/clear", insertText: "/clear", enterAction: "execute" },
+      { key: "ins", label: "/review", insertText: "/review", enterAction: "insert" },
+    ];
+    const { rerender } = render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={noop}
+        title="Commands"
+        emptyMessage="No matches"
+      />
+    );
+    const [first, second] = screen.getAllByRole("option");
+    expect(first!.textContent).toMatch(/Enter to run, Tab to complete/);
+    expect(second!.textContent).not.toMatch(/Enter to/);
+
+    rerender(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        staleKeys={new Set(["run"])}
+        onSelect={noop}
+        title="Commands"
+        emptyMessage="No matches"
+      />
+    );
+    expect(screen.getAllByRole("option")[0]!.textContent).not.toMatch(/Enter to/);
+  });
+
   it("gives each option a unique id the editor can name as its active descendant", () => {
     const items: AutocompleteItem[] = [
       { key: "a", label: "alpha", insertText: "alpha" },
