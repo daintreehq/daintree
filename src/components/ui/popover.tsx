@@ -2,7 +2,7 @@ import * as React from "react";
 import type * as PopoverPrimitiveType from "@radix-ui/react-popover";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
-import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import { OVERLAY_DROP_MOTION_CLASS, OVERLAY_MOTION_CLASS } from "./overlayMotion";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import {
@@ -222,7 +222,14 @@ const PopoverAnchor = React.forwardRef<
 });
 PopoverAnchor.displayName = "PopoverAnchor";
 
-type PopoverContentProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitiveType.Content>;
+type PopoverContentProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitiveType.Content> & {
+  /**
+   * `drop` for a list that hangs off a trigger about as wide as itself: it
+   * unrolls downward instead of zooming from the anchor's corner, which on a
+   * wide panel reads as sideways growth. See `overlayMotion.ts`.
+   */
+  motion?: "overlay" | "drop";
+};
 
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitiveType.Content>,
@@ -241,6 +248,7 @@ const PopoverContent = React.forwardRef<
       onKeyDown,
       onClick,
       onCloseAutoFocus,
+      motion = "overlay",
       ...props
     },
     ref
@@ -318,7 +326,7 @@ const PopoverContent = React.forwardRef<
               // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
               "app-no-drag",
               "z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
-              OVERLAY_MOTION_CLASS,
+              motion === "drop" ? OVERLAY_DROP_MOTION_CLASS : OVERLAY_MOTION_CLASS,
               className
             )}
             {...props}

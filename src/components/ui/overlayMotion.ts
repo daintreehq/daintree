@@ -51,6 +51,20 @@ export const OVERLAY_MOTION_CLASS = [
 ].join(" ");
 
 /**
+ * A list that drops from a trigger it is as wide as, or nearly — a subject
+ * switcher, a select. `OVERLAY_MOTION_CLASS`'s 3% zoom grows from the anchor's
+ * corner, and on a panel several hundred pixels wide that is ~20px of sideways
+ * growth against a 4px vertical nudge, so the list reads as widening rather than
+ * dropping. This one unrolls downward from the trigger edge instead: the panel
+ * keeps its width from the first frame and a clip reveals it top to bottom,
+ * mirrored when collision handling places it above.
+ *
+ * The keyframes live in `index.css` (`.overlay-motion-drop`), on the same
+ * 200/120ms entry/exit tier. Reduced motion keeps the fade and drops the wipe.
+ */
+export const OVERLAY_DROP_MOTION_CLASS = "overlay-motion-drop";
+
+/**
  * Tooltips: the same slide and fade, quicker, and no zoom.
  *
  * The two differences are the point rather than drift. A tooltip is a caption

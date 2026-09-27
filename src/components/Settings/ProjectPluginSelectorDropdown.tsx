@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, FolderCog, Package } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
+import { FolderCog, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SettingsSubjectPicker } from "./SettingsSubjectPicker";
 
 /** The pseudo-entry that selects the project-wide pane rather than one plugin. */
 export const PROJECT_PLUGINS_OVERVIEW_ID = "overview";
@@ -35,9 +33,11 @@ interface ProjectPluginSelectorDropdownProps {
   onChange: (id: string) => void;
 }
 
-type Item =
+type PickerItem =
   | { kind: "overview"; id: typeof PROJECT_PLUGINS_OVERVIEW_ID }
-  | { kind: "plugin"; id: string; plugin: ProjectPluginOption };
+  | (ProjectPluginOption & { kind: "plugin" });
+
+const OVERVIEW_ITEM: PickerItem = { kind: "overview", id: PROJECT_PLUGINS_OVERVIEW_ID };
 
 /**
  * Named for where the plugins come from. "This project" is already the fixed
@@ -50,241 +50,83 @@ const GROUP_LABEL: Record<ProjectPluginOption["origin"], string> = {
 };
 
 /**
- * Plugin picker for the project Plugins tab, in the shape the agents page
- * established: a filterable listbox in a popover, with a fixed first entry for
- * the settings that belong to the project as a whole rather than to any one
- * plugin.
- *
- * Deliberately a sibling of `AgentSelectorDropdown` rather than a generalization
- * of it. That component's option shape is agent vocabulary — brand colour, an
- * icon component, "skip permissions" — and widening it to carry plugin
- * vocabulary as well would leave both pages reading each other's fields. What is
- * worth sharing here is the interaction, and that is small enough to say twice.
+ * Plugin picker for the project Plugins tab: the shared settings subject picker,
+ * with the plugins grouped by where they come from — a project's own folder or
+ * installed everywhere — because the off switch beside each means something
+ * different (muted, never loaded, vs hidden from this project's views).
  */
 export function ProjectPluginSelectorDropdown({
   options,
   activeId,
   onChange,
 }: ProjectPluginSelectorDropdownProps) {
-  const [open, setOpen] = useState(false);
-  const [filterQuery, setFilterQuery] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
-  const activeItemRef = useRef<HTMLDivElement>(null);
-
-  const items: Item[] = useMemo(() => {
-    const q = filterQuery.trim().toLowerCase();
-    return [
-      { kind: "overview", id: PROJECT_PLUGINS_OVERVIEW_ID },
-      ...options
-        .filter(
-          (p) => !q || p.name.toLowerCase().includes(q) || p.pluginId.toLowerCase().includes(q)
-        )
-        .map((plugin) => ({ kind: "plugin" as const, id: plugin.id, plugin })),
-    ];
-  }, [options, filterQuery]);
-
-  const filtering = filterQuery.trim().length > 0;
-  // The overview stays listed as a destination, but it is never a search result:
-  // with a query and nothing matching, Enter has nothing to pick.
-  const noMatches = filtering && items.length === 1;
-
-  useEffect(() => {
-    // Land on the first real match when filtering, and on the overview when not.
-    setActiveIndex(filtering ? (items.length > 1 ? 1 : -1) : 0);
-  }, [filtering, items]);
-
-  useEffect(() => {
-    activeItemRef.current?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex]);
-
-  useEffect(() => {
-    if (!open) setFilterQuery("");
-  }, [open]);
-
-  const handleSelect = (id: string) => {
-    onChange(id);
-    setOpen(false);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        setActiveIndex((prev) => Math.min(prev + 1, items.length - 1));
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        setActiveIndex((prev) => Math.max(prev - 1, 0));
-        break;
-      case "Enter": {
-        const item = activeIndex >= 0 ? items[activeIndex] : undefined;
-        if (item) {
-          e.preventDefault();
-          handleSelect(item.id);
-        }
-        break;
-      }
-    }
-  };
-
+  const entries: PickerItem[] = options.map((plugin) => ({ ...plugin, kind: "plugin" }));
   const selected = options.find((p) => p.id === activeId) ?? null;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-haspopup="listbox"
-          data-testid="project-plugin-selector-trigger"
-          className={cn(
-            "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
-            // Radix hands focus back to the trigger when the list closes, so a `focus:`
-            // indicator stayed lit after every pick — accent only for keyboard focus,
-            // the same contract as the agent and forge pickers.
-            "focus:outline-hidden focus-visible:border-accent-primary"
-          )}
-        >
-          {selected ? (
-            <>
-              <Package
-                size={16}
-                className={cn(
-                  "shrink-0",
-                  selected.active ? "text-text-secondary" : "text-text-placeholder"
-                )}
-                aria-hidden="true"
-              />
-              <span className="flex-1 text-left truncate">{selected.name}</span>
-              <span className="text-2xs text-text-secondary shrink-0">{selected.status}</span>
-            </>
-          ) : (
-            <>
-              <FolderCog size={16} className="shrink-0 text-text-secondary" aria-hidden="true" />
-              <span className="flex-1 text-left truncate">This project</span>
-            </>
-          )}
-          <ChevronDown
-            size={14}
-            className={cn(
-              "shrink-0 text-text-secondary transition-transform",
-              open && "rotate-180"
-            )}
-          />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        sideOffset={4}
-        className="p-0"
-        style={{ width: "var(--radix-popover-trigger-width)" }}
-        onEscapeKeyDown={(e) => e.stopPropagation()}
-      >
-        <PopoverSearchField
-          autoFocus
-          placeholder="Filter plugins…"
-          value={filterQuery}
-          onChange={(e) => setFilterQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          role="combobox"
-          aria-label="Filter plugins"
-          aria-expanded={open}
-          aria-autocomplete="list"
-          aria-controls="project-plugin-selector-list"
-          aria-activedescendant={
-            activeIndex >= 0 && items[activeIndex]
-              ? `project-plugin-selector-item-${items[activeIndex].id}`
-              : undefined
-          }
-          className="h-8 text-xs"
-        />
-        <div
-          role="listbox"
-          id="project-plugin-selector-list"
-          aria-label="Plugins"
-          // Tall enough for both groups in a settings dialog: at 240px the installed
-          // group started below the fold with nothing saying it was there.
-          className="overflow-y-auto max-h-[min(28rem,60vh)] p-1"
-        >
-          {items.map((item, index) => {
-            const isActive = index === activeIndex;
-            const isSelected = activeId === item.id;
-            // A group header before the first row of each origin, so "this
-            // project's own folder" and "installed everywhere" never blur into
-            // one list — they mean different things and their switches do too.
-            const previous = index > 0 ? items[index - 1] : undefined;
-            const groupLabel =
-              item.kind === "plugin" &&
-              (previous?.kind !== "plugin" || previous.plugin.origin !== item.plugin.origin)
-                ? GROUP_LABEL[item.plugin.origin]
-                : null;
-
-            return (
-              <div key={item.id}>
-                {groupLabel && (
-                  // A disabled option rather than a role="group" label — group
-                  // labels drop under Chromium + VoiceOver (LESSON #9006).
-                  <div
-                    role="option"
-                    aria-disabled="true"
-                    aria-selected="false"
-                    aria-label={groupLabel}
-                    className="px-2 pt-2 pb-1 text-3xs font-medium uppercase tracking-wider text-text-secondary select-none"
-                  >
-                    {groupLabel}
-                  </div>
-                )}
-                <div
-                  ref={isActive ? activeItemRef : undefined}
-                  id={`project-plugin-selector-item-${item.id}`}
-                  role="option"
-                  aria-selected={isSelected}
-                  data-highlighted={isActive || undefined}
-                  onClick={() => handleSelect(item.id)}
-                  onMouseEnter={() => setActiveIndex(index)}
-                  className={cn(
-                    "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm text-text-primary",
-                    isActive && "bg-overlay-selected",
-                    isSelected && "font-medium"
-                  )}
-                >
-                  {item.kind === "overview" ? (
-                    <>
-                      <FolderCog size={16} className="shrink-0 text-text-secondary" />
-                      <div className="flex-1 min-w-0">
-                        <div className="truncate">This project</div>
-                        <div className="text-xs text-text-secondary truncate">
-                          Trust and reload for the whole folder
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <Package
-                        size={16}
-                        className={cn(
-                          "shrink-0",
-                          item.plugin.active ? "text-text-secondary" : "text-text-placeholder"
-                        )}
-                      />
-                      <span className="flex-1 min-w-0 truncate">{item.plugin.name}</span>
-                      <span className="text-2xs text-text-secondary shrink-0">
-                        {item.plugin.status}
-                      </span>
-                    </>
-                  )}
-                </div>
+    <SettingsSubjectPicker<PickerItem>
+      idPrefix="project-plugin-selector"
+      overview={OVERVIEW_ITEM}
+      entries={entries}
+      // By the plugin's own id, never the namespaced selection key.
+      matches={(item, q) =>
+        item.kind === "plugin" &&
+        (item.name.toLowerCase().includes(q) || item.pluginId.toLowerCase().includes(q))
+      }
+      groupOf={(item) => (item.kind === "plugin" ? GROUP_LABEL[item.origin] : undefined)}
+      activeId={selected ? selected.id : PROJECT_PLUGINS_OVERVIEW_ID}
+      onChange={onChange}
+      listLabel="Plugins"
+      filterLabel="Filter plugins"
+      placeholder="Filter plugins…"
+      noMatches={(q) => <>No plugins match &ldquo;{q}&rdquo;</>}
+      current={
+        selected ? (
+          <>
+            <Package
+              size={18}
+              className={cn(
+                "shrink-0",
+                selected.active ? "text-text-secondary" : "text-text-placeholder"
+              )}
+              aria-hidden="true"
+            />
+            <span className="min-w-0 truncate text-base font-semibold">{selected.name}</span>
+            <span className="shrink-0 text-xs text-text-secondary">{selected.status}</span>
+          </>
+        ) : (
+          <>
+            <FolderCog size={18} className="shrink-0 text-text-secondary" aria-hidden="true" />
+            <span className="min-w-0 truncate text-base font-semibold">This project</span>
+          </>
+        )
+      }
+      renderRow={(item) =>
+        item.kind === "overview" ? (
+          <>
+            <FolderCog size={16} className="shrink-0 text-text-secondary" aria-hidden="true" />
+            <div className="flex-1 min-w-0">
+              <div className="truncate">This project</div>
+              <div className="text-xs text-text-secondary truncate">
+                Trust and reload for the whole folder
               </div>
-            );
-          })}
-          {noMatches && (
-            <div role="status" className="px-2 py-3 text-xs text-text-secondary">
-              No plugins match &ldquo;{filterQuery.trim()}&rdquo;
             </div>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
+          </>
+        ) : (
+          <>
+            <Package
+              size={16}
+              className={cn(
+                "shrink-0",
+                item.active ? "text-text-secondary" : "text-text-placeholder"
+              )}
+              aria-hidden="true"
+            />
+            <span className="flex-1 min-w-0 truncate">{item.name}</span>
+            <span className="text-xs text-text-secondary shrink-0">{item.status}</span>
+          </>
+        )
+      }
+    />
   );
 }
