@@ -436,6 +436,52 @@ describe("projectPluginStore mute and visibility", () => {
     expect(useProjectPluginStore.getState().muting.has("acme.dash")).toBe(false);
   });
 
+  it("records what failed, what it tried and main's reason, apart from the fallback", async () => {
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("acme.dash", "active")],
+      trust: trust({ decision: "enabled", enabled: true, persisted: true }),
+    });
+    setProjectPluginMuted.mockRejectedValueOnce(new Error("main said no"));
+    await useProjectPluginStore.getState().setMuted("acme.dash", true);
+    expect(useProjectPluginStore.getState().errorSource).toEqual({
+      action: "mute",
+      pluginId: "acme.dash",
+      muted: true,
+      reason: "main said no",
+    });
+
+    // No reason from main: the legacy message falls back, the reason stays empty.
+    setProjectPluginMuted.mockRejectedValueOnce({});
+    await useProjectPluginStore.getState().setMuted("acme.dash", false);
+    expect(useProjectPluginStore.getState().errorSource?.reason).toBeNull();
+    expect(useProjectPluginStore.getState().error).toContain("Couldn't turn on");
+  });
+
+  it("clears a failed visibility read once a read succeeds, and leaves other failures alone", async () => {
+    getProjectPluginVisibility.mockRejectedValueOnce(new Error("store is read-only"));
+    await useProjectPluginStore.getState().loadVisibility();
+    expect(useProjectPluginStore.getState().errorSource?.action).toBe("loadVisibility");
+
+    await useProjectPluginStore.getState().loadVisibility();
+    expect(useProjectPluginStore.getState().error).toBeNull();
+    expect(useProjectPluginStore.getState().errorSource).toBeNull();
+
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("acme.dash", "active")],
+      trust: trust({ decision: "enabled", enabled: true, persisted: true }),
+    });
+    setProjectPluginMuted.mockRejectedValueOnce(new Error("main said no"));
+    await useProjectPluginStore.getState().setMuted("acme.dash", true);
+    await useProjectPluginStore.getState().loadVisibility();
+    expect(useProjectPluginStore.getState().errorSource?.action).toBe("mute");
+  });
+
   it("names no project on the wire — main resolves it from the sender", async () => {
     const store = useProjectPluginStore.getState();
     store.setViewProjectId(PROJECT);

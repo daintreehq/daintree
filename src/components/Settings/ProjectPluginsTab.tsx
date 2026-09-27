@@ -50,7 +50,6 @@ import {
   PROJECT_PLUGIN_INSTANCE_PREFIX,
   pluginManifestIdFromInstanceKey,
   type LoadedPluginInfo,
-  type PluginRequiredSettingsStatus,
   type ProjectPluginInfo,
   type ProjectPluginState,
 } from "@shared/types/plugin";
@@ -232,55 +231,119 @@ function EmptyCanvasSection() {
   );
 }
 
+/** What a running project plugin's own settings still need, as the overview reports it. */
+interface SettingsGaps {
+  /** Required settings with nothing stored, as `{ id, label }`, in manifest order. */
+  missing: { id: string; label: string }[];
+  /** `mustExist` paths whose stored value no longer resolves on disk. */
+  brokenPaths: { id: string; label: string }[];
+  /** The check itself couldn't be made, so the two lists above can't be trusted. */
+  failed: boolean;
+}
+
+const PATH_TYPES = new Set(["path", "directory", "file"]);
+
 /**
- * The required settings still unset for each running project plugin that
- * declares any — the same read the plugin's own setup strip makes — keyed by
+ * The setup gaps of each running project plugin that declares required settings
+ * or paths that must exist: the same required-settings read the plugin's own
+ * setup strip makes, plus a probe of each stored `mustExist` path. Keyed by
  * instance id, and re-read whenever that plugin's settings change.
  */
-function useMissingRequiredSettings(
+function usePluginSettingsGaps(
   plugins: readonly ProjectPluginInfo[],
   folderTrusted: boolean
-): ReadonlyMap<string, PluginRequiredSettingsStatus> {
+): { gaps: ReadonlyMap<string, SettingsGaps>; recheck: () => void } {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
-  const [statuses, setStatuses] = useState<ReadonlyMap<string, PluginRequiredSettingsStatus>>(
-    () => new Map()
+  const [gaps, setGaps] = useState<ReadonlyMap<string, SettingsGaps>>(() => new Map());
+  const [attempt, setAttempt] = useState(0);
+  const candidates = useMemo(
+    () =>
+      plugins.flatMap((p) => {
+        if (p.instanceId === undefined || !isProjectPluginRunning(p, folderTrusted)) return [];
+        const defs = p.settings ?? [];
+        const paths = defs.filter(
+          (def) => def.mustExist === true && PATH_TYPES.has(def.type ?? "string")
+        );
+        if (!defs.some((def) => def.required === true) && paths.length === 0) return [];
+        return [
+          {
+            id: p.instanceId,
+            required: defs.some((def) => def.required === true),
+            paths: paths.map((def) => ({
+              id: def.id,
+              label: def.label ?? def.id,
+              scope: def.scope ?? "user",
+            })),
+          },
+        ];
+      }),
+    [plugins, folderTrusted]
   );
-  const candidates = plugins
-    .flatMap((p) =>
-      p.instanceId !== undefined &&
-      isProjectPluginRunning(p, folderTrusted) &&
-      (p.settings ?? []).some((def) => def.required === true)
-        ? [p.instanceId]
-        : []
-    )
-    .join("\n");
 
   useEffect(() => {
     const bridge = window.electron?.plugin;
-    const ids = candidates === "" ? [] : candidates.split("\n");
-    setStatuses(new Map());
-    if (ids.length === 0 || typeof bridge?.getRequiredSettingsStatus !== "function") return;
+    const targets = candidates;
+    setGaps(new Map());
+    if (targets.length === 0 || typeof bridge?.getRequiredSettingsStatus !== "function") return;
     let cancelled = false;
-    const read = (id: string) => {
-      bridge
-        .getRequiredSettingsStatus(id, projectId)
-        .then((status) => {
-          if (cancelled) return;
-          setStatuses((prev) => new Map(prev).set(id, status));
-        })
-        .catch((err: unknown) => logError(`Failed to read required settings for ${id}`, err));
+    const check = async (target: (typeof targets)[number]): Promise<SettingsGaps> => {
+      const status = target.required
+        ? await bridge.getRequiredSettingsStatus(target.id, projectId)
+        : { missing: [], unreadable: [], labels: {} };
+      const brokenPaths: SettingsGaps["brokenPaths"] = [];
+      const scopes = [...new Set(target.paths.map((path) => path.scope))];
+      for (const scope of scopes) {
+        if (scope !== "user" && projectId === null) continue;
+        const { values } = await bridge.getSettingValues(target.id, scope, projectId);
+        for (const path of target.paths.filter((p) => p.scope === scope)) {
+          const stored = values[path.id];
+          if (typeof stored !== "string" || stored === "") continue;
+          if (!(await bridge.pathExists(target.id, stored))) brokenPaths.push(path);
+        }
+      }
+      return {
+        missing: status.missing.map((id) => ({ id, label: status.labels[id] ?? id })),
+        brokenPaths,
+        failed: status.unreadable.length > 0,
+      };
     };
-    ids.forEach(read);
+    const read = (target: (typeof targets)[number]) => {
+      check(target)
+        .then((next) => {
+          if (!cancelled) setGaps((prev) => new Map(prev).set(target.id, next));
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setGaps((prev) =>
+            new Map(prev).set(target.id, { missing: [], brokenPaths: [], failed: true })
+          );
+          logError(`Failed to check settings for ${target.id}`, err);
+        });
+    };
+    targets.forEach(read);
     const unsubscribe = bridge.onSettingsChanged?.((payload) => {
-      if (ids.includes(payload.pluginId)) read(payload.pluginId);
+      const target = targets.find((t) => t.id === payload.pluginId);
+      if (target) read(target);
     });
     return () => {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [candidates, projectId]);
+  }, [candidates, projectId, attempt]);
 
-  return statuses;
+  return { gaps, recheck: () => setAttempt((n) => n + 1) };
+}
+
+/** What a plugin's setup row says is missing, in the order it will be fixed. */
+function setupGapDescription(gap: SettingsGaps): string | undefined {
+  const parts: string[] = [];
+  if (gap.missing.length > 0) {
+    parts.push(`Required and not set yet: ${gap.missing.map((m) => m.label).join(", ")}`);
+  }
+  if (gap.brokenPaths.length > 0) {
+    parts.push(`No longer exists: ${gap.brokenPaths.map((p) => p.label).join(", ")}`);
+  }
+  return parts.length > 0 ? parts.join(". ") : undefined;
 }
 
 /** Why a project plugin in the overview's attention list needs a look. */
@@ -313,13 +376,12 @@ function ProjectOverviewPane({
   const needsAttention = projectPlugins.filter(
     (p) => p.state === "invalid" || (enabled && p.state === "staged" && !p.muted)
   );
-  const requiredStatus = useMissingRequiredSettings(projectPlugins, enabled);
+  const { gaps, recheck } = usePluginSettingsGaps(projectPlugins, enabled);
   const needsSetup = projectPlugins.flatMap((plugin) => {
-    const status = plugin.instanceId ? requiredStatus.get(plugin.instanceId) : undefined;
-    const first = status?.missing[0];
-    return status && first !== undefined
-      ? [{ plugin, missing: status.missing.map((id) => status.labels[id] ?? id), first }]
-      : [];
+    const gap = plugin.instanceId ? gaps.get(plugin.instanceId) : undefined;
+    if (!gap) return [];
+    const first = gap.missing[0] ?? gap.brokenPaths[0];
+    return first !== undefined || gap.failed ? [{ plugin, gap, first }] : [];
   });
 
   const decideError = decideFailure ? (
@@ -366,7 +428,7 @@ function ProjectOverviewPane({
               <SettingsRow
                 label="Not running"
                 layout="stacked"
-                description="Nothing in this project's plugins folder is running. Allowing it runs its plugins with your account — Daintree doesn't sandbox them — though any new to this project still wait for you to activate them."
+                description="Nothing in this project's plugins folder is running. Allowing it runs its plugins with your account — Daintree doesn't sandbox them — though any plugins new to this project still wait for you to activate them."
                 error={decideError}
                 control={
                   <SettingsRowActions>
@@ -431,26 +493,36 @@ function ProjectOverviewPane({
                   }
                 />
               ))}
-              {needsSetup.map(({ plugin, missing, first }) => (
+              {needsSetup.map(({ plugin, gap, first }) => (
                 <SettingsRow
                   key={`setup:${plugin.id}`}
                   label={plugin.displayName}
-                  accessory={<Badge size="xs">Needs setup</Badge>}
-                  description={`Required and not set yet: ${missing.join(", ")}`}
+                  accessory={first && <Badge size="xs">Needs setup</Badge>}
+                  description={setupGapDescription(gap)}
+                  error={
+                    gap.failed ? (
+                      <RowFailure
+                        summary="Couldn't check all of its settings, so this may be incomplete"
+                        onRetry={recheck}
+                      />
+                    ) : undefined
+                  }
                   control={
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        void actionService.dispatch(
-                          "plugin.openSettings",
-                          { pluginId: plugin.instanceId, key: first },
-                          { source: "user" }
-                        )
-                      }
-                    >
-                      Set up
-                    </Button>
+                    first && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          void actionService.dispatch(
+                            "plugin.openSettings",
+                            { pluginId: plugin.instanceId, key: first.id },
+                            { source: "user" }
+                          )
+                        }
+                      >
+                        Set up
+                      </Button>
+                    )
                   }
                 />
               ))}
@@ -796,7 +868,7 @@ function ProjectPluginPane({
 /** Why a declared-but-stopped plugin's settings can't be changed right now. */
 function stoppedSettingsReason(plugin: ProjectPluginInfo, folderOff: boolean): string {
   if (folderOff) return "Available once this project's plugins are allowed to run";
-  if (plugin.muted) return "Available when the plugin is turned on";
+  if (plugin.muted) return "Available once the plugin is turned on";
   if (plugin.state === "staged") return "Available once the plugin is activated";
   return "Available while the plugin is running";
 }
@@ -808,18 +880,28 @@ function stoppedSettingsReason(plugin: ProjectPluginInfo, folderOff: boolean): s
  * Nothing is loaded to answer for its values: the settings bridge reads and
  * writes against a running plugin's declarations, and without them it can't
  * tell a secret from a plain string, so it must not be handed a write. The
- * section keeps its place anyway, naming every declared setting under the one
- * thing that makes them editable, so turning the plugin off doesn't make its
- * settings look like they never existed. One row rather than a disabled row per
- * field: with no control on any of them, a column of dimmed labels each
- * repeating the same reason was harder to read and said less.
+ * section keeps its shape anyway — each declared field as a disabled row, and
+ * the custom section as its own row — each saying what it needs, so turning the
+ * plugin off doesn't make its settings look like they never existed. With no
+ * control on them, the rows keep their words at full contrast.
  */
 function StoppedPluginSettings({ plugin, reason }: { plugin: ProjectPluginInfo; reason: string }) {
-  const names = (plugin.settings ?? []).map((def) => def.label ?? def.id);
-  if (plugin.declaresSettingsView === true) names.push("its own settings section");
+  const fields = plugin.settings ?? [];
+  if (fields.length === 0 && plugin.declaresSettingsView !== true) return null;
   return (
     <SettingsGroup>
-      <SettingsRow label={reason} description={names.join(", ")} />
+      {fields.map((def) => (
+        <SettingsRow
+          key={def.id}
+          label={def.label ?? def.id}
+          description={def.description}
+          disabled
+          disabledReason={reason}
+        />
+      ))}
+      {plugin.declaresSettingsView === true && (
+        <SettingsRow label="More settings" disabled disabledReason={reason} />
+      )}
     </SettingsGroup>
   );
 }

@@ -80,18 +80,24 @@ function fieldLabel(def: SettingDefinition): string {
 }
 
 /**
- * A required text or number field starts empty, with its default as the
- * placeholder. A default never satisfies a required setting, so showing it as
- * the field's value made an unconfigured field look configured.
+ * A required text or number field with nothing stored starts empty. A default
+ * never satisfies a required setting, so showing it as the field's value made
+ * an unconfigured field look configured; the row's "Use …" action names it.
  */
-function defaultIsPlaceholder(def: SettingDefinition, type: SettingFieldType): boolean {
+function startsEmptyWhenUnset(def: SettingDefinition, type: SettingFieldType): boolean {
   return def.required === true && (type === "string" || type === "number");
 }
 
 /** The draft a field starts from, or returns to on reset, when nothing is stored. */
 function unsetDraft(def: SettingDefinition, type: SettingFieldType): string {
-  return defaultIsPlaceholder(def, type) ? "" : toDraft(def.default, type);
+  return startsEmptyWhenUnset(def, type) ? "" : toDraft(def.default, type);
 }
+
+/**
+ * A write that failed, kept so the row can offer it again: the value it tried to
+ * store and what the field does once it lands, or a reset back to the default.
+ */
+type FailedWrite = { kind: "write"; value: unknown; onSaved?: () => void } | { kind: "reset" };
 
 /** Longest default a plain string field shows on the rail rather than full width. */
 const INLINE_STRING_MAX = 24;
@@ -235,6 +241,9 @@ function SettingField({
   const [overridden, setOverridden] = useState(false);
   const tierId = useId();
   const [error, setError] = useState<string | null>(null);
+  // Set only when `error` is a failed write; a draft rejected before any write
+  // (not a number, not JSON) is fixed by editing, so it offers no Retry.
+  const [failedWrite, setFailedWrite] = useState<FailedWrite | null>(null);
   const [saving, setSaving] = useState(false);
   // Secret-specific state.
   const [hasStored, setHasStored] = useState(secretIsSet);
@@ -280,6 +289,7 @@ function SettingField({
     setDraft(initial);
     setCommitted(initial);
     setError(null);
+    setFailedWrite(null);
   }, [loaded, storedValue, secretIsSet, isSecret, type, def]);
 
   // Existence feedback for `mustExist` path fields: probe whenever the committed
@@ -313,15 +323,18 @@ function SettingField({
   // state; never throws (the error is surfaced inline) so blur handlers can fire
   // it without an unhandled rejection.
   const writeValue = useCallback(
-    async (value: unknown): Promise<boolean> => {
+    async (value: unknown, onSaved?: () => void): Promise<boolean> => {
       setSaving(true);
       try {
         await window.electron.plugin.setSettingValue(pluginId, def.id, value, scope, projectId);
         setError(null);
+        setFailedWrite(null);
         setOverridden(true);
+        onSaved?.();
         return true;
       } catch (err) {
         setError(formatErrorMessage(err, "Couldn't save setting"));
+        setFailedWrite({ kind: "write", value, onSaved });
         logError(`Failed to save plugin setting ${pluginId}.${def.id}`, err);
         return false;
       } finally {
@@ -336,6 +349,7 @@ function SettingField({
     try {
       await window.electron.plugin.deleteSettingValue(pluginId, def.id, scope, projectId);
       setError(null);
+      setFailedWrite(null);
       setOverridden(false);
       if (isSecret) {
         setHasStored(false);
@@ -351,6 +365,7 @@ function SettingField({
       }
     } catch (err) {
       setError(formatErrorMessage(err, "Couldn't reset setting"));
+      setFailedWrite({ kind: "reset" });
       logError(`Failed to reset plugin setting ${pluginId}.${def.id}`, err);
     } finally {
       setSaving(false);
@@ -374,9 +389,15 @@ function SettingField({
 
   // Optimistic, but a failed write puts the switch back: a control that still shows
   // the value it couldn't save reads as applied.
+  /** A problem with the draft or a local step, not a write: nothing to retry. */
+  const showError = (message: string | null) => {
+    setError(message);
+    setFailedWrite(null);
+  };
+
   const toggleBool = (next: boolean) => {
     setBoolValue(next);
-    void writeValue(next).then((ok) => {
+    void writeValue(next, () => setBoolValue(next)).then((ok) => {
       if (!ok) setBoolValue(!next);
     });
   };
@@ -384,9 +405,11 @@ function SettingField({
   const chooseEnum = (next: string) => {
     const previous = committed;
     setDraft(next);
-    void writeValue(next).then((ok) => {
-      if (ok) setCommitted(next);
-      else setDraft(previous);
+    void writeValue(next, () => {
+      setDraft(next);
+      setCommitted(next);
+    }).then((ok) => {
+      if (!ok) setDraft(previous);
     });
   };
 
@@ -394,9 +417,14 @@ function SettingField({
     // Back to what is saved: nothing to write, and whatever the last draft was
     // rejected for no longer applies.
     if (draft === committed) {
-      setError(null);
+      showError(null);
       return;
     }
+    const attempted = draft;
+    const landed = () => {
+      setDraft(attempted);
+      setCommitted(attempted);
+    };
     if (type === "number") {
       const trimmed = draft.trim();
       if (trimmed === "") {
@@ -406,18 +434,18 @@ function SettingField({
       }
       const num = Number(trimmed);
       if (!Number.isFinite(num)) {
-        setError("Enter a valid number");
+        showError("Enter a valid number");
         return;
       }
       if (def.min !== undefined && num < def.min) {
-        setError(`Must be at least ${def.min}`);
+        showError(`Must be at least ${def.min}`);
         return;
       }
       if (def.max !== undefined && num > def.max) {
-        setError(`Must be at most ${def.max}`);
+        showError(`Must be at most ${def.max}`);
         return;
       }
-      if (await writeValue(num)) setCommitted(draft);
+      await writeValue(num, landed);
       return;
     }
     if (type === "json") {
@@ -430,14 +458,14 @@ function SettingField({
       try {
         parsed = JSON.parse(trimmed);
       } catch {
-        setError("Enter valid JSON");
+        showError("Enter valid JSON");
         return;
       }
-      if (await writeValue(parsed)) setCommitted(draft);
+      await writeValue(parsed, landed);
       return;
     }
     // string
-    if (await writeValue(draft)) setCommitted(draft);
+    await writeValue(draft, landed);
   };
 
   const handleReveal = async () => {
@@ -451,9 +479,9 @@ function SettingField({
       setDraft(value ?? "");
       setSecretEdited(false);
       setRevealed(true);
-      setError(null);
+      showError(null);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't reveal secret"));
+      showError(formatErrorMessage(err, "Couldn't reveal secret"));
       logError(`Failed to reveal plugin secret ${pluginId}.${def.id}`, err);
     }
   };
@@ -468,13 +496,13 @@ function SettingField({
     // Persist first; only re-mask (and drop the value from the DOM) once the
     // write succeeds, so a failed save leaves the typed value recoverable next
     // to the inline error instead of silently discarding it.
-    if (await writeValue(value)) {
+    await writeValue(value, () => {
       setSecretEdited(false);
       setHasStored(true);
       setRevealed(false);
       setDraft("");
       setMigratedToKeychain(true);
-    }
+    });
   };
 
   const handleBrowse = async () => {
@@ -493,10 +521,13 @@ function SettingField({
       setDraft(picked);
       // A path that didn't save goes back to the saved one: the field showing the
       // new pick beside the error would read as applied.
-      if (await writeValue(picked)) setCommitted(picked);
-      else setDraft(previous);
+      const saved = await writeValue(picked, () => {
+        setDraft(picked);
+        setCommitted(picked);
+      });
+      if (!saved) setDraft(previous);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't open the file picker"));
+      showError(formatErrorMessage(err, "Couldn't open the file picker"));
       logError(`Failed to pick path for plugin setting ${pluginId}.${def.id}`, err);
     }
   };
@@ -519,14 +550,20 @@ function SettingField({
     scopeReady &&
     !failed;
   const acceptDefault = async () => {
-    if (!(await writeValue(def.default))) return;
-    if (type === "boolean") {
-      setBoolValue(def.default === true);
-    } else {
-      const accepted = toDraft(def.default, type);
-      setDraft(accepted);
-      setCommitted(accepted);
-    }
+    await writeValue(def.default, () => {
+      if (type === "boolean") {
+        setBoolValue(def.default === true);
+      } else {
+        const accepted = toDraft(def.default, type);
+        setDraft(accepted);
+        setCommitted(accepted);
+      }
+    });
+  };
+  const retryWrite = () => {
+    if (failedWrite === null) return;
+    if (failedWrite.kind === "reset") void handleReset();
+    else void writeValue(failedWrite.value, failedWrite.onSaved);
   };
   const scopeBadge = (
     <>
@@ -573,8 +610,6 @@ function SettingField({
   ) : null;
   // A required value that isn't set is as invalid as a rejected one, and says so the same way.
   const invalid = shownError !== null || requiredUnset;
-  const placeholderDefault =
-    defaultIsPlaceholder(def, type) && def.default !== undefined ? defaultText : undefined;
   const rowProps = {
     id: fieldId,
     label,
@@ -597,7 +632,14 @@ function SettingField({
     // A failed write is announced where it happened; a missing path, found by a
     // probe after the form settles, is a standing state announced politely.
     error: error ? (
-      <span role="alert">{error}</span>
+      <span role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="min-w-0 break-words">{error}</span>
+        {failedWrite !== null && (
+          <Button type="button" variant="outline" size="xs" disabled={saving} onClick={retryWrite}>
+            Retry
+          </Button>
+        )}
+      </span>
     ) : shownError ? (
       <span role="status">{shownError}</span>
     ) : (
@@ -689,7 +731,6 @@ function SettingField({
             type="text"
             inputMode="decimal"
             value={draft}
-            placeholder={placeholderDefault}
             aria-required={def.required === true || undefined}
             disabled={disabled || saving}
             aria-labelledby={labelId}
@@ -872,7 +913,6 @@ function SettingField({
           aria-describedby={descriptionId}
           aria-required={def.required === true || undefined}
           invalid={invalid}
-          placeholder={placeholderDefault}
           className={inlineString ? SETTINGS_CONTROL_WIDTH.wide : undefined}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => void commitText()}

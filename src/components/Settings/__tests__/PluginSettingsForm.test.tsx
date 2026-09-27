@@ -599,8 +599,9 @@ describe("PluginSettingsForm", () => {
     );
     const input = (await screen.findByLabelText("Region")) as HTMLInputElement;
     // A default never satisfies a required setting, so the field doesn't wear it
-    // as a value: it is empty, the default is only suggested, and the row says so.
-    await waitFor(() => expect(input.placeholder).toBe("us"));
+    // as a value: it is empty, and the row says so and names the default.
+    const row0 = input.closest<HTMLElement>("[data-settings-row]")!;
+    await waitFor(() => expect(row0.textContent).toContain("Not set yet"));
     expect(input.value).toBe("");
     const row = input.closest<HTMLElement>("[data-settings-row]")!;
     expect(row.textContent).toContain("Not set yet");
@@ -663,6 +664,33 @@ describe("PluginSettingsForm", () => {
     await waitFor(() => expect(row.textContent).not.toContain("Enter a valid number"));
     expect(input.getAttribute("aria-invalid")).toBeNull();
     expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+  });
+
+  it("offers a failed write again from its row, and a rejected draft only its correction", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { port: 8080 } }));
+    pluginApi.setSettingValue.mockRejectedValueOnce(new Error("EACCES"));
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "port", type: "number", label: "Port" }])} />
+    );
+    const input = (await screen.findByLabelText("Port")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("8080"));
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+
+    fireEvent.change(input, { target: { value: "9090" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(row.textContent).toContain("EACCES"));
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(pluginApi.setSettingValue).toHaveBeenCalledTimes(2));
+    expect(pluginApi.setSettingValue.mock.calls[1]).toEqual(
+      pluginApi.setSettingValue.mock.calls[0]
+    );
+    await waitFor(() => expect(row.textContent).not.toContain("EACCES"));
+
+    // Not a number: nothing was written, so there is nothing to retry — only to fix.
+    fireEvent.change(input, { target: { value: "ninety" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(row.textContent).toContain("Enter a valid number"));
+    expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("puts a picked path back when saving it fails", async () => {

@@ -707,9 +707,9 @@ describe("ProjectPluginsTab settings deep link and lifecycle", () => {
     await select("Acme Dashboard");
 
     const detail = screen.getByTestId("project-plugin-detail");
-    // One row naming every declared setting under the one thing that unlocks them.
-    expect(within(detail).getAllByText("Available when the plugin is turned on")).toHaveLength(1);
-    expect(within(detail).getByText("API key, its own settings section")).toBeTruthy();
+    expect(within(detail).getByText("API key")).toBeTruthy();
+    expect(within(detail).getByText("More settings")).toBeTruthy();
+    expect(within(detail).getAllByText("Available once the plugin is turned on")).toHaveLength(2);
     // Declarations only: nothing is read or editable without the plugin loaded.
     expect(within(detail).queryByRole("textbox")).toBeNull();
     expect(pluginApi.getSettingValues).not.toHaveBeenCalled();
@@ -733,7 +733,7 @@ describe("ProjectPluginsTab settings deep link and lifecycle", () => {
 
     const detail = screen.getByTestId("project-plugin-detail");
     await waitFor(() => expect(within(detail).queryByRole("textbox")).toBeNull());
-    expect(within(detail).getByText("Available when the plugin is turned on")).toBeTruthy();
+    expect(within(detail).getByText("Available once the plugin is turned on")).toBeTruthy();
   });
 
   it("lands a link to a stopped plugin's field on its Settings heading, even with a stale list", async () => {
@@ -912,6 +912,59 @@ describe("ProjectPluginsTab failures and state honesty", () => {
     );
     delete (pluginApi as Partial<typeof pluginApi & { getRequiredSettingsStatus: unknown }>)
       .getRequiredSettingsStatus;
+  });
+
+  it("lists a stored path that no longer exists, and says so when the check itself fails", async () => {
+    const getRequiredSettingsStatus = vi
+      .fn()
+      .mockResolvedValue({ missing: [], unreadable: [], labels: {} });
+    const pathExists = vi.fn().mockResolvedValue(false);
+    Object.assign(pluginApi, {
+      getRequiredSettingsStatus,
+      pathExists,
+      onSettingsChanged: vi.fn(() => vi.fn()),
+    });
+    pluginApi.getSettingValues.mockResolvedValue({
+      values: { out: "/Volumes/gone" },
+      secretsSet: [],
+      secretsPlaintext: [],
+      secretTier: "keychain",
+    });
+    seed([
+      projectPlugin({
+        settings: [
+          {
+            id: "out",
+            type: "directory",
+            label: "Output folder",
+            mustExist: true,
+            scope: "project",
+          },
+        ],
+      }),
+    ]);
+    const { unmount } = render(<ProjectPluginsTab />);
+    const group = await screen.findByRole("group", { name: "Needs attention" });
+    await waitFor(() => expect(group.textContent).toContain("No longer exists: Output folder"));
+    expect(pathExists).toHaveBeenCalledWith(
+      `project__${PROJECT_ID}__acme.dashboard`,
+      "/Volumes/gone"
+    );
+    unmount();
+
+    // The check can't be made: the row says the list may be incomplete, and Retry checks again.
+    pathExists.mockReset().mockRejectedValueOnce(new Error("EIO")).mockResolvedValue(true);
+    render(<ProjectPluginsTab />);
+    const failed = await screen.findByRole("group", { name: "Needs attention" });
+    const alert = await within(failed).findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't check all of its settings");
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Needs attention" })).toBeNull()
+    );
+    for (const key of ["getRequiredSettingsStatus", "pathExists", "onSettingsChanged"]) {
+      delete (pluginApi as Record<string, unknown>)[key];
+    }
   });
 
   it("lists the plugins that need a look on the overview, each with a way to it", async () => {

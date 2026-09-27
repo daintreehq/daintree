@@ -306,7 +306,13 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
     loadVisibility: async () => {
       try {
         const visibility = await window.electron.plugin.getProjectPluginVisibility();
-        set({ visibility });
+        // A read that now succeeds answers an earlier failed one; any other
+        // failure is about something else and stays.
+        set(
+          get().errorSource?.action === "loadVisibility"
+            ? { visibility, error: null, errorSource: null }
+            : { visibility }
+        );
       } catch (err) {
         set(
           failure(err, "Couldn't read this project's plugin visibility", {
