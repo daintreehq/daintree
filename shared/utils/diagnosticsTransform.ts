@@ -30,21 +30,39 @@ export function filterSections(
 
 /** Apply find-and-replace redactions to a JSON string. */
 export function applyReplacements(json: string, rules: ReplacementRule[]): string {
+  return applyReplacementsCounted(json, rules).output;
+}
+
+/**
+ * `applyReplacements`, plus how many matches each rule replaced (index-aligned
+ * with `rules`). Counted in the same ordered pass, so a later rule that finds
+ * nothing because an earlier one already replaced it reports zero — which is
+ * what the saved report will contain.
+ */
+export function applyReplacementsCounted(
+  json: string,
+  rules: ReplacementRule[]
+): { output: string; counts: number[] } {
   let out = json;
-  for (const rule of rules) {
-    if (!rule.find) continue;
+  const counts = rules.map(() => 0);
+  rules.forEach((rule, i) => {
+    if (!rule.find) return;
     try {
       if (rule.kind === "regex") {
-        out = out.replace(new RegExp(rule.find, "g"), rule.replace);
+        const pattern = new RegExp(rule.find, "g");
+        counts[i] = out.match(pattern)?.length ?? 0;
+        out = out.replace(pattern, rule.replace);
       } else {
-        out = out.split(rule.find).join(rule.replace);
+        const parts = out.split(rule.find);
+        counts[i] = parts.length - 1;
+        out = parts.join(rule.replace);
       }
     } catch {
       // Skip invalid replacements (e.g. an uncompilable regex pattern), the
       // same way an empty `find` is skipped above.
     }
-  }
-  return out;
+  });
+  return { output: out, counts };
 }
 
 /**

@@ -210,18 +210,28 @@ async function fillRules(card: Locator) {
   await card.page().mouse.move(0, 0);
 }
 
-async function scrollBody(card: Locator, to: "bottom" | "preview") {
+async function scrollBody(card: Locator, to: "bottom" | "preview" | "replacement") {
   await card.evaluate((el, where) => {
+    const region = el.querySelector<HTMLElement>('[role="region"]');
     const scrollers = Array.from(el.querySelectorAll<HTMLElement>("*")).filter(
-      (n) => n.scrollHeight > n.clientHeight + 2 && getComputedStyle(n).overflowY !== "visible"
+      (n) =>
+        n !== region &&
+        n.scrollHeight > n.clientHeight + 2 &&
+        ["auto", "scroll"].includes(getComputedStyle(n).overflowY)
     );
-    // The body is the outermost scroller; the preview is nested inside it.
-    const body = scrollers.find((s) => !scrollers.some((o) => o !== s && o.contains(s)));
-    if (!body) return;
-    if (where === "bottom") body.scrollTop = body.scrollHeight;
-    else {
-      const preview = el.querySelector<HTMLElement>('[aria-label="Report preview"]');
-      if (preview) body.scrollTop = preview.offsetTop - 120;
+    const body = scrollers[0];
+    if (body) {
+      if (where === "bottom") body.scrollTop = body.scrollHeight;
+      else if (region) {
+        const top = region.getBoundingClientRect().top - body.getBoundingClientRect().top;
+        body.scrollTop += top - 80;
+      }
+    }
+    if (where === "replacement" && region) {
+      const mark = region.querySelector<HTMLElement>(".bg-overlay-strong");
+      if (!mark) throw new Error("no highlighted replacement in the preview");
+      const offset = mark.getBoundingClientRect().top - region.getBoundingClientRect().top;
+      region.scrollTop += offset - 60;
     }
   }, to);
   await card.page().waitForTimeout(150);
@@ -274,7 +284,6 @@ const STATES: Array<{ name: string; fixture: string; step?: Step }> = [
     name: "preview-open",
     fixture: "default",
     step: async (card) => {
-      await expand(card, /preview/i);
       await expect(card.getByLabel("Report preview")).toContainText("recentEntries");
       await scrollBody(card, "preview");
     },
@@ -284,9 +293,8 @@ const STATES: Array<{ name: string; fixture: string; step?: Step }> = [
     fixture: "default",
     step: async (card) => {
       await fillRules(card);
-      await expand(card, /preview/i);
       await expect(card.getByLabel("Report preview")).toContainText("[REDACTED]");
-      await scrollBody(card, "preview");
+      await scrollBody(card, "replacement");
     },
   },
   {
@@ -356,7 +364,6 @@ test("diagnostics review dialog — every state, every theme", async ({ context 
     await withPage(context, "short", async (page) => {
       const card = await open(page, "default", first!, { width: WIDTH, height: SHORT_HEIGHT });
       await expand(card, /^Sections/);
-      await expand(card, /preview/i);
       await scrollBody(card, "bottom");
       return snap(page.locator("[data-preview-shell]"), `short-${first}.png`);
     })

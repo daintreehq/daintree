@@ -1,7 +1,57 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import * as React from "react";
 import { DiagnosticsReviewDialog } from "../DiagnosticsReviewDialog";
+
+// Radix Select does not open in jsdom. The stand-in renders one native select
+// carrying the trigger's own props, so the label, description and options the
+// dialog wires are still what the tests read.
+vi.mock("@/components/ui/select", () => {
+  const SelectTrigger = (_: Record<string, unknown>) => null;
+  const SelectValue = () => null;
+  const SelectContent = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+  const SelectItem = ({ value, children }: { value: string; children: React.ReactNode }) => (
+    <option value={value}>{children}</option>
+  );
+  const Select = ({
+    value,
+    onValueChange,
+    disabled,
+    children,
+  }: {
+    value: string;
+    onValueChange: (value: string) => void;
+    disabled?: boolean;
+    children: React.ReactNode;
+  }) => {
+    let id: string | undefined;
+    let describedBy: string | undefined;
+    let options: React.ReactNode = null;
+    React.Children.forEach(children, (child) => {
+      if (!React.isValidElement<Record<string, unknown>>(child)) return;
+      if (child.type === SelectTrigger) {
+        const { id: triggerId, "aria-describedby": triggerDescribedBy } = child.props;
+        id = typeof triggerId === "string" ? triggerId : undefined;
+        describedBy = typeof triggerDescribedBy === "string" ? triggerDescribedBy : undefined;
+      } else if (child.type === SelectContent) {
+        options = child;
+      }
+    });
+    return (
+      <select
+        id={id}
+        aria-describedby={describedBy}
+        disabled={disabled}
+        value={value}
+        onChange={(e) => onValueChange(e.target.value)}
+      >
+        {options}
+      </select>
+    );
+  };
+  return { Select, SelectTrigger, SelectValue, SelectContent, SelectItem };
+});
 import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 
 const payload: DiagnosticsReviewPayload = {
@@ -13,17 +63,27 @@ const payload: DiagnosticsReviewPayload = {
   oldestRetainedLogMs: null,
 };
 
-function renderDialog(reviewPayload: DiagnosticsReviewPayload = payload, onSave = vi.fn()) {
+function renderDialog(
+  reviewPayload: DiagnosticsReviewPayload = payload,
+  onSave = vi.fn(),
+  isSaving = false
+) {
   return render(
     <DiagnosticsReviewDialog
       isOpen
       onClose={vi.fn()}
       reviewPayload={reviewPayload}
       onSave={onSave}
-      isSaving={false}
+      isSaving={isSaving}
     />
   );
 }
+
+const contactPayload: DiagnosticsReviewPayload = {
+  ...payload,
+  payload: { os: { owner: "sam@acme.io", backup: "ops@acme.io", org: "acme corp" } },
+  sectionKeys: ["os"],
+};
 
 const updatedPayload: DiagnosticsReviewPayload = {
   ...payload,
@@ -69,13 +129,72 @@ describe("DiagnosticsReviewDialog", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add rule" }));
   });
 
-  it("exposes the preview as a disclosure", () => {
+  it("shows the report preview on open, as a named keyboard-scrollable region", () => {
     renderDialog();
-    const toggle = screen.getByRole("button", { name: "Preview the report" });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByLabelText("Report preview")).toBeTruthy();
+    const region = screen.getByRole("region", { name: "Report preview" });
+    expect(region.tabIndex).toBe(0);
+    expect(region.textContent).toContain("whySlow");
+  });
+
+  it("reports how many matches each active redaction made, including none", () => {
+    renderDialog(contactPayload);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
+    const emailRow = screen
+      .getByRole("checkbox", { name: /Strip email addresses/ })
+      .closest("label")!;
+    expect(emailRow.textContent).toContain("2 matches");
+
+    const find = screen.getByRole("textbox", { name: "Find, rule 1" });
+    fireEvent.change(find, { target: { value: "acme" } });
+    expect(document.getElementById(find.getAttribute("aria-describedby")!)!.textContent).toBe(
+      "1 match"
+    );
+    fireEvent.change(find, { target: { value: "acne" } });
+    expect(document.getElementById(find.getAttribute("aria-describedby")!)!.textContent).toBe(
+      "No matches"
+    );
+  });
+
+  it("counts a rule against what the rules before it left behind", () => {
+    renderDialog(contactPayload);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
+    // Both addresses are already gone by the time the custom rule runs, so it
+    // replaces nothing in the saved report and must not claim otherwise.
+    const find = screen.getByRole("textbox", { name: "Find, rule 1" });
+    fireEvent.change(find, { target: { value: "@acme.io" } });
+    expect(document.getElementById(find.getAttribute("aria-describedby")!)!.textContent).toBe(
+      "No matches"
+    );
+  });
+
+  it("marks every replacement in the preview", () => {
+    renderDialog(contactPayload);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
+    const region = screen.getByRole("region", { name: "Report preview" });
+    const bands = Array.from(region.querySelectorAll("span")).filter(
+      (el) => el.textContent === "[REDACTED]"
+    );
+    expect(bands).toHaveLength(2);
+  });
+
+  it("moves focus to the new rule's Find field when a rule is added", () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Find, rule 2" }));
+  });
+
+  it("freezes everything that shapes the report while it saves", () => {
+    renderDialog(payload, vi.fn(), true);
+    for (const control of [
+      screen.getByLabelText("Logs from"),
+      screen.getByRole("checkbox", { name: /Strip email addresses/ }),
+      screen.getByRole("textbox", { name: "Find, rule 1" }),
+      screen.getByRole("button", { name: "Add rule" }),
+      screen.getByRole("button", { name: /^Sections/ }),
+    ]) {
+      expect(control.matches(":disabled")).toBe(true);
+    }
+    expect(screen.getByRole("region", { name: "Report preview" }).matches(":disabled")).toBe(false);
   });
 
   it("hides the update window when no version change has been observed", () => {
@@ -104,7 +223,6 @@ describe("DiagnosticsReviewDialog", () => {
     const onSave = vi.fn();
     renderDialog(updatedPayload, onSave);
     fireEvent.change(timeWindowSelect(), { target: { value: "update" } });
-    fireEvent.click(screen.getByRole("button", { name: "Preview the report" }));
 
     const preview = screen.getByLabelText("Report preview").textContent ?? "";
     expect(preview).toContain("after-update");

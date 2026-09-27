@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import {
   SECTION_LABELS,
   applyReplacements,
+  applyReplacementsCounted,
   filterLogEntriesByTime,
   filterSections,
   PREBUILT_REDACTIONS,
@@ -47,6 +48,24 @@ describe("applyReplacements", () => {
       { find: "bar", replace: "baz" },
     ];
     expect(applyReplacements("foo", rules)).toBe("baz");
+  });
+});
+
+describe("applyReplacementsCounted", () => {
+  const rules = [
+    { kind: "regex" as const, find: "\\d+", replace: "#" },
+    { find: "cat", replace: "dog" },
+    { find: "", replace: "x" },
+    { kind: "regex" as const, find: "(", replace: "x" },
+  ];
+
+  it("produces exactly what applyReplacements produces", () => {
+    const input = "cat 12 cat 3 concat";
+    expect(applyReplacementsCounted(input, rules).output).toBe(applyReplacements(input, rules));
+  });
+
+  it("counts each rule's matches in order, and zero for skipped or invalid rules", () => {
+    expect(applyReplacementsCounted("cat 12 cat 3 concat", rules).counts).toEqual([2, 3, 0, 0]);
   });
 });
 

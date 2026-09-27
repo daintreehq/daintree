@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 
 interface HighlightedTextProps {
@@ -8,9 +9,19 @@ interface HighlightedTextProps {
    * so nothing here is mutated in place.
    */
   indices: readonly (readonly [number, number])[] | undefined;
+  /**
+   * The band's fill. Search results keep the light default; a surface whose
+   * bands are the thing being checked (the diagnostics preview's replacements)
+   * can ask for a heavier neutral one.
+   */
+  bandClassName?: string;
 }
 
-export function HighlightedText({ text, indices }: HighlightedTextProps) {
+export function HighlightedText({
+  text,
+  indices,
+  bandClassName = "bg-overlay-medium",
+}: HighlightedTextProps) {
   if (!indices?.length) return <>{text}</>;
   // Merge adjacent and overlapping ranges so a contiguous match renders as a
   // single span (sub-pixel gaps otherwise appear between adjacent spans). Fuse
@@ -44,7 +55,7 @@ export function HighlightedText({ text, indices }: HighlightedTextProps) {
       // no metrics, and it is the same idiom document search already uses in
       // the terminal, diff and code viewers, which keep the
       // `search-highlight-*` tokens for exactly that job.
-      <span key={i} className="bg-overlay-medium text-text-primary">
+      <span key={i} className={cn(bandClassName, "text-text-primary")}>
         {text.substring(start, end + 1)}
       </span>
     );
