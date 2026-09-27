@@ -547,7 +547,7 @@ function PanelHeaderComponent({
   const handleMoveToWorktreeSelect = useCallback(() => {
     pendingMovePickerRef.current = id;
   }, [id]);
-  const handleOverflowMenuOpenChange = useCallback((open: boolean) => {
+  const handleOverflowMenuOpenChange = (open: boolean) => {
     if (!open) return;
     setOverflowTooltipOpen(false);
     // A menu reopened inside its exit animation never unmounts, so the close
@@ -555,32 +555,29 @@ function PanelHeaderComponent({
     // open the picker on some later, unrelated close.
     pendingMovePickerRef.current = null;
     pendingMenuDispatchRef.current = null;
-  }, []);
-  const handleOverflowMenuCloseAutoFocus = useCallback(
-    (event: Event) => {
-      const pendingDispatch = pendingMenuDispatchRef.current;
-      pendingMenuDispatchRef.current = null;
-      if (pendingDispatch !== null) {
-        // Left to the menu primitive's own restore (ringless for a pointer,
-        // ringed for the keyboard), then dispatched once focus is back.
-        setTimeout(() => {
-          void actionService.dispatch(pendingDispatch.actionId, pendingDispatch.args, {
-            source: "menu",
-          });
-        }, AFTER_MENU_FOCUS_RESTORE_MS);
-        return;
-      }
-      const pendingPanelId = pendingMovePickerRef.current;
-      pendingMovePickerRef.current = null;
-      if (pendingPanelId === null || pendingPanelId !== id) return;
-      // The picker takes focus into its search field; returning it to the
-      // button first would only flash a ring on the way.
-      event.preventDefault();
-      setHasOpenedMovePicker(true);
-      setMovePickerPanelId(id);
-    },
-    [id]
-  );
+  };
+  const handleOverflowMenuCloseAutoFocus = (event: Event) => {
+    const pendingDispatch = pendingMenuDispatchRef.current;
+    pendingMenuDispatchRef.current = null;
+    if (pendingDispatch !== null) {
+      // Left to the menu primitive's own restore (ringless for a pointer,
+      // ringed for the keyboard), then dispatched once focus is back.
+      setTimeout(() => {
+        void actionService.dispatch(pendingDispatch.actionId, pendingDispatch.args, {
+          source: "menu",
+        });
+      }, AFTER_MENU_FOCUS_RESTORE_MS);
+      return;
+    }
+    const pendingPanelId = pendingMovePickerRef.current;
+    pendingMovePickerRef.current = null;
+    if (pendingPanelId === null || pendingPanelId !== id) return;
+    // The picker takes focus into its search field; returning it to the
+    // button first would only flash a ring on the way.
+    event.preventDefault();
+    setHasOpenedMovePicker(true);
+    setMovePickerPanelId(id);
+  };
 
   // The same list the right-click menu renders for these kinds (#12606), so
   // the two menus offer one set of panel commands.
