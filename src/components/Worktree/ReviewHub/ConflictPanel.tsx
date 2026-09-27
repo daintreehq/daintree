@@ -420,6 +420,14 @@ export function ConflictPanel({
   // `git add` stages marker text as happily as a resolution. Re-read the file
   // first and make leftover markers — or a re-read that failed — a deliberate
   // choice rather than something staged silently.
+  const isDeletionConflict = useCallback(
+    (filePath: string) => {
+      const xy = status.conflictedFiles.find((f) => f.path === filePath)?.xy ?? "";
+      return xy.includes("D");
+    },
+    [status.conflictedFiles]
+  );
+
   const handleMarkResolvedClick = useCallback(
     async (filePath: string) => {
       const handOffFocus = rowHasFocus(filePath);
@@ -427,10 +435,10 @@ export function ConflictPanel({
       let hunkCount: number | null;
       try {
         const [entry] = await window.electron.git.scanConflictMarkers(worktreePath, [filePath]);
-        // A missing entry is as unknown as a thrown read. A `null` count is
-        // the scanner saying there's no text to check — the file is deleted,
-        // binary or oversized — so nothing textual can be staged by mistake.
-        hunkCount = entry ? (entry.hunkCount ?? 0) : null;
+        // The scanner answers `null` for any file it skipped. For a deletion
+        // conflict that means there is no file to hold markers; for anything
+        // else (oversized, unreadable) it means nobody looked.
+        hunkCount = entry?.hunkCount ?? (isDeletionConflict(filePath) ? 0 : null);
       } catch {
         hunkCount = null;
       } finally {
@@ -442,7 +450,7 @@ export function ConflictPanel({
       }
       await markResolved(filePath, handOffFocus);
     },
-    [worktreePath, markResolved]
+    [worktreePath, markResolved, isDeletionConflict]
   );
 
   const handleCheckoutSide = useCallback(
@@ -703,7 +711,7 @@ export function ConflictPanel({
                     <TruncatedTooltip content={file.path}>
                       <div className="flex-1 min-w-0 flex items-baseline font-mono text-2xs">
                         {dir && (
-                          <PathTail className="min-w-0 text-text-muted">{`${dir}/`}</PathTail>
+                          <PathTail className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
                         )}
                         <span className="shrink-0 max-w-full truncate text-text-secondary">
                           {base}
@@ -792,10 +800,9 @@ export function ConflictPanel({
           pendingMarkerConfirm ? (
             pendingMarkerConfirm.hunkCount === null ? (
               <span>
-                Couldn&apos;t re-read{" "}
-                <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> to
-                check for leftover conflict markers. Marking it resolved stages the file exactly as
-                it is.
+                Couldn&apos;t check{" "}
+                <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> for
+                leftover conflict markers. Marking it resolved stages the file exactly as it is.
               </span>
             ) : (
               <span>
