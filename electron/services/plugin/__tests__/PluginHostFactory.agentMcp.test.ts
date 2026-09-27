@@ -247,6 +247,12 @@ describe("host.mcp.registerTools", () => {
       ["over the tool budget", "data", tooMany, /at most/],
       ["for a bad tool name", "data", { ListTransactions: tool() }, /must match/],
       [
+        "for a plugin's own read-only claim",
+        "data",
+        { list: tool({ annotations: { readOnlyHint: true } as never }) },
+        /only the host may mark a tool read-only/,
+      ],
+      [
         "for an oversized description",
         "data",
         { list: tool({ description: "x".repeat(AGENT_MCP_MAX_DESCRIPTION_BYTES + 1) }) },

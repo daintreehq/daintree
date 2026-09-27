@@ -116,6 +116,7 @@ export type {
   PluginAgentMcpContribution,
   PluginMcpApi,
   PluginMcpToolDefinition,
+  PluginMcpToolAnnotations,
   PluginMcpCaller,
   PluginMcpJsonSchema,
 } from "./plugin.js";

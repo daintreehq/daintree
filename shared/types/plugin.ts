@@ -780,6 +780,23 @@ export interface PluginMcpCaller {
 export type PluginMcpJsonSchema = { type: "object" } & Record<string, unknown>;
 
 /**
+ * The MCP tool annotations a plugin may declare. They are hints for the agent
+ * client, advertised as written and never checked against what `execute` does;
+ * an omitted hint means the MCP default (destructive, non-idempotent,
+ * open-world). `readOnlyHint` is deliberately absent: some clients run a
+ * read-only tool without asking, so only the host may make that claim, and a
+ * roster declaring it is rejected.
+ */
+export interface PluginMcpToolAnnotations {
+  /** `false` when the tool only adds and never deletes or overwrites. */
+  destructiveHint?: boolean;
+  /** `true` when repeating a call with the same arguments has no further effect. */
+  idempotentHint?: boolean;
+  /** `false` when the tool touches only a closed set of things, such as this project's own data. */
+  openWorldHint?: boolean;
+}
+
+/**
  * One tool on an `agentMcp` endpoint. Both schemas are compiled at
  * registration. `execute` receives the arguments the agent sent, already
  * checked against `inputSchema` and never coerced, defaulted or stripped; a
@@ -793,6 +810,8 @@ export interface PluginMcpToolDefinition {
   description: string;
   inputSchema: PluginMcpJsonSchema;
   outputSchema?: PluginMcpJsonSchema;
+  /** MCP tool annotations advertised on `tools/list`. See {@link PluginMcpToolAnnotations}. */
+  annotations?: PluginMcpToolAnnotations;
   execute(
     args: Record<string, unknown>,
     caller: PluginMcpCaller,

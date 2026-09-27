@@ -35,6 +35,7 @@ import type {
   PluginFsWriteOptions,
   PluginMcpCaller,
   PluginMcpJsonSchema,
+  PluginMcpToolAnnotations,
   PluginSendToAgentOptions,
 } from "./plugin.js";
 
@@ -421,6 +422,7 @@ export interface RegisterMcpToolsParams {
       description: string;
       inputSchema: PluginMcpJsonSchema;
       outputSchema?: PluginMcpJsonSchema;
+      annotations?: PluginMcpToolAnnotations;
     }
   >;
 }

@@ -198,7 +198,13 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       description: tool.description,
       inputSchema: tool.inputSchema,
       ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
-      ...(tool.readOnly === true ? { annotations: { readOnlyHint: true } } : {}),
+      // A host read-only tool carries only that claim; the plugin's own hints
+      // never include it (validateTools rejects a roster that tries).
+      ...(tool.readOnly === true
+        ? { annotations: { readOnlyHint: true } }
+        : tool.annotations !== undefined
+          ? { annotations: { ...tool.annotations } }
+          : {}),
     }));
     return { tools };
   });

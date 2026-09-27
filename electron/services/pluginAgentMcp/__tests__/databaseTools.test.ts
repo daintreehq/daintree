@@ -71,7 +71,10 @@ describe("database tool descriptors", () => {
       DATABASE_TOOL_DESCRIPTORS.map((d) => d.name)
     );
     const roster = Object.fromEntries(
-      DATABASE_TOOL_DESCRIPTORS.map((d) => [d.name, { ...d, execute: () => null }])
+      DATABASE_TOOL_DESCRIPTORS.map(({ readOnly: _readOnly, ...d }) => [
+        d.name,
+        { ...d, execute: () => null },
+      ])
     );
     expect(() => validateAgentMcpTools(roster)).toThrow(/reserved/);
   });

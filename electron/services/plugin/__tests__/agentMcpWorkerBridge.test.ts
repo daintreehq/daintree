@@ -155,6 +155,56 @@ describe("agent MCP over the worker bridge", () => {
     expect(workerSignal.aborted).toBe(false);
   });
 
+  it("carries declared annotations across the port, explicit false included", async () => {
+    const { host, proxy } = makeConnectedPair();
+    await proxy.host.mcp.registerTools("data", {
+      add_row: {
+        description: "Adds a row.",
+        inputSchema: { type: "object" },
+        annotations: { destructiveHint: false, idempotentHint: true },
+        execute: () => null,
+      },
+    });
+    await flush();
+
+    expect(host.rosters[0].tools.add_row.annotations).toEqual({
+      destructiveHint: false,
+      idempotentHint: true,
+    });
+  });
+
+  it("rejects a read-only claim in the worker before anything crosses the port", async () => {
+    const { host, proxy } = makeConnectedPair();
+    expect(() =>
+      proxy.host.mcp.registerTools("data", {
+        peek: {
+          description: "Reads.",
+          inputSchema: { type: "object" },
+          annotations: { readOnlyHint: true } as never,
+          execute: () => null,
+        },
+      })
+    ).toThrow(/only the host may mark a tool read-only/);
+    await flush();
+
+    expect(host.mcp.registerTools).not.toHaveBeenCalled();
+  });
+
+  it("hands main whatever annotations arrived, for the host's validator to judge", async () => {
+    const { host, workerHost } = makeBridge();
+    const forged = { readOnlyHint: true };
+    workerHost.emit(
+      "worker-message",
+      registerNotify({ peek: { ...WIRE_TOOL, readOnly: true, annotations: forged } })
+    );
+    await flush();
+
+    // A top-level claim never survives the rebuild; one inside annotations is
+    // passed on so the host's roster validation rejects it by name.
+    expect(host.rosters[0].tools.peek).not.toHaveProperty("readOnly");
+    expect(host.rosters[0].tools.peek.annotations).toEqual(forged);
+  });
+
   it("carries only the caller descriptor's own fields into the worker", async () => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", registerNotify({ list_rows: WIRE_TOOL }));

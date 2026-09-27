@@ -1225,7 +1225,7 @@ export class PluginDevWorkerMainBridge {
           if (!entry || typeof entry !== "object") {
             throw new Error(`mcp.registerTools: tool "${toolName}" is malformed`);
           }
-          const { description, inputSchema, outputSchema } = entry as Partial<
+          const { description, inputSchema, outputSchema, annotations } = entry as Partial<
             RegisterMcpToolsParams["tools"][string]
           >;
           // Descriptor fields are handed to the host as the worker sent them —
@@ -1234,6 +1234,7 @@ export class PluginDevWorkerMainBridge {
             description: description as string,
             inputSchema: inputSchema as PluginMcpToolDefinition["inputSchema"],
             ...(outputSchema !== undefined ? { outputSchema } : {}),
+            ...(annotations !== undefined ? { annotations } : {}),
             execute: (args, caller, signal) => {
               // Fenced to the generation that registered it. Retirement unbinds
               // the roster, but a caller that looked it up just before can still

@@ -41,10 +41,47 @@ describe("validateAgentMcpTools", () => {
     for (const descriptor of descriptors) expect(descriptor).not.toHaveProperty("execute");
   });
 
-  it("never lets a plugin's own roster claim to be read-only", () => {
-    const [descriptor] = validateAgentMcpTools({ drop_everything: tool({ readOnly: true }) });
+  it.each([
+    [{ readOnly: true }, /readOnly is not allowed/],
+    [{ readOnlyHint: false }, /readOnlyHint is not allowed/],
+    [{ annotations: { readOnlyHint: true } }, /annotations\.readOnlyHint is not allowed/],
+    [{ annotations: { readOnly: true } }, /annotations\.readOnly is not allowed/],
+  ])("rejects a plugin's own read-only claim %j", (overrides, message) => {
+    expect(() => validateAgentMcpTools({ drop_everything: tool(overrides) })).toThrow(message);
+  });
 
-    expect(descriptor).not.toHaveProperty("readOnly");
+  it("keeps the declared hints, including explicit false, in a frozen detached copy", () => {
+    const annotations: Record<string, unknown> = {
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: undefined,
+    };
+    const [descriptor] = validateAgentMcpTools({
+      add_entry: tool({ annotations, outputSchema: { type: "object" } }),
+    });
+
+    annotations.destructiveHint = true;
+
+    expect(descriptor!.annotations).toEqual({ destructiveHint: false, idempotentHint: true });
+    expect(descriptor!.annotations).not.toHaveProperty("openWorldHint");
+    expect(Object.isFrozen(descriptor!.annotations)).toBe(true);
+  });
+
+  it("omits annotations when none, or only empty ones, are declared", () => {
+    const [bare, empty] = validateAgentMcpTools({ bare: tool(), empty: tool({ annotations: {} }) });
+
+    expect(bare).not.toHaveProperty("annotations");
+    expect(empty).not.toHaveProperty("annotations");
+  });
+
+  it.each([
+    [null, /must be a plain object/],
+    [[true], /must be a plain object/],
+    [{ destructiveHint: "yes" }, /annotations\.destructiveHint must be a boolean/],
+    [{ idempotentHint: null }, /annotations\.idempotentHint must be a boolean/],
+    [{ title: "Ledger" }, /annotations\.title is not supported/],
+  ])("rejects the annotations %j", (annotations, message) => {
+    expect(() => validateAgentMcpTools({ list: tool({ annotations }) })).toThrow(message);
   });
 
   it("detaches advertised schemas from the plugin's objects", () => {
