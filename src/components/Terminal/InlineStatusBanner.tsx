@@ -237,6 +237,34 @@ function ContextLine({ text, truncate }: { text: string; truncate: "end" | "midd
   );
 }
 
+/**
+ * The first tabbable at or after where the banner stood, else the last one
+ * before it. Either neighbour may have left in the same commit, so each is
+ * only trusted while it is still in the document.
+ */
+function nearestSurvivor(
+  candidates: HTMLElement[],
+  next: Element | null,
+  prev: Element | null
+): HTMLElement | undefined {
+  if (next?.isConnected) {
+    const after = candidates.find(
+      (c) =>
+        next.contains(c) || !!(next.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING)
+    );
+    if (after) return after;
+  }
+  if (prev?.isConnected) {
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const c = candidates[i]!;
+      if (prev.contains(c) || prev.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_PRECEDING) {
+        return c;
+      }
+    }
+  }
+  return undefined;
+}
+
 export function InlineStatusBanner({
   icon,
   title,
@@ -357,12 +385,23 @@ export function InlineStatusBanner({
   // chrome behind an open dialog. Captured on focus, since the ref is gone by
   // the time the unmount cleanup runs.
   const focusHomeRef = useRef<HTMLElement | null>(null);
+  // The banner's neighbours, so a banner in a stack hands focus to whatever
+  // now stands where it did rather than to the top of its container — the
+  // user keeps their place instead of being thrown back up the stack.
+  const focusNeighboursRef = useRef<{ next: Element | null; prev: Element | null }>({
+    next: null,
+    prev: null,
+  });
   const handleFocusCapture = (e: React.FocusEvent) => {
     const root = rootRef.current;
     if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return;
     focusWithinRef.current = true;
     focusHomeRef.current =
       root.closest<HTMLElement>("[role='dialog'], [role='alertdialog']") ?? root.parentElement;
+    focusNeighboursRef.current = {
+      next: root.nextElementSibling,
+      prev: root.previousElementSibling,
+    };
   };
   const handleBlurCapture = (e: React.FocusEvent) => {
     const root = rootRef.current;
@@ -381,10 +420,11 @@ export function InlineStatusBanner({
     () => () => {
       if (!focusWithinRef.current) return;
       const home = focusHomeRef.current;
+      const { next, prev } = focusNeighboursRef.current;
       requestAnimationFrame(() => {
         if (document.activeElement && document.activeElement !== document.body) return;
-        const nearest = home?.isConnected ? getVisibleTabbableElements(home)[0] : undefined;
-        restoreFocusTo(nearest);
+        const candidates = home?.isConnected ? getVisibleTabbableElements(home) : [];
+        restoreFocusTo(nearestSurvivor(candidates, next, prev) ?? candidates[0]);
       });
     },
     []

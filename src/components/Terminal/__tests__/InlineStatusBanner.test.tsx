@@ -879,6 +879,57 @@ describe("InlineStatusBanner family invariants", () => {
 });
 
 describe("InlineStatusBanner focus handoff on any removal", () => {
+  it("keeps the user's place in a stack: focus goes to the survivor after, else before", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      function Stack() {
+        const [open, setOpen] = useState(["a", "b", "c", "d"]);
+        return (
+          <div>
+            {open.map((id) => (
+              <InlineStatusBanner
+                key={id}
+                title={id}
+                severity="warning"
+                animated={false}
+                closeAriaLabel={`Dismiss ${id}`}
+                onClose={() => setOpen((ids) => ids.filter((x) => x !== id))}
+              />
+            ))}
+          </div>
+        );
+      }
+      const view = render(<Stack />);
+      const dismiss = (id: string) => screen.getByRole("button", { name: `Dismiss ${id}` });
+
+      // The middle one hands focus down to the banner that now stands in its place.
+      dismiss("b").focus();
+      fireEvent.click(dismiss("b"));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(dismiss("c"));
+
+      // The last one has nothing after it, so focus steps back up — not to the top.
+      dismiss("d").focus();
+      fireEvent.click(dismiss("d"));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(dismiss("c"));
+      view.unmount();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("hands focus back when an action, not the ×, unmounts the banner", () => {
     vi.useFakeTimers();
     const raf = vi
