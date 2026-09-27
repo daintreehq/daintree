@@ -903,6 +903,130 @@ describe("HttpLifecycle", () => {
     });
   });
 
+  describe("buildSessionServerDeps — the assistant's pinned-view read scope (#12883)", () => {
+    type ScopeDeps = { isTerminalInPinnedWorkspace?: (terminalId: string) => boolean };
+    const buildDeps = (lc: HttpLifecycle, sessionId: string): ScopeDeps =>
+      (
+        lc as unknown as { buildSessionServerDeps: (id: string) => ScopeDeps }
+      ).buildSessionServerDeps(sessionId);
+
+    const PIN = 404;
+    let view: { isDestroyed: () => boolean; send: () => void };
+    let workspaceOfView: string | null;
+    let terminalProjects: Map<string, string>;
+
+    function setup(options: { pinned?: boolean; registry?: unknown } = {}) {
+      const deps = fakeDeps();
+      deps.getAgentPaneProjectId = (id) => terminalProjects.get(id) ?? null;
+      if (options.pinned !== false) deps.sessionStore.sessionWebContentsMap.set("session-1", PIN);
+      const lc = new HttpLifecycle(deps);
+      const getWorkspaceRefForWebContents = vi.fn((id: number) =>
+        id === PIN && workspaceOfView !== null
+          ? { kind: "project", workspaceId: workspaceOfView, workspacePath: "/p" }
+          : null
+      );
+      (lc as unknown as { registry: unknown }).registry =
+        "registry" in options
+          ? options.registry
+          : {
+              getByWebContentsId: (id: number) =>
+                id === PIN
+                  ? { services: { projectViewManager: { getWorkspaceRefForWebContents } } }
+                  : undefined,
+            };
+      return { deps, lc, getWorkspaceRefForWebContents };
+    }
+
+    beforeEach(() => {
+      view = { isDestroyed: () => false, send: () => undefined };
+      mockWebContentsById.set(PIN, view);
+      workspaceOfView = "ws-a";
+      terminalProjects = new Map([
+        ["mine", "ws-a"],
+        ["theirs", "ws-b"],
+      ]);
+    });
+
+    afterEach(() => {
+      mockWebContentsById.delete(PIN);
+    });
+
+    it("admits a terminal in the pinned view's workspace and nothing else", () => {
+      const { lc, getWorkspaceRefForWebContents } = setup();
+      const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
+
+      expect(inView("mine")).toBe(true);
+      expect(inView("theirs")).toBe(false);
+      expect(inView("untracked")).toBe(false);
+      expect(getWorkspaceRefForWebContents).toHaveBeenCalledWith(PIN);
+    });
+
+    it("refuses an unpinned session", () => {
+      const { lc } = setup({ pinned: false });
+      expect(buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+    });
+
+    it("rechecks on every call, so a pin dropped after build refuses", () => {
+      const { deps, lc } = setup();
+      const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
+      expect(inView("mine")).toBe(true);
+
+      deps.sessionStore.sessionWebContentsMap.delete("session-1");
+
+      expect(inView("mine")).toBe(false);
+    });
+
+    it("refuses once the pinned view is destroyed", () => {
+      const { lc } = setup();
+      const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
+
+      view.isDestroyed = () => true;
+
+      expect(inView("mine")).toBe(false);
+    });
+
+    it("refuses a recycled webContents id, even one showing the same workspace", () => {
+      const { lc } = setup();
+      const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
+
+      mockWebContentsById.set(PIN, { isDestroyed: () => false, send: () => undefined });
+
+      expect(inView("mine")).toBe(false);
+    });
+
+    it("refuses when the view's workspace is unknown, rather than matching an unknown terminal", () => {
+      workspaceOfView = null;
+      const { lc } = setup();
+      const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
+
+      expect(inView("mine")).toBe(false);
+      expect(inView("untracked")).toBe(false);
+    });
+
+    it("refuses without a registry, and when the lookup throws", () => {
+      const noRegistry = setup({ registry: null });
+      expect(buildDeps(noRegistry.lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(
+        false
+      );
+
+      const throwing = setup({
+        registry: {
+          getByWebContentsId: () => {
+            throw new Error("window torn down");
+          },
+        },
+      });
+      expect(buildDeps(throwing.lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+    });
+
+    it("refuses when main cannot place terminals at all", () => {
+      const { deps, lc } = setup();
+      delete deps.getAgentPaneProjectId;
+
+      expect(buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+    });
+  });
+
   describe("buildSessionServerDeps — turnId snapshot stamping (#10067)", () => {
     // Picked from the real dep contract rather than a `Record<string, unknown>`
     // carrier: this block is the only coverage of the closure's

@@ -179,6 +179,12 @@ export interface HttpLifecycleDeps {
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalAgentState?: import("./sessionServer.js").SessionServerDeps["readTerminalAgentState"];
+  /**
+   * The workspace an agent pane was spawned into, read off the pty-host's spawn
+   * tracking; `null` when main never tracked it or it backs the assistant
+   * overlay rather than a pane (#12883).
+   */
+  getAgentPaneProjectId?: (terminalId: string) => string | null;
   /** Terminal notices. Absent, `terminal.notifyWhenIdle` and `notify: true` answer not-eligible. */
   terminalNotify?: import("./terminalNotify.js").TerminalNotifyHandlers;
   replyWaiter?: Pick<import("./replyWaiter.js").ReplyWaiterService, "wait">;
@@ -1827,6 +1833,38 @@ export class HttpLifecycle {
     // here, before the closure, never inside it.
     const sessionOrigin = this.deps.sessionStore.getOrigin(sessionId);
 
+    // The view captured with the pin, so a webContents id recycled after the
+    // view is gone never resolves as the one the assistant was opened in.
+    const pinnedWebContents =
+      pinnedWebContentsId !== null ? webContentsModule.fromId(pinnedWebContentsId) : undefined;
+    /**
+     * Whether a terminal is in the workspace of this session's pinned view
+     * (#12883) — the whole boundary for the assistant's reads of panes it did
+     * not create, so every unknown refuses. Re-resolved per call rather than at
+     * build: the view can be torn down, or the pin dropped, while the session
+     * lives on. Only this view's own manager is asked; never the focused
+     * window's or the active project's.
+     */
+    const isTerminalInPinnedWorkspace = (terminalId: string): boolean => {
+      if (pinnedWebContentsId === null || !pinnedWebContents) return false;
+      try {
+        if (this.deps.sessionStore.sessionWebContentsMap.get(sessionId) !== pinnedWebContentsId) {
+          return false;
+        }
+        const live = webContentsModule.fromId(pinnedWebContentsId);
+        if (live !== pinnedWebContents || live.isDestroyed()) return false;
+        const workspaceId = this.registry
+          ?.getByWebContentsId(pinnedWebContentsId)
+          ?.services.projectViewManager?.getWorkspaceRefForWebContents(
+            pinnedWebContentsId
+          )?.workspaceId;
+        if (!workspaceId) return false;
+        return this.deps.getAgentPaneProjectId?.(terminalId) === workspaceId;
+      } catch {
+        return false;
+      }
+    };
+
     /**
      * A bound session whose workspace route is unwired must fail, never fall
      * through (#11789). The helpers are individually optional for the same
@@ -2180,6 +2218,7 @@ export class HttpLifecycle {
       ...(this.deps.readTerminalAgentState !== undefined
         ? { readTerminalAgentState: this.deps.readTerminalAgentState }
         : {}),
+      isTerminalInPinnedWorkspace,
       ...(this.deps.replyWaiter !== undefined ? { replyWaiter: this.deps.replyWaiter } : {}),
       ...(this.deps.terminalNotify !== undefined
         ? { terminalNotify: this.deps.terminalNotify }

@@ -1925,7 +1925,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Read the last reply an agent this connection launched or was handed wrote to its transcript, plus any unanswered tool calls such as a question and its options. Claude Code only. Says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
+      "Read the last reply an agent wrote to its transcript, plus unanswered tool calls such as a question and its options. Agents this connection launched or was handed; for Daintree's assistant, any in its project. Claude Code only. Not proof the agent is waiting; permission prompts show only on screen.",
     enabled: true,
     examples: [
       {
