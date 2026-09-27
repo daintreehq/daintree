@@ -6,8 +6,8 @@ import { CommandPicker } from "./CommandPicker";
 import { CommandBuilder } from "./CommandBuilder";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import type { CommandManifestEntry, CommandContext, CommandResult } from "@shared/types/commands";
 
 interface CommandPickerHostProps {
@@ -97,6 +97,10 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
     closeBuilder();
   }, [closeBuilder]);
 
+  const handleBuilderRetry = useCallback(() => {
+    if (activeCommand) void openBuilder(activeCommand, builderContext ?? context);
+  }, [activeCommand, builderContext, context, openBuilder]);
+
   return (
     <>
       <CommandPicker
@@ -114,9 +118,13 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
             <AppDialog.CloseButton />
           </AppDialog.Header>
           <AppDialog.Body>
-            <div className="flex flex-col items-center justify-center py-8 space-y-4">
-              <Spinner size="2xl" className="text-daintree-text/40" />
-              <p className="text-sm text-text-secondary">Loading command configuration…</p>
+            <div
+              className="flex flex-col items-center justify-center gap-3 py-8"
+              role="status"
+              aria-live="polite"
+            >
+              <Spinner size="lg" className="text-text-secondary" />
+              <p className="text-sm text-text-secondary">Loading command…</p>
             </div>
           </AppDialog.Body>
         </AppDialog>
@@ -129,13 +137,14 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
             <AppDialog.CloseButton />
           </AppDialog.Header>
           <AppDialog.Body>
-            <div className="flex flex-col items-center justify-center py-8 space-y-4">
-              <AlertCircle className="h-12 w-12 text-status-error" />
-              <div className="text-center">
-                <h3 className="text-lg font-medium text-text-primary">Failed to Load Command</h3>
-                <p className="text-sm text-text-secondary mt-1">{builderLoadError}</p>
-              </div>
-            </div>
+            <InlineStatusBanner
+              severity="error"
+              title="Couldn't load this command"
+              description={builderLoadError}
+              action={{ id: "retry", label: "Retry", onClick: handleBuilderRetry }}
+              animated={false}
+              className="rounded-[var(--radius-md)]"
+            />
           </AppDialog.Body>
           <AppDialog.Footer>
             <Button variant="contrast" onClick={handleBuilderCancel}>

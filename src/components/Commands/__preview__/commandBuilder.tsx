@@ -38,6 +38,8 @@ const requested = params.get("fixture");
 const fixture = isBuilderFixture(requested) ? requested : "create-issue";
 const outcome = params.get("outcome") ?? "success";
 const host = params.get("host");
+// Long enough that the running state renders before the result replaces it.
+const SETTLE_MS = 50;
 
 function Builder() {
   const data = useMemo(() => builderFixture(fixture), []);
@@ -50,7 +52,7 @@ function Builder() {
       setIsExecuting(true);
       setExecutionError(null);
       if (outcome === "pending") return new Promise<CommandResult>(() => {});
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
       setIsExecuting(false);
       if (outcome === "error") {
         setExecutionError(data.failure.error?.message ?? "Command failed");
@@ -84,7 +86,9 @@ function seedHost(mode: string) {
     builderSteps: null,
     isLoadingBuilder: mode === "loading",
     builderLoadError:
-      mode === "load-error" ? "Command github:create-issue is not registered" : null,
+      mode === "load-error"
+        ? "The builder request timed out. Check the app is still responding."
+        : null,
   });
 }
 

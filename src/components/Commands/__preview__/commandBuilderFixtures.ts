@@ -22,32 +22,30 @@ export function isBuilderFixture(value: string | null): value is BuilderFixture 
 const CREATE_ISSUE_STEPS: BuilderStep[] = [
   {
     id: "issue-details",
-    title: "Create GitHub Issue",
-    description:
-      "Create a well-structured issue that provides enough context for developers or AI agents to implement autonomously",
+    title: "Create a GitHub issue",
+    description: "Give it a title, an explanation, or both.",
+    submitLabel: "Create issue",
     fields: [
       {
         name: "title",
-        label: "Issue Title",
+        label: "Title",
         type: "text",
-        placeholder: "Optional - agent can generate from your explanation",
-        helpText: "Leave empty to let the agent generate a title from your explanation",
+        placeholder: "Add dark mode toggle to settings",
+        helpText: "Leave blank to use the first line of the explanation.",
       },
       {
         name: "body",
         label: "Explanation",
         type: "textarea",
-        placeholder: "Explain what you want to create an issue about...",
-        helpText:
-          "Describe the issue in natural language. The agent will interpret and format appropriately.",
+        placeholder: "What should change, and why",
+        helpText: "Becomes the issue body. Leave blank to use the title.",
       },
       {
         name: "labels",
         label: "Labels",
         type: "text",
         placeholder: "enhancement, ui",
-        helpText:
-          "Common labels: bug, enhancement, documentation, refactor, testing, ui, api, performance",
+        helpText: "Separate labels with commas.",
       },
     ],
   },
@@ -56,36 +54,34 @@ const CREATE_ISSUE_STEPS: BuilderStep[] = [
 const WORK_ISSUE_STEPS: BuilderStep[] = [
   {
     id: "issue",
-    title: "Work on GitHub Issue",
-    description:
-      "Create an isolated worktree for the issue. By default, the worktree is created in a sibling " +
-      "directory, allowing you to work on multiple issues simultaneously without conflicts.",
+    title: "Work on a GitHub issue",
+    description: "Creates a worktree for the issue beside this one and switches to it.",
+    submitLabel: "Create worktree",
     fields: [
       {
         name: "issueNumber",
-        label: "Issue Number",
+        label: "Issue number",
         type: "number",
-        placeholder: "e.g., 123",
-        validation: { min: 1, message: "Issue number must be a positive integer" },
-        helpText: "The GitHub issue number. Leave empty to let the agent help you find one.",
+        placeholder: "123",
+        validation: {
+          min: 1,
+          integer: true,
+          message: "Enter a whole issue number, like 123",
+        },
       },
       {
         name: "branchName",
-        label: "Branch Name (Optional)",
+        label: "Branch name",
         type: "text",
-        placeholder: "issue-1234-add-dark-mode",
-        helpText:
-          "Leave empty to auto-generate from issue title. Format: issue-{number}-{slugified-title}. " +
-          "If the branch already exists, a suffix will be added automatically.",
+        placeholder: "issue-123-add-dark-mode",
+        helpText: "Leave blank to name it from the issue title.",
       },
       {
         name: "baseBranch",
-        label: "Base Branch (Optional)",
+        label: "Base branch",
         type: "text",
         placeholder: "develop",
-        helpText:
-          "Branch to start from. Auto-detects: uses 'develop' if it exists, otherwise tries 'trunk', 'main', then 'master'. " +
-          "Override for hotfixes (use 'main') or feature branches (use specific branch).",
+        helpText: "Leave blank to use develop, trunk, main or master, whichever exists first.",
       },
     ],
   },
@@ -114,7 +110,10 @@ const WIZARD_STEPS: BuilderStep[] = [
         type: "text",
         placeholder: "spring-cleanup",
         helpText: "Lowercase letters, numbers and dashes.",
-        validation: { pattern: "^[a-z0-9-]+$", message: "Use lowercase letters, numbers and dashes" },
+        validation: {
+          pattern: "^[a-z0-9-]+$",
+          message: "Use lowercase letters, numbers and dashes",
+        },
       },
     ],
   },
@@ -141,6 +140,7 @@ const WIZARD_STEPS: BuilderStep[] = [
   {
     id: "confirm",
     title: "Notifications",
+    submitLabel: "Start rollout",
     description: "Who hears about it once the rollout settles.",
     fields: [
       {
@@ -185,7 +185,11 @@ export function builderFixture(fixture: BuilderFixture): BuilderFixtureData {
       return {
         command: CREATE_ISSUE,
         steps: CREATE_ISSUE_STEPS,
-        success: { success: true, message: "Issue #12482 created successfully" },
+        success: {
+          success: true,
+          message: "Issue #12482 created",
+          detail: "Command builder loses focus on Execute",
+        },
         failure: {
           success: false,
           error: {
@@ -200,8 +204,8 @@ export function builderFixture(fixture: BuilderFixture): BuilderFixtureData {
         steps: WORK_ISSUE_STEPS,
         success: {
           success: true,
-          message:
-            "Created worktree for issue #12391: Command builder success state restates the dialog title instead of naming the result",
+          message: "Worktree created for #12391",
+          detail: "Switched to issue-12391-command-builder-success-state-restates-the-dialog-title",
         },
         failure: {
           success: false,
@@ -212,7 +216,11 @@ export function builderFixture(fixture: BuilderFixture): BuilderFixtureData {
       return {
         command: WIZARD_COMMAND,
         steps: WIZARD_STEPS,
-        success: { success: true, message: "spring-cleanup is rolling out to Canary" },
+        success: {
+          success: true,
+          message: "Rollout started",
+          detail: "spring-cleanup is going to Canary first",
+        },
         failure: {
           success: false,
           error: { code: "EXECUTION_ERROR", message: "Deploy service returned 503" },

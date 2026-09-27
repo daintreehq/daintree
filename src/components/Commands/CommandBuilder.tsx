@@ -9,15 +9,16 @@ import type {
   BuilderStep,
   BuilderField,
 } from "@shared/types/commands";
-import { ChevronLeft, ChevronRight, AlertCircle, CheckCircle } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
+import { Check, ChevronLeft, ChevronRight, AlertCircle } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import {
   FIELD_FOCUS,
   FIELD_INPUT,
   FIELD_SURFACE,
   FormGrid,
   FormRow,
-} from "@/components/Worktree/views";
+} from "@/components/Worktree/views/WorktreeFormLayout";
 
 interface CommandBuilderProps {
   command: CommandManifestEntry;
@@ -72,6 +73,9 @@ function validateField(field: BuilderField, value: unknown): string | null {
     if (isNaN(numValue)) {
       return "Must be a valid number";
     }
+    if (validation.integer && !Number.isInteger(numValue)) {
+      return validation.message ?? "Must be a whole number";
+    }
     if (validation.min !== undefined && numValue < validation.min) {
       return validation.message ?? `Minimum value is ${validation.min}`;
     }
@@ -111,7 +115,7 @@ function builderFieldHint({
   }
   if (helpText) {
     return (
-      <p id={helpId} className="text-xs text-text-muted">
+      <p id={helpId} className="text-xs text-text-secondary">
         {helpText}
       </p>
     );
@@ -192,7 +196,9 @@ function BuilderTextareaField({
         className={cn(
           FIELD_SURFACE,
           FIELD_FOCUS,
-          "w-full px-2.5 py-2 text-sm resize-y min-h-[100px]",
+          // `block`: an inline textarea sits on the text baseline and leaves a
+          // descender gap beneath it, pushing its hint further off than an input's.
+          "block w-full px-2.5 py-2 text-sm resize-y min-h-[100px]",
           "text-text-primary placeholder:text-text-placeholder",
           error && "border-status-error"
         )}
@@ -229,9 +235,16 @@ function BuilderSelectField({
         onChange={(e) => onChange(e.target.value)}
         aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
         aria-invalid={error ? "true" : undefined}
-        className={cn(FIELD_INPUT, "pr-8", error && "border-status-error")}
+        className={cn(
+          FIELD_INPUT,
+          "pr-8",
+          // The empty option is a prompt, not a choice: it reads as placeholder
+          // ink until something is picked.
+          value === "" && "text-text-placeholder",
+          error && "border-status-error"
+        )}
       >
-        <option value="">{field.placeholder ?? "Select an option..."}</option>
+        <option value="">{field.placeholder ?? "Choose an option"}</option>
         {field.options?.map((opt) => (
           <option key={opt.value} value={opt.value}>
             {opt.label}
@@ -259,26 +272,18 @@ function BuilderCheckboxField({
       label={field.label}
       htmlFor={inputId}
       labelClassName={BUILDER_LABEL}
-      hint={
-        field.helpText && (
-          <p id={helpId} className="text-xs text-text-muted">
-            {field.helpText}
-          </p>
-        )
-      }
+      hint={builderFieldHint({ helpText: field.helpText, errorId: "", helpId })}
     >
-      <input
-        id={inputId}
-        type="checkbox"
-        checked={value}
-        onChange={(e) => onChange(e.target.checked)}
-        aria-describedby={field.helpText ? helpId : undefined}
-        className={cn(
-          "h-4 w-4 rounded border-border-default bg-surface-canvas",
-          "text-accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-          "cursor-pointer"
-        )}
-      />
+      {/* The row is the box's height, not a 32px control's, so the box sits on
+          the label's line rather than floating in a taller cell. */}
+      <div className="flex h-8 items-center">
+        <Checkbox
+          id={inputId}
+          checked={value}
+          onCheckedChange={(checked) => onChange(checked === true)}
+          aria-describedby={field.helpText ? helpId : undefined}
+        />
+      </div>
     </FormRow>
   );
 }
@@ -330,6 +335,8 @@ function BuilderFieldRenderer({
   }
 }
 
+const DEFAULT_SUBMIT_LABEL = "Run";
+
 export function CommandBuilder({
   command,
   steps,
@@ -343,15 +350,23 @@ export function CommandBuilder({
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [executionResult, setExecutionResult] = useState<CommandResult | null>(null);
+  // Bumped on every failed validation, so the effect that moves focus to the
+  // first invalid field runs again even when the same field fails twice.
+  const [validationAttempt, setValidationAttempt] = useState(0);
+  const formRef = useRef<HTMLFieldSetElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const lastFocusedStepRef = useRef(0);
 
   const currentStep = steps[currentStepIndex];
   const isFirstStep = currentStepIndex === 0;
   const isLastStep = currentStepIndex === steps.length - 1;
   const hasMultipleSteps = steps.length > 1;
   const hasEmptySteps = steps.length === 0;
+  const submitLabel = steps[steps.length - 1]?.submitLabel ?? DEFAULT_SUBMIT_LABEL;
 
   useEffect(() => {
     setCurrentStepIndex(0);
+    lastFocusedStepRef.current = 0;
     // Initialize checkbox fields to false to ensure explicit boolean values
     const initialData: Record<string, unknown> = {};
     for (const step of steps) {
@@ -366,6 +381,30 @@ export function CommandBuilder({
     setExecutionResult(null);
   }, [command.id, steps]);
 
+  // Back and Next swap the fields out from under the button that was pressed,
+  // and on the last step swap the button itself. Land on the new step's first
+  // field so the keyboard continues from the top of what just appeared. The
+  // dialog places focus for the first step on open.
+  useEffect(() => {
+    if (lastFocusedStepRef.current === currentStepIndex) return;
+    lastFocusedStepRef.current = currentStepIndex;
+    formRef.current
+      ?.querySelector<HTMLElement>("input, textarea, select, button:not([disabled])")
+      ?.focus();
+  }, [currentStepIndex]);
+
+  useEffect(() => {
+    if (validationAttempt === 0) return;
+    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+  }, [validationAttempt]);
+
+  const showSuccessState = executionResult?.success === true;
+
+  // The form, and the button that ran it, are gone once the result shows.
+  useEffect(() => {
+    if (showSuccessState) closeRef.current?.focus();
+  }, [showSuccessState]);
+
   const validateCurrentStep = useCallback((): boolean => {
     if (!currentStep) return true;
 
@@ -378,7 +417,9 @@ export function CommandBuilder({
     }
 
     setFieldErrors(errors);
-    return Object.keys(errors).length === 0;
+    const valid = Object.keys(errors).length === 0;
+    if (!valid) setValidationAttempt((n) => n + 1);
+    return valid;
   }, [currentStep, formData]);
 
   const handleFieldChange = useCallback(
@@ -388,9 +429,14 @@ export function CommandBuilder({
         coercedValue = Number(value);
       }
       setFormData((prev) => ({ ...prev, [fieldName]: coercedValue }));
+      // A field already marked wrong is re-checked as it's edited, so the error
+      // clears when the value is fixed and not merely when it's touched.
       setFieldErrors((prev) => {
+        if (!(fieldName in prev)) return prev;
         const next = { ...prev };
-        delete next[fieldName];
+        const error = field ? validateField(field, coercedValue) : null;
+        if (error) next[fieldName] = error;
+        else delete next[fieldName];
         return next;
       });
     },
@@ -416,7 +462,7 @@ export function CommandBuilder({
   }, [isLastStep, validateCurrentStep]);
 
   const handleExecute = useCallback(async () => {
-    if (!validateCurrentStep()) return;
+    if (isExecuting || !validateCurrentStep()) return;
 
     // Normalize empty strings to undefined so agents see "unset" rather than "provided empty"
     const normalizedData: Record<string, unknown> = {};
@@ -433,7 +479,7 @@ export function CommandBuilder({
 
     const result = await onExecute(normalizedData);
     setExecutionResult(result);
-  }, [formData, onExecute, validateCurrentStep]);
+  }, [formData, isExecuting, onExecute, validateCurrentStep]);
 
   const handleClose = useCallback(() => {
     if (executionResult?.success) {
@@ -443,130 +489,143 @@ export function CommandBuilder({
     }
   }, [executionResult, isExecuting, onCancel]);
 
-  const showSuccessState = executionResult?.success;
-
   return (
     <AppDialog isOpen={true} onClose={handleClose} size="md" dismissible={!isExecuting}>
       <AppDialog.Header>
-        <div className="flex items-center gap-3">
-          <AppDialog.Title>{command.label}</AppDialog.Title>
-          {hasMultipleSteps && (
-            <span className="text-sm tabular-nums text-text-secondary">
-              Step {currentStepIndex + 1} of {steps.length}
-            </span>
-          )}
-        </div>
+        <AppDialog.Title>{command.label}</AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body>
         {showSuccessState ? (
-          <div className="flex flex-col items-center justify-center py-8 space-y-4">
-            <CheckCircle className="h-12 w-12 text-status-success" />
-            <div className="text-center">
-              <h3 className="text-lg font-medium text-text-primary">Command Executed</h3>
-              <p className="text-sm text-text-secondary mt-1">
-                {executionResult.message ?? "Command completed."}
-              </p>
+          <div
+            className="flex flex-col items-center gap-4 py-6 text-center"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-success/15">
+              <Check className="h-6 w-6 text-status-success" aria-hidden="true" />
+            </div>
+            <div className="max-w-full space-y-1">
+              <h3 className="text-base font-semibold text-text-primary break-words">
+                {executionResult.message ?? "Done"}
+              </h3>
+              {executionResult.detail && (
+                <p className="text-sm text-text-secondary break-words">{executionResult.detail}</p>
+              )}
             </div>
           </div>
         ) : hasEmptySteps ? (
-          <div className="flex flex-col items-center justify-center py-8 space-y-4">
-            <AlertCircle className="h-12 w-12 text-status-error" />
-            <div className="text-center">
-              <h3 className="text-lg font-medium text-text-primary">Configuration Error</h3>
-              <p className="text-sm text-text-secondary mt-1">
-                This command has no builder steps configured.
-              </p>
-            </div>
-          </div>
+          <InlineStatusBanner
+            severity="error"
+            title="This command isn't set up"
+            description="Its builder has no steps, so there's nothing to fill in. The command's author needs to add them."
+            animated={false}
+            className="rounded-[var(--radius-md)]"
+          />
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {currentStep && (
               <>
-                {currentStep.title && (
-                  <h3 className="text-base font-semibold text-text-primary">{currentStep.title}</h3>
+                {(hasMultipleSteps || currentStep.title || currentStep.description) && (
+                  <div className="space-y-1">
+                    {hasMultipleSteps && (
+                      <p className="text-xs tabular-nums text-text-secondary">
+                        Step {currentStepIndex + 1} of {steps.length}
+                      </p>
+                    )}
+                    {currentStep.title && (
+                      <h3 className="text-base font-semibold text-text-primary">
+                        {currentStep.title}
+                      </h3>
+                    )}
+                    {currentStep.description && (
+                      <p className="text-sm text-text-secondary">{currentStep.description}</p>
+                    )}
+                  </div>
                 )}
-                {currentStep.description && (
-                  <p className="text-sm text-text-secondary">{currentStep.description}</p>
+                {/* Step changes are announced here rather than by re-titling the
+                    dialog, which would read as a new dialog opening. */}
+                {hasMultipleSteps && (
+                  <span className="sr-only" aria-live="polite">
+                    {`Step ${currentStepIndex + 1} of ${steps.length}${currentStep.title ? `: ${currentStep.title}` : ""}`}
+                  </span>
                 )}
 
-                <FormGrid>
-                  {currentStep.fields.map((field) => (
-                    <BuilderFieldRenderer
-                      key={field.name}
-                      field={field}
-                      value={formData[field.name]}
-                      error={fieldErrors[field.name]}
-                      onChange={(value) => handleFieldChange(field.name, value, field)}
-                    />
-                  ))}
-                </FormGrid>
+                {/* Locked while the command runs: what was sent is already fixed, and
+                    an edit then would look like it counted. Kept at full ink,
+                    though — dimmed, a typed value reads as an empty placeholder. */}
+                <fieldset
+                  ref={formRef}
+                  disabled={isExecuting}
+                  className="m-0 min-w-0 border-0 p-0 [&_:disabled]:opacity-100!"
+                >
+                  <FormGrid>
+                    {currentStep.fields.map((field) => (
+                      <BuilderFieldRenderer
+                        key={field.name}
+                        field={field}
+                        value={formData[field.name]}
+                        error={fieldErrors[field.name]}
+                        onChange={(value) => handleFieldChange(field.name, value, field)}
+                      />
+                    ))}
+                  </FormGrid>
+                </fieldset>
               </>
             )}
 
-            {executionError && (
-              <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/30">
-                <AlertCircle className="h-4 w-4 text-status-error shrink-0 mt-0.5" />
-                <div className="text-sm text-status-error">{executionError}</div>
-              </div>
+            {executionError && !isExecuting && (
+              <InlineStatusBanner
+                severity="error"
+                title="Command failed"
+                description={executionError}
+                action={{ id: "retry", label: "Retry", onClick: () => void handleExecute() }}
+                className="rounded-[var(--radius-md)]"
+              />
             )}
           </div>
         )}
       </AppDialog.Body>
 
       <AppDialog.Footer>
-        {showSuccessState ? (
-          <Button variant="contrast" onClick={onCancel}>
-            Close
-          </Button>
-        ) : hasEmptySteps ? (
-          <Button variant="contrast" onClick={onCancel}>
+        {showSuccessState || hasEmptySteps ? (
+          <Button ref={closeRef} variant="contrast" onClick={onCancel}>
             Close
           </Button>
         ) : (
-          <>
-            <div className="flex-1 flex items-center gap-2">
-              {!isFirstStep && (
-                <Button
-                  variant="ghost"
-                  onClick={handleBack}
-                  disabled={isExecuting}
-                  className="text-text-secondary"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  Back
-                </Button>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-3">
+            <Button
+              variant="ghost"
+              onClick={onCancel}
+              disabled={isExecuting}
+              className="text-text-secondary"
+            >
+              Cancel
+            </Button>
+            {!isFirstStep && (
               <Button
                 variant="ghost"
-                onClick={onCancel}
+                onClick={handleBack}
                 disabled={isExecuting}
                 className="text-text-secondary"
               >
-                Cancel
+                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+                Back
               </Button>
-              {isLastStep ? (
-                <Button variant="contrast" onClick={handleExecute} disabled={isExecuting}>
-                  {isExecuting ? (
-                    <>
-                      <Spinner size="md" />
-                      Executing...
-                    </>
-                  ) : (
-                    "Execute"
-                  )}
-                </Button>
-              ) : (
-                <Button variant="contrast" onClick={handleNext} disabled={isExecuting}>
-                  Next
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
-          </>
+            )}
+            {isLastStep ? (
+              <Button variant="contrast" onClick={() => void handleExecute()} loading={isExecuting}>
+                {submitLabel}
+              </Button>
+            ) : (
+              <Button variant="contrast" onClick={handleNext}>
+                Next
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            )}
+          </div>
         )}
       </AppDialog.Footer>
     </AppDialog>
