@@ -463,22 +463,16 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Git status letter A, the notation git itself paints green",
-    },
-    {
-      category: "domain",
-      signature: "text-status-success/80",
       anchor: "+{insertions}",
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
       anchor: "+{totalInsertions}",
       expectedOccurrences: 1,
-      rationale: "Total diff insertion count",
+      rationale: "Diff insertion count for the whole comparison",
     },
   ],
   "src/components/Worktree/DiffViewer.tsx": [
@@ -752,5 +746,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 88;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 92;
+export const EXPECTED_STATUS_SUCCESS_SITES = 87;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 91;

@@ -45,10 +45,7 @@ vi.mock("../DiffViewer", () => ({
 // Selector stub: clicking the labeled button picks the matching worktree.
 vi.mock("../WorktreeSelector", () => ({
   WorktreeSelector: ({ label, onChange }: { label: string; onChange: (id: string) => void }) => (
-    <button
-      type="button"
-      onClick={() => onChange(label.startsWith("Left") ? "wt-left" : "wt-right")}
-    >
+    <button type="button" onClick={() => onChange(label === "Base" ? "wt-left" : "wt-right")}>
       {label}
     </button>
   ),
@@ -84,8 +81,8 @@ async function setupComparison() {
       <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId={null} />
     </TooltipProvider>
   );
-  fireEvent.click(screen.getByText("Left (base)"));
-  fireEvent.click(screen.getByText("Right (compare)"));
+  fireEvent.click(screen.getByText("Base"));
+  fireEvent.click(screen.getByText("Compare"));
 
   await waitFor(() => {
     expect(screen.getByText("alpha.ts")).toBeTruthy();

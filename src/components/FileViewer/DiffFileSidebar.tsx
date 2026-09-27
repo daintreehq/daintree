@@ -15,7 +15,7 @@ import {
   useFileRowMenuItems,
 } from "@/hooks/useFileRowMenuItems";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
-import { DIFF_STATUS_CONFIG, summarizeChangeSet } from "./diffChangeSet";
+import { DIFF_STATUS_CONFIG, formatDiffDir, summarizeChangeSet } from "./diffChangeSet";
 import type { DiffChangeSetEntry } from "./diffChangeSet";
 
 export interface DiffFileSidebarProps {
@@ -38,13 +38,6 @@ interface IndexedEntry extends DiffChangeSetEntry {
 interface DirGroup {
   dir: string;
   files: IndexedEntry[];
-}
-
-function formatDir(dir: string, maxSegments = 3): string {
-  if (!dir || dir === ".") return "(root)";
-  const segments = dir.split("/");
-  if (segments.length <= maxSegments) return dir;
-  return "…/" + segments.slice(-maxSegments).join("/");
 }
 
 /** Per-row inputs, shared by the static and windowed paths so they cannot drift. */
@@ -186,7 +179,7 @@ function DiffShelfGroupHeader({ dir }: { dir: string }) {
   return (
     <div className="flex items-center gap-1.5 bg-surface-sidebar px-1.5 py-1 text-2xs text-text-secondary">
       <Folder className="h-3 w-3 shrink-0" />
-      <span className="truncate font-mono">{formatDir(dir)}</span>
+      <span className="truncate font-mono">{formatDiffDir(dir)}</span>
     </div>
   );
 }

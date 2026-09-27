@@ -9,3 +9,13 @@ export function sortWorktreesForComparison(
     return a.name.localeCompare(b.name);
   });
 }
+
+/**
+ * The comparison is branch against branch, so the branch is what an option
+ * names. A detached worktree has none to compare and is offered disabled
+ * rather than accepted and silently ignored.
+ */
+export function worktreeOptionLabel(wt: WorktreeSnapshot): string {
+  if (!wt.branch) return `${wt.name} (detached)`;
+  return wt.isMainWorktree ? `${wt.branch} (main worktree)` : wt.branch;
+}
