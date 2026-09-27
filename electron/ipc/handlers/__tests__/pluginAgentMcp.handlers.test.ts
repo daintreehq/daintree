@@ -405,6 +405,22 @@ describe("plugin agent MCP access IPC", () => {
       expect(row).toMatchObject({ access: "read-only", source: "project", available: false });
     });
 
+    it("asks about the endpoint a stopped plugin declares now, not the one an old answer named", async () => {
+      setAllProjectsAgentMcpAccess("acme.ledger", "read-write");
+      storeData.set("projectAgentMcpEnablement", {
+        [PROJECT]: { "acme.ledger": { data: { decidedAt: 1, enabled: false } } },
+      });
+      mocks.listPlugins.mockReturnValue([
+        plugin({ agentMcp: [{ id: "entries", name: "Entries", mode: "tools" }] }),
+      ]);
+      mocks.hasPlugin.mockReturnValue(false);
+
+      const [row] = (await list()).plugins;
+
+      // `entries` was never answered, so it follows the all-projects answer.
+      expect(row).toMatchObject({ access: "read-write", available: false });
+    });
+
     it("never flags withheld database tools on a plugin that is not running", async () => {
       storeData.set("projectAgentMcpEnablement", {
         [PROJECT]: { "acme.ledger": { data: { decidedAt: 1 } } },
@@ -490,6 +506,30 @@ describe("plugin agent MCP access IPC", () => {
 
       expect(projectAgentMcpAccessAnswer(PROJECT, "acme.ledger")).toBe("read-only");
       expect(projectAgentMcpAccessAnswer(OTHER_PROJECT, "acme.ledger")).toBeUndefined();
+    });
+
+    it("leaves an old answer that withholds database tools in place when making a default", async () => {
+      storeData.set("projectAgentMcpEnablement", {
+        [PROJECT]: {
+          "acme.ledger": { data: { decidedAt: 1 }, "@databases": { decidedAt: 1, enabled: false } },
+        },
+      });
+
+      const snapshot = await set({
+        pluginInstanceId: "acme.ledger",
+        access: "read-write",
+        scope: "all-projects",
+      });
+
+      expect(allProjectsAgentMcpAccess("acme.ledger")).toBe("read-write");
+      expect(projectAgentMcpAccessAnswer(PROJECT, "acme.ledger")).toBeUndefined();
+      expect(snapshot.plugins).toEqual([
+        expect.objectContaining({
+          access: "read-write",
+          source: "project",
+          databasesWithheld: true,
+        }),
+      ]);
     });
 
     it("records an installed plugin's answer for every project", async () => {

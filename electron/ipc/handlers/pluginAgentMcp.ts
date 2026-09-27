@@ -188,15 +188,24 @@ const UNNAMED_OWN_ENDPOINT = "tools";
  * the answers rather than from rosters it may no longer declare, so a row never
  * shows less than would apply if the plugin came back.
  */
-function retainedAccess(projectId: string, pluginInstanceId: string): AgentMcpAccess {
+function retainedAccess(
+  projectId: string,
+  pluginInstanceId: string,
+  manifest: LoadedPluginInfo["manifest"] | undefined
+): AgentMcpAccess {
   const answer = projectAgentMcpAccessAnswer(projectId, pluginInstanceId);
   if (answer !== undefined && answer !== null) return answer;
   if (answer === undefined && hasLegacyAgentMcpAnswer(projectId, pluginInstanceId)) {
     // Each roster the old answer names follows it; any it does not name falls
-    // through to the default, exactly as the route would decide.
-    const ownIds = listLegacyAgentMcpEndpointIds(projectId, pluginInstanceId).filter(
-      (endpointId) => endpointId !== DATABASE_ENDPOINT_ID
-    );
+    // through to the default, exactly as the route would decide. The endpoint
+    // the manifest declares now is the one that would be asked about.
+    const declaredId = manifest?.contributes.agentMcp?.[0]?.id;
+    const ownIds =
+      declaredId !== undefined
+        ? [declaredId]
+        : listLegacyAgentMcpEndpointIds(projectId, pluginInstanceId).filter(
+            (endpointId) => endpointId !== DATABASE_ENDPOINT_ID
+          );
     const own =
       ownIds.length > 0
         ? ownIds.some((endpointId) =>
@@ -251,7 +260,7 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
       false
     );
     const { databasesWithheld: _withheld, ...rest } = orphan;
-    rows.push({ ...rest, access: retainedAccess(projectId, id) });
+    rows.push({ ...rest, access: retainedAccess(projectId, id, manifest) });
   }
 
   return { plugins: rows, mcpServerEnabled };
@@ -303,8 +312,12 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
           setAllProjectsAgentMcpAccess(pluginInstanceId, access);
           // Making a level the default from a project means this project
           // follows it too, rather than keeping its own answer and silently
-          // parting ways the next time the default changes.
-          if (access !== null) setProjectAgentMcpAccess(projectId, pluginInstanceId, null);
+          // parting ways the next time the default changes. Not over an answer
+          // from before access levels: that one may keep database tools off,
+          // and following the default would quietly turn them on.
+          if (access !== null && !hasLegacyAgentMcpAnswer(projectId, pluginInstanceId)) {
+            setProjectAgentMcpAccess(projectId, pluginInstanceId, null);
+          }
         };
 
         if (access === null || access === "off") {

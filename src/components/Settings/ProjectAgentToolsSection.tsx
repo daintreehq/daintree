@@ -358,7 +358,7 @@ export function ProjectAgentToolsSection() {
                             }
                             data-testid="project-agent-tool-clear-default"
                           >
-                            Turn off in all projects
+                            Clear default for all projects
                           </Button>
                         </span>
                       )}

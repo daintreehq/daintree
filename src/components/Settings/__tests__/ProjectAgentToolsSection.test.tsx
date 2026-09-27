@@ -507,7 +507,7 @@ describe("ProjectAgentToolsSection", () => {
     ).toBeNull();
 
     const clear = within(rowFor("Ledger")).getByTestId("project-agent-tool-clear-default");
-    expect(clear.textContent).toBe("Turn off in all projects");
+    expect(clear.textContent).toBe("Clear default for all projects");
     fireEvent.click(clear);
 
     expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
