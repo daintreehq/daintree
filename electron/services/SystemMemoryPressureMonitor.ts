@@ -126,16 +126,53 @@ export function parseFseventsdRssMb(stdout: string): number {
   return maxKb / 1024;
 }
 
+/** Null where the reading failed. */
+interface OverCauses {
+  swapOver: boolean | null;
+  fseventsdOver: boolean | null;
+  kernelPressureLevel: KernelPressureLevel | null;
+}
+
+/**
+ * A reading that differs from the last one seen. A failed reading is no
+ * change, and neither is a first healthy reading of a figure that had only
+ * ever failed — it completes the picture rather than altering it.
+ */
+function overCausesChanged(seen: OverCauses, observed: OverCauses): boolean {
+  const differs = <T>(before: T | null, after: T | null, healthy: boolean) =>
+    after !== null && after !== before && !(before === null && healthy);
+  return (
+    differs(seen.swapOver, observed.swapOver, observed.swapOver === false) ||
+    differs(seen.fseventsdOver, observed.fseventsdOver, observed.fseventsdOver === false) ||
+    differs(
+      seen.kernelPressureLevel,
+      observed.kernelPressureLevel,
+      observed.kernelPressureLevel !== null && observed.kernelPressureLevel < KERNEL_PRESSURE_WARN
+    )
+  );
+}
+
+function mergeOverCauses(seen: OverCauses | null, observed: OverCauses): OverCauses {
+  return {
+    swapOver: observed.swapOver ?? seen?.swapOver ?? null,
+    fseventsdOver: observed.fseventsdOver ?? seen?.fseventsdOver ?? null,
+    kernelPressureLevel: observed.kernelPressureLevel ?? seen?.kernelPressureLevel ?? null,
+  };
+}
+
 /**
  * Observes whether the machine itself is degraded — swap nearly full, or on
  * Darwin an `fseventsd` grown to many gigabytes or the kernel reporting memory
  * pressure (#12799) — so a slow Mac is not read as
  * a slow Daintree (#12462). Numbers only: it never infers a cause.
  *
- * Every over-threshold sample logs a `system-health` record. An episode opens
- * after {@link EPISODE_OPEN_SAMPLES} consecutive ones and is published exactly
- * once; it closes, with one recovery record and one publish, after
- * {@link EPISODE_CLEAR_SAMPLES} consecutive fully observed clear samples. A
+ * The first over-threshold sample logs a `system-health` record, and another
+ * follows only when the episode opens or which thresholds are crossed (or the
+ * kernel level) changes — never merely because the figures moved (#12888). An
+ * episode opens after {@link EPISODE_OPEN_SAMPLES} consecutive over-threshold
+ * samples and is published exactly once; it closes, with one recovery record
+ * and one publish, after {@link EPISODE_CLEAR_SAMPLES} consecutive fully
+ * observed clear samples. A
  * sample with a failed reading breaks both runs — a missing measurement can
  * neither open an episode nor prove recovery.
  *
@@ -153,6 +190,12 @@ export function createSystemMemoryPressureMonitor(
   /** An over-threshold record was logged since the last recovery record. */
   let elevated = false;
   let episodeOpen = false;
+  /**
+   * Which thresholds were last seen crossed, and the kernel level, since the
+   * last recovery; null until the first over-threshold sample. A failed reading
+   * keeps the previous value rather than reading as a change.
+   */
+  let seenCauses: OverCauses | null = null;
 
   function record(sample: SystemMemorySample): void {
     const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
@@ -174,8 +217,19 @@ export function createSystemMemoryPressureMonitor(
       overStreak++;
       clearStreak = 0;
       elevated = true;
-      logWarn("system-health", { state: "over", ...figures, consecutiveSamples: overStreak });
-      if (!episodeOpen && overStreak >= EPISODE_OPEN_SAMPLES) {
+      const episodeOpening = !episodeOpen && overStreak >= EPISODE_OPEN_SAMPLES;
+      // Figures are left out: they move on every reading.
+      const observed: OverCauses = {
+        swapOver: swap === null ? null : swapOver,
+        fseventsdOver: fseventsdRssMb === null ? null : fseventsdOver,
+        kernelPressureLevel,
+      };
+      const causeChanged = seenCauses === null || overCausesChanged(seenCauses, observed);
+      seenCauses = mergeOverCauses(seenCauses, observed);
+      if (episodeOpening || causeChanged) {
+        logWarn("system-health", { state: "over", ...figures, consecutiveSamples: overStreak });
+      }
+      if (episodeOpening) {
         episodeOpen = true;
         deps.publish({
           status: "degraded",
@@ -209,6 +263,7 @@ export function createSystemMemoryPressureMonitor(
     elevated = false;
     episodeOpen = false;
     clearStreak = 0;
+    seenCauses = null;
     if (wasOpen) {
       deps.publish({
         status: "normal",
