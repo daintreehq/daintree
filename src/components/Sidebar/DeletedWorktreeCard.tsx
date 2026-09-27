@@ -6,11 +6,8 @@ import {
   getDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
   type DeletedWorktree,
-  type DeletedWorktreeHoldReason,
 } from "@/store/worktreeStore";
-import { usePreferencesStore } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
-import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { WorktreeTerminalSection } from "@/components/Worktree/WorktreeCard/WorktreeTerminalSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -19,6 +16,7 @@ import {
   collectRunningAgentTerminals,
 } from "@/utils/destructiveSessionConfirm";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
 
 interface DeletedWorktreeCardProps {
   worktree: DeletedWorktree;
@@ -29,27 +27,6 @@ interface DeletedWorktreeCardProps {
    */
   showDismissAction?: boolean;
 }
-
-/**
- * What the row says while its countdown is held. The visible label is what
- * carries the reason — it has to survive a narrow sidebar beside the title and
- * the "Deleted" pill, so it stays terse, and the tooltip expands it for anyone
- * who wants the whole sentence.
- */
-const HOLD_COPY: Record<DeletedWorktreeHoldReason, { label: string; tooltip: string }> = {
-  confirm: {
-    label: "Confirming",
-    tooltip: "Auto-close is paused while you confirm closing this row",
-  },
-  drag: {
-    label: "Dragging",
-    tooltip: "Auto-close is paused while a drag is in progress",
-  },
-  agent: {
-    label: "Agent working",
-    tooltip: "Auto-close is paused while an agent here is still working",
-  },
-};
 
 /**
  * Sidebar row for a worktree whose directory is gone but whose terminals are
@@ -80,70 +57,21 @@ export function DeletedWorktreeCard({
   const isActive = useWorktreeSelectionStore((s) => s.activeWorktreeId === worktree.id);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const trackTerminalFocus = useWorktreeSelectionStore((s) => s.trackTerminalFocus);
-  const isTerminalsExpanded = useWorktreeSelectionStore((s) =>
-    s.expandedTerminals.has(worktree.id)
-  );
-  const toggleTerminalsExpanded = useWorktreeSelectionStore((s) => s.toggleTerminalsExpanded);
+  // Open by default, and local rather than the live card's persisted
+  // `expandedTerminals`: the terminals are all this row exists for, so hiding
+  // them behind an "N active" bar made opening the group show less than the
+  // collapsed rail did.
+  const [isTerminalsExpanded, setIsTerminalsExpanded] = useState(true);
 
   const { counts, terminals } = useWorktreeTerminals(worktree.id);
 
-  // Auto-cleanup countdown (deletedWorktreeCleanup.ts owns the deadline; this
-  // is display only): a numeric seconds readout in the header plus the row's
-  // own bottom separator draining from full width to empty. While the sweep
-  // holds the countdown it pins the deadline to whatever remained when the hold
-  // began, so both freeze at that value — and `holdReason` says which condition
-  // is holding, because a row that just stops counting down reads as broken
+  // Auto-cleanup countdown: a numeric seconds readout in the header plus the
+  // row's own bottom separator draining from full width to empty. While the
+  // sweep holds the countdown both freeze, and `hold` says which condition is
+  // holding, because a row that just stops counting down reads as broken
   // (#11259).
-  const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
-  const [nowTick, setNowTick] = useState(() => Date.now());
-  const expiresAt = worktree.expiresAt;
-  const hasCountdown = expiresAt !== null && cleanupSeconds > 0;
-  const hold =
-    hasCountdown && worktree.holdReason !== null ? HOLD_COPY[worktree.holdReason] : undefined;
-  useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasCountdown);
-  // Clamp to the TTL: the sweep arms the deadline off its own clock, so the
-  // first tick after arming can otherwise read a whole second past full ("61s").
-  const cleanupMs = cleanupSeconds * 1000;
-  const rawRemainingMs = expiresAt !== null ? Math.max(0, expiresAt - nowTick) : 0;
-  const derivedRemainingMs = cleanupMs > 0 ? Math.min(rawRemainingMs, cleanupMs) : rawRemainingMs;
-  // While held, render the remaining captured when the hold began rather than
-  // re-deriving it from the deadline. The sweep re-pins `expiresAt` to
-  // `now + remaining` on every pass, and its phase is independent of this
-  // component's tick, so each pins a value exactly one interval apart and the
-  // readout alternates between N and N+1 forever — a held row visibly flips
-  // 38s/37s/38s. Freezing is also the honest reading: a held countdown is not
-  // advancing. The key re-captures if the TTL preference changes underneath the
-  // hold, which is the one case where the sweep re-pins a genuinely new value.
-  // Captured in state, not a ref: this value IS render output, and refs may not
-  // be read or written during render (React Compiler enforces it). This is the
-  // documented "adjust state when a prop changes" pattern — React re-runs the
-  // component immediately, before paint, so no torn frame is observable.
-  const holdKey = hold === undefined ? null : `${worktree.holdReason}:${cleanupMs}`;
-  const [heldRemaining, setHeldRemaining] = useState<{
-    key: string;
-    remainingMs: number;
-  } | null>(null);
-  if (holdKey === null) {
-    if (heldRemaining !== null) setHeldRemaining(null);
-  } else if (heldRemaining?.key !== holdKey) {
-    setHeldRemaining({ key: holdKey, remainingMs: derivedRemainingMs });
-  }
-  // Falls back to the derived value on the capture render, where `heldRemaining`
-  // still holds the previous key — that fallback is the very value being
-  // captured, so the readout never flickers through an underived frame.
-  const remainingMs =
-    heldRemaining !== null && heldRemaining.key === holdKey
-      ? heldRemaining.remainingMs
-      : derivedRemainingMs;
-  const remainingSeconds = Math.ceil(remainingMs / 1000);
-  // Snap the top of the range to exactly full: the tick that arms the row lands
-  // somewhere inside the sweep's first second, so a bar that should read "just
-  // deleted" would otherwise start a sliver short.
-  const remainingFraction = hasCountdown
-    ? remainingMs >= cleanupMs - 1500
-      ? 1
-      : Math.min(1, remainingMs / cleanupMs)
-    : 0;
+  const { hasCountdown, hold, remainingSeconds, remainingFraction } =
+    useDeletedWorktreeCountdown(worktree);
 
   const panels = useMemo(() => {
     void panelIdsByWorktreeId;
@@ -151,6 +79,12 @@ export function DeletedWorktreeCard({
       .map((id) => panelsById[id])
       .filter((panel): panel is PanelInstance => panel != null);
   }, [worktree.id, panelsById, panelIdsByWorktreeId]);
+  // Listed from the same set the dismiss would close (#9699): the live hook
+  // keeps overlay and dialog panels, which never belong to a worktree row.
+  const listedTerminals = useMemo(() => {
+    const ids = new Set(panels.map((panel) => panel.id));
+    return terminals.filter((terminal) => ids.has(terminal.id));
+  }, [panels, terminals]);
 
   const handleDismiss = useCallback(() => {
     if (panels.length === 0) {
@@ -209,13 +143,10 @@ export function DeletedWorktreeCard({
     ]
   );
 
-  const handleToggleTerminals = useCallback(
-    (e: MouseEvent) => {
-      e.stopPropagation();
-      toggleTerminalsExpanded(worktree.id);
-    },
-    [toggleTerminalsExpanded, worktree.id]
-  );
+  const handleToggleTerminals = useCallback((e: MouseEvent) => {
+    e.stopPropagation();
+    setIsTerminalsExpanded((open) => !open);
+  }, []);
 
   // Defensive: the store prunes empty deleted-worktree rows, so an empty row should never
   // reach render. Bailing keeps a torn frame from showing a zero-terminal card.
@@ -243,51 +174,32 @@ export function DeletedWorktreeCard({
         className="absolute inset-0 z-0 outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         aria-label={`Select deleted worktree: ${worktree.title}`}
       />
-      <div
-        className={cn(
-          // The fade is the "this worktree is gone" signal; it lifts on hover,
-          // focus, and while active so the card stays fully usable. Left
-          // padding matches live sidebar rows' drag-handle gutter (w-4 + pl-1)
-          // so the icon sits exactly in line with live branch icons.
-          "relative z-10 pl-5 pr-4 py-3 transition-opacity duration-150",
-          !isActive && "opacity-70 group-hover/card:opacity-100 group-focus-within/card:opacity-100"
-        )}
-      >
+      {/* Left padding is the live card's drag-grip gutter (w-4), so FolderX
+          sits on the live branch-icon column. No fade: what marks the row as
+          deleted is FolderX, the badge and the struck-through path — dimming
+          the whole row made its surviving sessions read as disabled. */}
+      <div className="relative z-10 pl-4 pr-4 py-3">
         {/* Mirrors WorktreeHeader's title row: same row height, and the same
             icon size/stroke/gap/typography as BranchLabel, with FolderX in
             the branch-type icon's slot. */}
         <div className="flex items-center gap-2 min-h-[22px]">
           <span className="flex items-center gap-1.5 min-w-0 flex-1">
             <FolderX
-              className="w-3.5 h-3.5 text-text-muted shrink-0"
+              className="w-3.5 h-3.5 text-text-secondary shrink-0"
               strokeWidth={2.5}
               aria-hidden="true"
             />
             <span
-              className="truncate font-mono text-2xs font-medium text-text-muted"
+              className="truncate font-mono text-2xs font-medium text-text-secondary"
               title={worktree.title}
             >
               {worktree.title}
             </span>
-            <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-muted">
+            <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-secondary">
               Deleted
             </span>
           </span>
           <div className="flex items-center gap-2 shrink-0">
-            {hold !== undefined && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-muted"
-                    data-testid="deleted-worktree-countdown-hold"
-                    data-hold-reason={worktree.holdReason}
-                  >
-                    {hold.label}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top">{hold.tooltip}</TooltipContent>
-              </Tooltip>
-            )}
             {hasCountdown && (
               <span
                 role="timer"
@@ -296,7 +208,7 @@ export function DeletedWorktreeCard({
                     ? `${hold.tooltip}, holding at ${remainingSeconds} seconds`
                     : `Closes automatically in ${remainingSeconds} seconds`
                 }
-                className="font-mono text-2xs tabular-nums text-text-muted"
+                className="font-mono text-2xs tabular-nums text-text-secondary"
                 title={
                   hold !== undefined
                     ? `${hold.tooltip}, holding at ${remainingSeconds}s`
@@ -316,7 +228,7 @@ export function DeletedWorktreeCard({
                       e.stopPropagation();
                       handleDismiss();
                     }}
-                    className="sidebar-action-button shrink-0 p-1.5 -my-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                    className="sidebar-action-button shrink-0 rounded-[var(--radius-md)] p-1.5 -my-1.5 text-text-secondary transition-colors hover:text-status-error focus-visible:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                     aria-label={closeLabel}
                   >
                     <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
@@ -327,16 +239,39 @@ export function DeletedWorktreeCard({
             )}
           </div>
         </div>
-        <div className="truncate text-xs text-text-muted line-through mt-0.5" title={worktree.path}>
-          {worktree.path}
+        {/* The hold reason rides the path line: in the title row it pushed the
+            branch name down to a few characters, and the name is what says
+            which worktree this is. */}
+        <div className="mt-0.5 flex items-center gap-2">
+          <div
+            className="min-w-0 flex-1 truncate text-xs text-text-muted line-through"
+            title={worktree.path}
+          >
+            {worktree.path}
+          </div>
+          {hold !== undefined && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-secondary"
+                  data-testid="deleted-worktree-countdown-hold"
+                  data-hold-reason={worktree.holdReason}
+                >
+                  {hold.label}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">{hold.tooltip}</TooltipContent>
+            </Tooltip>
+          )}
         </div>
         <WorktreeTerminalSection
           worktreeId={worktree.id}
           isExpanded={isTerminalsExpanded}
           counts={counts}
-          terminals={terminals}
+          terminals={listedTerminals}
           onToggle={handleToggleTerminals}
           onTerminalSelect={handleTerminalSelect}
+          rowClick="select"
         />
       </div>
       {/* The row separator and the countdown are one element, not two stacked

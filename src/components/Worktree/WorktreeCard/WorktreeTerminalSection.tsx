@@ -48,9 +48,11 @@ interface TerminalRowProps {
   onClick: (term: PtyPanelData) => void;
   /** Vertical padding of the row's button — `CardDensity.sessionRowY`. */
   padY: string;
+  /** See {@link WorktreeTerminalSectionProps.rowClick}. */
+  canArm: boolean;
 }
 
-function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
+function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   const { ref, isTruncated } = useTruncationDetection();
   const dragHandle = useDragHandle();
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(term.id));
@@ -67,7 +69,7 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
   // border color so multiple accents never render at once. The arm-position
   // badge stays accent-colored as the secondary signal.
   const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
-  const isArmable = isFleetArmEligible(term);
+  const isArmable = canArm && isFleetArmEligible(term);
   const StateIcon = agentState ? getEffectiveStateIcon(agentState) : null;
   const placementLabel = term.location === "dock" ? "Docked" : "On grid";
   const showCommand = !chrome.isAgent && term.activityStatus === "working" && !!term.lastCommand;
@@ -235,6 +237,13 @@ export interface WorktreeTerminalSectionProps {
   terminals: PtyPanelData[];
   onToggle: (e: React.MouseEvent) => void;
   onTerminalSelect: (terminal: PtyPanelData) => void;
+  /**
+   * What clicking a row does. A live card's rows arm agents for a fleet
+   * broadcast; a deleted worktree's rows only ever view, because opening one
+   * is how you inspect a session before deciding whether to rescue it — and
+   * the collapsed group's rail beside them already views on click.
+   */
+  rowClick?: "arm" | "select";
 }
 
 const FLEET_HINT_DISMISSED_KEY = "daintree:fleet-selection-hint-dismissed";
@@ -248,6 +257,7 @@ export function WorktreeTerminalSection({
   terminals,
   onToggle,
   onTerminalSelect,
+  rowClick = "arm",
 }: WorktreeTerminalSectionProps) {
   useKeybindingScope("worktreeGrid", isExpanded);
 
@@ -295,14 +305,15 @@ export function WorktreeTerminalSection({
   }, [terminals]);
 
   const orderedWorktreeTerminals = terminals;
+  // Empty in select mode, which takes the marquee and the fleet hint with it.
   const eligibleTerminals = useMemo(
-    () => orderedWorktreeTerminals.filter(isFleetArmEligible),
-    [orderedWorktreeTerminals]
+    () => (rowClick === "arm" ? orderedWorktreeTerminals.filter(isFleetArmEligible) : []),
+    [orderedWorktreeTerminals, rowClick]
   );
 
   const handleTerminalClick = useCallback(
     (term: PtyPanelData) => {
-      if (!isFleetArmEligible(term)) {
+      if (rowClick === "select" || !isFleetArmEligible(term)) {
         onTerminalSelect(term);
         return;
       }
@@ -311,7 +322,7 @@ export function WorktreeTerminalSection({
       // the model is consistent across surfaces.
       useFleetArmingStore.getState().toggleId(term.id);
     },
-    [onTerminalSelect]
+    [onTerminalSelect, rowClick]
   );
 
   // Marquee starts potential on pointerdown (no capture yet). We only upgrade
@@ -343,7 +354,8 @@ export function WorktreeTerminalSection({
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (e.button !== 0) return;
+      // The marquee arms rows; a select-only section has nothing for it to do.
+      if (e.button !== 0 || rowClick !== "arm") return;
       const target = e.target as Element;
       // dnd-kit owns the drag handle — don't shadow its pointer events.
       if (target.closest("[data-drag-handle]")) return;
@@ -355,7 +367,7 @@ export function WorktreeTerminalSection({
       };
       snapshotRects();
     },
-    [snapshotRects]
+    [snapshotRects, rowClick]
   );
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -564,7 +576,10 @@ export function WorktreeTerminalSection({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerCancel}
-              className={cn("relative max-h-[300px] cursor-crosshair overflow-y-auto")}
+              className={cn(
+                "relative max-h-[300px] overflow-y-auto",
+                rowClick === "arm" && "cursor-crosshair"
+              )}
             >
               {orderedWorktreeTerminals.map((term, index) => (
                 <SortableWorktreeTerminal
@@ -577,6 +592,7 @@ export function WorktreeTerminalSection({
                     term={term}
                     onClick={handleTerminalClick}
                     padY={density.sessionRowY}
+                    canArm={rowClick === "arm"}
                   />
                 </SortableWorktreeTerminal>
               ))}

@@ -785,3 +785,48 @@ describe("WorktreeTerminalSection collapsed trigger name", () => {
     expect(button.querySelector("div")).toBeNull();
   });
 });
+
+describe("WorktreeTerminalSection select-only rows", () => {
+  function dragAcrossRows(container: HTMLElement) {
+    const scroller = container.querySelector<HTMLElement>(".overflow-y-auto")!;
+    scroller.setPointerCapture ??= () => {};
+    fireEvent.pointerDown(scroller, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(scroller, { clientX: 60, clientY: 60, pointerId: 1 });
+  }
+  const marquee = (container: HTMLElement) =>
+    container.querySelector("[aria-hidden].pointer-events-none.absolute");
+
+  it("views on click and never arms or claims a pressed state", () => {
+    const term = makeTerminal({ id: "s1", detectedAgentId: "claude", hasPty: true });
+    const onSelect = vi.fn();
+    renderSection({
+      isExpanded: true,
+      terminals: [term],
+      counts: { ...baseCounts, total: 1 },
+      onTerminalSelect: onSelect,
+      rowClick: "select",
+    });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
+    fireEvent.click(button);
+
+    expect(onSelect).toHaveBeenCalledWith(term);
+    expect(useFleetArmingStore.getState().armedIds.has("s1")).toBe(false);
+    expect(button.getAttribute("aria-pressed")).toBeNull();
+  });
+
+  it("starts no marquee, where an arming section does", () => {
+    const terminals = [
+      makeTerminal({ id: "m1", detectedAgentId: "claude", hasPty: true }),
+      makeTerminal({ id: "m2", detectedAgentId: "claude", hasPty: true }),
+    ];
+    const arming = renderSection({ isExpanded: true, terminals });
+    dragAcrossRows(arming.container);
+    expect(marquee(arming.container)).not.toBeNull();
+    arming.unmount();
+
+    const selecting = renderSection({ isExpanded: true, terminals, rowClick: "select" });
+    dragAcrossRows(selecting.container);
+    expect(marquee(selecting.container)).toBeNull();
+  });
+});

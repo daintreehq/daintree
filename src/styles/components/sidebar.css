@@ -288,7 +288,11 @@ html[data-dragging="true"]
 }
 
 [data-session-row]:hover [data-session-grip],
-[data-session-row]:has(:focus-visible) [data-session-grip] {
+[data-session-row]:has(:focus-visible) [data-session-grip],
+/* A deleted worktree's rows exist to be dragged somewhere else before they
+   are cleaned up, so the grip is the row's primary control, not a hover
+   extra — the same as the collapsed group's rail beside it. */
+[data-deleted-worktree-id] [data-session-grip] {
   opacity: 1;
   pointer-events: auto;
 }

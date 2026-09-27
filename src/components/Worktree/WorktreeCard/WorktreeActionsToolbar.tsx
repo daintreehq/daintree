@@ -112,7 +112,7 @@ export function WorktreeActionsToolbar({
                 onCleanupWorktree();
               }}
               data-no-dnd
-              className="sidebar-action-button p-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="sidebar-action-button rounded-[var(--radius-md)] p-1.5 text-text-secondary transition-colors hover:text-status-error focus-visible:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               aria-label="Delete worktree"
               data-testid="worktree-cleanup-button"
             >
