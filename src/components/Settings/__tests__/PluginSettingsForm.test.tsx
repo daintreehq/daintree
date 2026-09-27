@@ -604,6 +604,7 @@ describe("PluginSettingsForm", () => {
     expect(input.value).toBe("");
     const row = input.closest<HTMLElement>("[data-settings-row]")!;
     expect(row.textContent).toContain("Not set yet");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
     fireEvent.blur(input);
     expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
 
@@ -624,6 +625,7 @@ describe("PluginSettingsForm", () => {
     );
     await waitFor(() => expect(input.value).toBe("us"));
     expect(row.textContent).not.toContain("Not set yet");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
   });
 

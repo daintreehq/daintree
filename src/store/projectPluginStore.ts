@@ -78,8 +78,8 @@ export interface ProjectPluginStoreState {
   errorSource: ProjectPluginErrorSource | null;
 }
 
-/** The action behind a {@link ProjectPluginStoreState.error}, with the value it attempted. */
-export type ProjectPluginErrorSource =
+/** An action that can fail, with the value it attempted. */
+export type ProjectPluginFailedAction =
   | { action: "decide"; decision: ProjectPluginTrustDecision }
   | { action: "activate"; pluginId: string }
   | { action: "mute"; pluginId: string; muted: boolean }
@@ -87,6 +87,24 @@ export type ProjectPluginErrorSource =
   | { action: "visibilityDefault"; pluginId: string; hidden: boolean }
   | { action: "reload" }
   | { action: "loadVisibility" };
+
+/**
+ * The action behind a {@link ProjectPluginStoreState.error}, the value it
+ * attempted, and main's own reason when it gave one — kept apart from the
+ * store's fallback sentence so a page can say what failed in its own words
+ * and add only what main knew.
+ */
+export type ProjectPluginErrorSource = ProjectPluginFailedAction & { reason: string | null };
+
+/** The state a failed action leaves: the legacy message plus its source. */
+function failure(
+  err: unknown,
+  fallback: string,
+  attempted: ProjectPluginFailedAction
+): Pick<ProjectPluginStoreState, "error" | "errorSource"> {
+  const reason = formatErrorMessage(err, "") || null;
+  return { error: reason ?? fallback, errorSource: { ...attempted, reason } };
+}
 
 export interface ProjectPluginActions {
   setViewProjectId: (projectId: string | null) => void;
@@ -230,10 +248,9 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
         // would believe they had answered.
         set({ prompt: null });
       } catch (err) {
-        set({
-          error: formatErrorMessage(err, "Couldn't save the plugin trust decision"),
-          errorSource: { action: "decide", decision },
-        });
+        set(
+          failure(err, "Couldn't save the plugin trust decision", { action: "decide", decision })
+        );
       } finally {
         set({ deciding: null });
       }
@@ -251,10 +268,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       try {
         await window.electron.plugin.activateStagedProjectPlugin(pluginId);
       } catch (err) {
-        set({
-          error: formatErrorMessage(err, `Couldn't activate '${pluginId}'`),
-          errorSource: { action: "activate", pluginId },
-        });
+        set(failure(err, `Couldn't activate '${pluginId}'`, { action: "activate", pluginId }));
       } finally {
         const next = new Set(get().activating);
         next.delete(pluginId);
@@ -270,13 +284,13 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       try {
         await window.electron.plugin.setProjectPluginMuted(pluginId, muted);
       } catch (err) {
-        set({
-          error: formatErrorMessage(
+        set(
+          failure(
             err,
-            muted ? `Couldn't turn off '${pluginId}'` : `Couldn't turn on '${pluginId}'`
-          ),
-          errorSource: { action: "mute", pluginId, muted },
-        });
+            muted ? `Couldn't turn off '${pluginId}'` : `Couldn't turn on '${pluginId}'`,
+            { action: "mute", pluginId, muted }
+          )
+        );
       } finally {
         const next = new Set(get().muting);
         next.delete(pluginId);
@@ -294,10 +308,11 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
         const visibility = await window.electron.plugin.getProjectPluginVisibility();
         set({ visibility });
       } catch (err) {
-        set({
-          error: formatErrorMessage(err, "Couldn't read this project's plugin visibility"),
-          errorSource: { action: "loadVisibility" },
-        });
+        set(
+          failure(err, "Couldn't read this project's plugin visibility", {
+            action: "loadVisibility",
+          })
+        );
       }
     },
 
@@ -317,8 +332,11 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       } catch (err) {
         set({
           visibility: previous,
-          error: formatErrorMessage(err, `Couldn't change visibility for '${pluginId}'`),
-          errorSource: { action: "visibility", pluginId, visible },
+          ...failure(err, `Couldn't change visibility for '${pluginId}'`, {
+            action: "visibility",
+            pluginId,
+            visible,
+          }),
         });
       }
     },
@@ -340,8 +358,11 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       } catch (err) {
         set({
           visibility: previous,
-          error: formatErrorMessage(err, `Couldn't change the default for '${pluginId}'`),
-          errorSource: { action: "visibilityDefault", pluginId, hidden },
+          ...failure(err, `Couldn't change the default for '${pluginId}'`, {
+            action: "visibilityDefault",
+            pluginId,
+            hidden,
+          }),
         });
       }
     },
@@ -354,10 +375,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       try {
         await window.electron.plugin.reloadProjectPlugins();
       } catch (err) {
-        set({
-          error: formatErrorMessage(err, "Couldn't reload this project's plugins"),
-          errorSource: { action: "reload" },
-        });
+        set(failure(err, "Couldn't reload this project's plugins", { action: "reload" }));
       } finally {
         set({ reloading: false });
       }

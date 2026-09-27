@@ -571,7 +571,8 @@ function SettingField({
       )}
     </span>
   ) : null;
-  const invalid = shownError !== null;
+  // A required value that isn't set is as invalid as a rejected one, and says so the same way.
+  const invalid = shownError !== null || requiredUnset;
   const placeholderDefault =
     defaultIsPlaceholder(def, type) && def.default !== undefined ? defaultText : undefined;
   const rowProps = {

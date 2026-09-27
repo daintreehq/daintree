@@ -707,9 +707,9 @@ describe("ProjectPluginsTab settings deep link and lifecycle", () => {
     await select("Acme Dashboard");
 
     const detail = screen.getByTestId("project-plugin-detail");
-    expect(within(detail).getByText("API key")).toBeTruthy();
-    expect(within(detail).getByText("More settings")).toBeTruthy();
-    expect(within(detail).getAllByText("Available when the plugin is turned on")).toHaveLength(2);
+    // One row naming every declared setting under the one thing that unlocks them.
+    expect(within(detail).getAllByText("Available when the plugin is turned on")).toHaveLength(1);
+    expect(within(detail).getByText("API key, its own settings section")).toBeTruthy();
     // Declarations only: nothing is read or editable without the plugin loaded.
     expect(within(detail).queryByRole("textbox")).toBeNull();
     expect(pluginApi.getSettingValues).not.toHaveBeenCalled();
@@ -862,6 +862,57 @@ describe("ProjectPluginsTab failures and state honesty", () => {
       expect(toggle.getAttribute("aria-checked")).toBe(String(running));
     }
   );
+
+  it("keeps a failure that isn't one plugin's when moving between panes, until it is retried", async () => {
+    pluginApi.list.mockResolvedValue([installed()]);
+    seed([]);
+    act(() =>
+      useProjectPluginStore.setState({
+        error: "store is read-only",
+        errorSource: { action: "loadVisibility", reason: "store is read-only" },
+      })
+    );
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    // Read while the overview showed, stated on the pane the read was for.
+    await select("Acme Tools");
+    const alert = await screen.findByRole("alert");
+    expect(alert.closest("[data-settings-row]")?.textContent).toContain("Show in this project");
+    expect(alert.textContent).toContain("store is read-only");
+  });
+
+  it("lists a running plugin whose required settings aren't set, and sets it up at the first one", async () => {
+    const getRequiredSettingsStatus = vi.fn().mockResolvedValue({
+      missing: ["apiKey", "region"],
+      unreadable: [],
+      labels: { apiKey: "API key", region: "Region" },
+    });
+    Object.assign(pluginApi, {
+      getRequiredSettingsStatus,
+      onSettingsChanged: vi.fn(() => vi.fn()),
+    });
+    seed([
+      projectPlugin({
+        settings: [
+          { id: "apiKey", type: "secret", label: "API key", required: true, scope: "project" },
+          { id: "region", type: "string", label: "Region", required: true, scope: "project" },
+        ],
+      }),
+    ]);
+    render(<ProjectPluginsTab />);
+
+    const group = await screen.findByRole("group", { name: "Needs attention" });
+    await waitFor(() => expect(group.textContent).toContain("API key, Region"));
+    fireEvent.click(within(group).getByRole("button", { name: "Set up" }));
+    expect(dispatch).toHaveBeenCalledWith(
+      "plugin.openSettings",
+      { pluginId: `project__${PROJECT_ID}__acme.dashboard`, key: "apiKey" },
+      { source: "user" }
+    );
+    delete (pluginApi as Partial<typeof pluginApi & { getRequiredSettingsStatus: unknown }>)
+      .getRequiredSettingsStatus;
+  });
 
   it("lists the plugins that need a look on the overview, each with a way to it", async () => {
     seed([
