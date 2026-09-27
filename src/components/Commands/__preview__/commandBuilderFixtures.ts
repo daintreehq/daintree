@@ -23,7 +23,7 @@ const CREATE_ISSUE_STEPS: BuilderStep[] = [
   {
     id: "issue-details",
     title: "Create a GitHub issue",
-    description: "Give it a title, an explanation, or both.",
+    description: "Give it a title, an explanation, or both",
     submitLabel: "Create issue",
     fields: [
       {
@@ -55,7 +55,7 @@ const WORK_ISSUE_STEPS: BuilderStep[] = [
   {
     id: "issue",
     title: "Work on a GitHub issue",
-    description: "Creates a worktree for the issue and switches to it.",
+    description: "Creates a worktree for the issue and switches to it",
     submitLabel: "Create worktree",
     fields: [
       {
@@ -143,7 +143,7 @@ const WIZARD_STEPS: BuilderStep[] = [
     id: "confirm",
     title: "Notifications",
     submitLabel: "Start rollout",
-    description: "Who hears about it once the rollout settles.",
+    description: "Who hears about it once the rollout settles",
     fields: [
       {
         name: "notify",

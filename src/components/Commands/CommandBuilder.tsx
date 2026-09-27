@@ -634,7 +634,7 @@ export function CommandBuilder({
               className="text-text-secondary"
             >
               {/* Once a slow run can be left, this no longer cancels anything. */}
-              {isExecuting ? "Close" : "Cancel"}
+              {isSlowRun ? "Close" : "Cancel"}
             </Button>
             {!isFirstStep && (
               <Button

@@ -174,7 +174,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
       {
         id: "issue",
         title: "Work on a GitHub issue",
-        description: "Creates a worktree for the issue and switches to it.",
+        description: "Creates a worktree for the issue and switches to it",
         submitLabel: "Create worktree",
         fields: [
           {

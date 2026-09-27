@@ -62,7 +62,7 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
       {
         id: "issue-details",
         title: "Create a GitHub issue",
-        description: "Give it a title, an explanation, or both.",
+        description: "Give it a title, an explanation, or both",
         submitLabel: "Create issue",
         fields: [
           {

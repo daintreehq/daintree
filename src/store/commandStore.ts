@@ -40,6 +40,11 @@ interface CommandStore {
   loadCommands: (context?: CommandContext) => Promise<void>;
 }
 
+// Bumped whenever the builder a run belongs to goes away. A run that settles
+// after that still reports its result to whoever awaited it, but must not
+// write its pending or error state into a builder opened since.
+let runGeneration = 0;
+
 export const useCommandStore = create<CommandStore>()((set, get) => ({
   // Picker state
   isPickerOpen: false,
@@ -91,22 +96,27 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
       set({ isLoadingBuilder: false });
     }
   },
-  closeBuilder: () =>
+  closeBuilder: () => {
+    runGeneration++;
     set({
       activeCommand: null,
       activeCommandId: null,
       builderSteps: null,
       builderContext: null,
+      isExecuting: false,
       executionError: null,
       isLoadingBuilder: false,
       builderLoadError: null,
-    }),
+    });
+  },
 
   // Execution state
   isExecuting: false,
   executionError: null,
   executeCommand: async (commandId, context, args = {}) => {
     set({ isExecuting: true, executionError: null });
+    const generation = runGeneration;
+    const isCurrent = () => generation === runGeneration;
 
     try {
       const result = await commandsClient.execute({
@@ -115,7 +125,7 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
         args,
       });
 
-      if (!result.success) {
+      if (!result.success && isCurrent()) {
         // A failure without error details still has to show as one.
         set({
           executionError: result.error?.message ?? result.message ?? "The command didn't finish.",
@@ -125,7 +135,7 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
       return result;
     } catch (error) {
       const message = formatErrorMessage(error, "Command execution failed");
-      set({ executionError: message });
+      if (isCurrent()) set({ executionError: message });
       return {
         success: false,
         error: {
@@ -134,7 +144,7 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
         },
       };
     } finally {
-      set({ isExecuting: false });
+      if (isCurrent()) set({ isExecuting: false });
     }
   },
 

@@ -288,13 +288,14 @@ describe("CommandBuilder recovery", () => {
     try {
       const onCancel = vi.fn();
       renderBuilder({ isExecuting: true, onCancel });
-      const leave = screen.getByRole("button", { name: "Close" });
-      expect(leave.hasAttribute("disabled")).toBe(true);
+      expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
 
       act(() => {
         vi.advanceTimersByTime(5000);
       });
       expect(screen.getByRole("status").textContent).toContain("Closing this won't stop it");
+      // Relabelled only once leaving is possible, and it no longer cancels anything.
+      const leave = screen.getByRole("button", { name: "Close" });
       expect(leave.hasAttribute("disabled")).toBe(false);
       fireEvent.click(leave);
       expect(onCancel).toHaveBeenCalledTimes(1);

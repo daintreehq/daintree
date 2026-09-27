@@ -140,6 +140,22 @@ describe("commandStore adversarial", () => {
     expect(useCommandStore.getState().executionError).toBeTruthy();
   });
 
+  it("a run whose builder was closed does not write into the builder opened after it", async () => {
+    let settle: (r: unknown) => void = () => {};
+    commandsClientMock.execute.mockImplementation(() => new Promise((r) => (settle = r)));
+
+    const pending = useCommandStore.getState().executeCommand("c1", {});
+    useCommandStore.getState().closeBuilder();
+    expect(useCommandStore.getState().isExecuting).toBe(false);
+
+    settle({ success: false, error: { code: "X", message: "late failure" } });
+    const result = await pending;
+
+    expect(result.success).toBe(false);
+    expect(useCommandStore.getState().executionError).toBeNull();
+    expect(useCommandStore.getState().isExecuting).toBe(false);
+  });
+
   it("loadCommands reentrancy guard blocks duplicate fetches while one is in flight", async () => {
     let resolveList: (v: unknown[]) => void = () => {};
     commandsClientMock.list.mockImplementation(

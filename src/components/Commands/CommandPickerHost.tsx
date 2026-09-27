@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useCommandStore } from "@/store/commandStore";
@@ -56,6 +56,11 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
   // a single dialog enter animation; the spinner dialog only mounts for
   // genuinely slow loads.
   const showBuilderLoading = useDohertyGate(isLoadingBuilder);
+  // A retry clears the store's load error the moment it starts, and the
+  // loading dialog is gated for 400ms, so without this the dialog holding the
+  // focused Retry would vanish into nothing. Hold the failure on screen, Retry
+  // busy, until the reload settles one way or the other.
+  const [retryingError, setRetryingError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isPickerOpen) {
@@ -98,8 +103,14 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
   }, [closeBuilder]);
 
   const handleBuilderRetry = useCallback(() => {
-    if (activeCommand) void openBuilder(activeCommand, builderContext ?? context);
-  }, [activeCommand, builderContext, context, openBuilder]);
+    if (!activeCommand) return;
+    setRetryingError(builderLoadError);
+    void openBuilder(activeCommand, builderContext ?? context).finally(() =>
+      setRetryingError(null)
+    );
+  }, [activeCommand, builderContext, builderLoadError, context, openBuilder]);
+
+  const shownLoadError = builderLoadError ?? retryingError;
 
   return (
     <>
@@ -111,7 +122,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
         onDismiss={closePicker}
       />
 
-      {activeCommand && showBuilderLoading && (
+      {activeCommand && showBuilderLoading && !retryingError && (
         <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
           <AppDialog.Header>
             <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
@@ -130,7 +141,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
         </AppDialog>
       )}
 
-      {activeCommand && builderLoadError && (
+      {activeCommand && shownLoadError && (
         <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
           <AppDialog.Header>
             <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
@@ -140,8 +151,13 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
             <InlineStatusBanner
               severity="error"
               title="Couldn't load this command"
-              description={builderLoadError}
-              action={{ id: "retry", label: "Retry", onClick: handleBuilderRetry }}
+              description={shownLoadError}
+              action={{
+                id: "retry",
+                label: "Retry",
+                onClick: handleBuilderRetry,
+                loading: retryingError !== null,
+              }}
               animated={false}
               className="rounded-[var(--radius-md)]"
             />
