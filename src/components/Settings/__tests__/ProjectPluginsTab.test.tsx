@@ -186,7 +186,10 @@ function seed(plugins: ProjectPluginInfo[], enabled = true) {
 /** Open the picker and choose the entry whose visible text starts with `label`. */
 async function select(label: string) {
   fireEvent.click(screen.getByTestId("project-plugin-selector-trigger"));
-  const option = await screen.findByText(label);
+  // Within the list: a plugin's name can also be on the page (the overview lists
+  // plugins that need a look).
+  const list = await screen.findByRole("listbox", { name: "Plugins" });
+  const option = await within(list).findByText(label);
   fireEvent.click(option);
 }
 
@@ -542,18 +545,19 @@ describe("ProjectPluginsTab", () => {
     );
   });
 
-  it("disables the per-project switch for a plugin turned off everywhere", async () => {
+  it("offers no show/hide switch for a plugin turned off everywhere, only the way back", async () => {
     pluginApi.list.mockResolvedValue([installed({ disabled: true })]);
     seed([]);
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
     await select("Acme Tools");
-    const toggle = await screen.findByTestId("installed-plugin-visibility-switch");
-    expect(toggle.getAttribute("data-disabled")).not.toBeNull();
-    expect(screen.getByTestId("installed-plugin-detail").textContent).toContain(
-      "Turned off everywhere"
-    );
+    const pane = await screen.findByTestId("installed-plugin-detail");
+    // Nothing runs, so there is nothing to show or hide: no switch that could read "on".
+    expect(screen.queryByTestId("installed-plugin-visibility-switch")).toBeNull();
+    expect(pane.textContent).toContain("Turned off everywhere");
+    fireEvent.click(within(pane).getByRole("button", { name: "Open plugin manager" }));
+    expect(dispatch).toHaveBeenCalledWith("app.pluginManager", undefined, { source: "user" });
   });
 
   it("keeps a project plugin's own instance out of the installed list", async () => {
@@ -762,5 +766,136 @@ describe("ProjectPluginsTab settings deep link and lifecycle", () => {
     seed([projectPlugin({ muted: true })]);
 
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("ProjectPluginsTab failures and state honesty", () => {
+  /** Every alert on the page, and the settings row each one sits in. */
+  function alertsWithRows() {
+    return screen.getAllByRole("alert").map((alert) => ({
+      alert,
+      row: alert.closest<HTMLElement>("[data-settings-row]"),
+    }));
+  }
+
+  it("states a failed action on the row whose control made it, and retries that write", async () => {
+    pluginApi.setProjectPluginMuted.mockRejectedValueOnce(new Error("EACCES: permission denied"));
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Dashboard");
+
+    const toggle = await screen.findByTestId("project-plugin-mute-switch");
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(screen.getAllByRole("alert").length).toBeGreaterThan(0));
+    for (const { alert, row } of alertsWithRows()) {
+      // Never a line of its own above the page: on the row, beside the control.
+      expect(row).not.toBeNull();
+      expect(row!.contains(toggle)).toBe(true);
+      expect(alert.textContent).toContain("Couldn't turn off Acme Dashboard");
+      expect(alert.textContent).toContain("EACCES");
+    }
+
+    fireEvent.click(within(alertsWithRows()[0]!.row!).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(pluginApi.setProjectPluginMuted).toHaveBeenCalledTimes(2));
+    expect(pluginApi.setProjectPluginMuted.mock.calls[1]).toEqual(
+      pluginApi.setProjectPluginMuted.mock.calls[0]
+    );
+    await waitFor(() => expect(screen.queryAllByRole("alert")).toHaveLength(0));
+  });
+
+  it("keeps a failure's words off the status colours, leaving severity to the glyph", async () => {
+    pluginApi.setProjectPluginMuted.mockRejectedValueOnce(new Error("EACCES"));
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Dashboard");
+    fireEvent.click(await screen.findByTestId("project-plugin-mute-switch"));
+    await waitFor(() => expect(screen.getAllByRole("alert").length).toBeGreaterThan(0));
+
+    for (const { row } of alertsWithRows()) {
+      const coloured = [...row!.querySelectorAll<HTMLElement>("*")].filter(
+        (el) =>
+          el.tagName.toLowerCase() !== "svg" &&
+          el.closest("svg") === null &&
+          [...el.classList].some((c) => c.startsWith("text-status-"))
+      );
+      expect(coloured).toEqual([]);
+    }
+  });
+
+  it("drops a failure when the page moves on to another pane", async () => {
+    pluginApi.setProjectPluginMuted.mockRejectedValueOnce(new Error("EACCES"));
+    seed([projectPlugin()]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Dashboard");
+    fireEvent.click(await screen.findByTestId("project-plugin-mute-switch"));
+    await waitFor(() => expect(screen.getAllByRole("alert").length).toBeGreaterThan(0));
+
+    await select("This project");
+    await screen.findByTestId("project-plugins-overview");
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+    // Coming back finds the plugin as it is now, not the old attempt waiting to be read.
+    await select("Acme Dashboard");
+    await screen.findByTestId("project-plugin-mute-switch");
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+  });
+
+  it.each([
+    { folder: true, muted: false, state: "active" as const },
+    { folder: true, muted: true, state: "active" as const },
+    { folder: false, muted: false, state: "blocked" as const },
+    { folder: false, muted: true, state: "blocked" as const },
+  ])(
+    "shows the run switch on only while the plugin is running (folder $folder, muted $muted)",
+    async ({ folder, muted, state }) => {
+      seed([projectPlugin({ muted, state })], folder);
+      render(<ProjectPluginsTab />);
+      await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+      await select("Acme Dashboard");
+
+      const toggle = await screen.findByTestId("project-plugin-mute-switch");
+      const trigger = screen.getByTestId("project-plugin-selector-trigger");
+      const running = trigger.textContent?.includes("Running") ?? false;
+      expect(toggle.getAttribute("aria-checked")).toBe(String(running));
+    }
+  );
+
+  it("lists the plugins that need a look on the overview, each with a way to it", async () => {
+    seed([
+      projectPlugin(),
+      projectPlugin({
+        id: "acme.fresh",
+        instanceId: `project__${PROJECT_ID}__acme.fresh`,
+        displayName: "Fresh Plugin",
+        dirName: "fresh",
+        state: "staged",
+      }),
+      projectPlugin({
+        id: "acme.broken",
+        instanceId: `project__${PROJECT_ID}__acme.broken`,
+        displayName: "acme.broken",
+        dirName: "broken",
+        state: "invalid",
+        error: "version: must be a valid semver",
+      }),
+    ]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const group = await screen.findByRole("group", { name: "Needs attention" });
+    const labels = [...group.querySelectorAll("[data-settings-row-label]")].map(
+      (el) => el.textContent
+    );
+    expect(labels.sort()).toEqual(["Fresh Plugin", "acme.broken"]);
+
+    const fresh = [...group.querySelectorAll<HTMLElement>("[data-settings-row]")].find((row) =>
+      row.textContent?.includes("Fresh Plugin")
+    )!;
+    fireEvent.click(within(fresh).getByRole("button", { name: "Review" }));
+    const pane = await screen.findByTestId("project-plugin-detail");
+    expect(within(pane).getByRole("button", { name: "Activate plugin" })).toBeTruthy();
   });
 });

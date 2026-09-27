@@ -588,7 +588,7 @@ describe("PluginSettingsForm", () => {
     );
   });
 
-  it("lets the user accept an unstored required field's default explicitly", async () => {
+  it("shows an unstored required field as unset, with its default as the way to set it", async () => {
     render(
       <PluginSettingsForm
         plugin={makePlugin([
@@ -598,16 +598,21 @@ describe("PluginSettingsForm", () => {
       />
     );
     const input = (await screen.findByLabelText("Region")) as HTMLInputElement;
-    await waitFor(() => expect(input.value).toBe("us"));
-    // Blurring the unchanged default saves nothing, as for every field…
+    // A default never satisfies a required setting, so the field doesn't wear it
+    // as a value: it is empty, the default is only suggested, and the row says so.
+    await waitFor(() => expect(input.placeholder).toBe("us"));
+    expect(input.value).toBe("");
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+    expect(row.textContent).toContain("Not set yet");
     fireEvent.blur(input);
     expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
 
-    // …so a required one offers the acceptance as its own action. An optional
-    // field with a default needs none: its default already applies.
-    const accept = screen.getByRole("button", { name: "Use default" });
-    expect(screen.getAllByRole("button", { name: "Use default" })).toHaveLength(1);
-    fireEvent.click(accept);
+    // An optional field with a default needs no acceptance: its default applies.
+    const port = (await screen.findByLabelText("Port")) as HTMLInputElement;
+    await waitFor(() => expect(port.value).toBe("80"));
+    expect(screen.getAllByRole("button", { name: /^Use / })).toHaveLength(1);
+
+    fireEvent.click(within(row).getByRole("button", { name: "Use \u201cus\u201d" }));
     await waitFor(() =>
       expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
         "acme.test",
@@ -617,7 +622,9 @@ describe("PluginSettingsForm", () => {
         null
       )
     );
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Use default" })).toBeNull());
+    await waitFor(() => expect(input.value).toBe("us"));
+    expect(row.textContent).not.toContain("Not set yet");
+    expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
   });
 
   it("offers no default acceptance once a required value is stored", async () => {
@@ -631,7 +638,48 @@ describe("PluginSettingsForm", () => {
     );
     const input = (await screen.findByLabelText("Region")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("eu"));
-    expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
+    expect(screen.queryByText(/Not set yet/)).toBeNull();
+  });
+
+  it("drops a validation error once the field is back to its saved value", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { port: 8080 } }));
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "port", type: "number", label: "Port" }])} />
+    );
+    const input = (await screen.findByLabelText("Port")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("8080"));
+
+    fireEvent.change(input, { target: { value: "eighty" } });
+    fireEvent.blur(input);
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+    await waitFor(() => expect(row.textContent).toContain("Enter a valid number"));
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+
+    fireEvent.change(input, { target: { value: "8080" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(row.textContent).not.toContain("Enter a valid number"));
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+  });
+
+  it("puts a picked path back when saving it fails", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { out: "/srv/old" } }));
+    pluginApi.pickPath.mockResolvedValue("/srv/new");
+    pluginApi.setSettingValue.mockRejectedValueOnce(new Error("EACCES"));
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([{ id: "out", type: "directory", label: "Output folder" }])}
+      />
+    );
+    const input = (await screen.findByLabelText("Output folder")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("/srv/old"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+    await waitFor(() => expect(row.textContent).toContain("EACCES"));
+    // The field shows what is saved, not the pick that wasn't.
+    expect(input.value).toBe("/srv/old");
   });
 
   it("disables project-scoped fields when no project is active", async () => {

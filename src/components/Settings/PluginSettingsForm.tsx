@@ -79,6 +79,23 @@ function fieldLabel(def: SettingDefinition): string {
   return def.label ?? def.id;
 }
 
+/**
+ * A required text or number field starts empty, with its default as the
+ * placeholder. A default never satisfies a required setting, so showing it as
+ * the field's value made an unconfigured field look configured.
+ */
+function defaultIsPlaceholder(def: SettingDefinition, type: SettingFieldType): boolean {
+  return def.required === true && (type === "string" || type === "number");
+}
+
+/** The draft a field starts from, or returns to on reset, when nothing is stored. */
+function unsetDraft(def: SettingDefinition, type: SettingFieldType): string {
+  return defaultIsPlaceholder(def, type) ? "" : toDraft(def.default, type);
+}
+
+/** Longest default a plain string field shows on the rail rather than full width. */
+const INLINE_STRING_MAX = 24;
+
 /** Stringify a stored/default value for a text, number, or JSON input. */
 function toDraft(value: unknown, type: SettingFieldType): string {
   if (value === undefined || value === null) return "";
@@ -259,11 +276,11 @@ function SettingField({
       setBoolValue(initial === true);
       return;
     }
-    const initial = toDraft(storedValue ?? def.default, type);
+    const initial = storedValue === undefined ? unsetDraft(def, type) : toDraft(storedValue, type);
     setDraft(initial);
     setCommitted(initial);
     setError(null);
-  }, [loaded, storedValue, secretIsSet, isSecret, type, def.default]);
+  }, [loaded, storedValue, secretIsSet, isSecret, type, def]);
 
   // Existence feedback for `mustExist` path fields: probe whenever the committed
   // path changes (it may have been moved/deleted since it was picked). A blank
@@ -328,7 +345,7 @@ function SettingField({
       } else if (type === "boolean") {
         setBoolValue(def.default === true);
       } else {
-        const reset = toDraft(def.default, type);
+        const reset = unsetDraft(def, type);
         setDraft(reset);
         setCommitted(reset);
       }
@@ -338,7 +355,7 @@ function SettingField({
     } finally {
       setSaving(false);
     }
-  }, [pluginId, def.id, def.default, scope, projectId, isSecret, type]);
+  }, [pluginId, def, scope, projectId, isSecret, type]);
 
   // The row greys out only while there is nothing to edit yet; a write in flight
   // disables just the control, so the label doesn't flicker on every save.
@@ -374,7 +391,12 @@ function SettingField({
   };
 
   const commitText = async () => {
-    if (draft === committed) return;
+    // Back to what is saved: nothing to write, and whatever the last draft was
+    // rejected for no longer applies.
+    if (draft === committed) {
+      setError(null);
+      return;
+    }
     if (type === "number") {
       const trimmed = draft.trim();
       if (trimmed === "") {
@@ -467,8 +489,12 @@ function SettingField({
     try {
       const picked = await window.electron.plugin.pickPath(pluginId, request);
       if (picked === null) return; // Picker dismissed — leave the current value.
+      const previous = committed;
       setDraft(picked);
+      // A path that didn't save goes back to the saved one: the field showing the
+      // new pick beside the error would read as applied.
       if (await writeValue(picked)) setCommitted(picked);
+      else setDraft(previous);
     } catch (err) {
       setError(formatErrorMessage(err, "Couldn't open the file picker"));
       logError(`Failed to pick path for plugin setting ${pluginId}.${def.id}`, err);
@@ -506,17 +532,6 @@ function SettingField({
     <>
       <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>
       {def.required === true && <Badge size="xs">Required</Badge>}
-      {canAcceptDefault && (
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          disabled={saving}
-          onClick={() => void acceptDefault()}
-        >
-          Use default
-        </Button>
-      )}
     </>
   );
   const isModified = (isSecret ? hasStored : overridden) && loaded && scopeReady;
@@ -525,6 +540,40 @@ function SettingField({
     (pathMissing
       ? `This ${type === "file" ? "file" : "folder"} no longer exists — pick a new one`
       : null);
+  // Required and nothing stored: say so on the row, with accepting the default
+  // as the action beside it when there is one.
+  const requiredUnset =
+    def.required === true &&
+    loaded &&
+    scopeReady &&
+    !failed &&
+    (isSecret ? !hasStored : !overridden);
+  const defaultText = def.default === undefined ? "" : toDraft(def.default, type);
+  const requiredNote = requiredUnset ? (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span>
+        {canAcceptDefault ? "Not set yet — enter a value or use the default" : "Not set yet"}
+      </span>
+      {canAcceptDefault && (
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          disabled={saving}
+          onClick={() => void acceptDefault()}
+        >
+          {defaultText.length > 0 &&
+          defaultText.length <= INLINE_STRING_MAX &&
+          !defaultText.includes("\n")
+            ? `Use \u201c${defaultText}\u201d`
+            : "Use default"}
+        </Button>
+      )}
+    </span>
+  ) : null;
+  const invalid = shownError !== null;
+  const placeholderDefault =
+    defaultIsPlaceholder(def, type) && def.default !== undefined ? defaultText : undefined;
   const rowProps = {
     id: fieldId,
     label,
@@ -544,8 +593,15 @@ function SettingField({
       : failed
         ? "Saved value couldn't be read"
         : undefined,
-    // A failed write is announced where it happened; a missing path is a standing state.
-    error: error ? <span role="alert">{error}</span> : (shownError ?? undefined),
+    // A failed write is announced where it happened; a missing path, found by a
+    // probe after the form settles, is a standing state announced politely.
+    error: error ? (
+      <span role="alert">{error}</span>
+    ) : shownError ? (
+      <span role="status">{shownError}</span>
+    ) : (
+      (requiredNote ?? undefined)
+    ),
   };
 
   if (type === "boolean") {
@@ -559,6 +615,7 @@ function SettingField({
             disabled={disabled || saving}
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
+            aria-invalid={invalid}
             onCheckedChange={toggleBool}
           />
         )}
@@ -577,6 +634,7 @@ function SettingField({
             <SegmentedRadioGroup
               aria-label={label}
               aria-describedby={descriptionId}
+              aria-invalid={invalid}
               options={options.map((opt) => ({ value: opt, label: opt }))}
               value={draft}
               onChange={chooseEnum}
@@ -600,7 +658,7 @@ function SettingField({
             <SelectTrigger
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
-              aria-invalid={shownError ? true : undefined}
+              aria-invalid={invalid || undefined}
               className={SETTINGS_CONTROL_WIDTH[wide ? "wide" : "select"]}
             >
               {/* An unset enum shows the placeholder rather than silently adopting the first option. */}
@@ -630,10 +688,12 @@ function SettingField({
             type="text"
             inputMode="decimal"
             value={draft}
+            placeholder={placeholderDefault}
+            aria-required={def.required === true || undefined}
             disabled={disabled || saving}
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
-            aria-invalid={shownError ? true : undefined}
+            invalid={invalid}
             className={SETTINGS_CONTROL_WIDTH.number}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => void commitText()}
@@ -655,7 +715,7 @@ function SettingField({
             disabled={disabled || saving}
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
-            aria-invalid={shownError ? true : undefined}
+            invalid={invalid}
             rows={4}
             spellCheck={false}
             onChange={(e) => setDraft(e.target.value)}
@@ -680,9 +740,10 @@ function SettingField({
               disabled={disabled || saving}
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
-              aria-invalid={shownError ? true : undefined}
+              invalid={invalid}
               placeholder={type === "file" ? "No file selected" : "No folder selected"}
-              className="min-w-0 flex-1 font-mono text-xs"
+              // The value is a path, so mono; the placeholder is a sentence, so not.
+              className="min-w-0 flex-1 font-mono text-xs placeholder:font-sans"
             />
             <Button
               type="button"
@@ -744,7 +805,7 @@ function SettingField({
                     [descriptionId, scopeReady ? tierId : null].filter(Boolean).join(" ") ||
                     undefined
                   }
-                  aria-invalid={shownError ? true : undefined}
+                  invalid={invalid}
                   placeholder={hasStored ? "••••••••" : "Not set"}
                   autoComplete="off"
                   className="min-w-0 flex-1"
@@ -791,11 +852,16 @@ function SettingField({
     );
   }
 
-  // string
+  // string — a short declared default says the value is a word or two, which
+  // sits on the rail; anything else could be a URL or a command, so full width.
+  const inlineString =
+    typeof def.default === "string" &&
+    def.default.length > 0 &&
+    def.default.length <= INLINE_STRING_MAX;
   return (
     <SettingsRow
       {...rowProps}
-      layout="stacked"
+      layout={inlineString ? "inline" : "stacked"}
       control={({ labelId, descriptionId, disabled }) => (
         <Input
           type="text"
@@ -803,7 +869,10 @@ function SettingField({
           disabled={disabled || saving}
           aria-labelledby={labelId}
           aria-describedby={descriptionId}
-          aria-invalid={shownError ? true : undefined}
+          aria-required={def.required === true || undefined}
+          invalid={invalid}
+          placeholder={placeholderDefault}
+          className={inlineString ? SETTINGS_CONTROL_WIDTH.wide : undefined}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => void commitText()}
         />

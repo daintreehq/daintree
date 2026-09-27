@@ -70,7 +70,23 @@ export interface ProjectPluginStoreState {
   reloading: boolean;
   /** Last mutation failure, surfaced inline by the manager. */
   error: string | null;
+  /**
+   * Which action produced `error`, and what it tried to write, so a page can
+   * state the failure on the control that caused it and offer that same write
+   * again. Set and cleared together with `error`.
+   */
+  errorSource: ProjectPluginErrorSource | null;
 }
+
+/** The action behind a {@link ProjectPluginStoreState.error}, with the value it attempted. */
+export type ProjectPluginErrorSource =
+  | { action: "decide"; decision: ProjectPluginTrustDecision }
+  | { action: "activate"; pluginId: string }
+  | { action: "mute"; pluginId: string; muted: boolean }
+  | { action: "visibility"; pluginId: string; visible: boolean | null }
+  | { action: "visibilityDefault"; pluginId: string; hidden: boolean }
+  | { action: "reload" }
+  | { action: "loadVisibility" };
 
 export interface ProjectPluginActions {
   setViewProjectId: (projectId: string | null) => void;
@@ -114,6 +130,7 @@ const INITIAL: ProjectPluginStoreState = {
   visibility: EMPTY_VISIBILITY,
   reloading: false,
   error: null,
+  errorSource: null,
 };
 
 /**
@@ -200,7 +217,12 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       // The user is answering the gate, so a "decide later" from earlier in the
       // session stops applying: if this call fails, the next re-emit should be
       // allowed to put the banner back.
-      set({ deciding: decision, error: null, dismissedPromptProjectId: null });
+      set({
+        deciding: decision,
+        error: null,
+        errorSource: null,
+        dismissedPromptProjectId: null,
+      });
       try {
         await window.electron.plugin.setProjectPluginTrust(decision);
         // Clear the prompt only after main has the decision. Clearing first
@@ -210,6 +232,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       } catch (err) {
         set({
           error: formatErrorMessage(err, "Couldn't save the plugin trust decision"),
+          errorSource: { action: "decide", decision },
         });
       } finally {
         set({ deciding: null });
@@ -220,11 +243,18 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const state = get();
       if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
       if (state.activating.has(pluginId)) return;
-      set({ activating: new Set([...state.activating, pluginId]), error: null });
+      set({
+        activating: new Set([...state.activating, pluginId]),
+        error: null,
+        errorSource: null,
+      });
       try {
         await window.electron.plugin.activateStagedProjectPlugin(pluginId);
       } catch (err) {
-        set({ error: formatErrorMessage(err, `Couldn't activate '${pluginId}'`) });
+        set({
+          error: formatErrorMessage(err, `Couldn't activate '${pluginId}'`),
+          errorSource: { action: "activate", pluginId },
+        });
       } finally {
         const next = new Set(get().activating);
         next.delete(pluginId);
@@ -236,7 +266,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const state = get();
       if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
       if (state.muting.has(pluginId)) return;
-      set({ muting: new Set([...state.muting, pluginId]), error: null });
+      set({ muting: new Set([...state.muting, pluginId]), error: null, errorSource: null });
       try {
         await window.electron.plugin.setProjectPluginMuted(pluginId, muted);
       } catch (err) {
@@ -245,6 +275,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
             err,
             muted ? `Couldn't turn off '${pluginId}'` : `Couldn't turn on '${pluginId}'`
           ),
+          errorSource: { action: "mute", pluginId, muted },
         });
       } finally {
         const next = new Set(get().muting);
@@ -263,7 +294,10 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
         const visibility = await window.electron.plugin.getProjectPluginVisibility();
         set({ visibility });
       } catch (err) {
-        set({ error: formatErrorMessage(err, "Couldn't read this project's plugin visibility") });
+        set({
+          error: formatErrorMessage(err, "Couldn't read this project's plugin visibility"),
+          errorSource: { action: "loadVisibility" },
+        });
       }
     },
 
@@ -277,13 +311,14 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const overrides = { ...previous.overrides };
       if (visible === null) delete overrides[pluginId];
       else overrides[pluginId] = visible;
-      set({ visibility: { ...previous, overrides }, error: null });
+      set({ visibility: { ...previous, overrides }, error: null, errorSource: null });
       try {
         await window.electron.plugin.setProjectPluginVisibility(pluginId, visible);
       } catch (err) {
         set({
           visibility: previous,
           error: formatErrorMessage(err, `Couldn't change visibility for '${pluginId}'`),
+          errorSource: { action: "visibility", pluginId, visible },
         });
       }
     },
@@ -298,6 +333,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       set({
         visibility: { ...previous, defaultHiddenPluginIds: [...defaults] },
         error: null,
+        errorSource: null,
       });
       try {
         await window.electron.plugin.setPluginVisibilityDefault(pluginId, hidden);
@@ -305,6 +341,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
         set({
           visibility: previous,
           error: formatErrorMessage(err, `Couldn't change the default for '${pluginId}'`),
+          errorSource: { action: "visibilityDefault", pluginId, hidden },
         });
       }
     },
@@ -313,17 +350,20 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const state = get();
       if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
       if (state.reloading) return;
-      set({ reloading: true, error: null });
+      set({ reloading: true, error: null, errorSource: null });
       try {
         await window.electron.plugin.reloadProjectPlugins();
       } catch (err) {
-        set({ error: formatErrorMessage(err, "Couldn't reload this project's plugins") });
+        set({
+          error: formatErrorMessage(err, "Couldn't reload this project's plugins"),
+          errorSource: { action: "reload" },
+        });
       } finally {
         set({ reloading: false });
       }
     },
 
-    clearError: () => set({ error: null }),
+    clearError: () => set({ error: null, errorSource: null }),
 
     reset: () => set({ ...INITIAL }),
   })
