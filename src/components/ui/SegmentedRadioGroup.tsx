@@ -14,6 +14,8 @@ interface SegmentedRadioGroupProps<T extends string> {
   "aria-label": string;
   /** Help text for the whole group, e.g. a settings row's description. */
   "aria-describedby"?: string;
+  /** The group's current value was rejected — a failed save, say. */
+  "aria-invalid"?: boolean;
   disabled?: boolean;
   /** Fill the container and split it evenly between the segments. */
   fullWidth?: boolean;
@@ -48,6 +50,7 @@ export function SegmentedRadioGroup<T extends string>({
   onChange,
   "aria-label": ariaLabel,
   "aria-describedby": ariaDescribedBy,
+  "aria-invalid": ariaInvalid,
   disabled,
   fullWidth,
   className,
@@ -152,6 +155,7 @@ export function SegmentedRadioGroup<T extends string>({
       role="radiogroup"
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedBy}
+      aria-invalid={ariaInvalid || undefined}
       onKeyDown={handleKeyDown}
     >
       {thumb && (

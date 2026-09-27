@@ -362,6 +362,19 @@ export function SettingsActions({ children, status }: SettingsActionsProps) {
   );
 }
 
+/**
+ * The actions of a `stacked` row, in the wrapping line under its description: the
+ * shape a row takes when more than one action, or one long one, would squeeze the
+ * label column on the rail. Pass it as the row's `control`.
+ */
+export function SettingsRowActions({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-settings-row-actions="">
+      {children}
+    </div>
+  );
+}
+
 interface SettingsEmptyRowProps {
   /** What to add, phrased as the next step — "Add a variable to set it in every terminal". */
   children: ReactNode;

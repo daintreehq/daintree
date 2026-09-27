@@ -18,6 +18,8 @@ interface SettingsSwitchProps {
   "aria-label"?: string;
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
+  /** The value shown couldn't be saved. */
+  "aria-invalid"?: boolean;
   "data-testid"?: string;
   id?: string;
   name?: string;
@@ -32,6 +34,7 @@ export function SettingsSwitch({
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledby,
   "aria-describedby": ariaDescribedby,
+  "aria-invalid": ariaInvalid,
   "data-testid": dataTestId,
   id,
   name,
@@ -48,6 +51,7 @@ export function SettingsSwitch({
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledby}
       aria-describedby={ariaDescribedby}
+      aria-invalid={ariaInvalid || undefined}
       data-testid={dataTestId}
       tone={TONE_BY_COLOR_SCHEME[colorScheme]}
       className={className}
