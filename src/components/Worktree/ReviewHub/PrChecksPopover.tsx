@@ -1,15 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import {
-  AlertTriangle,
-  ChevronRight,
-  CircleDashed,
-  ExternalLink,
-  GitPullRequest,
-  Info,
-  RotateCw,
-  Send,
-} from "lucide-react";
+import { ChevronRight, CircleDashed, ExternalLink, Info, RotateCw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -257,28 +250,35 @@ export function PrChecksPopover({
           ) : (
             <>
               {state.kind === "error" && (
-                <ChecksNotice
-                  testId="pr-checks-error"
-                  icon={<AlertTriangle className="text-status-error" />}
-                  title="Couldn't load checks"
-                  body="The check results couldn't be read. Retry, or open the pull request to see them there."
-                />
+                <ChecksBanner testId="pr-checks-error">
+                  <InlineStatusBanner
+                    severity="error"
+                    title="Couldn't load checks"
+                    description="The check results couldn't be read. Retry, or open the pull request to see them there."
+                    {...QUIET_BANNER}
+                  />
+                </ChecksBanner>
               )}
               {state.kind === "no-pr" && (
-                <ChecksNotice
-                  testId="pr-checks-missing"
-                  icon={<GitPullRequest className="text-text-secondary" />}
-                  title={`Pull request #${prNumber} wasn't found`}
-                  body="It may have been deleted, or moved to another repository. Retry, or open it to check."
-                />
+                <ChecksBanner testId="pr-checks-missing">
+                  <InlineStatusBanner
+                    severity="warning"
+                    title={`Pull request #${prNumber} wasn't found`}
+                    description="It may have been deleted, or moved to another repository. Retry, or open it to check."
+                    {...QUIET_BANNER}
+                  />
+                </ChecksBanner>
               )}
               {state.kind === "empty" && (
-                <ChecksNotice
-                  testId="pr-checks-empty"
-                  icon={<CircleDashed className="text-text-secondary" />}
-                  title="Refresh once CI starts"
-                  body={`No checks have reported on #${prNumber} yet.`}
-                />
+                <div data-testid="pr-checks-empty" className="px-3 py-4">
+                  <EmptyState
+                    variant="zero-data"
+                    scale="popover"
+                    icon={<CircleDashed />}
+                    title="Refresh once CI starts"
+                    instant
+                  />
+                </div>
               )}
               {state.kind === "loaded" && (
                 <ChecksList
@@ -350,6 +350,12 @@ export function PrChecksPopover({
 }
 
 const SKELETON_ROWS = ["w-44", "w-56", "w-36"];
+
+/**
+ * The status region outside the popover owns every announcement; a banner that
+ * mounted as its own alert would say the same thing twice.
+ */
+const QUIET_BANNER = { role: "status", ariaLive: "off" } as const;
 
 function ChecksList({
   rows,
@@ -519,30 +525,16 @@ function describeState(
   }
 }
 
-function ChecksNotice({
-  testId,
-  icon,
-  title,
-  body,
-}: {
-  testId: string;
-  icon: ReactNode;
-  title: string;
-  body: string;
-}) {
-  // Inline and quiet, never a toast: this is a drill-down the user opened, and
-  // its failure is only meaningful inside the surface they opened. The live
-  // region above does the announcing; the footer below carries the recovery,
-  // so a retry never unmounts the control that started it.
+/**
+ * Inline and quiet, never a toast: this is a drill-down the user opened, and
+ * its failure is only meaningful inside the surface they opened. The recovery
+ * lives in the footer rather than on the banner, so a retry never unmounts the
+ * control that started it.
+ */
+function ChecksBanner({ testId, children }: { testId: string; children: ReactNode }) {
   return (
-    <div data-testid={testId} className="flex items-start gap-2.5 px-3 py-3">
-      <span className="shrink-0 mt-px [&_svg]:w-3.5 [&_svg]:h-3.5" aria-hidden="true">
-        {icon}
-      </span>
-      <span className="min-w-0">
-        <span className="block font-medium text-text-primary">{title}</span>
-        <span className="block mt-0.5 text-text-secondary">{body}</span>
-      </span>
+    <div data-testid={testId} className="p-2">
+      {children}
     </div>
   );
 }
