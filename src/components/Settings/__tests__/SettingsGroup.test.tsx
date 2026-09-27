@@ -415,6 +415,7 @@ describe("SettingsRow disabled chips", () => {
           accessory={<span data-testid="chip">Off</span>}
           disabled
           disabledReason="The folder is off"
+          control={<button type="button">Toggle</button>}
         />
       </SettingsGroup>
     );
@@ -427,10 +428,30 @@ describe("SettingsRow disabled chips", () => {
 
     rerender(
       <SettingsGroup>
-        <SettingsRow label="Run here" accessory={<span data-testid="chip">Off</span>} />
+        <SettingsRow
+          label="Run here"
+          accessory={<span data-testid="chip">Off</span>}
+          control={<button type="button">Toggle</button>}
+        />
       </SettingsGroup>
     );
     expect(dimmer(screen.getByText("Run here"))).toBeNull();
     expect(dimmer(screen.getByTestId("chip"))).toBeNull();
+  });
+
+  it("keeps a disabled row's words readable when it has no control to grey out", () => {
+    render(
+      <SettingsGroup>
+        <SettingsRow
+          label="Region"
+          description="Where previews are built"
+          disabled
+          disabledReason="Available once the plugin is turned on"
+        />
+      </SettingsGroup>
+    );
+    expect(dimmer(screen.getByText("Region"))).toBeNull();
+    expect(dimmer(screen.getByText("Where previews are built"))).toBeNull();
+    expect(screen.getByText("Available once the plugin is turned on")).toBeTruthy();
   });
 });

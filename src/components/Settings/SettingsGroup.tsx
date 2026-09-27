@@ -224,6 +224,14 @@ export function SettingsRow({
 
   const ids: SettingsRowControlIds = { labelId, descriptionId: describedBy, disabled };
   const renderedControl = typeof control === "function" ? control(ids) : control;
+  // Dimming says "this control can't be used". A disabled row with no control —
+  // a setting listed while its plugin is stopped — has nothing to grey out, so
+  // its words stay readable and the reason line says why it can't change.
+  const dimmed =
+    disabled &&
+    renderedControl !== undefined &&
+    renderedControl !== null &&
+    renderedControl !== false;
 
   const resetButton = showReset ? (
     <button
@@ -248,7 +256,7 @@ export function SettingsRow({
       {/* The whole line dims, chips included: a full-contrast chip beside a disabled
           label read as the one live thing on the row. The reset is never shown while
           disabled, so nothing interactive dims with it. */}
-      <div className={cn("flex items-center gap-1.5 flex-wrap", disabled && "opacity-50")}>
+      <div className={cn("flex items-center gap-1.5 flex-wrap", dimmed && "opacity-50")}>
         <span
           id={labelId}
           // The hook a search result lands by when its section has no DOM id.
@@ -265,7 +273,7 @@ export function SettingsRow({
       {description && (
         <div
           id={descriptionId}
-          className={cn("mt-0.5 text-xs text-text-secondary select-text", disabled && "opacity-50")}
+          className={cn("mt-0.5 text-xs text-text-secondary select-text", dimmed && "opacity-50")}
         >
           {description}
         </div>
