@@ -1361,9 +1361,6 @@ function buildElectronApi(): ElectronAPI {
         signalBuffer: SharedArrayBuffer | null;
       }> => _unwrappingInvoke(CHANNELS.TERMINAL_GET_SHARED_BUFFERS),
 
-      getAnalysisBuffer: (): Promise<SharedArrayBuffer | null> =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),
-
       forceResume: (id: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
 

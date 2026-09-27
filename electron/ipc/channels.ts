@@ -50,7 +50,6 @@ export const CHANNELS = {
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
   TERMINAL_GET_SERIALIZED_STATES: "terminal:get-serialized-states",
   TERMINAL_GET_SHARED_BUFFERS: "terminal:get-shared-buffers",
-  TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",

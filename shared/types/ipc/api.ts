@@ -341,7 +341,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       visualBuffers: SharedArrayBuffer[];
       signalBuffer: SharedArrayBuffer | null;
     }>;
-    getAnalysisBuffer(): Promise<SharedArrayBuffer | null>;
     getInfo(id: string): Promise<TerminalInfoPayload>;
     onData(
       id: string,

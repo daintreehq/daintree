@@ -142,15 +142,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     }
   };
 
-  const handleTerminalGetAnalysisBuffer = async (): Promise<SharedArrayBuffer | null> => {
-    try {
-      return ptyClient.getAnalysisBuffer();
-    } catch (error) {
-      logWarn("Failed to get analysis buffer", { error });
-      return null;
-    }
-  };
-
   const handleTerminalReplayHistory = async ({
     terminalId,
     maxLines,
@@ -524,7 +515,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       ),
       getInfo: op(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo),
       getSharedBuffers: op(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers),
-      getAnalysisBuffer: op(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER, handleTerminalGetAnalysisBuffer),
       replayHistory: opValidated(
         CHANNELS.TERMINAL_REPLAY_HISTORY,
         TerminalReplayHistoryPayloadSchema,

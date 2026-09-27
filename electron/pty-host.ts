@@ -213,7 +213,7 @@ let initialPoolWarmDeferred = false;
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)
 // Visual buffers: consumed by renderer (xterm.js) - critical path, sharded for isolation
-// Analysis buffer: consumed by Web Worker - best-effort, can drop frames
+// Analysis buffer: best-effort, can drop frames; no renderer consumer since #12886
 let visualBuffers: SharedRingBuffer[] = [];
 let visualSignalView: Int32Array | null = null;
 let analysisBuffer: SharedRingBuffer | null = null;
