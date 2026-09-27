@@ -74,11 +74,14 @@ export type McpApprovalScope = "once" | "session";
  *
  * - `tier`: the project's `system` tier pre-authorized it. Only written by
  *   builds before the core/full split; no tier pre-authorizes a call now.
+ * - `project-setting`: the project's "Skip confirmations" setting at the `full`
+ *   tier pre-authorized it (#12876).
  * - `user`: the user approved this call in the dialog.
  * - `session-grant`: an earlier "Allow for this session" covered it.
  * - `native-grant`: a native automation grant covered it (#10648).
  */
-export type McpDispatchAuthorization = "tier" | "user" | "session-grant" | "native-grant";
+export type McpDispatchAuthorization =
+  "tier" | "project-setting" | "user" | "session-grant" | "native-grant";
 
 /**
  * Audit-record severity tier. Derived from the dispatch result at record-write

@@ -58,6 +58,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const [devServerLoadTimeout, setDevServerLoadTimeout] = useState<number | undefined>(undefined);
   const [turbopackEnabled, setTurbopackEnabled] = useState<boolean>(true);
   const [daintreeMcpTier, setDaintreeMcpTier] = useState<DaintreeMcpTier>("off");
+  const [daintreeMcpSkipConfirmations, setDaintreeMcpSkipConfirmations] = useState(false);
   const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
   const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
@@ -150,7 +151,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       defaultWorktreeMode,
       turbopackEnabled,
       daintreeMcpTier,
-      forgeProviderOverride
+      forgeProviderOverride,
+      daintreeMcpSkipConfirmations
     );
   }, [
     projectName,
@@ -178,6 +180,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     turbopackEnabled,
     daintreeMcpTier,
     forgeProviderOverride,
+    daintreeMcpSkipConfirmations,
   ]);
   // Layout effect, not passive: callers such as EnvironmentVariablesEditor push
   // new values and invoke flush() in the same tick, and flush() reads this ref
@@ -205,6 +208,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setDevServerLoadTimeout(undefined);
       setTurbopackEnabled(true);
       setDaintreeMcpTier("off");
+      setDaintreeMcpSkipConfirmations(false);
       setCommandOverrides([]);
       setCopyTreeSettings({});
       setProjectAutoSaveError(null);
@@ -243,6 +247,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialDevServerLoadTimeout = projectSettings.devServerLoadTimeout;
     const initialTurbopackEnabled = projectSettings.turbopackEnabled ?? true;
     const initialDaintreeMcpTier = resolveDaintreeMcpTier(projectSettings);
+    const initialDaintreeMcpSkipConfirmations =
+      projectSettings.daintreeMcpSkipConfirmations === true;
     const initialCommandOverrides = projectSettings.commandOverrides || [];
     const initialCopyTreeSettings = projectSettings.copyTreeSettings || {};
     const initialBranchPrefixMode = projectSettings.branchPrefixMode ?? "none";
@@ -281,6 +287,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setDevServerLoadTimeout(initialDevServerLoadTimeout);
     setTurbopackEnabled(initialTurbopackEnabled);
     setDaintreeMcpTier(initialDaintreeMcpTier);
+    setDaintreeMcpSkipConfirmations(initialDaintreeMcpSkipConfirmations);
     setCommandOverrides(initialCommandOverrides);
     setCopyTreeSettings(initialCopyTreeSettings);
     setBranchPrefixMode(initialBranchPrefixMode);
@@ -327,7 +334,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialDefaultWorktreeMode,
       initialTurbopackEnabled,
       initialDaintreeMcpTier,
-      initialForgeProviderOverride
+      initialForgeProviderOverride,
+      initialDaintreeMcpSkipConfirmations
     );
     setProjectIsInitialized(true);
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
@@ -415,6 +423,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         devServerLoadTimeout,
         turbopackEnabled: turbopackEnabled === true ? undefined : false,
         daintreeMcpTier: daintreeMcpTier !== "off" ? daintreeMcpTier : undefined,
+        daintreeMcpSkipConfirmations: daintreeMcpSkipConfirmations ? true : undefined,
         exposeDaintreeMcpToAgents: undefined,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
@@ -514,6 +523,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setTurbopackEnabled,
     daintreeMcpTier,
     setDaintreeMcpTier,
+    daintreeMcpSkipConfirmations,
+    setDaintreeMcpSkipConfirmations,
     commandOverrides,
     setCommandOverrides,
     copyTreeSettings,

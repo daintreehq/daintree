@@ -10321,6 +10321,60 @@ describe("agent-pane approval (#12692)", () => {
     pane.sessionStore.grantCache.dispose();
   });
 
+  // #12876: the old `system` tier's auto-confirm lives on as the project's own
+  // "Skip confirmations" setting, captured at launch.
+  it("runs a confirm-gated tool preconfirmed for a Full pane that skips confirmations", async () => {
+    const pane = paneServer("full", { paneSkipConfirmations: true });
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, {
+      name: "worktree.resource.teardown",
+      arguments: { worktreeId: "wt-1" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(pane.requestApproval).not.toHaveBeenCalled();
+    expect(pane.dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      true
+    );
+    expect(lastAudit(pane.appendAuditRecord).authorization).toBe("project-setting");
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("still asks before an above-tier call when a Core pane skips confirmations", async () => {
+    const pane = paneServer("core", { paneSkipConfirmations: true });
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, {
+      name: "worktree.resource.teardown",
+      arguments: { worktreeId: "wt-1" },
+    });
+
+    expect(pane.requestApproval).toHaveBeenCalledTimes(1);
+    expect(lastAudit(pane.appendAuditRecord).authorization).not.toBe("project-setting");
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("ignores skip-confirmations on a session that is not an agent pane", async () => {
+    const pane = paneServer("full", { paneSkipConfirmations: true, requestApproval: undefined });
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, {
+      name: "worktree.resource.teardown",
+      arguments: { worktreeId: "wt-1" },
+    });
+
+    expect(pane.dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      false
+    );
+    expect(lastAudit(pane.appendAuditRecord).authorization).toBeUndefined();
+    pane.sessionStore.grantCache.dispose();
+  });
+
   it("asks before an above-tier call instead of refusing it, then runs it once", async () => {
     const pane = paneServer("core");
     await pane.server.connect(makeMockTransport());

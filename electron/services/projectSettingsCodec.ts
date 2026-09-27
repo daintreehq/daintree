@@ -291,6 +291,19 @@ function decodeMcpTier(raw: unknown): DaintreeMcpTier | undefined {
   return normalizeDaintreeMcpTier(raw) ?? undefined;
 }
 
+// A project stored at the pre-split `system` tier had opted into running
+// destructive actions without asking. That tier now reads as `full`, so the
+// opt-in is recovered here from the raw value — but only while the key itself
+// is absent, so an explicit choice either way wins. Materialized as `true` so
+// the next save, which writes the tier back as `full`, keeps it; off is
+// `undefined`, which is what an absent key means once the tier is rewritten.
+function decodeMcpSkipConfirmations(raw: Record<string, unknown>): true | undefined {
+  const optedIn = Object.prototype.hasOwnProperty.call(raw, "daintreeMcpSkipConfirmations")
+    ? raw.daintreeMcpSkipConfirmations === true
+    : raw.daintreeMcpTier === "system";
+  return optedIn ? true : undefined;
+}
+
 function decodeBranchPrefixMode(raw: unknown): "none" | "username" | "custom" | undefined {
   if (raw === "none" || raw === "username" || raw === "custom") return raw;
   return undefined;
@@ -481,6 +494,7 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
     defaultWorktreeMode:
       typeof migrated.defaultWorktreeMode === "string" ? migrated.defaultWorktreeMode : undefined,
     daintreeMcpTier: decodeMcpTier(migrated.daintreeMcpTier),
+    daintreeMcpSkipConfirmations: decodeMcpSkipConfirmations(migrated),
     exposeDaintreeMcpToAgents:
       typeof migrated.exposeDaintreeMcpToAgents === "boolean"
         ? migrated.exposeDaintreeMcpToAgents
@@ -581,6 +595,7 @@ export const ProjectSettingsSaveSchema = z
     activeResourceEnvironment: z.string().optional(),
     defaultWorktreeMode: z.string().optional(),
     daintreeMcpTier: z.enum(["off", "core", "full"]).optional(),
+    daintreeMcpSkipConfirmations: z.boolean().optional(),
     exposeDaintreeMcpToAgents: z.boolean().optional(),
     browserAllowedHosts: z.array(z.string()).optional(),
     agentInstructions: z.unknown().optional(),

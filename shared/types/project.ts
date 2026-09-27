@@ -793,6 +793,14 @@ export interface ProjectSettings {
    */
   daintreeMcpTier?: DaintreeMcpTier;
   /**
+   * Whether an agent pane at the `full` tier runs the destructive actions its
+   * tier permits without the confirmation dialog. Independent of the tier so no
+   * tier skips a confirm on its own; a project stored at the pre-split `system`
+   * tier, which auto-confirmed, reads as `true` until the user changes it. A
+   * force delete that would discard changes still asks for the typed name.
+   */
+  daintreeMcpSkipConfirmations?: boolean;
+  /**
    * @deprecated Use `daintreeMcpTier` instead. Kept for one-cycle migration of existing project files.
    * `true` migrates to `core` on read; `false`/undefined migrates to `off`.
    */
@@ -843,6 +851,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   defaultWorktreeMode: "local",
   browserAllowedHosts: "local",
   daintreeMcpTier: "local",
+  daintreeMcpSkipConfirmations: "local",
   exposeDaintreeMcpToAgents: "local",
 } as const satisfies Record<keyof ProjectSettings, FieldShareability>;
 
@@ -869,7 +878,7 @@ export type ProjectSettingsAgentExposure = "exposed" | "internal";
  *   secure storage into `environmentVariables` in plaintext) and `projectIconSvg` (250KB
  *   of markup). `resourceEnvironments` joins them because it stores raw provisioning and
  *   `connect` shell strings that routinely embed credentials.
- * - Access-control state: `daintreeMcpTier` (`project.saveSettings` already strips it from
+ * - Access-control state: `daintreeMcpTier` and `daintreeMcpSkipConfirmations` (`project.saveSettings` already strips them from
  *   writes to block self-elevation; it should not be readable either) and
  *   `browserAllowedHosts`, which is the browser panel's approval list.
  * - Renderer-only UI state: dismissal flags, editor/viewer preferences, saved fleet scopes.
@@ -916,6 +925,7 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   defaultWorktreeMode: "exposed",
   browserAllowedHosts: "internal",
   daintreeMcpTier: "internal",
+  daintreeMcpSkipConfirmations: "internal",
   exposeDaintreeMcpToAgents: "internal",
 } as const satisfies Record<keyof ProjectSettings, ProjectSettingsAgentExposure>;
 

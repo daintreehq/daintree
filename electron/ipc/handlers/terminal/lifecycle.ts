@@ -902,6 +902,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                   ...(launchActionContext !== undefined
                     ? { actionContext: launchActionContext }
                     : {}),
+                  ...(tier === "full" && projSettings.daintreeMcpSkipConfirmations === true
+                    ? { skipConfirmations: true }
+                    : {}),
                 });
                 // Every format's hook for the orchestration bearer, whether or
                 // not the agent reads it from here.
