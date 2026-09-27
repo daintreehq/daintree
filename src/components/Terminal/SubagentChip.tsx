@@ -17,6 +17,7 @@ import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SUBAGENT_PROVIDERS, toSubagentProvider } from "@/clients/subagentProviders";
 import { useSubagents } from "@/hooks/useSubagents";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import {
   subagentAttentionRank,
   subagentStatusLabel,
@@ -31,16 +32,13 @@ import type {
   SubagentProvider,
 } from "@shared/types/ipc/agentSubagents";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { HEADER_CHIP_FOCUS_CLASS as CHIP_FOCUS_CLASS } from "./terminalHeaderChip";
 
 const TONE_CLASSES: Record<"error" | "waiting" | "muted", string> = {
   error: "text-status-error",
   waiting: "text-state-waiting",
   muted: "text-text-secondary",
 };
-
-/** The header's own control ring (see `PanelHeader`), so the chip focuses like its neighbours. */
-const CHIP_FOCUS_CLASS =
-  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary";
 
 /**
  * Children that need the user first, the provider's order otherwise. Sorting
@@ -274,6 +272,9 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   // that happened while they were elsewhere.
   const [refreshRequested, setRefreshRequested] = useState(false);
   const refreshButtonRef = useRef<HTMLButtonElement>(null);
+  // With motion off the spin never runs, so the icon steps down to muted — the one
+  // busy cue left once refresh stopped being natively disabled.
+  const skipMotion = useShouldSkipMotion();
   const { result, isLoading, refresh, refreshError } = useSubagents(terminalId, {
     provider: active,
     agentState,
@@ -366,7 +367,12 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
             )}
             aria-label="Refresh subagents"
           >
-            <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3.5 h-3.5" aria-hidden />
+            <SpinningIcon
+              icon={RefreshCw}
+              active={isLoading}
+              className={cn("w-3.5 h-3.5", isLoading && skipMotion && "text-text-muted")}
+              aria-hidden
+            />
           </button>
         </div>
         {/* Always mounted, so each outcome is announced when it lands. The
