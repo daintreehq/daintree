@@ -300,6 +300,42 @@ describe("DeletedWorktreeGroup", () => {
     }
   });
 
+  it("summarises the next close from running members only", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+      { id: "t3", worktreeId: "wt-3" },
+    ]);
+    const now = Date.now();
+    const { container } = renderGroup([
+      // Held rows are re-pinned every pass, so the soonest held one must not win.
+      { ...makeDeleted("wt-1", "feature/alpha", now + 5_000), holdReason: "agent" },
+      makeDeleted("wt-2", "feature/beta", now + 30_000),
+      makeDeleted("wt-3", "feature/gamma", now + 50_000),
+    ]);
+
+    const readout = container.querySelector("[data-testid='deleted-worktree-group-countdown']");
+    const seconds = Number(readout?.textContent?.replace("s", ""));
+    expect(seconds).toBeGreaterThan(25);
+    expect(seconds).toBeLessThanOrEqual(30);
+    // Kept out of the disclosure button so its name does not tick.
+    expect(readout?.closest("button")).toBeNull();
+  });
+
+  it("drops the summary timer when every member is held", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+    ]);
+    const now = Date.now();
+    const { container } = renderGroup([
+      { ...makeDeleted("wt-1", "feature/alpha", now + 5_000), holdReason: "agent" },
+      { ...makeDeleted("wt-2", "feature/beta", now + 9_000), holdReason: "drag" },
+    ]);
+
+    expect(container.querySelector("[data-testid='deleted-worktree-group-countdown']")).toBeNull();
+  });
+
   it("files every rail chip under the worktree it came from", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1", title: "claude" },

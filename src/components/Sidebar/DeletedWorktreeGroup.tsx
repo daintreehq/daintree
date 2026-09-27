@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
   FolderX,
@@ -10,6 +10,8 @@ import {
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import {
   getDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
@@ -98,6 +100,34 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
 
   const terminalCount = members.reduce((n, m) => n + m.panels.length, 0);
 
+  // A glanceable "next close" for the whole group. Only running members count:
+  // a held member's deadline is re-pinned by the sweep on every pass, so it is
+  // not a deadline at all, and letting it win made this readout jitter between
+  // two values. Each member's own timer — held ones included — is in the rail.
+  const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
+  const nextExpiresAt = useMemo(() => {
+    let soonest: number | null = null;
+    for (const { worktree, panels } of members) {
+      if (panels.length === 0 || worktree.expiresAt === null || worktree.holdReason !== null) {
+        continue;
+      }
+      if (soonest === null || worktree.expiresAt < soonest) soonest = worktree.expiresAt;
+    }
+    return soonest;
+  }, [members]);
+  const hasNextClose = nextExpiresAt !== null && cleanupSeconds > 0;
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasNextClose);
+  // The interval sleeps while every member is held; resync on the way back so
+  // the readout does not open on a stale second.
+  useEffect(() => {
+    if (hasNextClose) setNowTick(Date.now());
+  }, [hasNextClose]);
+  const nextCloseSeconds =
+    nextExpiresAt === null
+      ? 0
+      : Math.ceil(Math.min(Math.max(0, nextExpiresAt - nowTick), cleanupSeconds * 1000) / 1000);
+
   const handleClearAll = useCallback(() => {
     const preview: DestructivePreviewGroup[] = members
       .filter((m) => m.panels.length > 0)
@@ -178,6 +208,19 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
             </span>
           </span>
         </button>
+        {/* Outside the disclosure button, so a value that changes every second
+            never becomes part of that button's name. */}
+        {hasNextClose && (
+          <span
+            role="timer"
+            aria-label={`Next cleanup in ${nextCloseSeconds} seconds`}
+            title={`Next cleanup in ${nextCloseSeconds}s`}
+            className="shrink-0 font-mono text-2xs tabular-nums text-text-secondary"
+            data-testid="deleted-worktree-group-countdown"
+          >
+            {nextCloseSeconds}s
+          </span>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <button
