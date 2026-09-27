@@ -192,21 +192,18 @@ describe("projectSettingsDirty", () => {
     });
 
     it("should detect a flag-only daintreeMcpSkipConfirmations change", () => {
-      const args = [
-        "Project",
-        "🌲",
-        "npm run dev",
-        undefined,
-        [],
-        [],
-        [],
-        undefined,
-        [],
-        {},
-      ] as const;
       const make = (skip: boolean) =>
         createProjectSettingsSnapshot(
-          ...args,
+          "Project",
+          "🌲",
+          "npm run dev",
+          undefined,
+          [],
+          [],
+          [],
+          undefined,
+          [],
+          {},
           "none",
           "",
           undefined,
