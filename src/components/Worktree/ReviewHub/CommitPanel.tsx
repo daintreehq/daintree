@@ -50,6 +50,41 @@ function formatFileCount(count: number): string {
   return `${count} file${count === 1 ? "" : "s"}`;
 }
 
+/**
+ * Every unmet requirement in one sentence, most structural first, so fixing the
+ * named one never uncovers a second the user was not told about.
+ */
+function describeBlockers({
+  isDetachedHead,
+  hasConflicts,
+  needsStaging,
+  needsMessage,
+  stagedSummary,
+}: {
+  isDetachedHead: boolean;
+  hasConflicts: boolean;
+  needsStaging: boolean;
+  needsMessage: boolean;
+  stagedSummary: string;
+}): string {
+  const steps = [
+    isDetachedHead && "switch to a branch",
+    hasConflicts && "resolve merge conflicts",
+    needsStaging && "stage files",
+    needsMessage && "write a commit message",
+  ].filter((step): step is string => typeof step === "string");
+  const joined =
+    steps.length > 1 ? `${steps.slice(0, -1).join(", ")} and ${steps[steps.length - 1]}` : steps[0];
+  if (!joined) return "";
+  if (isDetachedHead) return `Detached HEAD — ${joined} to commit`;
+  const sentence = joined.charAt(0).toUpperCase() + joined.slice(1);
+  // With files staged and nothing structural in the way, the count confirms what
+  // the message will cover.
+  return !needsStaging && !hasConflicts
+    ? `${sentence} · ${stagedSummary}`
+    : `${sentence} to commit`;
+}
+
 interface CommitPanelProps {
   stagedCount: number;
   isDetachedHead: boolean;
@@ -107,6 +142,9 @@ export function CommitPanel({
   // Which submit is in flight. Commit & push holds it through the commit and the
   // refresh that follows, so the composer never looks idle before the push starts.
   const [pendingAction, setPendingAction] = useState<"commit" | "commit-push" | null>(null);
+  // The count being committed, held from the click: the refresh after the commit
+  // drops the live count to what is left, often zero, before the push begins.
+  const [pendingCount, setPendingCount] = useState(0);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
   const destinationLabel = pushDestination
     ? `${pushDestination.remote}/${pushDestination.branch}`
@@ -213,6 +251,7 @@ export function CommitPanel({
     if (!canCommit || actionsBusy) return;
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
+    setPendingCount(stagedCount);
     setPendingAction("commit");
     try {
       await onCommit(commitMessage);
@@ -223,12 +262,13 @@ export function CommitPanel({
       setPendingAction(null);
       actionInFlightRef.current = false;
     }
-  }, [canCommit, actionsBusy, commitMessage, onCommit, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit, onCommitMessageChange]);
 
   const handleCommitAndPush = useCallback(async () => {
     if (!canCommit || actionsBusy) return;
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
+    setPendingCount(stagedCount);
     setPendingAction("commit-push");
     try {
       await onCommitAndPush(commitMessage);
@@ -239,7 +279,7 @@ export function CommitPanel({
       setPendingAction(null);
       actionInFlightRef.current = false;
     }
-  }, [canCommit, actionsBusy, commitMessage, onCommitAndPush, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommitAndPush, onCommitMessageChange]);
 
   const handlePrimaryClick = useCallback(() => {
     if (isBlocked) {
@@ -426,20 +466,16 @@ export function CommitPanel({
     );
     statusTitle = pushTarget ? `Pushing to ${pushTarget}` : undefined;
   } else if (isCommitting) {
-    statusContent = `Committing ${formatFileCount(stagedCount)}…`;
-  } else if (isDetachedHead) {
-    statusTone = "warning";
-    statusContent = "Detached HEAD — switch to a branch to commit";
-  } else if (hasConflicts) {
-    statusTone = "warning";
-    statusContent = "Resolve merge conflicts to commit";
-  } else if (stagedCount === 0) {
-    statusContent =
-      commitMessage.trim().length === 0
-        ? "Stage files and write a commit message"
-        : "Stage files to commit";
-  } else if (commitMessage.trim().length === 0) {
-    statusContent = `Write a commit message · ${stagedSummary}`;
+    statusContent = `Committing ${formatFileCount(pendingCount)}…`;
+  } else if (isBlocked) {
+    statusTone = isDetachedHead || hasConflicts ? "warning" : "neutral";
+    statusContent = describeBlockers({
+      isDetachedHead,
+      hasConflicts,
+      needsStaging: stagedCount === 0,
+      needsMessage: commitMessage.trim().length === 0,
+      stagedSummary,
+    });
   } else if (isVerifying) {
     statusContent = "Checking staged changes…";
   } else if (hasRemote) {
@@ -457,7 +493,7 @@ export function CommitPanel({
   }
 
   const showShortcut = !isBlocked && !actionsBusy;
-  const progressRows = isPushing ? progressEntries.filter((e) => e.progress != null) : [];
+  const progressRows = isPushing ? progressEntries : [];
 
   return (
     <div className="border-t border-divider p-3 space-y-2" data-testid="review-hub-commit-panel">
@@ -559,8 +595,18 @@ export function CommitPanel({
       {progressRows.length > 0 && (
         <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 text-2xs text-text-secondary">
           {progressRows.map((e) => {
-            const value = Math.min(100, Math.max(0, Math.round(e.progress ?? 0)));
             const label = pushStageLabel(e.stage);
+            // Git reports some stages (remote hook output, mostly) with no
+            // percentage. A bar would draw that as 0%; say what was seen instead.
+            if (e.progress == null) {
+              return (
+                <div key={e.stage} className="contents">
+                  <span className="whitespace-nowrap">{label}</span>
+                  <span className="col-span-2 truncate">Reported, no percentage</span>
+                </div>
+              );
+            }
+            const value = Math.min(100, Math.max(0, Math.round(e.progress)));
             return (
               <div key={e.stage} className="contents">
                 <span className="whitespace-nowrap">{label}</span>

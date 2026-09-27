@@ -1095,6 +1095,34 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
     });
 
+    it("keeps the composer on screen through a push after the commit empties the tree", async () => {
+      let finishPush: () => void = () => {};
+      pushMock.mockImplementation(() => new Promise<void>((resolve) => (finishPush = resolve)));
+      usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      fireEvent.change(screen.getByLabelText("Commit message"), {
+        target: { value: "feat: thing" },
+      });
+
+      // The commit leaves nothing behind: the refresh that precedes the push reads
+      // a clean tree.
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ hasRemote: true, staged: [], unstaged: [] })
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Commit & push/i }));
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(pushMock).toHaveBeenCalled());
+
+      expect(screen.getByTestId("review-hub-commit-panel")).toBeTruthy();
+      await act(async () => finishPush());
+      await waitFor(() => expect(screen.queryByTestId("review-hub-commit-panel")).toBeNull());
+    });
+
     it("does not call push when commit itself fails", async () => {
       commitMock.mockRejectedValueOnce(new Error("nothing to commit"));
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));

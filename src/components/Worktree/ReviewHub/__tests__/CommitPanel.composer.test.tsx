@@ -68,7 +68,7 @@ describe("CommitPanel composer", () => {
     expect(loud).toMatch(/over/);
   });
 
-  it("names every determinate push stage as a progressbar and drops stages git gave no value", () => {
+  it("names every determinate push stage as a progressbar and shows valueless stages as text", () => {
     const pushProgress = new Map([
       ["counting", progress("counting", 100)],
       ["writing", progress("writing", 37.4)],
@@ -87,7 +87,27 @@ describe("CommitPanel composer", () => {
       expect(now).toBeGreaterThanOrEqual(Number(bar.getAttribute("aria-valuemin")));
       expect(now).toBeLessThanOrEqual(Number(bar.getAttribute("aria-valuemax")));
     }
-    expect(screen.queryByText(/^Remote/)).toBeNull();
+    // A stage with no percentage is still activity the user should see, but never
+    // as a bar reading 0%.
+    expect(screen.getByText("Remote")).toBeTruthy();
+  });
+
+  it("names every unmet requirement, not just the first", () => {
+    renderPanel({ isDetachedHead: true, stagedCount: 0, commitMessage: "" });
+    const text = screen.getByTestId("review-hub-commit-status").textContent ?? "";
+    expect(text).toMatch(/branch/);
+    expect(text).toMatch(/stage files/);
+    expect(text).toMatch(/commit message/);
+  });
+
+  it("keeps the submitted count while the commit empties the staged list", async () => {
+    let finishCommit: () => void = () => {};
+    const onCommitAndPush = vi.fn(() => new Promise<void>((resolve) => (finishCommit = resolve)));
+    const { rerender, props } = renderPanel({ skipPushConfirm: true, onCommitAndPush });
+    fireEvent.click(screen.getByRole("button", { name: /^Commit & push$/i }));
+    rerender(<CommitPanel {...props} onCommitAndPush={onCommitAndPush} stagedCount={0} />);
+    expect(screen.getByTestId("review-hub-commit-status").textContent).toContain("2 files");
+    finishCommit();
   });
 
   it("speaks the push target through a status region, not the visible line", () => {

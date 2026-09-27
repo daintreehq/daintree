@@ -223,6 +223,9 @@ export function ReviewHubContent({
   const showPushBanner = pushError !== null && !pushBannerDismissed;
   const [pushProgress, setPushProgress] = useState<Map<string, PushProgressEvent>>(new Map());
   const [pushTargetBranch, setPushTargetBranch] = useState<string | null>(null);
+  // A commit that empties the tree would otherwise unmount the composer before
+  // its push starts, taking the push target and progress with it.
+  const [isCommitPushInFlight, setIsCommitPushInFlight] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
@@ -1364,19 +1367,24 @@ export function ReviewHubContent({
       setActionError(null);
       setPushError(null);
       debouncedBgRefreshRef.current?.cancel();
+      setIsCommitPushInFlight(true);
       try {
-        await window.electron.git.commit(worktreePath, message);
-      } catch (err) {
-        setActionError({
-          title: "Couldn't commit changes",
-          detail: formatErrorMessage(err, "Failed to commit changes"),
-        });
-        throw err;
+        try {
+          await window.electron.git.commit(worktreePath, message);
+        } catch (err) {
+          setActionError({
+            title: "Couldn't commit changes",
+            detail: formatErrorMessage(err, "Failed to commit changes"),
+          });
+          throw err;
+        }
+        // Same review reset as handleCommit — the changeset starts over.
+        useDiffViewedStore.getState().clearWorktree(worktreePath);
+        await refresh();
+        await runPush();
+      } finally {
+        setIsCommitPushInFlight(false);
       }
-      // Same review reset as handleCommit — the changeset starts over.
-      useDiffViewedStore.getState().clearWorktree(worktreePath);
-      await refresh();
-      await runPush();
     },
     [worktreePath, refresh, runPush]
   );
@@ -2430,8 +2438,12 @@ export function ReviewHubContent({
             scroll Skeleton above owns the role="status" announcement. */}
         {diffMode === "working-tree" && showWorkingTreeSkeleton && (
           <div className="border-t border-divider p-3 space-y-2" aria-hidden="true">
+            <div className="flex items-center justify-between">
+              <SkeletonBone immediate className="h-3 w-24" />
+              <SkeletonBone immediate className="h-2.5 w-8" />
+            </div>
             <SkeletonBone immediate className="h-14 w-full" />
-            <SkeletonBone immediate className="h-2.5 w-8 ml-auto" />
+            <SkeletonBone immediate className="h-3 w-48" />
             <div className="flex items-center gap-2">
               <SkeletonBone immediate className="h-7 flex-1" />
               <SkeletonBone immediate className="h-7 w-7 shrink-0" />
@@ -2442,7 +2454,7 @@ export function ReviewHubContent({
         {/* Commit panel — only in working-tree mode, and never during a conflict op */}
         {diffMode === "working-tree" &&
           status &&
-          totalChanges > 0 &&
+          (totalChanges > 0 || isCommitPushInFlight) &&
           !loadError &&
           !isOperationState && (
             <CommitPanel
