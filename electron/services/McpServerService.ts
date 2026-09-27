@@ -37,11 +37,13 @@ import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
-import { handleTerminalGetStatusViewless } from "./mcp-server/terminalStatus.js";
+import {
+  handleTerminalGetStatusViewless,
+  isAgentPaneInWorkspace,
+} from "./mcp-server/terminalStatus.js";
 import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
 import { TerminalNotifyService, paneNotifyKey } from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
-import { isAssistantTerminalRecord } from "./assistantTerminal.js";
 import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
@@ -368,21 +370,8 @@ export class McpServerService {
         if (info === null) throw new Error(`Could not read terminal '${terminalId}'.`);
         return info.agentState ?? null;
       },
-      // The overlay's own PTY is in no panel store, so the assistant's input
-      // never reaches it and neither does its read (#12883).
-      getAgentPaneProjectId: (terminalId) => {
-        const ptyClient = getPtyClient();
-        if (
-          !ptyClient ||
-          isAssistantTerminalRecord({
-            id: terminalId,
-            isAssistantTerminal: ptyClient.isAssistantTerminal(terminalId),
-          })
-        ) {
-          return null;
-        }
-        return ptyClient.getTerminalProjectId(terminalId);
-      },
+      isAgentPaneInWorkspace: (terminalId, workspaceId) =>
+        isAgentPaneInWorkspace(getPtyClient(), terminalId, workspaceId),
       terminalNotify: this.terminalNotify,
       replyWaiter: this.replyWaiter,
       getCachedManifest: () => this.bridge.getCachedManifest(),

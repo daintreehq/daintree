@@ -1945,7 +1945,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "Agent panel `id` this session created or was handed. Required; no focus fallback.",
+            "Agent panel `id` the description says you may read. Required; no focus fallback.",
         },
         maxBytes: {
           description: "Text budget in escaped bytes, 1024 to 49152; default 24576.",

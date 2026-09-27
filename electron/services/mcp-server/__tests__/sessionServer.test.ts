@@ -8362,8 +8362,11 @@ describe("session-scoped resource ownership (#11909)", () => {
         origin: "help" | "assistant-pane",
         inView: (terminalId: string) => boolean
       ) {
-        const isTerminalInPinnedWorkspace = vi.fn(inView);
+        const isTerminalInPinnedWorkspace = vi.fn(async (id: string) => inView(id));
         const h = readHarness(sessionId);
+        // The assistant's own tier, not the external one the harness seeds:
+        // the external allowlist admits this tool too, so it would prove nothing.
+        h.store.sessionTierMap.set(sessionId, "core");
         h.store.sessionOriginMap.set(sessionId, origin);
         const deps = { ...h.deps, isTerminalInPinnedWorkspace };
         return {
@@ -8399,32 +8402,37 @@ describe("session-scoped resource ownership (#11909)", () => {
         }
       );
 
-      it("refuses a pane outside its pinned view, without reading", async () => {
-        const { server, deps, dispatchAction, handleTerminalReadLastMessageOwned } =
-          assistantReadHarness("s-assist-foreign", "help", () => false);
+      it.each(["help", "assistant-pane"] as const)(
+        "%s is refused a pane outside its pinned view, without reading",
+        async (origin) => {
+          const { server, deps, handleTerminalReadLastMessageOwned } = assistantReadHarness(
+            `s-assist-foreign-${origin}`,
+            origin,
+            () => false
+          );
 
-        const result = await callTool(server, {
-          name: "terminal.readLastMessageOwned",
-          arguments: { terminalId: "elsewhere" },
-        });
+          const result = await callTool(server, {
+            name: "terminal.readLastMessageOwned",
+            arguments: { terminalId: "elsewhere" },
+          });
 
-        expect(result.isError).toBe(true);
-        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
-        expect(errorText(result)).toContain("project this assistant is open in");
-        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
-        expect(dispatchAction).not.toHaveBeenCalled();
-        expect(deps.appendAuditRecord).toHaveBeenCalledWith(
-          expect.objectContaining({
-            outcome: {
-              kind: "result",
-              value: expect.objectContaining({
-                ok: false,
-                error: expect.objectContaining({ code: "RESOURCE_NOT_OWNED" }),
-              }),
-            },
-          })
-        );
-      });
+          expect(result.isError).toBe(true);
+          expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+          expect(errorText(result)).toContain("project this assistant is open in");
+          expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+          expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+            expect.objectContaining({
+              outcome: {
+                kind: "result",
+                value: expect.objectContaining({
+                  ok: false,
+                  error: expect.objectContaining({ code: "RESOURCE_NOT_OWNED" }),
+                }),
+              },
+            })
+          );
+        }
+      );
 
       // The view is the whole boundary: a pane the assistant created, but whose
       // view it can no longer resolve, is refused like any other.
@@ -8478,7 +8486,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       // An agent pane's bearer is an external origin: the ledger still decides,
       // however the view check would answer.
       it("never consults the view for an agent pane's session", async () => {
-        const isTerminalInPinnedWorkspace = vi.fn(() => true);
+        const isTerminalInPinnedWorkspace = vi.fn(async () => true);
         const { deps, handleTerminalReadLastMessageOwned } = readHarness("s-pane-read");
         const server = createSessionServer("s-pane-read", {
           ...deps,

@@ -1920,11 +1920,6 @@ export class PtyClient extends EventEmitter {
     return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
   }
 
-  /** Whether main spawned this terminal for the Daintree Assistant overlay. */
-  isAssistantTerminal(id: string): boolean {
-    return this.pendingSpawns.get(id)?.isAssistantTerminal === true;
-  }
-
   /**
    * Workspaces that currently own at least one tracked terminal (#12320).
    *

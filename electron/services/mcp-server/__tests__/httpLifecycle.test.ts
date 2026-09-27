@@ -904,7 +904,7 @@ describe("HttpLifecycle", () => {
   });
 
   describe("buildSessionServerDeps — the assistant's pinned-view read scope (#12883)", () => {
-    type ScopeDeps = { isTerminalInPinnedWorkspace?: (terminalId: string) => boolean };
+    type ScopeDeps = { isTerminalInPinnedWorkspace?: (terminalId: string) => Promise<boolean> };
     const buildDeps = (lc: HttpLifecycle, sessionId: string): ScopeDeps =>
       (
         lc as unknown as { buildSessionServerDeps: (id: string) => ScopeDeps }
@@ -913,11 +913,14 @@ describe("HttpLifecycle", () => {
     const PIN = 404;
     let view: { isDestroyed: () => boolean; send: () => void };
     let workspaceOfView: string | null;
-    let terminalProjects: Map<string, string>;
+    let panes: Map<string, string>;
 
     function setup(options: { pinned?: boolean; registry?: unknown } = {}) {
       const deps = fakeDeps();
-      deps.getAgentPaneProjectId = (id) => terminalProjects.get(id) ?? null;
+      const isAgentPaneInWorkspace = vi.fn(
+        async (id: string, workspaceId: string) => panes.get(id) === workspaceId
+      );
+      deps.isAgentPaneInWorkspace = isAgentPaneInWorkspace;
       if (options.pinned !== false) deps.sessionStore.sessionWebContentsMap.set("session-1", PIN);
       const lc = new HttpLifecycle(deps);
       const getWorkspaceRefForWebContents = vi.fn((id: number) =>
@@ -934,14 +937,14 @@ describe("HttpLifecycle", () => {
                   ? { services: { projectViewManager: { getWorkspaceRefForWebContents } } }
                   : undefined,
             };
-      return { deps, lc, getWorkspaceRefForWebContents };
+      return { deps, lc, getWorkspaceRefForWebContents, isAgentPaneInWorkspace };
     }
 
     beforeEach(() => {
       view = { isDestroyed: () => false, send: () => undefined };
       mockWebContentsById.set(PIN, view);
       workspaceOfView = "ws-a";
-      terminalProjects = new Map([
+      panes = new Map([
         ["mine", "ws-a"],
         ["theirs", "ws-b"],
       ]);
@@ -951,61 +954,82 @@ describe("HttpLifecycle", () => {
       mockWebContentsById.delete(PIN);
     });
 
-    it("admits a terminal in the pinned view's workspace and nothing else", () => {
-      const { lc, getWorkspaceRefForWebContents } = setup();
+    it("admits a pane of the pinned view's workspace and nothing else", async () => {
+      const { lc, getWorkspaceRefForWebContents, isAgentPaneInWorkspace } = setup();
       const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
 
-      expect(inView("mine")).toBe(true);
-      expect(inView("theirs")).toBe(false);
-      expect(inView("untracked")).toBe(false);
+      expect(await inView("mine")).toBe(true);
+      expect(await inView("theirs")).toBe(false);
+      expect(await inView("untracked")).toBe(false);
       expect(getWorkspaceRefForWebContents).toHaveBeenCalledWith(PIN);
+      expect(isAgentPaneInWorkspace).toHaveBeenCalledWith("mine", "ws-a");
     });
 
-    it("refuses an unpinned session", () => {
-      const { lc } = setup({ pinned: false });
-      expect(buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+    it("refuses an unpinned session without looking the terminal up", async () => {
+      const { lc, isAgentPaneInWorkspace } = setup({ pinned: false });
+      expect(await buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+      expect(isAgentPaneInWorkspace).not.toHaveBeenCalled();
     });
 
-    it("rechecks on every call, so a pin dropped after build refuses", () => {
+    it("rechecks on every call, so a pin dropped after build refuses", async () => {
       const { deps, lc } = setup();
       const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
-      expect(inView("mine")).toBe(true);
+      expect(await inView("mine")).toBe(true);
 
       deps.sessionStore.sessionWebContentsMap.delete("session-1");
 
-      expect(inView("mine")).toBe(false);
+      expect(await inView("mine")).toBe(false);
     });
 
-    it("refuses once the pinned view is destroyed", () => {
+    it("refuses when the view goes while the record lookup is out", async () => {
+      const { lc, isAgentPaneInWorkspace } = setup();
+      isAgentPaneInWorkspace.mockImplementationOnce(async () => {
+        view.isDestroyed = () => true;
+        return true;
+      });
+
+      expect(await buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+    });
+
+    it("refuses when the view is repointed while the record lookup is out", async () => {
+      const { lc, isAgentPaneInWorkspace } = setup();
+      isAgentPaneInWorkspace.mockImplementationOnce(async () => {
+        workspaceOfView = "ws-b";
+        return true;
+      });
+
+      expect(await buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+    });
+
+    it("refuses once the pinned view is destroyed", async () => {
       const { lc } = setup();
       const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
 
       view.isDestroyed = () => true;
 
-      expect(inView("mine")).toBe(false);
+      expect(await inView("mine")).toBe(false);
     });
 
-    it("refuses a recycled webContents id, even one showing the same workspace", () => {
+    it("refuses a recycled webContents id, even one showing the same workspace", async () => {
       const { lc } = setup();
       const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
 
       mockWebContentsById.set(PIN, { isDestroyed: () => false, send: () => undefined });
 
-      expect(inView("mine")).toBe(false);
+      expect(await inView("mine")).toBe(false);
     });
 
-    it("refuses when the view's workspace is unknown, rather than matching an unknown terminal", () => {
+    it("refuses when the view's workspace is unknown", async () => {
       workspaceOfView = null;
-      const { lc } = setup();
-      const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
+      const { lc, isAgentPaneInWorkspace } = setup();
 
-      expect(inView("mine")).toBe(false);
-      expect(inView("untracked")).toBe(false);
+      expect(await buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+      expect(isAgentPaneInWorkspace).not.toHaveBeenCalled();
     });
 
-    it("refuses without a registry, and when the lookup throws", () => {
+    it("refuses without a registry, and when a lookup throws", async () => {
       const noRegistry = setup({ registry: null });
-      expect(buildDeps(noRegistry.lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(
+      expect(await buildDeps(noRegistry.lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(
         false
       );
 
@@ -1016,14 +1040,22 @@ describe("HttpLifecycle", () => {
           },
         },
       });
-      expect(buildDeps(throwing.lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+      expect(await buildDeps(throwing.lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(
+        false
+      );
+
+      const rejecting = setup();
+      rejecting.isAgentPaneInWorkspace.mockRejectedValueOnce(new Error("pty host gone"));
+      expect(await buildDeps(rejecting.lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(
+        false
+      );
     });
 
-    it("refuses when main cannot place terminals at all", () => {
+    it("refuses when main cannot look terminals up at all", async () => {
       const { deps, lc } = setup();
-      delete deps.getAgentPaneProjectId;
+      delete deps.isAgentPaneInWorkspace;
 
-      expect(buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+      expect(await buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
     });
   });
 

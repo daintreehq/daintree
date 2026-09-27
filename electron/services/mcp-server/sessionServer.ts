@@ -959,7 +959,7 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * answer `false` whenever either side is unknown. Absent, every such read is
    * refused.
    */
-  isTerminalInPinnedWorkspace?: (terminalId: string) => boolean;
+  isTerminalInPinnedWorkspace?: (terminalId: string) => Promise<boolean>;
   /**
    * Terminal notices. Optional so fixtures that never exercise them need not
    * stub them; absent, `terminal.notifyWhenIdle` and `notify: true` answer
@@ -2520,7 +2520,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const readsByPinnedView =
             rendererOwnedOrigin && actionId === TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL;
           const inPinnedView =
-            readsByPinnedView && deps.isTerminalInPinnedWorkspace?.(resourceId) === true;
+            readsByPinnedView &&
+            (await deps.isTerminalInPinnedWorkspace?.(resourceId).catch(() => false)) === true;
           // A hand-over is consulted only after the ownership ledger, and only
           // by the tools that declare it enough (#12490). The cleanup tools
           // never reach it, so an adopted terminal cannot be closed through

@@ -392,17 +392,6 @@ describe("PtyClient lifecycle ledger", () => {
       expect(client.getTerminalProjectId("t1")).toBe("p-live");
     });
 
-    // What keeps the assistant's reads off its own overlay PTY (#12883).
-    it("reports which tracked terminals back the assistant overlay", () => {
-      const client = createReadyClient();
-      client.spawn("pane", { ...baseOptions, projectId: "p" });
-      client.spawn("overlay", { ...baseOptions, projectId: "p", isAssistantTerminal: true });
-
-      expect(client.isAssistantTerminal("pane")).toBe(false);
-      expect(client.isAssistantTerminal("overlay")).toBe(true);
-      expect(client.isAssistantTerminal("unknown")).toBe(false);
-    });
-
     it("restores the running spawn, not an earlier refused one, when duplicates overlap", () => {
       const client = createReadyClient();
       client.spawn("t1", { ...baseOptions, projectId: "p-live" }); // generation 1

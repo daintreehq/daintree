@@ -816,7 +816,7 @@ export function registerTerminalQueryActions(
         .string()
         .min(1)
         .describe(
-          "Agent panel `id` this session created or was handed. Required; no focus fallback."
+          "Agent panel `id` the description says you may read. Required; no focus fallback."
         ),
       maxBytes: z
         .number()

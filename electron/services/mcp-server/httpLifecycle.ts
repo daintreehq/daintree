@@ -180,11 +180,10 @@ export interface HttpLifecycleDeps {
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalAgentState?: import("./sessionServer.js").SessionServerDeps["readTerminalAgentState"];
   /**
-   * The workspace an agent pane was spawned into, read off the pty-host's spawn
-   * tracking; `null` when main never tracked it or it backs the assistant
-   * overlay rather than a pane (#12883).
+   * Whether the pty-host's record places a terminal as an agent pane of this
+   * workspace (#12883). `false` for anything it cannot place.
    */
-  getAgentPaneProjectId?: (terminalId: string) => string | null;
+  isAgentPaneInWorkspace?: (terminalId: string, workspaceId: string) => Promise<boolean>;
   /** Terminal notices. Absent, `terminal.notifyWhenIdle` and `notify: true` answer not-eligible. */
   terminalNotify?: import("./terminalNotify.js").TerminalNotifyHandlers;
   replyWaiter?: Pick<import("./replyWaiter.js").ReplyWaiterService, "wait">;
@@ -1845,21 +1844,28 @@ export class HttpLifecycle {
      * lives on. Only this view's own manager is asked; never the focused
      * window's or the active project's.
      */
-    const isTerminalInPinnedWorkspace = (terminalId: string): boolean => {
-      if (pinnedWebContentsId === null || !pinnedWebContents) return false;
-      try {
-        if (this.deps.sessionStore.sessionWebContentsMap.get(sessionId) !== pinnedWebContentsId) {
-          return false;
-        }
-        const live = webContentsModule.fromId(pinnedWebContentsId);
-        if (live !== pinnedWebContents || live.isDestroyed()) return false;
-        const workspaceId = this.registry
+    const pinnedWorkspaceId = (): string | null => {
+      if (pinnedWebContentsId === null || !pinnedWebContents) return null;
+      if (this.deps.sessionStore.sessionWebContentsMap.get(sessionId) !== pinnedWebContentsId) {
+        return null;
+      }
+      const live = webContentsModule.fromId(pinnedWebContentsId);
+      if (live !== pinnedWebContents || live.isDestroyed()) return null;
+      return (
+        this.registry
           ?.getByWebContentsId(pinnedWebContentsId)
-          ?.services.projectViewManager?.getWorkspaceRefForWebContents(
-            pinnedWebContentsId
-          )?.workspaceId;
-        if (!workspaceId) return false;
-        return this.deps.getAgentPaneProjectId?.(terminalId) === workspaceId;
+          ?.services.projectViewManager?.getWorkspaceRefForWebContents(pinnedWebContentsId)
+          ?.workspaceId ?? null
+      );
+    };
+    const isTerminalInPinnedWorkspace = async (terminalId: string): Promise<boolean> => {
+      try {
+        const workspaceId = pinnedWorkspaceId();
+        if (!workspaceId || !this.deps.isAgentPaneInWorkspace) return false;
+        if (!(await this.deps.isAgentPaneInWorkspace(terminalId, workspaceId))) return false;
+        // The record lookup is a round trip, and the view can go, or be
+        // repointed, while it is out.
+        return pinnedWorkspaceId() === workspaceId;
       } catch {
         return false;
       }
