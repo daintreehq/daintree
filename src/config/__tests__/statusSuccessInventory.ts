@@ -739,5 +739,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 87;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 91;
+export const EXPECTED_STATUS_SUCCESS_SITES = 86;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 90;
