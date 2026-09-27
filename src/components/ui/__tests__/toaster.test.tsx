@@ -2126,6 +2126,62 @@ describe("Toast controls and layering", () => {
     expect(useNotificationStore.getState().notifications.some((n) => !n.dismissed)).toBe(false);
   });
 
+  it("holds a keyboard-activated confirmation while focus stays inside", async () => {
+    const outside = createFixtureButton("Outside");
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        message: "Branch",
+        duration: 0,
+        actions: [{ label: "Copy", successLabel: "Copied", onClick: vi.fn() }],
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    const copy = screen.getByRole("button", { name: "Copy" });
+    await act(async () => {
+      copy.focus();
+    });
+    // Enter/Space activation: a synthetic click with detail 0.
+    fireEvent.click(copy, { detail: 0 });
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(useNotificationStore.getState().notifications.some((n) => !n.dismissed)).toBe(true);
+
+    await act(async () => {
+      outside.focus();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(useNotificationStore.getState().notifications.some((n) => !n.dismissed)).toBe(false);
+  });
+
+  // Chromium focuses a clicked button, so focus alone must not pin a
+  // pointer-confirmed toast open.
+  it("lets a pointer-activated confirmation dismiss even with focus inside", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        message: "Branch",
+        duration: 0,
+        actions: [{ label: "Copy", successLabel: "Copied", onClick: vi.fn() }],
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    const copy = screen.getByRole("button", { name: "Copy" });
+    await act(async () => {
+      copy.focus();
+    });
+    fireEvent.click(copy, { detail: 1 });
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(useNotificationStore.getState().notifications.some((n) => !n.dismissed)).toBe(false);
+  });
+
   // An untitled toast's count belongs beside the event it counts, not on an
   // otherwise empty row above it.
   it("sets an untitled toast's count badge on the message row", async () => {

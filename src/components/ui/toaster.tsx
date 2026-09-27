@@ -148,6 +148,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   type ActionStatus = "idle" | "loading" | "success";
   const [actionStatus, setActionStatus] = useState<ActionStatus>("idle");
   const [activeActionIndex, setActiveActionIndex] = useState<number | null>(null);
+  const [actionActivatedByKeyboard, setActionActivatedByKeyboard] = useState(false);
   // An action still running holds the toast: letting the timer dismiss it
   // mid-flight would drop the result (and its confirmation) on the floor.
   const isActionPending = activeActionIndex !== null && actionStatus !== "success";
@@ -356,11 +357,13 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   ]);
 
   // The success confirmation dwells, then dismisses. It holds while the pointer
-  // rests on the card or the window is blurred, so it's never cut off unseen.
-  // Focus doesn't hold it: Chromium focuses a clicked button, so focus-inside
-  // would pin every pointer-confirmed toast open until the user clicked away.
+  // rests on the card, the window is blurred, or — after a keyboard activation —
+  // focus stays inside. Focus only counts for the keyboard: Chromium focuses a
+  // clicked button, so for a pointer activation focus-inside would pin the
+  // toast open until the user clicked away.
+  const holdsDwellOnFocus = isFocusInside && actionActivatedByKeyboard;
   useEffect(() => {
-    if (actionStatus !== "success" || isHovered || isWindowBlurred) return;
+    if (actionStatus !== "success" || isHovered || isWindowBlurred || holdsDwellOnFocus) return;
     dwellTimerRef.current = setTimeout(() => {
       if (mountedRef.current) dismissRef.current();
     }, UI_ACTION_SUCCESS_DWELL_MS);
@@ -370,7 +373,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
         dwellTimerRef.current = null;
       }
     };
-  }, [actionStatus, isHovered, isWindowBlurred]);
+  }, [actionStatus, isHovered, isWindowBlurred, holdsDwellOnFocus]);
 
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
   const countBadge =
@@ -506,8 +509,13 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
             ];
             if (actions.length === 0) return null;
 
-            const handleActionClick = (action: (typeof actions)[number], index: number) => {
+            const handleActionClick = (
+              action: (typeof actions)[number],
+              index: number,
+              byKeyboard: boolean
+            ) => {
               if (activeActionIndex !== null) return;
+              setActionActivatedByKeyboard(byKeyboard);
 
               const result = action.onClick();
 
@@ -595,7 +603,9 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
                       // Forced colours flatten outline and ghost to the same
                       // border; this hook restores the primary's heavier one.
                       data-notification-action={variant}
-                      onClick={() => handleActionClick(action, index)}
+                      // Enter/Space activate a button with a synthetic click
+                      // whose detail is 0; a pointer click counts presses.
+                      onClick={(e) => handleActionClick(action, index, e.detail === 0)}
                       className={cn(isDimmed && "opacity-50 pointer-events-none")}
                       // aria-disabled, not disabled: Chromium drops focus from a
                       // control the moment it becomes disabled, stranding a
