@@ -400,3 +400,90 @@ describe("Dependents explain themselves to assistive tech", () => {
     expect(container).toBeTruthy();
   });
 });
+
+describe("SettingsRow disabled chips", () => {
+  /** The nearest ancestor (or self) that dims its content. */
+  function dimmer(el: Element): Element | null {
+    return el.closest(".opacity-50");
+  }
+
+  it("dims a disabled row's chips with its label, and neither while enabled", () => {
+    const { rerender } = render(
+      <SettingsGroup>
+        <SettingsRow
+          label="Run here"
+          accessory={<span data-testid="chip">Off</span>}
+          disabled
+          disabledReason="The folder is off"
+          control={<button type="button">Toggle</button>}
+        />
+      </SettingsGroup>
+    );
+    const label = screen.getByText("Run here");
+    const chip = screen.getByTestId("chip");
+    expect(dimmer(label)).not.toBeNull();
+    expect(dimmer(chip)).toBe(dimmer(label));
+    // The reason is what the row is for while disabled, so it stays at full contrast.
+    expect(dimmer(screen.getByText("The folder is off"))).toBeNull();
+
+    rerender(
+      <SettingsGroup>
+        <SettingsRow
+          label="Run here"
+          accessory={<span data-testid="chip">Off</span>}
+          control={<button type="button">Toggle</button>}
+        />
+      </SettingsGroup>
+    );
+    expect(dimmer(screen.getByText("Run here"))).toBeNull();
+    expect(dimmer(screen.getByTestId("chip"))).toBeNull();
+  });
+
+  it("keeps a disabled row's words readable when it has no control to grey out", () => {
+    render(
+      <SettingsGroup>
+        <SettingsRow
+          label="Region"
+          description="Where previews are built"
+          disabled
+          disabledReason="Available once the plugin is turned on"
+        />
+      </SettingsGroup>
+    );
+    expect(dimmer(screen.getByText("Region"))).toBeNull();
+    expect(dimmer(screen.getByText("Where previews are built"))).toBeNull();
+    expect(screen.getByText("Available once the plugin is turned on")).toBeTruthy();
+  });
+});
+
+describe("Settings errors", () => {
+  it("states every settings error in neutral words beside a status glyph", async () => {
+    const { SettingsInlineError } = await import("../SettingsGroup");
+    const { container } = render(
+      <>
+        <SettingsInlineError>Standalone error</SettingsInlineError>
+        <SettingsGroup>
+          <SettingsRow label="Row" error="Row error" control={<input aria-label="x" />} />
+        </SettingsGroup>
+        <SettingsSelect
+          label="Loose select"
+          value="a"
+          options={[{ value: "a", label: "A" }]}
+          onValueChange={noop}
+          error="Select error"
+        />
+      </>
+    );
+    for (const text of ["Standalone error", "Row error", "Select error"]) {
+      const words = screen.getByText(text);
+      const line = words.closest("p")!;
+      expect(line.querySelector("svg")).not.toBeNull();
+      const coloured = [line, ...line.querySelectorAll("*")].filter(
+        (el) =>
+          el.closest("svg") === null && [...el.classList].some((c) => c.startsWith("text-status-"))
+      );
+      expect(coloured).toEqual([]);
+    }
+    expect(container).toBeTruthy();
+  });
+});

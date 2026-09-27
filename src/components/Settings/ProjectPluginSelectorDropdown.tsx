@@ -23,7 +23,7 @@ export interface ProjectPluginOption {
   pluginId: string;
   name: string;
   origin: "project" | "installed";
-  /** Short state word beside the name — "Running", "Staged", "Off", "Unreadable". */
+  /** Short state word beside the name — "Running", "Staged", "Off", "Invalid". */
   status: string;
   /** Whether the plugin is doing anything in this project right now. */
   active: boolean;
@@ -39,9 +39,14 @@ type Item =
   | { kind: "overview"; id: typeof PROJECT_PLUGINS_OVERVIEW_ID }
   | { kind: "plugin"; id: string; plugin: ProjectPluginOption };
 
+/**
+ * Named for where the plugins come from. "This project" is already the fixed
+ * first entry's name, and a group header reading the same words sat directly
+ * under it meaning something else.
+ */
 const GROUP_LABEL: Record<ProjectPluginOption["origin"], string> = {
-  project: "This project",
-  installed: "Installed",
+  project: "Project plugins",
+  installed: "Installed plugins",
 };
 
 /**
@@ -198,7 +203,9 @@ export function ProjectPluginSelectorDropdown({
           role="listbox"
           id="project-plugin-selector-list"
           aria-label="Plugins"
-          className="overflow-y-auto max-h-60 p-1"
+          // Tall enough for both groups in a settings dialog: at 240px the installed
+          // group started below the fold with nothing saying it was there.
+          className="overflow-y-auto max-h-[min(28rem,60vh)] p-1"
         >
           {items.map((item, index) => {
             const isActive = index === activeIndex;

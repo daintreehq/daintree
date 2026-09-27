@@ -10,7 +10,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { SETTINGS_CONTROL_WIDTH, SettingsRow, useSettingsGroup } from "./SettingsGroup";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsInlineError,
+  SettingsRow,
+  useSettingsGroup,
+} from "./SettingsGroup";
 
 export interface SettingsSelectOption {
   value: string;
@@ -172,11 +177,7 @@ export function SettingsSelect({
           {description}
         </p>
       )}
-      {isError && (
-        <p id={errorId} className="text-xs text-status-error">
-          {error}
-        </p>
-      )}
+      {isError && <SettingsInlineError id={errorId}>{error}</SettingsInlineError>}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useId, useRef, useEffect } from "react";
 import type { ComponentPropsWithoutRef, KeyboardEvent, ReactNode } from "react";
 import { Check, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { settingsRowFrameClass, useSettingsGroup } from "./SettingsGroup";
+import { SettingsInlineError, settingsRowFrameClass, useSettingsGroup } from "./SettingsGroup";
 
 export interface ChoiceboxOption<T extends string = string> {
   value: T;
@@ -263,9 +263,9 @@ export function SettingsChoicebox<T extends string = string>({
           })}
         </div>
         {isError && (
-          <p id={errorId} className={cn(frame, "pt-0 text-xs text-status-error")}>
+          <SettingsInlineError id={errorId} className={cn(frame, "pt-0")}>
             {error}
-          </p>
+          </SettingsInlineError>
         )}
       </div>
     );
@@ -391,11 +391,7 @@ export function SettingsChoicebox<T extends string = string>({
           {description}
         </p>
       )}
-      {isError && (
-        <p id={errorId} className="text-xs text-status-error">
-          {error}
-        </p>
-      )}
+      {isError && <SettingsInlineError id={errorId}>{error}</SettingsInlineError>}
     </div>
   );
 }

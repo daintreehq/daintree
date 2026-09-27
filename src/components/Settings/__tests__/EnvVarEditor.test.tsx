@@ -29,6 +29,7 @@ vi.mock("lucide-react", () => ({
   // InlineStatusBanner's severity glyphs, reached through ImportEnvDialog.
   XCircle: () => <span data-testid="x-circle-icon" />,
   CheckCircle2: () => <span data-testid="check-circle-icon" />,
+  CircleAlert: () => <span data-testid="circle-alert-icon" />,
   Info: () => <span data-testid="info-icon" />,
 }));
 

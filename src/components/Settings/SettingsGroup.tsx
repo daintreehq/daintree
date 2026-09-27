@@ -224,6 +224,14 @@ export function SettingsRow({
 
   const ids: SettingsRowControlIds = { labelId, descriptionId: describedBy, disabled };
   const renderedControl = typeof control === "function" ? control(ids) : control;
+  // Dimming says "this control can't be used". A disabled row with no control —
+  // a setting listed while its plugin is stopped — has nothing to grey out, so
+  // its words stay readable and the reason line says why it can't change.
+  const dimmed =
+    disabled &&
+    renderedControl !== undefined &&
+    renderedControl !== null &&
+    renderedControl !== false;
 
   const resetButton = showReset ? (
     <button
@@ -245,14 +253,17 @@ export function SettingsRow({
 
   const text = (
     <div className="min-w-0 flex-1">
-      <div className="flex items-center gap-1.5 flex-wrap">
+      {/* The whole line dims, chips included: a full-contrast chip beside a disabled
+          label read as the one live thing on the row. The reset is never shown while
+          disabled, so nothing interactive dims with it. */}
+      <div className={cn("flex items-center gap-1.5 flex-wrap", dimmed && "opacity-50")}>
         <span
           id={labelId}
           // The hook a search result lands by when its section has no DOM id.
           data-settings-row-label=""
           // min-w-0 so a label that truncates (an icon + name) shrinks inside its
           // column instead of painting under the controls on the rail.
-          className={cn("min-w-0 text-sm font-medium text-text-primary", disabled && "opacity-50")}
+          className="min-w-0 text-sm font-medium text-text-primary"
         >
           {label}
         </span>
@@ -262,7 +273,7 @@ export function SettingsRow({
       {description && (
         <div
           id={descriptionId}
-          className={cn("mt-0.5 text-xs text-text-secondary select-text", disabled && "opacity-50")}
+          className={cn("mt-0.5 text-xs text-text-secondary select-text", dimmed && "opacity-50")}
         >
           {description}
         </div>
@@ -317,21 +328,9 @@ export function SettingsRow({
         renderedControl && <div className="min-w-0">{renderedControl}</div>
       )}
       {error && (
-        // The glyph carries the severity; the words stay neutral, because
-        // severity-coloured text falls under 4.5:1 on most themes.
-        <p
-          id={errorId}
-          className={cn(
-            "flex items-start gap-1.5 text-xs text-text-primary",
-            layout === "inline" && "basis-full"
-          )}
-        >
-          <CircleAlert
-            className="w-3.5 h-3.5 mt-px shrink-0 text-status-error"
-            aria-hidden="true"
-          />
-          <span>{error}</span>
-        </p>
+        <SettingsInlineError id={errorId} className={cn(layout === "inline" && "basis-full")}>
+          {error}
+        </SettingsInlineError>
       )}
     </div>
   );
@@ -358,6 +357,52 @@ export function SettingsActions({ children, status }: SettingsActionsProps) {
         {status}
       </div>
       <div className="flex items-center gap-2 shrink-0">{children}</div>
+    </div>
+  );
+}
+
+interface SettingsInlineErrorProps {
+  children: ReactNode;
+  id?: string;
+  className?: string;
+  role?: "alert" | "status";
+  "data-testid"?: string;
+}
+
+/**
+ * A settings error as words: the glyph carries the severity and the words stay
+ * neutral, because severity-coloured text falls under 4.5:1 on most themes. The
+ * form every settings error takes, a row's own or one a custom control states.
+ */
+export function SettingsInlineError({
+  children,
+  id,
+  className,
+  role,
+  "data-testid": testId,
+}: SettingsInlineErrorProps) {
+  return (
+    <p
+      id={id}
+      role={role}
+      data-testid={testId}
+      className={cn("flex items-start gap-1.5 text-xs text-text-primary", className)}
+    >
+      <CircleAlert className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
+      <span className="min-w-0">{children}</span>
+    </p>
+  );
+}
+
+/**
+ * The actions of a `stacked` row, in the wrapping line under its description: the
+ * shape a row takes when more than one action, or one long one, would squeeze the
+ * label column on the rail. Pass it as the row's `control`.
+ */
+export function SettingsRowActions({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-settings-row-actions="">
+      {children}
     </div>
   );
 }

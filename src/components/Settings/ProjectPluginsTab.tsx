@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { AlertCircle, FolderOpen, RefreshCw } from "lucide-react";
+import { FolderOpen, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -8,6 +8,7 @@ import {
   SettingsEmptyRow,
   SettingsGroup,
   SettingsRow,
+  SettingsRowActions,
 } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import {
@@ -37,13 +38,14 @@ import {
   selectSurfaceChoice,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
-import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { useProjectPluginStore, type ProjectPluginErrorSource } from "@/store/projectPluginStore";
 import { useProjectStore } from "@/store/projectStore";
 import { systemClient } from "@/clients";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   PROJECT_PLUGIN_INSTANCE_PREFIX,
@@ -66,7 +68,7 @@ const STATE_LABEL: Record<ProjectPluginState, string> = {
   active: "Running",
   staged: "Staged",
   blocked: "Off",
-  invalid: "Unreadable",
+  invalid: "Invalid",
 };
 
 /**
@@ -86,6 +88,64 @@ export function projectPluginStatus(plugin: ProjectPluginInfo, folderTrusted: bo
   if (plugin.state === "invalid") return STATE_LABEL.invalid;
   if (plugin.muted || !folderTrusted) return "Off";
   return STATE_LABEL[plugin.state];
+}
+
+/**
+ * A failed write, stated on the row whose control made it: what didn't happen,
+ * the reason main gave, and the same write again. `SettingsRow` supplies the
+ * error glyph and keeps the words on the neutral ramp.
+ */
+function RowFailure({
+  summary,
+  detail,
+  onRetry,
+}: {
+  summary: string;
+  detail?: string | null;
+  onRetry?: () => void;
+}) {
+  return (
+    // The recovery sits under the words rather than beside them, so the glyph
+    // stays on the first line and a long reason from main never squeezes it.
+    <span role="alert" className="flex flex-col items-start gap-2">
+      <span className="min-w-0 break-words">
+        {summary}
+        {detail && <span className="text-text-secondary"> — {detail}</span>}
+      </span>
+      {onRetry && (
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      )}
+    </span>
+  );
+}
+
+type FailureOf<A extends ProjectPluginErrorSource["action"]> = Extract<
+  ProjectPluginErrorSource,
+  { action: A }
+>;
+
+function isFailureOf<A extends ProjectPluginErrorSource["action"]>(
+  source: ProjectPluginErrorSource,
+  action: A
+): source is FailureOf<A> {
+  return source.action === action;
+}
+
+/**
+ * The store's last failure when it came from `action` — and, for a per-plugin
+ * action, from this plugin — so each row answers only for its own writes.
+ */
+function useStoreFailure<A extends ProjectPluginErrorSource["action"]>(
+  action: A,
+  pluginId?: string
+): { source: FailureOf<A>; detail: string | null } | null {
+  const error = useProjectPluginStore((s) => s.error);
+  const source = useProjectPluginStore((s) => s.errorSource);
+  if (error === null || source === null || !isFailureOf(source, action)) return null;
+  if (pluginId !== undefined && "pluginId" in source && source.pluginId !== pluginId) return null;
+  return { source, detail: source.reason };
 }
 
 const EMPTY_CANVAS_STATUS = {
@@ -134,6 +194,14 @@ function EmptyCanvasSection() {
           <SettingsRow
             label="Show on the empty canvas"
             description={EMPTY_CANVAS_STATUS[choice ?? "none"]}
+            error={
+              failedSave !== null ? (
+                <RowFailure
+                  summary="Couldn't save the canvas choice"
+                  onRetry={() => void setSurfaceChoice("emptyCanvas", failedSave.choice)}
+                />
+              ) : undefined
+            }
             control={({ descriptionId }) => (
               <SettingsSwitch
                 checked={choice !== "stock"}
@@ -160,113 +228,337 @@ function EmptyCanvasSection() {
               </Button>
             }
           />
-          {failedSave !== null && (
-            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-              <p role="alert" className="text-xs text-status-error">
-                Couldn&apos;t save the canvas choice.
-              </p>
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => void setSurfaceChoice("emptyCanvas", failedSave.choice)}
-              >
-                Retry
-              </Button>
-            </div>
-          )}
         </SettingsGroup>
       </SettingsSection>
     </div>
   );
 }
 
+/** What a running project plugin's own settings still need, as the overview reports it. */
+interface SettingsGaps {
+  /** Required settings with nothing stored, as `{ id, label }`, in manifest order. */
+  missing: { id: string; label: string }[];
+  /** `mustExist` paths whose stored value no longer resolves on disk. */
+  brokenPaths: { id: string; label: string }[];
+  /** The check itself couldn't be made, so the two lists above can't be trusted. */
+  failed: boolean;
+}
+
+const PATH_TYPES = new Set(["path", "directory", "file"]);
+
+/**
+ * The setup gaps of each running project plugin that declares required settings
+ * or paths that must exist: the same required-settings read the plugin's own
+ * setup strip makes, plus a probe of each stored `mustExist` path. Keyed by
+ * instance id, and re-read whenever that plugin's settings change.
+ */
+function usePluginSettingsGaps(
+  plugins: readonly ProjectPluginInfo[],
+  folderTrusted: boolean
+): { gaps: ReadonlyMap<string, SettingsGaps>; recheck: () => void } {
+  const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const [gaps, setGaps] = useState<ReadonlyMap<string, SettingsGaps>>(() => new Map());
+  const [attempt, setAttempt] = useState(0);
+  const candidates = useMemo(
+    () =>
+      plugins.flatMap((p) => {
+        if (p.instanceId === undefined || !isProjectPluginRunning(p, folderTrusted)) return [];
+        const defs = p.settings ?? [];
+        const paths = defs.filter(
+          (def) => def.mustExist === true && PATH_TYPES.has(def.type ?? "string")
+        );
+        if (!defs.some((def) => def.required === true) && paths.length === 0) return [];
+        return [
+          {
+            id: p.instanceId,
+            required: defs.some((def) => def.required === true),
+            paths: paths.map((def) => ({
+              id: def.id,
+              label: def.label ?? def.id,
+              scope: def.scope ?? "user",
+              fallback: typeof def.default === "string" ? def.default : "",
+            })),
+          },
+        ];
+      }),
+    [plugins, folderTrusted]
+  );
+
+  useEffect(() => {
+    const bridge = window.electron?.plugin;
+    const targets = candidates;
+    setGaps(new Map());
+    if (targets.length === 0 || typeof bridge?.getRequiredSettingsStatus !== "function") return;
+    let cancelled = false;
+    // Each read stands on its own: one that fails marks the result incomplete
+    // without discarding what the others found, so a known gap keeps its Set up.
+    const check = async (target: (typeof targets)[number]): Promise<SettingsGaps> => {
+      const gaps: SettingsGaps = { missing: [], brokenPaths: [], failed: false };
+      const noteFailure = (err: unknown) => {
+        gaps.failed = true;
+        logError(`Failed to check settings for ${target.id}`, err);
+      };
+      if (target.required) {
+        try {
+          const status = await bridge.getRequiredSettingsStatus(target.id, projectId);
+          gaps.missing = status.missing.map((id) => ({ id, label: status.labels[id] ?? id }));
+          if (status.unreadable.length > 0) gaps.failed = true;
+        } catch (err) {
+          noteFailure(err);
+        }
+      }
+      const scopes = [...new Set(target.paths.map((path) => path.scope))];
+      for (const scope of scopes) {
+        if (scope !== "user" && projectId === null) continue;
+        let values: Record<string, unknown>;
+        try {
+          ({ values } = await bridge.getSettingValues(target.id, scope, projectId));
+        } catch (err) {
+          noteFailure(err);
+          continue;
+        }
+        for (const path of target.paths.filter((p) => p.scope === scope)) {
+          // The value the plugin actually uses: what is stored, else its default —
+          // the same one its settings form checks.
+          const stored = values[path.id];
+          const effective = typeof stored === "string" ? stored : path.fallback;
+          if (effective === "") continue;
+          try {
+            if (!(await bridge.pathExists(target.id, effective))) gaps.brokenPaths.push(path);
+          } catch (err) {
+            noteFailure(err);
+          }
+        }
+      }
+      return gaps;
+    };
+    const read = (target: (typeof targets)[number]) => {
+      check(target)
+        .then((next) => {
+          if (!cancelled) setGaps((prev) => new Map(prev).set(target.id, next));
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setGaps((prev) =>
+            new Map(prev).set(target.id, { missing: [], brokenPaths: [], failed: true })
+          );
+          logError(`Failed to check settings for ${target.id}`, err);
+        });
+    };
+    targets.forEach(read);
+    const unsubscribe = bridge.onSettingsChanged?.((payload) => {
+      const target = targets.find((t) => t.id === payload.pluginId);
+      if (target) read(target);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [candidates, projectId, attempt]);
+
+  return { gaps, recheck: () => setAttempt((n) => n + 1) };
+}
+
+/** What a plugin's setup row says is missing, in the order it will be fixed. */
+function setupGapDescription(gap: SettingsGaps): string | undefined {
+  const names = (items: { label: string }[]) => items.map((item) => item.label).join(", ");
+  const parts: string[] = [];
+  if (gap.missing.length > 0) {
+    parts.push(`${names(gap.missing)} ${gap.missing.length === 1 ? "isn't" : "aren't"} set yet`);
+  }
+  if (gap.brokenPaths.length > 0) {
+    parts.push(
+      `${names(gap.brokenPaths)} ${gap.brokenPaths.length === 1 ? "no longer exists" : "no longer exist"}`
+    );
+  }
+  if (parts.length === 0) return undefined;
+  const sentence = parts.join(", and ");
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`;
+}
+
+/** Why a project plugin in the overview's attention list needs a look. */
+function attentionReason(plugin: ProjectPluginInfo): string {
+  return plugin.state === "invalid"
+    ? "Its manifest isn't valid, so it isn't loaded"
+    : "New to this project, so it hasn't run yet. Review what it declares before activating it";
+}
+
 /** Everything the project pane needs about the folder as a whole. */
-function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: number }) {
+function ProjectOverviewPane({
+  projectPlugins,
+  onSelectPlugin,
+}: {
+  projectPlugins: readonly ProjectPluginInfo[];
+  onSelectPlugin: (plugin: ProjectPluginInfo) => void;
+}) {
   const trust = useProjectPluginStore((s) => s.trust);
   const deciding = useProjectPluginStore((s) => s.deciding);
   const decide = useProjectPluginStore((s) => s.decide);
   const reload = useProjectPluginStore((s) => s.reload);
-  const [reloading, setReloading] = useState(false);
+  const reloading = useProjectPluginStore((s) => s.reloading);
+  const decideFailure = useStoreFailure("decide");
+  const reloadFailure = useStoreFailure("reload");
 
   const enabled = trust?.enabled === true;
+  const count = projectPlugins.length;
+  // A staged plugin only waits on activation once the folder may run; while it
+  // may not, the folder row above already says why nothing runs.
+  const needsAttention = projectPlugins.filter(
+    (p) => p.state === "invalid" || (enabled && p.state === "staged" && !p.muted)
+  );
+  const { gaps, recheck } = usePluginSettingsGaps(projectPlugins, enabled);
+  const needsSetup = projectPlugins.flatMap((plugin) => {
+    const gap = plugin.instanceId ? gaps.get(plugin.instanceId) : undefined;
+    if (!gap) return [];
+    const first = gap.missing[0] ?? gap.brokenPaths[0];
+    return first !== undefined || gap.failed ? [{ plugin, gap, first }] : [];
+  });
 
-  const handleReload = async () => {
-    setReloading(true);
-    try {
-      await reload();
-    } finally {
-      setReloading(false);
-    }
-  };
+  const decideError = decideFailure ? (
+    <RowFailure
+      summary={
+        decideFailure.source.decision === "disabled"
+          ? "Couldn't turn off this project's plugins"
+          : "Couldn't allow this project's plugins"
+      }
+      detail={decideFailure.detail}
+      onRetry={() => void decide(decideFailure.source.decision)}
+    />
+  ) : undefined;
 
   return (
     <div className="space-y-8" data-testid="project-plugins-overview">
       <SettingsSection
         title="This project's plugins"
         description={
-          projectPluginCount === 0
+          count === 0
             ? "None found in .daintree/plugins"
-            : `${projectPluginCount} plugin${projectPluginCount === 1 ? "" : "s"} in .daintree/plugins`
+            : `${count} plugin${count === 1 ? "" : "s"} in .daintree/plugins`
         }
       >
-        <SettingsGroup>
-          {enabled ? (
+        <div className="grid gap-3">
+          <SettingsGroup>
+            {enabled ? (
+              <SettingsRow
+                label="Allowed to run"
+                description="They execute with your account — Daintree doesn't sandbox them. Turning them off unloads every plugin this project ships; to silence just one, pick it above and use its own switch."
+                error={decideError}
+                control={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void decide("disabled")}
+                    loading={deciding === "disabled"}
+                  >
+                    Turn off project plugins
+                  </Button>
+                }
+              />
+            ) : (
+              <SettingsRow
+                label="Not running"
+                layout="stacked"
+                description="Nothing in this project's plugins folder is running. Allowing it runs its plugins with your account — Daintree doesn't sandbox them — though any plugins new to this project still wait for you to activate them."
+                error={decideError}
+                control={
+                  <SettingsRowActions>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void decide("session")}
+                      loading={deciding === "session"}
+                    >
+                      Enable for this session
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void decide("enabled")}
+                      loading={deciding === "enabled"}
+                    >
+                      Enable for this project
+                    </Button>
+                  </SettingsRowActions>
+                }
+              />
+            )}
             <SettingsRow
-              label="Allowed to run"
-              description="They execute with your account — Daintree doesn't sandbox them. Turning them off unloads every plugin this project ships; to silence just one, pick it above and use its own switch."
+              label="Plugins folder"
+              description="Reads every manifest again and reloads what changed. Same trust and staging rules as opening the project."
+              error={
+                reloadFailure ? (
+                  <RowFailure
+                    summary="Couldn't re-scan the plugins folder"
+                    detail={reloadFailure.detail}
+                    onRetry={() => void reload()}
+                  />
+                ) : undefined
+              }
               control={
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void decide("disabled")}
-                  loading={deciding === "disabled"}
+                  onClick={() => void reload()}
+                  loading={reloading}
                 >
-                  Turn off project plugins
+                  <RefreshCw />
+                  Re-scan plugins folder
                 </Button>
               }
             />
-          ) : (
-            <SettingsRow
-              label="Not running"
-              description="Nothing in this project's plugins folder is running. Enabling runs all of them with your account; Daintree doesn't sandbox them."
-              control={
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void decide("session")}
-                    loading={deciding === "session"}
-                  >
-                    Enable for this session
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void decide("enabled")}
-                    loading={deciding === "enabled"}
-                  >
-                    Enable for this project
-                  </Button>
-                </div>
-              }
-            />
+          </SettingsGroup>
+
+          {(needsAttention.length > 0 || needsSetup.length > 0) && (
+            <SettingsGroup label="Needs attention">
+              {needsAttention.map((plugin) => (
+                <SettingsRow
+                  key={plugin.id}
+                  label={plugin.displayName}
+                  accessory={<Badge size="xs">{projectPluginStatus(plugin, enabled)}</Badge>}
+                  description={attentionReason(plugin)}
+                  control={
+                    <Button variant="outline" size="sm" onClick={() => onSelectPlugin(plugin)}>
+                      Review
+                    </Button>
+                  }
+                />
+              ))}
+              {needsSetup.map(({ plugin, gap, first }) => (
+                <SettingsRow
+                  key={`setup:${plugin.id}`}
+                  label={plugin.displayName}
+                  accessory={first && <Badge size="xs">Needs setup</Badge>}
+                  description={setupGapDescription(gap)}
+                  error={
+                    gap.failed ? (
+                      <RowFailure
+                        summary="Couldn't check all of its settings, so this may be incomplete"
+                        onRetry={recheck}
+                      />
+                    ) : undefined
+                  }
+                  control={
+                    first && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          void actionService.dispatch(
+                            "plugin.openSettings",
+                            { pluginId: plugin.instanceId, key: first.id },
+                            { source: "user" }
+                          )
+                        }
+                      >
+                        Set up
+                      </Button>
+                    )
+                  }
+                />
+              ))}
+            </SettingsGroup>
           )}
-          <SettingsRow
-            label="Plugins folder"
-            description="Reads every manifest again and reloads what changed. Same trust and staging rules as opening the project."
-            control={
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void handleReload()}
-                loading={reloading}
-              >
-                <RefreshCw />
-                Re-scan plugins folder
-              </Button>
-            }
-          />
-        </SettingsGroup>
+        </div>
       </SettingsSection>
 
       <EmptyCanvasSection />
@@ -279,12 +571,12 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
 /** Longer than this and a manifest description is clamped behind "Show more". */
 const LONG_DESCRIPTION = 160;
 
-/** Whether a loaded plugin contributes settings, so its section is worth a heading. */
 /** Whether a project plugin runs now, by its live state rather than the loaded list. */
 function isProjectPluginRunning(plugin: ProjectPluginInfo, folderTrusted: boolean): boolean {
   return folderTrusted && !plugin.muted && plugin.state === "active";
 }
 
+/** Whether a loaded plugin contributes settings, so its section is worth a heading. */
 function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is LoadedPluginInfo {
   return plugin !== undefined && pluginHasSettings(plugin);
 }
@@ -301,9 +593,18 @@ interface PaneSettingsFocus {
 /**
  * The plugin's name as the section title, its manifest description and id beneath.
  * The id stays visible because two plugins can share a display name, and the
- * `collidesWithGlobal` case is exactly two plugins sharing an id.
+ * `collidesWithGlobal` case is exactly two plugins sharing an id — unless the
+ * title already is the id, as it is for a manifest that couldn't be read.
  */
-function PluginIdentityDescription({ description, id }: { description?: string; id: string }) {
+function PluginIdentityDescription({
+  description,
+  id,
+  title,
+}: {
+  description?: string;
+  id: string;
+  title: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const textId = useId();
   const long = (description?.length ?? 0) > LONG_DESCRIPTION;
@@ -325,12 +626,19 @@ function PluginIdentityDescription({ description, id }: { description?: string; 
           {expanded ? "Show less" : "Show more"}
         </button>
       )}
-      <span className="mt-1 block font-mono break-all">{id}</span>
+      {id !== title && <span className="mt-1 block font-mono break-all">{id}</span>}
     </>
   );
 }
 
-/** Detail for one plugin the project itself ships. */
+/**
+ * Detail for one plugin the project itself ships.
+ *
+ * Ordered by what someone arrives here to do: whether it runs, then its
+ * settings, then where it lives and what it declares. The declared
+ * capabilities move up beside the Activate step while it is staged, because
+ * that is the decision they inform.
+ */
 function ProjectPluginPane({
   plugin,
   loaded,
@@ -350,7 +658,10 @@ function ProjectPluginPane({
   const setMuted = useProjectPluginStore((s) => s.setMuted);
   const activateStaged = useProjectPluginStore((s) => s.activateStaged);
   const reload = useProjectPluginStore((s) => s.reload);
-  const [reloading, setReloading] = useState(false);
+  const reloading = useProjectPluginStore((s) => s.reloading);
+  const muteFailure = useStoreFailure("mute", plugin.id);
+  const activateFailure = useStoreFailure("activate", plugin.id);
+  const reloadFailure = useStoreFailure("reload");
 
   const folderTrusted = trust?.enabled === true;
   const declared = new Set(plugin.capabilities);
@@ -363,20 +674,16 @@ function ProjectPluginPane({
   const editable =
     isProjectPluginRunning(plugin, folderTrusted) && hasPluginSettings(loaded) ? loaded : undefined;
 
-  const handleReload = async () => {
-    setReloading(true);
-    try {
-      await reload();
-    } finally {
-      setReloading(false);
-    }
-  };
-
+  const [revealFailure, setRevealFailure] = useState<{ reason: string | null } | null>(null);
   const handleReveal = () => {
     if (!projectPath) return;
     systemClient
       .showItemInFolder(`${projectPath}/.daintree/plugins/${plugin.dirName}`)
-      .catch((err: unknown) => logError("Failed to reveal project plugin folder", err));
+      .then(() => setRevealFailure(null))
+      .catch((err: unknown) => {
+        setRevealFailure({ reason: formatErrorMessage(err, "") || null });
+        logError("Failed to reveal project plugin folder", err);
+      });
   };
 
   const folderOff = !folderTrusted && plugin.state !== "invalid";
@@ -385,11 +692,9 @@ function ProjectPluginPane({
     ? undefined
     : plugin.muted
       ? "Switched off on its own. The project's other plugins are unaffected, and turning this back on runs it again without asking."
-      : plugin.state === "staged"
-        ? undefined
-        : plugin.state === "active"
-          ? "Running in this project. Switching it off stops only this plugin."
-          : undefined;
+      : plugin.state === "active"
+        ? "Running in this project. Switching it off stops only this plugin."
+        : undefined;
 
   const badges = (
     <>
@@ -399,11 +704,33 @@ function ProjectPluginPane({
     </>
   );
 
+  const capabilitiesRow =
+    granted.length > 0 ? (
+      <SettingsRow
+        label="Declared capabilities"
+        layout="stacked"
+        description="What the plugin says it uses. Daintree doesn't sandbox project plugins, so this is a description of intent, not a limit on it."
+        control={
+          <ul className="space-y-1.5">
+            {granted.map((capability) => (
+              <CapabilityRow key={capability} capability={capability} />
+            ))}
+          </ul>
+        }
+      />
+    ) : null;
+
   return (
     <div className="space-y-8" data-testid="project-plugin-detail">
       <SettingsSection
         title={plugin.displayName}
-        description={<PluginIdentityDescription description={plugin.description} id={plugin.id} />}
+        description={
+          <PluginIdentityDescription
+            description={plugin.description}
+            id={plugin.id}
+            title={plugin.displayName}
+          />
+        }
       >
         <SettingsGroup>
           {folderOff && (
@@ -424,6 +751,15 @@ function ProjectPluginPane({
               label="Run here"
               accessory={badges}
               description="New to this project, so it was read but never run. Activating starts it now and on every future open."
+              error={
+                activateFailure ? (
+                  <RowFailure
+                    summary={`Couldn't activate ${plugin.displayName}`}
+                    detail={activateFailure.detail}
+                    onRetry={() => void activateStaged(plugin.id)}
+                  />
+                ) : undefined
+              }
               control={
                 <Button
                   variant="outline"
@@ -441,10 +777,31 @@ function ProjectPluginPane({
               accessory={badges}
               description={runStatus}
               disabled={folderOff}
-              disabledReason="Not running because this project's plugins are turned off"
+              // While the folder is off the switch shows what is true — not running —
+              // and the reason carries what it will do once the folder is allowed.
+              disabledReason={
+                plugin.muted
+                  ? "Also switched off on its own, so it stays off when the folder is allowed"
+                  : plugin.state === "staged"
+                    ? "New to this project, so once the folder is allowed it waits for you to activate it"
+                    : "Runs once this project's plugins are allowed"
+              }
+              error={
+                muteFailure ? (
+                  <RowFailure
+                    summary={
+                      muteFailure.source.muted
+                        ? `Couldn't turn off ${plugin.displayName}`
+                        : `Couldn't turn on ${plugin.displayName}`
+                    }
+                    detail={muteFailure.detail}
+                    onRetry={() => void setMuted(plugin.id, muteFailure.source.muted)}
+                  />
+                ) : undefined
+              }
               control={({ descriptionId, disabled }) => (
                 <SettingsSwitch
-                  checked={!plugin.muted}
+                  checked={!plugin.muted && !folderOff}
                   disabled={disabled || muting.has(plugin.id)}
                   onCheckedChange={(next) => void setMuted(plugin.id, !next)}
                   aria-label={`Run ${plugin.displayName} in this project`}
@@ -457,25 +814,10 @@ function ProjectPluginPane({
             <SettingsRow
               label="Manifest"
               accessory={badges}
-              error={
-                plugin.error ? (
-                  <span className="flex items-start gap-1.5 break-words">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
-                    {plugin.error}
-                  </span>
-                ) : undefined
-              }
+              description={plugin.error ? undefined : "Its manifest isn't valid"}
+              error={plugin.error ? <span className="break-words">{plugin.error}</span> : undefined}
             />
           )}
-
-          <SettingsRow
-            label="Source"
-            description={
-              <span className="font-mono">
-                <PathSegments path={`.daintree/plugins/${plugin.dirName}`} />
-              </span>
-            }
-          />
 
           {plugin.collidesWithGlobal && (
             <SettingsRow
@@ -484,43 +826,7 @@ function ProjectPluginPane({
             />
           )}
 
-          {granted.length > 0 && (
-            <SettingsRow
-              label="Declared capabilities"
-              layout="stacked"
-              description="What the plugin says it uses. Daintree doesn't sandbox project plugins, so this is a description of intent, not a limit on it."
-              control={
-                <ul className="space-y-1.5">
-                  {granted.map((capability) => (
-                    <CapabilityRow key={capability} capability={capability} />
-                  ))}
-                </ul>
-              }
-            />
-          )}
-
-          <SettingsRow
-            label="Plugin folder"
-            layout="stacked"
-            description="Reloading re-reads every manifest in the folder, not just this one."
-            control={
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handleReload()}
-                  loading={reloading}
-                >
-                  <RefreshCw />
-                  Reload from disk
-                </Button>
-                <Button variant="outline" size="sm" onClick={handleReveal} disabled={!projectPath}>
-                  <FolderOpen />
-                  Reveal folder
-                </Button>
-              </div>
-            }
-          />
+          {awaitingActivation && capabilitiesRow}
         </SettingsGroup>
       </SettingsSection>
 
@@ -545,6 +851,57 @@ function ProjectPluginPane({
             />
           </SettingsSection>
         )}
+
+      <SettingsSection title="Details">
+        <SettingsGroup>
+          <SettingsRow
+            label="Source"
+            description={
+              <span className="font-mono">
+                <PathSegments path={`.daintree/plugins/${plugin.dirName}`} />
+              </span>
+            }
+          />
+          {!awaitingActivation && capabilitiesRow}
+          <SettingsRow
+            label="Plugins folder"
+            layout="stacked"
+            description="Re-scanning reads every manifest in the folder again, not just this one"
+            error={
+              reloadFailure ? (
+                <RowFailure
+                  summary="Couldn't re-scan the plugins folder"
+                  detail={reloadFailure.detail}
+                  onRetry={() => void reload()}
+                />
+              ) : revealFailure ? (
+                <RowFailure
+                  summary="Couldn't reveal the plugin's folder"
+                  detail={revealFailure.reason}
+                  onRetry={handleReveal}
+                />
+              ) : undefined
+            }
+            control={
+              <SettingsRowActions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void reload()}
+                  loading={reloading}
+                >
+                  <RefreshCw />
+                  Re-scan plugins folder
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleReveal} disabled={!projectPath}>
+                  <FolderOpen />
+                  Reveal folder
+                </Button>
+              </SettingsRowActions>
+            }
+          />
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }
@@ -552,7 +909,7 @@ function ProjectPluginPane({
 /** Why a declared-but-stopped plugin's settings can't be changed right now. */
 function stoppedSettingsReason(plugin: ProjectPluginInfo, folderOff: boolean): string {
   if (folderOff) return "Available once this project's plugins are allowed to run";
-  if (plugin.muted) return "Available when the plugin is turned on";
+  if (plugin.muted) return "Available once the plugin is turned on";
   if (plugin.state === "staged") return "Available once the plugin is activated";
   return "Available while the plugin is running";
 }
@@ -564,33 +921,29 @@ function stoppedSettingsReason(plugin: ProjectPluginInfo, folderOff: boolean): s
  * Nothing is loaded to answer for its values: the settings bridge reads and
  * writes against a running plugin's declarations, and without them it can't
  * tell a secret from a plain string, so it must not be handed a write. The
- * section keeps its shape anyway — each declared field as a row, and the custom
- * section as its own row — each saying what it needs, so turning the plugin off
- * doesn't make its settings look like they never existed.
+ * section keeps its shape anyway — each declared field as a disabled row, and
+ * the custom section as its own row — each saying what it needs, so turning the
+ * plugin off doesn't make its settings look like they never existed. With no
+ * control on them, the rows keep their words at full contrast.
  */
 function StoppedPluginSettings({ plugin, reason }: { plugin: ProjectPluginInfo; reason: string }) {
   const fields = plugin.settings ?? [];
+  if (fields.length === 0 && plugin.declaresSettingsView !== true) return null;
   return (
-    <div className="grid gap-3">
-      {fields.length > 0 && (
-        <SettingsGroup>
-          {fields.map((def) => (
-            <SettingsRow
-              key={def.id}
-              label={def.label ?? def.id}
-              description={def.description}
-              disabled
-              disabledReason={reason}
-            />
-          ))}
-        </SettingsGroup>
-      )}
+    <SettingsGroup>
+      {fields.map((def) => (
+        <SettingsRow
+          key={def.id}
+          label={def.label ?? def.id}
+          description={def.description}
+          disabled
+          disabledReason={reason}
+        />
+      ))}
       {plugin.declaresSettingsView === true && (
-        <SettingsGroup>
-          <SettingsRow label="More settings" description={reason} />
-        </SettingsGroup>
+        <SettingsRow label="More settings" disabled disabledReason={reason} />
       )}
-    </div>
+    </SettingsGroup>
   );
 }
 
@@ -611,6 +964,10 @@ function InstalledPluginPane({
   const visibility = useProjectPluginStore((s) => s.visibility);
   const setVisibility = useProjectPluginStore((s) => s.setVisibility);
   const setVisibilityDefault = useProjectPluginStore((s) => s.setVisibilityDefault);
+  const loadVisibility = useProjectPluginStore((s) => s.loadVisibility);
+  const visibilityFailure = useStoreFailure("visibility", pluginId);
+  const defaultFailure = useStoreFailure("visibilityDefault", pluginId);
+  const loadFailure = useStoreFailure("loadVisibility");
 
   const hiddenByDefault = visibility.defaultHiddenPluginIds.includes(pluginId);
   // A forge provider that ships its own settings tab owns its settings there: editing
@@ -639,39 +996,52 @@ function InstalledPluginPane({
     void setVisibility(pluginId, next === !hiddenByDefault ? null : next);
   };
 
+  const badges = (
+    <>
+      <Badge size="xs">{plugin.isBuiltin ? "Built-in" : "Installed"}</Badge>
+      {plugin.manifest.version && <Badge size="xs">v{plugin.manifest.version}</Badge>}
+    </>
+  );
+
+  const visibilityError = visibilityFailure ? (
+    <RowFailure
+      summary={
+        // A null write returns to the default, so what it tried to do is whatever
+        // the default is.
+        (visibilityFailure.source.visible ?? !hiddenByDefault)
+          ? `Couldn't show ${name} in this project`
+          : `Couldn't hide ${name} in this project`
+      }
+      detail={visibilityFailure.detail}
+      onRetry={() => void setVisibility(pluginId, visibilityFailure.source.visible)}
+    />
+  ) : loadFailure ? (
+    <RowFailure
+      summary="Couldn't read which plugins this project hides, so this may show the default"
+      detail={loadFailure.detail}
+      onRetry={() => void loadVisibility()}
+    />
+  ) : undefined;
+
   return (
     <div className="space-y-8" data-testid="installed-plugin-detail">
       <SettingsSection
         title={name}
         description={
-          <PluginIdentityDescription description={plugin.manifest.description} id={pluginId} />
+          <PluginIdentityDescription
+            description={plugin.manifest.description}
+            id={pluginId}
+            title={name}
+          />
         }
       >
         <SettingsGroup>
-          <SettingsRow
-            label="Show in this project"
-            accessory={
-              <>
-                <Badge size="xs">{plugin.isBuiltin ? "Built-in" : "Installed"}</Badge>
-                {plugin.manifest.version && <Badge size="xs">v{plugin.manifest.version}</Badge>}
-              </>
-            }
-            description="Hiding removes its panels, commands, buttons and shortcuts from this project. It stays installed and running, so background features such as agents, forge providers and file decorations carry on."
-            disabled={plugin.disabled}
-            control={({ descriptionId, disabled }) => (
-              <SettingsSwitch
-                checked={visible}
-                disabled={disabled}
-                onCheckedChange={handleToggle}
-                aria-label={`Show ${name} in this project`}
-                aria-describedby={descriptionId}
-                data-testid="installed-plugin-visibility-switch"
-              />
-            )}
-          />
-          {plugin.disabled && (
+          {plugin.disabled ? (
+            // Off everywhere, there is nothing here to show or hide: one row that says
+            // so and where to turn it back on, rather than a switch that reads "on".
             <SettingsRow
               label="Turned off everywhere"
+              accessory={badges}
               description="It isn't running in any project, so there's nothing to show or hide here"
               control={
                 <Button
@@ -685,73 +1055,104 @@ function InstalledPluginPane({
                 </Button>
               }
             />
-          )}
-          {!plugin.disabled && (
-            <SettingsRow
-              label="Default for all projects"
-
-              description={
-                hiddenByDefault
-                  ? "Hidden in every project that hasn't chosen, including new ones. Changing this affects other projects; the switch above is only this one."
-                  : "Shown in every project that hasn't chosen, including new ones. Changing this affects other projects; the switch above is only this one."
-              }
-              control={({ descriptionId, disabled }) => (
-                <Select
-                  value={hiddenByDefault ? "selected" : "all"}
-                  disabled={disabled}
-                  onValueChange={(next) => void setVisibilityDefault(pluginId, next === "selected")}
-                >
-                  <SelectTrigger
-                    aria-label="Which projects show this plugin by default"
+          ) : (
+            <>
+              <SettingsRow
+                label="Show in this project"
+                accessory={badges}
+                description="Hiding removes its panels, commands, buttons and shortcuts from this project. It stays installed and running, so background features such as agents, forge providers and file decorations carry on."
+                error={visibilityError}
+                control={({ descriptionId, disabled }) => (
+                  <SettingsSwitch
+                    checked={visible}
+                    disabled={disabled}
+                    onCheckedChange={handleToggle}
+                    aria-label={`Show ${name} in this project`}
                     aria-describedby={descriptionId}
-                    data-testid="installed-plugin-visibility-default"
-                    className={SETTINGS_CONTROL_WIDTH.wide}
+                    data-testid="installed-plugin-visibility-switch"
+                  />
+                )}
+              />
+              <SettingsRow
+                label="Default for all projects"
+                description={
+                  hiddenByDefault
+                    ? "Hidden in every project that hasn't chosen, including new ones. Changing this affects other projects; the switch above is only this one."
+                    : "Shown in every project that hasn't chosen, including new ones. Changing this affects other projects; the switch above is only this one."
+                }
+                error={
+                  defaultFailure ? (
+                    <RowFailure
+                      summary="Couldn't change the default for all projects"
+                      detail={defaultFailure.detail}
+                      onRetry={() =>
+                        void setVisibilityDefault(pluginId, defaultFailure.source.hidden)
+                      }
+                    />
+                  ) : undefined
+                }
+                control={({ descriptionId, disabled }) => (
+                  <Select
+                    value={hiddenByDefault ? "selected" : "all"}
+                    disabled={disabled}
+                    onValueChange={(next) =>
+                      void setVisibilityDefault(pluginId, next === "selected")
+                    }
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VISIBILITY_DEFAULT_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            />
+                    <SelectTrigger
+                      aria-label="Which projects show this plugin by default"
+                      aria-describedby={descriptionId}
+                      data-testid="installed-plugin-visibility-default"
+                      className={SETTINGS_CONTROL_WIDTH.wide}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {VISIBILITY_DEFAULT_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </>
           )}
         </SettingsGroup>
       </SettingsSection>
 
-      {hasPluginSettings(plugin) &&
-        (forgeSettingsProvider ? (
-          <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
-            <SettingsGroup>
-              <SettingsRow
-                label={`Configured in Code forge → ${forgeSettingsProvider.name}`}
-                description="Its settings sit beside its credentials there, so a change that affects the saved token is checked first"
-                control={
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      window.dispatchEvent(
-                        new CustomEvent("daintree:open-settings-tab", {
-                          detail: {
-                            tab: "code-forge",
-                            subtab: makeForgeProviderId(pluginId, forgeSettingsProvider.id),
-                          },
-                        })
-                      )
-                    }
-                  >
-                    Open Code forge
-                  </Button>
-                }
-              />
-            </SettingsGroup>
-          </SettingsSection>
-        ) : (
+      {forgeSettingsProvider ? (
+        // A forge provider's settings live beside its credentials, whether or not
+        // it also declares generic fields — so the pointer is there either way.
+        <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
+          <SettingsGroup>
+            <SettingsRow
+              label={`Configured in Code forge → ${forgeSettingsProvider.name}`}
+              description="Its settings sit beside its credentials there, so a change that affects the saved token is checked first"
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("daintree:open-settings-tab", {
+                        detail: {
+                          tab: "code-forge",
+                          subtab: makeForgeProviderId(pluginId, forgeSettingsProvider.id),
+                        },
+                      })
+                    )
+                  }
+                >
+                  Open Code forge
+                </Button>
+              }
+            />
+          </SettingsGroup>
+        </SettingsSection>
+      ) : (
+        hasPluginSettings(plugin) && (
           <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
             <PluginSettingsForm
               plugin={plugin}
@@ -760,7 +1161,8 @@ function InstalledPluginPane({
               onFocusHandled={settingsFocus.onHandled}
             />
           </SettingsSection>
-        ))}
+        )
+      )}
     </div>
   );
 }
@@ -780,7 +1182,9 @@ function InstalledPluginPane({
  */
 export function ProjectPluginsTab() {
   const projectPlugins = useProjectPluginStore((s) => s.plugins);
-  const error = useProjectPluginStore((s) => s.error);
+  const clearError = useProjectPluginStore((s) => s.clearError);
+  const visibility = useProjectPluginStore((s) => s.visibility);
+  const errorSource = useProjectPluginStore((s) => s.errorSource);
   const folderTrusted = useProjectPluginStore((s) => s.trust?.enabled === true);
   const projectPath = useProjectStore((s) => s.currentProject?.path);
 
@@ -833,27 +1237,45 @@ export function ProjectPluginsTab() {
     [installed]
   );
 
-  const options: ProjectPluginOption[] = useMemo(
-    () => [
-      ...projectPlugins.map((p) => ({
-        id: `${PROJECT_OPTION_PREFIX}${p.id}`,
-        pluginId: p.id,
-        name: p.displayName,
-        origin: "project" as const,
-        status: projectPluginStatus(p, folderTrusted),
-        active: folderTrusted && !p.muted && p.state === "active",
-      })),
-      ...installedOnly.map((p) => ({
+  // Each group in name order: the lists arrive in load order, which differs
+  // from one launch to the next, so a plugin would otherwise move around.
+  const options: ProjectPluginOption[] = useMemo(() => {
+    const byName = (a: ProjectPluginOption, b: ProjectPluginOption) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    const project = projectPlugins.map((p) => ({
+      id: `${PROJECT_OPTION_PREFIX}${p.id}`,
+      pluginId: p.id,
+      name: p.displayName,
+      origin: "project" as const,
+      status: projectPluginStatus(p, folderTrusted),
+      active: folderTrusted && !p.muted && p.state === "active",
+    }));
+    const installedOptions = installedOnly.map((p) => {
+      // What this project shows, not only where it came from: a plugin hidden
+      // here reads "Hidden", so the list agrees with its pane's switch.
+      const shown =
+        visibility.overrides[p.instanceId] ??
+        !visibility.defaultHiddenPluginIds.includes(p.instanceId);
+      return {
         id: `${INSTALLED_OPTION_PREFIX}${p.instanceId}`,
         pluginId: p.instanceId,
         name: p.manifest.displayName ?? p.instanceId,
         origin: "installed" as const,
-        status: p.disabled ? "Off" : "Installed",
-        active: !p.disabled,
-      })),
-    ],
-    [projectPlugins, installedOnly, folderTrusted]
-  );
+        status: p.disabled ? "Off" : !shown ? "Hidden" : p.isBuiltin ? "Built-in" : "Installed",
+        active: !p.disabled && shown,
+      };
+    });
+    return [...project.sort(byName), ...installedOptions.sort(byName)];
+  }, [projectPlugins, installedOnly, folderTrusted, visibility]);
+
+  // A failure is stated on the row that caused it. One plugin's failed switch
+  // leaves with its pane rather than waiting to be read as news about the next
+  // plugin; a failure that isn't one plugin's (the folder, the visibility read)
+  // stays until it is retried, since its row is on more than one pane.
+  const select = (id: string) => {
+    if (id !== selectedId && errorSource !== null && "pluginId" in errorSource) clearError();
+    setSelectedId(id);
+  };
 
   // A selection that has gone away — the folder changed, a plugin was
   // uninstalled — falls back to the overview rather than rendering an empty
@@ -951,22 +1373,28 @@ export function ProjectPluginsTab() {
         <ProjectPluginSelectorDropdown
           options={options}
           activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
-          onChange={setSelectedId}
+          onChange={select}
         />
-        {error && (
-          <p className="text-xs text-status-error" role="alert">
-            {error}
-          </p>
-        )}
         {installedFailed && (
+          // Once a read has succeeded the list is kept, so a later failure leaves it
+          // possibly stale rather than empty.
           <SettingsLoadErrorBanner
-            message="Couldn't read your installed plugins, so they're missing from this list"
+            message={
+              installed === null
+                ? "Couldn't read your installed plugins, so they're missing from this list"
+                : "Couldn't refresh your installed plugins, so this list may be out of date"
+            }
             onRetry={() => setInstalledAttempt((n) => n + 1)}
           />
         )}
       </div>
 
-      {showOverview && <ProjectOverviewPane projectPluginCount={projectPlugins.length} />}
+      {showOverview && (
+        <ProjectOverviewPane
+          projectPlugins={projectPlugins}
+          onSelectPlugin={(plugin) => select(`${PROJECT_OPTION_PREFIX}${plugin.id}`)}
+        />
+      )}
 
       {selectedProjectPlugin && (
         <ProjectPluginPane
@@ -978,7 +1406,7 @@ export function ProjectPluginsTab() {
               : undefined
           }
           projectPath={projectPath}
-          onShowOverview={() => setSelectedId(PROJECT_PLUGINS_OVERVIEW_ID)}
+          onShowOverview={() => select(PROJECT_PLUGINS_OVERVIEW_ID)}
           settingsFocus={paneSettingsFocus}
         />
       )}

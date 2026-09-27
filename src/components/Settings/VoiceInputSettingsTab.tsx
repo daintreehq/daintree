@@ -9,7 +9,12 @@ import { SettingsSelect } from "./SettingsSelect";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { SettingsInput } from "./SettingsInput";
-import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowActions,
+} from "./SettingsGroup";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
@@ -1082,7 +1087,7 @@ function MicPermissionRow({
       }
       control={
         denied ? (
-          <div className="flex flex-wrap items-center gap-2">{statusDisplay.actions}</div>
+          <SettingsRowActions>{statusDisplay.actions}</SettingsRowActions>
         ) : (
           statusDisplay.actions
         )
