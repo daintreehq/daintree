@@ -94,7 +94,10 @@ export interface BuilderField {
   type: BuilderFieldType;
   /** Placeholder text */
   placeholder?: string;
-  /** Whether field is required (deprecated - all fields are now optional) */
+  /**
+   * A blank value fails validation before the command runs. Fields are optional
+   * by default; set this only where the handler rejects a blank value.
+   */
   required?: boolean;
   /** Validation rules */
   validation?: BuilderFieldValidation;

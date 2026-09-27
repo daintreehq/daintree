@@ -232,3 +232,38 @@ describe("CommandBuilder focus and state contract", () => {
     await vi.waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("CommandBuilder input contract", () => {
+  const numberStep: BuilderStep[] = [
+    {
+      id: "only",
+      title: "Only",
+      fields: [{ name: "issue", label: "Issue number", type: "number", required: true }],
+    },
+  ];
+
+  it("stops a blank required field before the command runs", () => {
+    const onExecute = vi.fn().mockResolvedValue({ success: true });
+    renderBuilder({ steps: numberStep, onExecute });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    expect(screen.getByLabelText("Issue number").getAttribute("aria-invalid")).toBe("true");
+    expect(onExecute).not.toHaveBeenCalled();
+  });
+
+  it("sends a number field's value as a number", async () => {
+    const onExecute = vi.fn().mockResolvedValue({ success: true });
+    renderBuilder({ steps: numberStep, onExecute });
+    const input = screen.getByLabelText("Issue number");
+
+    fireEvent.change(input, { target: { value: "42" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByText("Done");
+    expect(onExecute.mock.calls[0]?.[0]).toEqual({ issue: 42 });
+  });
+
+  it("says what it is running while the command is in flight", () => {
+    renderBuilder({ isExecuting: true });
+    expect(screen.getByRole("status").textContent).toBe("Running Test command…");
+  });
+});

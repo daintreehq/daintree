@@ -35,13 +35,11 @@ interface FieldErrors {
 }
 
 function validateField(field: BuilderField, value: unknown): string | null {
-  // No required field validation - all fields are optional
-  // The agent will interpret user intent from whatever is provided
-
+  // Fields are optional unless the manifest says its handler rejects a blank.
   // Treat whitespace-only input as empty
   const stringValue = typeof value === "string" ? value.trim() : value;
   if (stringValue === undefined || stringValue === null || stringValue === "") {
-    return null;
+    return field.required ? "Required to run this command" : null;
   }
 
   const validation = field.validation;
@@ -424,10 +422,9 @@ export function CommandBuilder({
 
   const handleFieldChange = useCallback(
     (fieldName: string, value: unknown, field?: BuilderField) => {
-      let coercedValue = value;
-      if (field?.type === "number" && typeof value === "string" && value !== "") {
-        coercedValue = Number(value);
-      }
+      // Number fields keep the typed string while editing: coercing each
+      // keystroke turns a half-typed "-" or "1e" into NaN and writes it back.
+      const coercedValue = value;
       setFormData((prev) => ({ ...prev, [fieldName]: coercedValue }));
       // A field already marked wrong is re-checked as it's edited, so the error
       // clears when the value is fixed and not merely when it's touched.
@@ -465,12 +462,18 @@ export function CommandBuilder({
     if (isExecuting || !validateCurrentStep()) return;
 
     // Normalize empty strings to undefined so agents see "unset" rather than "provided empty"
+    const numberFields = new Set(
+      steps
+        .flatMap((step) => step.fields)
+        .filter((f) => f.type === "number")
+        .map((f) => f.name)
+    );
     const normalizedData: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(formData)) {
       if (typeof value === "string") {
         const trimmed = value.trim();
         if (trimmed !== "") {
-          normalizedData[key] = trimmed;
+          normalizedData[key] = numberFields.has(key) ? Number(trimmed) : trimmed;
         }
       } else if (value !== undefined && value !== null && value !== "") {
         normalizedData[key] = value;
@@ -479,7 +482,7 @@ export function CommandBuilder({
 
     const result = await onExecute(normalizedData);
     setExecutionResult(result);
-  }, [formData, isExecuting, onExecute, validateCurrentStep]);
+  }, [formData, isExecuting, onExecute, steps, validateCurrentStep]);
 
   const handleClose = useCallback(() => {
     if (executionResult?.success) {
@@ -589,7 +592,15 @@ export function CommandBuilder({
         )}
       </AppDialog.Body>
 
-      <AppDialog.Footer>
+      <AppDialog.Footer
+        hint={
+          isExecuting ? (
+            // Says what the dimmed action and the locked form are waiting on,
+            // and why the dialog won't close yet.
+            <span role="status">Running {command.label}…</span>
+          ) : undefined
+        }
+      >
         {showSuccessState || hasEmptySteps ? (
           <Button ref={closeRef} variant="contrast" onClick={onCancel}>
             Close

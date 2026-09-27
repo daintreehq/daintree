@@ -55,7 +55,7 @@ const WORK_ISSUE_STEPS: BuilderStep[] = [
   {
     id: "issue",
     title: "Work on a GitHub issue",
-    description: "Creates a worktree for the issue beside this one and switches to it.",
+    description: "Creates a worktree for the issue and switches to it.",
     submitLabel: "Create worktree",
     fields: [
       {
@@ -63,6 +63,8 @@ const WORK_ISSUE_STEPS: BuilderStep[] = [
         label: "Issue number",
         type: "number",
         placeholder: "123",
+        required: true,
+        helpText: "Required. The branch is named after this issue.",
         validation: {
           min: 1,
           integer: true,

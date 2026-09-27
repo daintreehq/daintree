@@ -174,7 +174,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
       {
         id: "issue",
         title: "Work on a GitHub issue",
-        description: "Creates a worktree for the issue beside this one and switches to it.",
+        description: "Creates a worktree for the issue and switches to it.",
         submitLabel: "Create worktree",
         fields: [
           {
@@ -182,6 +182,8 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
             label: "Issue number",
             type: "number",
             placeholder: "123",
+            required: true,
+            helpText: "Required. The branch is named after this issue.",
             validation: {
               min: 1,
               integer: true,
