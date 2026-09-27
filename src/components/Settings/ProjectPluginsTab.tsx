@@ -290,29 +290,47 @@ function usePluginSettingsGaps(
     setGaps(new Map());
     if (targets.length === 0 || typeof bridge?.getRequiredSettingsStatus !== "function") return;
     let cancelled = false;
+    // Each read stands on its own: one that fails marks the result incomplete
+    // without discarding what the others found, so a known gap keeps its Set up.
     const check = async (target: (typeof targets)[number]): Promise<SettingsGaps> => {
-      const status = target.required
-        ? await bridge.getRequiredSettingsStatus(target.id, projectId)
-        : { missing: [], unreadable: [], labels: {} };
-      const brokenPaths: SettingsGaps["brokenPaths"] = [];
+      const gaps: SettingsGaps = { missing: [], brokenPaths: [], failed: false };
+      const noteFailure = (err: unknown) => {
+        gaps.failed = true;
+        logError(`Failed to check settings for ${target.id}`, err);
+      };
+      if (target.required) {
+        try {
+          const status = await bridge.getRequiredSettingsStatus(target.id, projectId);
+          gaps.missing = status.missing.map((id) => ({ id, label: status.labels[id] ?? id }));
+          if (status.unreadable.length > 0) gaps.failed = true;
+        } catch (err) {
+          noteFailure(err);
+        }
+      }
       const scopes = [...new Set(target.paths.map((path) => path.scope))];
       for (const scope of scopes) {
         if (scope !== "user" && projectId === null) continue;
-        const { values } = await bridge.getSettingValues(target.id, scope, projectId);
+        let values: Record<string, unknown>;
+        try {
+          ({ values } = await bridge.getSettingValues(target.id, scope, projectId));
+        } catch (err) {
+          noteFailure(err);
+          continue;
+        }
         for (const path of target.paths.filter((p) => p.scope === scope)) {
           // The value the plugin actually uses: what is stored, else its default —
           // the same one its settings form checks.
           const stored = values[path.id];
           const effective = typeof stored === "string" ? stored : path.fallback;
           if (effective === "") continue;
-          if (!(await bridge.pathExists(target.id, effective))) brokenPaths.push(path);
+          try {
+            if (!(await bridge.pathExists(target.id, effective))) gaps.brokenPaths.push(path);
+          } catch (err) {
+            noteFailure(err);
+          }
         }
       }
-      return {
-        missing: status.missing.map((id) => ({ id, label: status.labels[id] ?? id })),
-        brokenPaths,
-        failed: status.unreadable.length > 0,
-      };
+      return gaps;
     };
     const read = (target: (typeof targets)[number]) => {
       check(target)
@@ -343,14 +361,19 @@ function usePluginSettingsGaps(
 
 /** What a plugin's setup row says is missing, in the order it will be fixed. */
 function setupGapDescription(gap: SettingsGaps): string | undefined {
+  const names = (items: { label: string }[]) => items.map((item) => item.label).join(", ");
   const parts: string[] = [];
   if (gap.missing.length > 0) {
-    parts.push(`Required and not set yet: ${gap.missing.map((m) => m.label).join(", ")}`);
+    parts.push(`${names(gap.missing)} ${gap.missing.length === 1 ? "isn't" : "aren't"} set yet`);
   }
   if (gap.brokenPaths.length > 0) {
-    parts.push(`No longer exists: ${gap.brokenPaths.map((p) => p.label).join(", ")}`);
+    parts.push(
+      `${names(gap.brokenPaths)} ${gap.brokenPaths.length === 1 ? "no longer exists" : "no longer exist"}`
+    );
   }
-  return parts.length > 0 ? parts.join(". ") : undefined;
+  if (parts.length === 0) return undefined;
+  const sentence = parts.join(", and ");
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`;
 }
 
 /** Why a project plugin in the overview's attention list needs a look. */

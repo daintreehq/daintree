@@ -903,7 +903,7 @@ describe("ProjectPluginsTab failures and state honesty", () => {
     render(<ProjectPluginsTab />);
 
     const group = await screen.findByRole("group", { name: "Needs attention" });
-    await waitFor(() => expect(group.textContent).toContain("API key, Region"));
+    await waitFor(() => expect(group.textContent).toContain("API key, Region aren't set yet"));
     fireEvent.click(within(group).getByRole("button", { name: "Set up" }));
     expect(dispatch).toHaveBeenCalledWith(
       "plugin.openSettings",
@@ -945,7 +945,7 @@ describe("ProjectPluginsTab failures and state honesty", () => {
     ]);
     const { unmount } = render(<ProjectPluginsTab />);
     const group = await screen.findByRole("group", { name: "Needs attention" });
-    await waitFor(() => expect(group.textContent).toContain("No longer exists: Output folder"));
+    await waitFor(() => expect(group.textContent).toContain("Output folder no longer exists"));
     expect(pathExists).toHaveBeenCalledWith(
       `project__${PROJECT_ID}__acme.dashboard`,
       "/Volumes/gone"
@@ -1049,6 +1049,42 @@ describe("ProjectPluginsTab failures and state honesty", () => {
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(showItemInFolder).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a gap it found when another part of the check fails", async () => {
+    Object.assign(pluginApi, {
+      getRequiredSettingsStatus: vi.fn().mockResolvedValue({
+        missing: ["token"],
+        unreadable: [],
+        labels: { token: "Token" },
+      }),
+      pathExists: vi.fn().mockRejectedValue(new Error("EIO")),
+      onSettingsChanged: vi.fn(() => vi.fn()),
+    });
+    pluginApi.getSettingValues.mockResolvedValue({
+      values: { out: "/srv/out" },
+      secretsSet: [],
+      secretsPlaintext: [],
+      secretTier: "keychain",
+    });
+    seed([
+      projectPlugin({
+        settings: [
+          { id: "token", type: "string", label: "Token", required: true, scope: "project" },
+          { id: "out", type: "directory", label: "Out", mustExist: true, scope: "project" },
+        ],
+      }),
+    ]);
+    render(<ProjectPluginsTab />);
+    const group = await screen.findByRole("group", { name: "Needs attention" });
+    await waitFor(() => expect(group.textContent).toContain("Token isn't set yet"));
+    expect(within(group).getByRole("button", { name: "Set up" })).toBeTruthy();
+    expect(within(group).getByRole("alert").textContent).toContain(
+      "Couldn't check all of its settings"
+    );
+    for (const key of ["getRequiredSettingsStatus", "pathExists", "onSettingsChanged"]) {
+      delete (pluginApi as Record<string, unknown>)[key];
+    }
   });
 
   it("lists the plugins that need a look on the overview, each with a way to it", async () => {
