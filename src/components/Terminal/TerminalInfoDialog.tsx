@@ -336,6 +336,11 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // Bumped on every fresh read and on close, so a background refresh that resolves
   // after the dialog closed or moved to another terminal is dropped, not rendered.
   const readGenerationRef = useRef(0);
+  // The terminal the last foreground read was for. A Retry of the same terminal keeps
+  // its warning up until the retry succeeds — clearing it on the way in presented the
+  // stale values as current for the whole round trip, and dropped the caveat from any
+  // report copied during it.
+  const lastReadTerminalRef = useRef<string | null>(null);
   const errorDetailId = useId();
   const panelRaw = usePanelStore((state) => state.panelsById[terminalId]);
   const panel = panelRaw && isPtyPanel(panelRaw) ? panelRaw : undefined;
@@ -344,6 +349,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   useEffect(() => {
     readGenerationRef.current += 1;
     if (!isOpen) {
+      lastReadTerminalRef.current = null;
       setRead(null);
       setError(null);
       setLoading(false);
@@ -354,9 +360,12 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
 
     let isMounted = true;
 
+    const isRetry = lastReadTerminalRef.current === terminalId;
+    lastReadTerminalRef.current = terminalId;
+
     const fetchInfo = async () => {
       setLoading(true);
-      setError(null);
+      if (!isRetry) setError(null);
       try {
         const result = await actionService.dispatch(
           "terminal.info.get",
@@ -368,6 +377,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
         }
         if (isMounted) {
           setInfo(result.result as TerminalInfoPayload, terminalId);
+          setError(null);
         }
       } catch (err) {
         const message = formatErrorMessage(err, "Failed to load terminal info");
@@ -484,7 +494,9 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // local, so it survives the payload read failing — which is exactly the case
   // where liveness matters most.
   const runtimeStatus = panel?.runtimeStatus;
-  const hasExited = runtimeStatus === "exited" || info?.hasPty === false;
+  // The host's `hasPty` only decides when the store has no status at all; a known
+  // status wins outright, or a lagging `hasPty: false` labelled a live terminal dead.
+  const hasExited = runtimeStatus ? runtimeStatus === "exited" : info?.hasPty === false;
   const liveness = hasExited
     ? exitCode != null
       ? `Exited · code ${exitCode}`
@@ -552,7 +564,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   const showAgentLiveSection = !!(launchAgentId || detectedAgentId || everDetectedAgent);
 
   const formatArgsForClipboard = (args: string[] | undefined): string => {
-    if (args === undefined) return UNKNOWN;
+    if (args === undefined) return info ? NONE : UNAVAILABLE;
     if (args.length === 0) return "(none)";
     // JSON, not a space join: argv boundaries and embedded whitespace are the facts a
     // bug report needs, and a join reconstructs a command line that never existed.
@@ -607,7 +619,7 @@ Agent state:
 Status:
   Liveness: ${liveness}
   Runtime status: ${runtimeStatus ?? UNKNOWN}
-  Foreground process: ${info?.ptyForegroundProcess ?? NONE}
+  Foreground process: ${info?.ptyForegroundProcess ?? (info ? NONE : UNAVAILABLE)}
   Exit code: ${exitCode != null ? exitCode : NONE}
 ${diagnosticsNote}
 Session:
@@ -615,16 +627,16 @@ Session:
   Kind: ${info?.kind || panel?.kind || "terminal"}
   Title: ${title ?? NONE}
   Title mode: ${titleMode ?? "default"}
-  Project ID: ${info?.projectId || NONE}
+  Project ID: ${info?.projectId || (info ? NONE : UNAVAILABLE)}
   Worktree ID: ${worktreeId || NONE}
   CWD: ${cwd ?? NONE}
   Location: ${location ?? NONE}
-  Spawn source: ${spawnSource ?? NONE}
+  Spawn source: ${spawnSource ?? UNKNOWN}
 ${startedByAssistant ? "  Started by: Daintree Assistant\n" : ""}  Started via MCP: ${startedViaMcp ?? UNKNOWN}
   UI created at: ${uiStartedAt != null ? formatTimestamp(uiStartedAt) : NONE}
 
 How it launched:
-  Shell: ${info?.shell || NONE}
+  Shell: ${info?.shell || UNAVAILABLE}
   Command: ${command ?? NONE}
   Args: ${formatArgsForClipboard(info?.spawnArgs)}${agentSection}
 
@@ -650,8 +662,8 @@ Activity:
   Activity tier: ${info?.activityTier ?? UNAVAILABLE}
 
 Performance:
-  Output buffer: ${info?.outputBufferSize ?? UNAVAILABLE} lines
-  Semantic buffer: ${info?.semanticBufferLines ?? UNAVAILABLE} lines
+  Output buffer: ${info?.outputBufferSize != null ? `${info.outputBufferSize} lines` : UNAVAILABLE}
+  Semantic buffer: ${info?.semanticBufferLines != null ? `${info.semanticBufferLines} lines` : UNAVAILABLE}
   Synchronized output (DEC 2026): ${formatSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId))}
 `;
   }, [
@@ -1014,7 +1026,13 @@ Performance:
               mono={worktreeId !== cwd}
               pending={pending}
             />
-            <Row label="Project ID" value={info?.projectId} mono pending={pending} />
+            <Row
+              label="Project ID"
+              value={info?.projectId}
+              mono
+              pending={pending}
+              fallback={info ? NONE : UNAVAILABLE}
+            />
           </Group>
 
           <DisclosureGroup

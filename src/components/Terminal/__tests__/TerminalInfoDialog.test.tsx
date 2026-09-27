@@ -613,4 +613,50 @@ describe("TerminalInfoDialog", () => {
       expect(payload).not.toMatch(/could not be read/);
     });
   });
+
+  describe("liveness and provenance under conflicting signals", () => {
+    // A known store status outranks the host's `hasPty`, which lags on reconnect.
+    it("never calls a terminal the store knows is running exited", async () => {
+      mockPanelsById = {
+        "test-id": {
+          id: "test-id",
+          kind: "terminal",
+          title: "t",
+          cwd: "/r",
+          location: "grid",
+          runtimeStatus: "running",
+        },
+      };
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload({ hasPty: false }) });
+      renderDialog();
+      await screen.findByText("vim");
+
+      expect(screen.getByTestId("terminal-info-liveness").textContent).toBe("Running");
+    });
+
+    // A retry is not a success: the warning stays until the new read lands.
+    it("keeps the warning up while a retry is in flight", async () => {
+      dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "not found" } });
+      renderDialog();
+      await screen.findByTestId("terminal-info-error");
+
+      dispatchMock.mockReturnValue(new Promise(() => {}));
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
+      expect(screen.queryByTestId("terminal-info-error")).not.toBeNull();
+    });
+
+    // The report uses the screen's absence vocabulary: a value the failed read could
+    // not supply is "Unavailable" in both, and units only follow numbers.
+    it("speaks the same absence vocabulary as the screen when the read failed", async () => {
+      dispatchMock.mockResolvedValue({ ok: false, error: { message: "not found" } });
+      renderDialog();
+      await screen.findByTestId("terminal-info-error");
+
+      const payload = await copyPayload();
+      expect(payload).toMatch(/Shell: Unavailable/);
+      expect(payload).toMatch(/Args: Unavailable/);
+      expect(payload).not.toMatch(/Unavailable lines/);
+    });
+  });
 });
