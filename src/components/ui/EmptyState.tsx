@@ -81,12 +81,14 @@ function renderInner(
   const iconClass = isCanvas
     ? "text-text-placeholder [&_svg]:h-10 [&_svg]:w-10 @max-[280px]/empty-state:[&_svg]:h-6 @max-[280px]/empty-state:[&_svg]:w-6"
     : "text-text-placeholder [&_svg]:h-6 [&_svg]:w-6 @max-[280px]/empty-state:[&_svg]:h-4 @max-[280px]/empty-state:[&_svg]:w-4";
+  // `text-balance` so a line that just overflows wraps into two even lines
+  // rather than stranding its last word beneath a full one.
   const titleClass = isCanvas
-    ? "text-lg font-semibold text-text-secondary @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
-    : "text-sm font-medium text-text-secondary";
+    ? "text-lg font-semibold text-text-secondary text-balance @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
+    : "text-sm font-medium text-text-secondary text-balance";
   const descriptionClass = isCanvas
-    ? "text-sm text-text-secondary max-w-xs @max-[280px]/empty-state:text-xs"
-    : "text-xs text-text-secondary max-w-xs";
+    ? "text-sm text-text-secondary max-w-xs text-balance @max-[280px]/empty-state:text-xs"
+    : "text-xs text-text-secondary max-w-xs text-balance";
   return (
     <>
       {icon ? (
