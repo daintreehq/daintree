@@ -354,7 +354,8 @@ export function WorktreeTerminalSection({
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (e.button !== 0) return;
+      // The marquee arms rows; a select-only section has nothing for it to do.
+      if (e.button !== 0 || rowClick !== "arm") return;
       const target = e.target as Element;
       // dnd-kit owns the drag handle — don't shadow its pointer events.
       if (target.closest("[data-drag-handle]")) return;
@@ -366,7 +367,7 @@ export function WorktreeTerminalSection({
       };
       snapshotRects();
     },
-    [snapshotRects]
+    [snapshotRects, rowClick]
   );
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -575,7 +576,10 @@ export function WorktreeTerminalSection({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerCancel}
-              className={cn("relative max-h-[300px] cursor-crosshair overflow-y-auto")}
+              className={cn(
+                "relative max-h-[300px] overflow-y-auto",
+                rowClick === "arm" && "cursor-crosshair"
+              )}
             >
               {orderedWorktreeTerminals.map((term, index) => (
                 <SortableWorktreeTerminal
