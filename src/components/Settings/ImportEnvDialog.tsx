@@ -325,7 +325,7 @@ export function ImportEnvDialog({
 
   /** Why the primary action is dead. A disabled button that explains nothing is a dead end. */
   const blockedHint = keepIsNoOp
-    ? "Nothing is new, so keeping existing values changes nothing"
+    ? "No new keys to add"
     : step !== "paste" || canProceed
       ? null
       : hasErrors
