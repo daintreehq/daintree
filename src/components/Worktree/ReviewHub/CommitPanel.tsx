@@ -512,10 +512,19 @@ export function CommitPanel({
         <span
           id={counterId}
           className={cn(
-            "text-2xs tabular-nums",
-            isSubjectOverflow ? "text-status-warning" : "text-text-secondary"
+            "inline-flex items-center gap-1 text-2xs tabular-nums",
+            // Warning ink measured just under 4.5:1 on the light themes. The glyph
+            // carries the tone; the numbers stay in primary ink.
+            isSubjectOverflow ? "font-medium text-text-primary" : "text-text-secondary"
           )}
         >
+          {isSubjectOverflow && (
+            <AlertTriangle
+              className="w-3 h-3 shrink-0 text-status-warning"
+              aria-hidden="true"
+              data-severity-glyph=""
+            />
+          )}
           {subjectLine.length}/{MAX_SUBJECT_LENGTH}
           <span className="sr-only">
             {isSubjectOverflow
@@ -573,7 +582,10 @@ export function CommitPanel({
         data-testid="review-hub-commit-status"
         className={cn(
           "flex items-center gap-1.5 min-h-5 text-xs text-text-secondary rounded-[var(--radius-sm)]",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          // `focus:`, not `focus-visible:`: a blocked click moves focus here by
+          // script, and Chromium would not ring that after a pointer click, so a
+          // mouse user would see nothing happen.
+          "focus:outline focus:outline-2 focus:outline-accent-primary focus:outline-offset-2"
         )}
       >
         {statusTone === "warning" && (
