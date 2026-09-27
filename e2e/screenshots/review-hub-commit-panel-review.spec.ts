@@ -1,11 +1,11 @@
 /**
  * Review Hub commit composer visual-review harness.
  *
- * `CommitPanel` is the bottom of the Review Hub: the commit message box, the blocker
- * checklist tooltip, the Commit / Commit & Push pair, and the push progress rows. Most
- * of its states are transient (a push is over in a second against a local remote) or
- * gated on git shapes nobody sets up by hand (detached HEAD, no remote), so they are
- * rarely looked at. This harness puts every one of them on screen.
+ * `CommitPanel` is the bottom of the Review Hub: the commit message box, the status
+ * line that names what blocks a commit, the Commit / Commit & push pair, and the push
+ * progress rows. Most of its states are transient (a push is over in a second against a
+ * local remote) or gated on git shapes nobody sets up by hand (detached HEAD, no
+ * remote), so they are rarely looked at. This harness puts every one of them on screen.
  *
  * How each state is reached:
  *
@@ -83,9 +83,13 @@ const NARROW = { width: 900, height: 1050 };
 const FEATURE_BRANCH = "feature/agent-refactor";
 
 const CONTENT = '[data-testid="review-hub-content"]';
-const TEXTAREA = `${CONTENT} textarea[placeholder^="Commit message"]`;
+const TEXTAREA = `${CONTENT} textarea`;
+const PRIMARY = `${CONTENT} [data-testid="review-hub-commit-primary"]`;
+const staged = (n: number): string => `${PRIMARY}[data-staged-count="${n}"]`;
 const PANEL_TESTID = '[data-testid="review-hub-commit-panel"]';
 const TOOLTIP = "[data-radix-popper-content-wrapper]";
+/** An OPEN tooltip — a closing one keeps its wrapper mounted for its exit frames. */
+const TOOLTIP_OPEN = `${TOOLTIP}:has([data-state="delayed-open"], [data-state="instant-open"])`;
 const REFRESH = '[aria-label="Refresh"]';
 
 const CH = { push: "git:push", commit: "git:commit" } as const;
@@ -434,14 +438,14 @@ test("review hub commit panel review — every state of the commit composer", as
     const stageSome = async (): Promise<void> => {
       await unstage(DIRTY_FILES[2]![0]);
       await unstage(DIRTY_FILES[3]![0]);
-      await expectState(page, `${CONTENT} button:has-text("(2)")`, { label: "two staged" });
+      await expectState(page, staged(2), { label: "two staged" });
     };
     const unstageAll = async (): Promise<void> => {
       await hub
         .getByRole("button", { name: /^Unstage all/ })
         .first()
         .click();
-      await expectState(page, `${CONTENT} button:has-text("(0)")`, { label: "none staged" });
+      await expectState(page, staged(0), { label: "none staged" });
     };
 
     const typeMessage = async (message: string): Promise<void> => {
@@ -456,7 +460,13 @@ test("review hub commit panel review — every state of the commit composer", as
       await settle(page, 250);
     };
 
-    const primary = () => hub.getByRole("button", { name: /Commit( & Push)? \(\d+\)/ }).first();
+    const primary = () => page.locator(PRIMARY).first();
+
+    /** Snap with whatever overlay the hover or focus opened, if any. */
+    const openOverlay = async (): Promise<string[]> => {
+      await settle(page, 500);
+      return (await page.locator(TOOLTIP_OPEN).count()) ? [TOOLTIP_OPEN] : [];
+    };
 
     const rest = async (): Promise<void> => {
       await clearAllFaults(app).catch(() => {});
@@ -482,8 +492,7 @@ test("review hub commit panel review — every state of the commit composer", as
         await snapPanel(page, "01-blocked-rest");
         await snapWindow(page, "02-hub-context");
         await primary().hover();
-        await expectState(page, TOOLTIP, { label: "blocker tooltip" });
-        await snapPanel(page, "03-blocked-tooltip", [TOOLTIP]);
+        await snapPanel(page, "03-blocked-tooltip", await openOverlay());
       },
       rest
     );
@@ -495,8 +504,7 @@ test("review hub commit panel review — every state of the commit composer", as
         await blurAll();
         await snapPanel(page, "04-staged-no-message");
         await primary().hover();
-        await expectState(page, TOOLTIP, { label: "partial tooltip" });
-        await snapPanel(page, "05-staged-no-message-tooltip", [TOOLTIP]);
+        await snapPanel(page, "05-staged-no-message-tooltip", await openOverlay());
       },
       rest
     );
@@ -537,16 +545,15 @@ test("review hub commit panel review — every state of the commit composer", as
         await page.keyboard.press("Tab");
         await settle(page, 200);
         await snapPanel(page, "11-focus-commit");
-        const reached = await tabTo(page, `${CONTENT} button:has-text("Commit & Push")`, 4);
+        const reached = await tabTo(page, PRIMARY, 4);
         if (!reached) throw new Error("primary never took focus");
         await snapPanel(page, "12-focus-primary");
         await typeMessage("");
         await page.locator(TEXTAREA).focus();
         await page.keyboard.press("Tab");
-        await tabTo(page, `${CONTENT} button:has-text("Commit & Push")`, 4);
+        await tabTo(page, PRIMARY, 4);
         await settle(page, 600);
-        const tip = await page.locator(TOOLTIP).count();
-        await snapPanel(page, "13-focus-primary-blocked", tip ? [TOOLTIP] : []);
+        await snapPanel(page, "13-focus-primary-blocked", await openOverlay());
       },
       rest
     );
@@ -574,7 +581,7 @@ test("review hub commit panel review — every state of the commit composer", as
       const confirm = page.getByRole("button", { name: /^Push to / }).first();
       await confirm.waitFor({ state: "visible", timeout: T_MEDIUM });
       await confirm.click();
-      await expectState(page, `${CONTENT} button[aria-disabled="true"]:has-text("Commit & Push")`, {
+      await expectState(page, `${PRIMARY}[aria-disabled="true"]`, {
         label: "push in flight",
       });
       await settle(page, 600);
@@ -663,13 +670,11 @@ test("review hub commit panel review — every state of the commit composer", as
         await blurAll();
         await snapPanel(page, "23-forced-colors-staged");
         await primary().hover();
-        await expectState(page, TOOLTIP, { label: "forced tooltip" });
-        await snapPanel(page, "24-forced-colors-tooltip", [TOOLTIP]);
+        await snapPanel(page, "24-forced-colors-tooltip", await openOverlay());
         await page.emulateMedia({ forcedColors: "none", contrast: "more" });
         await blurAll();
         await primary().hover();
-        await expectState(page, TOOLTIP, { label: "contrast tooltip" });
-        await snapPanel(page, "25-more-contrast-tooltip", [TOOLTIP]);
+        await snapPanel(page, "25-more-contrast-tooltip", await openOverlay());
       },
       rest
     );
@@ -681,7 +686,7 @@ test("review hub commit panel review — every state of the commit composer", as
         git("remote remove origin", repo.dir);
         await settle(page, 600);
         await openHub();
-        await expectState(page, `${CONTENT} button:has-text("Commit (")`, { label: "no remote" });
+        await expectState(page, `${PRIMARY}:not(:has-text("push"))`, { label: "no remote" });
         await blurAll();
         await snapPanel(page, "26-no-remote-staged");
         await stageSome();
