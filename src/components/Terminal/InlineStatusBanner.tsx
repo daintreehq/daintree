@@ -547,6 +547,16 @@ export function InlineStatusBanner({
           <Button
             key={action.id}
             variant={variant}
+            // Handle for the forced-colors block in index.css, which restores
+            // the recommended action's heavier border once the UA has
+            // flattened outline and ghost to the same stroke.
+            data-notification-action={
+              action.variant === undefined ||
+              action.variant === "primary" ||
+              action.variant === "dangerFilled"
+                ? "primary"
+                : "secondary"
+            }
             size={action.iconOnly ? (isInline ? "icon-xs" : "icon-sm") : "sm"}
             // A raised, shadowed button reads louder than a routine one-line
             // notice should; the ring alone marks it as a control. `sm` type

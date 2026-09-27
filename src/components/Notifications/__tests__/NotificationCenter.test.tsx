@@ -2172,6 +2172,36 @@ describe("uiStore — closeNotificationCenter records timestamp", () => {
   });
 });
 
+describe("NotificationCenter — row actions", () => {
+  // Same mapping as the toast the row was born from: severity stays on the
+  // row's icon, the actions stay neutral, and forced colours can still tell
+  // the recommended one apart.
+  it("renders row actions neutral, primary marked apart from secondary", () => {
+    getMock.mockReturnValue({ enabled: true });
+    setEntries([
+      makeEntry({
+        id: "a",
+        type: "error",
+        message: "Push rejected",
+        actions: [
+          { actionId: "test.pull", label: "Pull and rebase" },
+          { actionId: "test.review", label: "Open review", variant: "secondary" },
+        ],
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const primary = screen.getByRole("button", { name: "Pull and rebase" });
+    const secondary = screen.getByRole("button", { name: "Open review" });
+    for (const button of [primary, secondary]) {
+      expect(button.className).not.toMatch(/(?:^|\s)(?:[a-z-]+:)*(?:bg|text|border|ring)-status-/);
+    }
+    expect(primary.getAttribute("data-notification-action")).toBe("primary");
+    expect(secondary.getAttribute("data-notification-action")).toBe("secondary");
+    expect(primary.className).not.toBe(secondary.className);
+  });
+});
+
 describe("NotificationCenter — keyboard navigation", () => {
   function getRows(container: HTMLElement): HTMLElement[] {
     return Array.from(container.querySelectorAll<HTMLElement>('[role="listitem"]'));
@@ -2618,7 +2648,7 @@ describe("NotificationCenter — keyboard navigation", () => {
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
     const list = container.querySelector('[role="list"]') as HTMLElement;
 
-    const actionButton = screen.getByText("Open");
+    const actionButton = screen.getByRole("button", { name: "Open" });
     act(() => {
       actionButton.focus();
     });
