@@ -410,6 +410,14 @@ test("toaster review — cards, stack, focus, menu, themes", async () => {
       await page.locator(REGION).getByRole("button", { name: "Notification options" }).focus();
       await page.keyboard.press("Enter");
       await page.getByRole("menu").waitFor({ state: "visible", timeout: 3000 });
+      // "Visible" to Playwright only means laid out; a menu under the toast
+      // passes that. Hit-test its centre so a covered menu throws.
+      const onTop = await page.getByRole("menu").evaluate((menu) => {
+        const r = menu.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return !!hit && menu.contains(hit);
+      });
+      if (!onTop) throw new Error("menu: options menu is painted under another layer");
       await snap(page, "40-options-menu-open", 120);
     });
 

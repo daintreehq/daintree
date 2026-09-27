@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, beforeAll, beforeEach, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
@@ -1674,48 +1676,53 @@ describe("Toast action variant rendering (issue #7595)", () => {
     fixtureElements = [];
   });
 
-  it("renders primary action with the tonal info fill", async () => {
+  // Severity belongs to the icon and the card's edge. An action painted in a
+  // status hue competes with it, and status inks are only contrast-gated at
+  // 3:1, so the recommended action ends up reading weaker than its neighbour.
+  const STATUS_INK = /\b(?:[a-z-]+:)*(?:bg|text|border|ring|outline)-status-/;
+
+  it("never paints an action in a severity colour, whatever the toast's type", async () => {
     render(<Toaster />);
     await act(async () => {
-      addToast({
-        actions: [{ label: "Primary", variant: "primary", onClick: vi.fn() }],
-      });
+      for (const type of ["info", "success", "warning", "error"] as const) {
+        addToast({
+          type,
+          message: `${type} toast`,
+          actions: [
+            { label: `${type} primary`, variant: "primary", onClick: vi.fn() },
+            { label: `${type} secondary`, variant: "secondary", onClick: vi.fn() },
+          ],
+        });
+      }
       vi.advanceTimersByTime(16);
     });
 
-    const button = screen.getByRole("button", { name: "Primary" });
-    expect(button.className).toContain("bg-status-info/10");
-    expect(button.className).toContain("text-status-info");
+    for (const type of ["info", "success", "warning", "error"]) {
+      for (const variant of ["primary", "secondary"]) {
+        const button = screen.getByRole("button", { name: `${type} ${variant}` });
+        expect(button.className).not.toMatch(STATUS_INK);
+      }
+    }
   });
 
-  it("renders secondary action as text-only — no fill, no border", async () => {
+  it("marks each action for the forced-colors hook, defaulting to primary", async () => {
     render(<Toaster />);
     await act(async () => {
       addToast({
-        actions: [{ label: "Secondary", variant: "secondary", onClick: vi.fn() }],
+        actions: [
+          { label: "Default", onClick: vi.fn() },
+          { label: "Alt", variant: "secondary", onClick: vi.fn() },
+        ],
       });
       vi.advanceTimersByTime(16);
     });
 
-    const button = screen.getByRole("button", { name: "Secondary" });
-    expect(button.className).not.toContain("bg-status-info/10");
-    expect(button.className).not.toContain("text-status-info");
-    expect(button.className).not.toMatch(/\bborder\b/);
-    expect(button.className).toContain("hover:bg-tint/10");
-  });
-
-  it("defaults to primary when variant is omitted", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({
-        actions: [{ label: "Default", onClick: vi.fn() }],
-      });
-      vi.advanceTimersByTime(16);
-    });
-
-    const button = screen.getByRole("button", { name: "Default" });
-    expect(button.className).toContain("bg-status-info/10");
-    expect(button.className).toContain("text-status-info");
+    expect(
+      screen.getByRole("button", { name: "Default" }).getAttribute("data-notification-action")
+    ).toBe("primary");
+    expect(
+      screen.getByRole("button", { name: "Alt" }).getAttribute("data-notification-action")
+    ).toBe("secondary");
   });
 
   it("renders mixed primary+secondary actions distinctly in the same toast", async () => {
@@ -1732,14 +1739,12 @@ describe("Toast action variant rendering (issue #7595)", () => {
 
     const confirm = screen.getByRole("button", { name: "Confirm" });
     const cancel = screen.getByRole("button", { name: "Cancel" });
-    expect(confirm.className).toContain("bg-status-info/10");
-    expect(cancel.className).not.toContain("bg-status-info/10");
     // "Distinctly" is the claim: whatever the two variants paint, they must not
     // paint the same thing.
     expect(cancel.className).not.toBe(confirm.className);
   });
 
-  it("dimmed secondary action retains opacity-50, stays disabled, and ignores clicks", async () => {
+  it("dimmed secondary action retains opacity-50, stays focusable, and ignores clicks", async () => {
     let resolvePrimary: () => void = () => {};
     const primaryClick = vi.fn(
       () =>
@@ -1771,12 +1776,14 @@ describe("Toast action variant rendering (issue #7595)", () => {
     const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
     expect(cancel.className).toContain("opacity-50");
     expect(cancel.className).toContain("pointer-events-none");
-    // Still the secondary text-only styling under the dim, not the primary fill.
-    expect(cancel.className).not.toContain("bg-status-info/10");
-    expect(cancel.className).not.toContain("text-status-info");
-    // Behavioral inertness: HTML `disabled` is the real guard (CSS
-    // pointer-events doesn't block fireEvent in JSDOM). Confirm both.
-    expect(cancel.disabled).toBe(true);
+    expect(cancel.getAttribute("data-notification-action")).toBe("secondary");
+    // Inert without native `disabled`: Chromium drops focus from a control the
+    // moment it becomes disabled, so a keyboard user who just pressed Confirm
+    // would land on <body>. The click guard is the real barrier (CSS
+    // pointer-events doesn't block fireEvent in JSDOM).
+    expect(cancel.disabled).toBe(false);
+    expect(confirm.hasAttribute("disabled")).toBe(false);
+    expect(cancel.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(cancel);
     expect(cancelClick).not.toHaveBeenCalled();
 
@@ -1797,9 +1804,7 @@ describe("Toast action variant rendering (issue #7595)", () => {
     });
 
     const button = screen.getByRole("button", { name: "Mute" });
-    expect(button.className).not.toContain("bg-status-info/10");
-    expect(button.className).not.toContain("text-status-info");
-    expect(button.className).toContain("hover:bg-tint/10");
+    expect(button.getAttribute("data-notification-action")).toBe("secondary");
   });
 });
 
@@ -1815,7 +1820,10 @@ describe("Toast stack motion (issue #9618)", () => {
     vi.useRealTimers();
   });
 
-  it("assigns ascending stack indices, newest frontmost", async () => {
+  // The column does not overlap, so shrinking background cards never read as a
+  // pile — it only staggered their right edges and cut their text and targets
+  // below the floors (12px copy, 24px targets) the front card meets.
+  it("keeps every live card at full size and unshifted, whatever its depth", async () => {
     render(<Toaster />);
     await act(async () => {
       addToast({ message: "First" });
@@ -1824,76 +1832,13 @@ describe("Toast stack motion (issue #9618)", () => {
       vi.advanceTimersByTime(16);
     });
 
-    // renderOrder is newest-first, so DOM order is [Third, Second, First] and
-    // the frontmost (newest) toast carries index 0.
-    // Bind indices to toast identity, not raw DOM position.
-    const byText = (needle: string) =>
-      screen.getAllByRole("status").find((t) => t.textContent?.includes(needle))!;
-    expect(screen.getAllByRole("status")).toHaveLength(3);
-    expect(byText("Third").style.getPropertyValue("--toast-index")).toBe("0");
-    expect(byText("Second").style.getPropertyValue("--toast-index")).toBe("1");
-    expect(byText("First").style.getPropertyValue("--toast-index")).toBe("2");
-
-    // The lift/scale must actually read the custom property, not a baked value.
-    expect(byText("Second").style.transform).toContain("var(--toast-index)");
-  });
-
-  it("gives a single toast a flat front index", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({ message: "Only" });
-      vi.advanceTimersByTime(16);
-    });
-
-    expect(screen.getByRole("status").style.getPropertyValue("--toast-index")).toBe("0");
-  });
-
-  it("compacts remaining toasts when one is dismissed", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({ message: "First" });
-      addToast({ message: "Second" });
-      vi.advanceTimersByTime(16);
-    });
-
-    // Second is frontmost (index 0); First is behind it (index 1).
-    let toasts = screen.getAllByRole("status");
-    const firstToast = toasts.find((t) => t.textContent?.includes("First"))!;
-    expect(firstToast.style.getPropertyValue("--toast-index")).toBe("1");
-
-    // Dismiss the frontmost toast; the remaining one must slide forward to 0
-    // rather than stay parked behind the (now exiting) toast.
-    const dismissButtons = screen.getAllByLabelText("Dismiss notification");
-    await act(async () => {
-      fireEvent.click(dismissButtons[0]!);
-    });
-
-    toasts = screen.getAllByRole("status");
-    const firstAfter = toasts.find((t) => t.textContent?.includes("First"))!;
-    expect(firstAfter.style.getPropertyValue("--toast-index")).toBe("0");
-  });
-
-  it("freezes an evicted background toast's index during its exit fade", async () => {
-    render(<Toaster />);
-    let oldestId = "";
-    await act(async () => {
-      oldestId = addToast({ message: "Oldest" });
-      addToast({ message: "Middle" });
-      addToast({ message: "Newest" });
-      vi.advanceTimersByTime(16);
-    });
-
-    const oldest = () =>
-      screen.getAllByRole("status").find((t) => t.textContent?.includes("Oldest"))!;
-    expect(oldest().style.getPropertyValue("--toast-index")).toBe("2");
-
-    // Dismiss the oldest (background) toast. While it fades out it falls off the
-    // parent's live-index map, but its depth must stay parked at 2 so it exits
-    // in place rather than lurching from the back of the pile to the front.
-    await act(async () => {
-      useNotificationStore.getState().dismissNotification(oldestId);
-    });
-    expect(oldest().style.getPropertyValue("--toast-index")).toBe("2");
+    const toasts = screen.getAllByRole("status");
+    expect(toasts).toHaveLength(3);
+    const transforms = toasts.map((t) => t.style.transform);
+    for (const transform of transforms) {
+      expect(transform).not.toMatch(/scale|translateY/);
+    }
+    expect(new Set(transforms).size).toBe(1);
   });
 
   it("keeps backdrop-blur off the animated wrapper to avoid Chromium 146 flicker", async () => {
@@ -1954,5 +1899,142 @@ describe("Toast drag-region opt-out (issue #12347)", () => {
     const column = document.querySelector('[aria-label="Notifications"]');
     expect(column?.className).toContain("pointer-events-none");
     expect(column?.className.split(/\s+/)).not.toContain("app-no-drag");
+  });
+});
+
+describe("Toast controls and layering", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    for (const el of fixtureElements) {
+      el.remove();
+    }
+    fixtureElements = [];
+  });
+
+  function zLayers(): Record<string, number> {
+    const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+    const layers: Record<string, number> = {};
+    for (const m of css.matchAll(/--(z-[a-z-]+):\s*(\d+);/g)) layers[m[1]!] = Number(m[2]);
+    return layers;
+  }
+
+  // A menu portaled out of a toast is only usable if it paints above the toast
+  // that owns it; at an equal or lower layer it opens underneath the card.
+  it("opens the options menu on a layer above the toast stack", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ context: { projectId: "p1" }, duration: 0 });
+      vi.advanceTimersByTime(16);
+    });
+
+    const trigger = screen.getByLabelText("Notification options");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+      vi.advanceTimersByTime(16);
+    });
+
+    const menu = screen.getByRole("menu");
+    const layerTokens = [...menu.className.matchAll(/z-\[var\(--(z-[a-z-]+)\)\]/g)].map(
+      (m) => m[1]!
+    );
+    const layers = zLayers();
+    // twMerge keeps the last z utility; that is the one that paints.
+    const effective = layers[layerTokens[layerTokens.length - 1]!];
+    expect(effective).toBeGreaterThan(layers["z-toast"]!);
+  });
+
+  // Hover-only controls are invisible to anyone not already pointing at the
+  // card, and the options menu is the only way to silence a noisy kind.
+  it("shows the options and dismiss controls at rest, not only on hover", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ context: { projectId: "p1" } });
+      vi.advanceTimersByTime(16);
+    });
+
+    for (const name of ["Notification options", "Dismiss notification"]) {
+      const control = screen.getByLabelText(name);
+      expect(control.className).not.toMatch(/(?:^|\s)opacity-0(?:\s|$)/);
+    }
+  });
+
+  it("holds the toast while an action is still running, past its duration", async () => {
+    let resolveAction: () => void = () => {};
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        message: "Pending",
+        duration: 1000,
+        actions: [
+          {
+            label: "Run",
+            successLabel: "Done",
+            onClick: () =>
+              new Promise<void>((res) => {
+                resolveAction = res;
+              }),
+          },
+        ],
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByText("Pending")).toBeTruthy();
+
+    resolveAction();
+    await act(async () => {
+      vi.advanceTimersByTime(0);
+    });
+  });
+
+  // Focus is handed back to where the user came from when they entered the
+  // toast, not to wherever they were when it happened to appear.
+  it("returns focus to the element the user entered the toast from", async () => {
+    const before = createFixtureButton("Before");
+    const after = createFixtureButton("After");
+    before.focus();
+
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ duration: 0 });
+      vi.advanceTimersByTime(16);
+    });
+
+    after.focus();
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      dismissButton.focus();
+    });
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+
+    expect(document.activeElement).toBe(after);
+  });
+
+  // An untitled toast's count belongs beside the event it counts, not on an
+  // otherwise empty row above it.
+  it("sets an untitled toast's count badge on the message row", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "Copied", count: 3 });
+      vi.advanceTimersByTime(16);
+    });
+
+    const badge = screen.getByTestId("toast-coalesce-badge");
+    expect(badge.parentElement?.textContent).toContain("Copied");
   });
 });

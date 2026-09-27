@@ -160,6 +160,7 @@ code.hljs {
    * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
    * Tier 75: Nested dialogs (dialogs triggered from within popovers)
    * Tier 80: Toast notifications (always visible)
+   * Tier 85: Menus opened from a toast (must clear the toast that owns them)
    */
   --z-panel: 40;
   --z-portal: 50;
@@ -169,6 +170,7 @@ code.hljs {
   --z-popover: 70;
   --z-nested-dialog: 75;
   --z-toast: 80;
+  --z-toast-overlay: 85;
 
   /* Legacy floating-chrome shadow stack. The :root values are the ORIGINAL
    * black-derived stack and remain the dark-mode source of truth (byte-for-byte
