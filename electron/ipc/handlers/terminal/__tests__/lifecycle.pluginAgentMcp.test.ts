@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Claude launches hand the project's enabled plugin MCP endpoints to the agent
-// in the same managed --mcp-config file as the Daintree entry. Unlike
+// Agent launches hand the project's enabled plugin MCP servers to the agent
+// beside the Daintree entry — here in Claude's managed --mcp-config file. Unlike
 // lifecycle.spawn.test.ts, the pane config service and the grant registry are
 // real here: what matters is the file the agent is handed and which grants are
 // live afterwards, not which calls were made.
@@ -236,7 +236,7 @@ function configPathFromCommand(command: string): string {
   return match[1];
 }
 
-describe("terminal spawn handler - plugin MCP endpoints for Claude launches", () => {
+describe("terminal spawn handler - plugin MCP servers for agent launches", () => {
   let ptyClient: {
     spawn: ReturnType<typeof vi.fn>;
     hasTerminal: ReturnType<typeof vi.fn>;

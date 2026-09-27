@@ -714,11 +714,13 @@ export interface McpServerContribution {
  * the existing loopback listener), the per-terminal credential, the project
  * binding and revocation. The plugin supplies the tool roster at activation via
  * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
- * an endpoint reaches no agent until the user enables it for a project.
+ * reaches no agent until the user gives the plugin read-and-write access. Its
+ * tools share one MCP server with the host's tools for the plugin's databases,
+ * so `database_schema` and `database_query` are reserved.
  */
 export interface PluginAgentMcpContribution {
   id: string;
-  /** Shown in the per-project enablement UI. Agents never see it; their server key derives from the ids. */
+  /** Shown in the per-project access UI. Agents never see it; their server name comes from the manifest's `mcpName`. */
   name: string;
   description?: string;
   /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
@@ -748,7 +750,7 @@ export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
  * Tool name grammar — the subset every MCP client accepts unmangled. Capped at
  * 32 characters because Claude exposes a server's tools as
  * `mcp__<server>__<tool>` under a 64-character tool-name limit, and the host's
- * server key for a plugin endpoint takes up to 25 of what is left.
+ * server key for a plugin takes up to 25 of what is left.
  */
 export const AGENT_MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
 /** UTF-8 byte cap on a tool description, matching the host's own MCP authoring budget. */
@@ -1158,6 +1160,14 @@ export interface PluginManifest {
   name: string;
   version: string;
   displayName?: string;
+  /**
+   * The short name agents see this plugin's MCP server under, as
+   * `daintree-<mcpName>`: lowercase letters, digits and hyphens, at most 16
+   * characters. Without one the host derives a name from the last segment of
+   * `name`. The same name in every project; see `docs/plugins/manifest.md` for
+   * how a clash between two plugins is settled.
+   */
+  mcpName?: string;
   description?: string;
   /**
    * One-line value proposition shown in catalog rows and cards. `description`

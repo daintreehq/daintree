@@ -1224,8 +1224,8 @@ export const CHANNELS = {
   // Per-project consent for plugin agent tools (`contributes.agentMcp`).
   // Renderer-only by design: an action here would be on the MCP tool surface,
   // and an agent must never be able to grant itself a plugin's tools.
-  PLUGIN_AGENT_MCP_LIST_PROJECT_ENDPOINTS: "plugin-agent-mcp:list-project-endpoints",
-  PLUGIN_AGENT_MCP_SET_PROJECT_ENDPOINT_ENABLED: "plugin-agent-mcp:set-project-endpoint-enabled",
+  PLUGIN_AGENT_MCP_LIST_PROJECT_PLUGINS: "plugin-agent-mcp:list-project-plugins",
+  PLUGIN_AGENT_MCP_SET_PLUGIN_ACCESS: "plugin-agent-mcp:set-plugin-access",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

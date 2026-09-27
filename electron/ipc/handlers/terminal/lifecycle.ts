@@ -12,7 +12,10 @@ import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { noteTerminalLaunch } from "../../../services/pty/agentSessionCapturePersistence.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
-import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
+import {
+  mcpPaneConfigService,
+  type PanePluginServer,
+} from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
@@ -58,13 +61,14 @@ import {
   substituteSettingsTemplates,
 } from "../../../services/settingsTemplateResolver.js";
 import type * as PluginServiceModule from "../../../services/PluginService.js";
-import { listDeclaredAgentMcpEndpoints } from "../../../services/pluginAgentMcp/declaredEndpoints.js";
+import { listDeclaredAgentMcpPlugins } from "../../../services/pluginAgentMcp/declaredEndpoints.js";
 import {
+  agentMcpScopeFor,
   hasAnyAgentMcpEnablement,
-  isAgentMcpEndpointEnabled,
+  isAgentMcpScopeAllowed,
   refreshProjectAgentMcpDefaults,
 } from "../../../services/pluginAgentMcp/projectEnablement.js";
-import type { DeclaredAgentMcpEndpoint } from "../../../services/pluginAgentMcp/types.js";
+import { pluginServerKeysFor } from "../../../services/pluginAgentMcp/serverKeys.js";
 import { isProjectWorkspaceId } from "../../../../shared/utils/workspaceIds.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
@@ -131,9 +135,9 @@ async function waitForTerminalSpawnAdmission(
 }
 
 // Lazy cached accessor (same pattern as `helpAssistant.ts`) — the MCP server
-// stack is ~637KB and only needed for Claude launches with a non-"off" MCP
-// tier, so keep it out of this module's static import set (it loads eagerly
-// at boot).
+// stack is ~637KB and only needed for agent launches that are handed Daintree's
+// MCP servers (a non-"off" tier, or a plugin with agent tools on), so keep it
+// out of this module's static import set (it loads eagerly at boot).
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
 
 let cachedMcpServerService: McpServerSingleton | null = null;
@@ -177,8 +181,8 @@ function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
 
 // Same lazy-import discipline as the MCP service above: PluginService pulls in
 // the whole plugin host (~thousands of lines), and only plugin-agent launches
-// that actually embed a `${settings:*}` template, or Claude launches in a
-// project with a plugin MCP endpoint turned on, need it — so keep it off the
+// that actually embed a `${settings:*}` template, or agent launches in a
+// project with a plugin's agent tools turned on, need it — so keep it off the
 // eager spawn path and load on first such launch.
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
 let cachedPluginService: PluginServiceSingleton | null = null;
@@ -214,18 +218,18 @@ import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 
-// The plugin MCP endpoints an agent launch in this project should be handed:
-// on for this project (the user's answer, else the repository's own
-// `.daintree/mcp.json` default) AND declared by a plugin instance that is
-// running and may serve it. Enablement is read first because it is a store read
-// and one small file, and an empty answer — every project that never turned a
-// plugin endpoint on — keeps the launch off the lazy PluginService load entirely.
+// The plugin MCP servers an agent launch in this project should be handed: one
+// per plugin instance that is running, may serve this project, and has agent
+// access here (the user's answer, else their answer for every project or the
+// repository's own `.daintree/mcp.json`). Access is read first because it is a
+// store read and one small file, and an empty answer — every project with no
+// plugin tools on — keeps the launch off the lazy PluginService load entirely.
 const PLUGIN_INIT_WAIT_MS = 5000;
 
-async function resolveEnabledPluginMcpEndpoints(
+async function resolvePluginMcpServers(
   projectId: string,
   projectRoot: string
-): Promise<DeclaredAgentMcpEndpoint[]> {
+): Promise<PanePluginServer[]> {
   if (!isProjectWorkspaceId(projectId)) return [];
   await refreshProjectAgentMcpDefaults(projectId, projectRoot);
   if (!hasAnyAgentMcpEnablement(projectId)) return [];
@@ -242,15 +246,25 @@ async function resolveEnabledPluginMcpEndpoints(
     );
   } catch {
     console.warn(
-      `[TerminalSpawn] Plugin service not ready after ${PLUGIN_INIT_WAIT_MS}ms; launching without plugin MCP endpoints`
+      `[TerminalSpawn] Plugin service not ready after ${PLUGIN_INIT_WAIT_MS}ms; launching without plugin MCP servers`
     );
     return [];
   }
-  return listDeclaredAgentMcpEndpoints(pluginService.listPlugins(), projectId, (instanceId) =>
-    pluginService.hasPlugin(instanceId)
-  ).filter((endpoint) =>
-    isAgentMcpEndpointEnabled(projectId, endpoint.pluginInstanceId, endpoint.endpointId)
+  const declared = listDeclaredAgentMcpPlugins(pluginService.listPlugins(), projectId, (id) =>
+    pluginService.hasPlugin(id)
   );
+  // Named over every plugin that could serve here, not only those on, so a
+  // plugin's name does not change when another is switched on or off.
+  const keys = pluginServerKeysFor(declared);
+  const servers: PanePluginServer[] = [];
+  for (const plugin of declared) {
+    const scope = agentMcpScopeFor(projectId, plugin);
+    const serverKey = keys.get(plugin.pluginInstanceId);
+    if (scope !== null && serverKey !== undefined) {
+      servers.push({ pluginInstanceId: plugin.pluginInstanceId, serverKey, scope });
+    }
+  }
+  return servers;
 }
 
 /**
@@ -271,18 +285,16 @@ function mergeLaunchEnv(
   return { ...kept, ...injected };
 }
 
-// Re-checked synchronously as each grant is minted: the endpoints above were
-// resolved before the launch's awaits, and a plugin unloaded or an endpoint
-// switched off in between would otherwise get a grant its revocation sweep has
-// already run past. `cachedPluginService` is always set by then — the endpoint
+// Re-checked synchronously as each grant is minted: the servers above were
+// resolved before the launch's awaits, and a plugin unloaded or its access
+// reduced in between would otherwise get a grant its revocation sweep has
+// already run past. `cachedPluginService` is always set by then — the server
 // list could not have been non-empty without loading it.
-function isPluginMcpEndpointStillEligible(
-  projectId: string
-): (endpoint: { pluginInstanceId: string; endpointId: string }) => boolean {
-  return (endpoint) =>
+function isPluginMcpServerStillEligible(projectId: string): (server: PanePluginServer) => boolean {
+  return ({ pluginInstanceId, scope }) =>
     cachedPluginService !== null &&
-    cachedPluginService.hasPlugin(endpoint.pluginInstanceId) &&
-    isAgentMcpEndpointEnabled(projectId, endpoint.pluginInstanceId, endpoint.endpointId);
+    cachedPluginService.hasPlugin(pluginInstanceId) &&
+    isAgentMcpScopeAllowed(projectId, pluginInstanceId, scope);
 }
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
@@ -815,16 +827,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       try {
         const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
         const tier = resolveDaintreeMcpTier(projSettings);
-        const pluginEndpoints = await resolveEnabledPluginMcpEndpoints(
+        const pluginServers = await resolvePluginMcpServers(
           resolvedProject.id,
           resolvedProject.path
         );
-        if (tier !== "off" || pluginEndpoints.length > 0) {
+        if (tier !== "off" || pluginServers.length > 0) {
           const mcpServerService = await getMcpServerService();
           const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
           if (!ready) {
             console.warn(
-              "[TerminalSpawn] Daintree MCP requested for Claude launch, but the MCP server is not ready; continuing without MCP injection"
+              "[TerminalSpawn] Daintree MCP requested for agent launch, but the MCP server is not ready; continuing without MCP injection"
             );
           }
           const port = mcpServerService.currentPort;
@@ -836,13 +848,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               injection: launchMcp,
               inheritedEnv: { ...process.env, ...(spawnEnv ?? {}) },
               cwd,
-              ...(pluginEndpoints.length > 0
+              ...(pluginServers.length > 0
                 ? {
                     plugin: {
                       projectId: resolvedProject.id,
-                      endpoints: pluginEndpoints,
+                      servers: pluginServers,
                       launchAgentIdHint: launchAgentId,
-                      isEligible: isPluginMcpEndpointStillEligible(resolvedProject.id),
+                      isEligible: isPluginMcpServerStillEligible(resolvedProject.id),
                     },
                   }
                 : {}),

@@ -1,8 +1,8 @@
 import type { IpcInvokeMap } from "../../types/index.js";
 
 export const PLUGIN_AGENT_MCP_METHOD_CHANNELS = {
-  listProjectEndpoints: "plugin-agent-mcp:list-project-endpoints",
-  setProjectEndpointEnabled: "plugin-agent-mcp:set-project-endpoint-enabled",
+  listProjectPlugins: "plugin-agent-mcp:list-project-plugins",
+  setPluginAccess: "plugin-agent-mcp:set-plugin-access",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_AGENT_MCP_METHOD_CHANNELS;

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { app } from "electron";
@@ -6,13 +6,12 @@ import { resilientAtomicWriteFile, resilientUnlink } from "../utils/fs.js";
 import type { DaintreeMcpTier } from "../../shared/types/project.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PaneWorkspaceBinding } from "./mcp-server/shared.js";
-import { pluginManifestIdFromInstanceKey } from "../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
   pluginMcpGrantRegistry,
   type PluginMcpGrantRegistry,
 } from "./pluginAgentMcp/grantRegistry.js";
-import { pluginMcpRoutePath } from "./pluginAgentMcp/types.js";
+import { pluginMcpRoutePath, type AgentMcpToolScope } from "./pluginAgentMcp/types.js";
 import type { LaunchMcpInjection } from "../../shared/config/launchMcp.js";
 import {
   LAUNCH_MCP_FILE_PLACEHOLDER,
@@ -25,17 +24,10 @@ const CLAUDE_INJECTION: LaunchMcpInjection = { format: "claude-mcp-config" };
 
 const PANE_CONFIG_DIR_NAME = "mcp-pane-configs";
 const MCP_SERVER_KEY = "daintree";
-const PLUGIN_SERVER_KEY_PREFIX = "daintree-";
 const DAINTREE_MCP_TOKEN_ENV = "DAINTREE_MCP_TOKEN";
 // Plugin bearers never share the orchestration bearer's name: that one also
 // marks a help-session launch in the spawn path.
 const PLUGIN_MCP_TOKEN_ENV_PREFIX = "DAINTREE_PLUGIN_MCP_TOKEN_";
-// Claude names a server's tools `mcp__<server>__<tool>` under a 64-character
-// tool-name limit. Tool names are capped at 32 (AGENT_MCP_TOOL_NAME_PATTERN),
-// which leaves 25 for the key, so a long manifest id is truncated and
-// disambiguated by hash rather than carried whole.
-const MAX_PLUGIN_SERVER_KEY_LENGTH = 25;
-const SERVER_KEY_HASH_LENGTH = 8;
 
 interface PaneRecord {
   /** Null for a format that hands the agent everything through args and env. */
@@ -74,31 +66,33 @@ export interface OrchestratorPaneIdentity {
   workspaceId?: string;
 }
 
-export interface PanePluginEndpoint {
+/** One plugin's MCP server for a launch: its key (`pluginServerKeysFor`) and what it reaches. */
+export interface PanePluginServer {
   readonly pluginInstanceId: string;
-  readonly endpointId: string;
+  readonly serverKey: string;
+  readonly scope: AgentMcpToolScope;
 }
 
-export interface PreparePanePluginEndpoints {
+export interface PreparePanePluginServers {
   projectId: string;
-  endpoints: readonly PanePluginEndpoint[];
+  servers: readonly PanePluginServer[];
   launchAgentIdHint?: string;
   /**
-   * Re-checked for each endpoint immediately before its grant is minted, with
-   * no await in between. The endpoint list was resolved before this call's
-   * awaits; a plugin unloaded or an endpoint switched off meanwhile must not
-   * come back as a grant the unload or disable sweep never saw.
+   * Re-checked for each server immediately before its grant is minted, with no
+   * await in between. The list was resolved before this call's awaits; a
+   * plugin unloaded or its access reduced meanwhile must not come back as a
+   * grant the unload or revocation sweep never saw.
    */
-  isEligible?: (endpoint: PanePluginEndpoint) => boolean;
+  isEligible?: (server: PanePluginServer) => boolean;
 }
 
 export interface PreparePaneConfigParams {
   paneId: string;
   port: number;
-  /** "off" writes no Daintree entry and registers no pane token; only valid alongside plugin endpoints. */
+  /** "off" writes no Daintree entry and registers no pane token; only valid alongside plugin servers. */
   tier: DaintreeMcpTier;
-  /** Plugin endpoints the user enabled for this project, each given its own grant and server entry. */
-  plugin?: PreparePanePluginEndpoints;
+  /** Plugins with agent access in this project, each given its own grant and server entry. */
+  plugin?: PreparePanePluginServers;
   /** The launching agent's dialect; Claude's `--mcp-config` file when omitted. */
   injection?: LaunchMcpInjection;
   /** The env the agent will inherit, for formats that must carry an existing value forward. */
@@ -120,63 +114,9 @@ export interface PreparedPaneConfig {
   env: Record<string, string>;
 }
 
-/** What a call without plugin endpoints gets back: always carries the Daintree entry. */
+/** What a call without plugin servers gets back: always carries the Daintree entry. */
 export interface PreparedDaintreePaneConfig extends PreparedPaneConfig {
   token: string;
-}
-
-function sanitiseServerKeyPart(value: string): string {
-  return value.replace(/[^A-Za-z0-9_-]/g, "_");
-}
-
-function shortHash(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, SERVER_KEY_HASH_LENGTH);
-}
-
-function withHashSuffix(base: string, hash: string): string {
-  const room = MAX_PLUGIN_SERVER_KEY_LENGTH - hash.length - 1;
-  return `${base.slice(0, room)}-${hash}`;
-}
-
-/**
- * One server key per endpoint, restricted to `[A-Za-z0-9_-]`, never `daintree`,
- * and collision-free across the list. Keyed by manifest id rather than instance
- * key because a project plugin's instance key embeds a 64-hex project id; when
- * two endpoints still land on the same key (an installed and a project copy of
- * one plugin, or ids that differ only in characters the sanitiser folds), every
- * member of that group gets a hash of its full instance and endpoint id, so a
- * key does not depend on which of them happened to be listed first.
- */
-export function pluginServerKeysFor(endpoints: readonly PanePluginEndpoint[]): string[] {
-  const identities = endpoints.map((e) => `${e.pluginInstanceId}\0${e.endpointId}`);
-  const bases = endpoints.map((e, i) => {
-    const base = `${PLUGIN_SERVER_KEY_PREFIX}${sanitiseServerKeyPart(
-      pluginManifestIdFromInstanceKey(e.pluginInstanceId)
-    )}-${sanitiseServerKeyPart(e.endpointId)}`;
-    return base.length > MAX_PLUGIN_SERVER_KEY_LENGTH
-      ? withHashSuffix(base, shortHash(identities[i]))
-      : base;
-  });
-  const counts = new Map<string, number>();
-  for (const base of bases) counts.set(base, (counts.get(base) ?? 0) + 1);
-  // Any clash left (a hashed key landing on another endpoint's plain key) is
-  // settled in identity order, so the set of endpoints decides every key and
-  // the order they were listed in never does.
-  const order = endpoints
-    .map((_, i) => i)
-    .sort((a, b) => (identities[a] < identities[b] ? -1 : identities[a] > identities[b] ? 1 : 0));
-  const keys = new Array<string>(endpoints.length);
-  const used = new Set<string>();
-  for (const i of order) {
-    const base = bases[i];
-    let key = (counts.get(base) ?? 0) > 1 ? withHashSuffix(base, shortHash(identities[i])) : base;
-    for (let n = 2; used.has(key); n++) {
-      key = withHashSuffix(base, shortHash(`${identities[i]}\0${n}`));
-    }
-    used.add(key);
-    keys[i] = key;
-  }
-  return keys;
 }
 
 export class McpPaneConfigService {
@@ -219,8 +159,8 @@ export class McpPaneConfigService {
   /**
    * Mint the pane's MCP wiring and render it in the launching agent's dialect:
    * the Daintree orchestration entry (unless the tier is "off") and one
-   * Streamable HTTP entry per enabled plugin endpoint, each with its own freshly
-   * minted grant. Formats that need a file get one, written 0600 under
+   * Streamable HTTP entry per plugin with agent access, each with its own
+   * freshly minted grant. Formats that need a file get one, written 0600 under
    * userData; the rest come back as args and env for the spawn.
    *
    * Returns null when the tier is "off" and no plugin grant could be minted:
@@ -257,10 +197,10 @@ export class McpPaneConfigService {
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       throw new Error(`Invalid MCP port: ${port}`);
     }
-    const pluginEndpoints = plugin?.endpoints ?? [];
-    if (tier === "off" && pluginEndpoints.length === 0) {
+    const pluginServerList = plugin?.servers ?? [];
+    if (tier === "off" && pluginServerList.length === 0) {
       throw new Error(
-        'preparePaneConfig should not be called with tier "off" and no plugin endpoints'
+        'preparePaneConfig should not be called with tier "off" and no plugin servers'
       );
     }
     // Validate paneId early — configPathFor throws on traversal attempts.
@@ -387,45 +327,46 @@ export class McpPaneConfigService {
   }
 
   /**
-   * Mint one grant per endpoint and build its server entry. An endpoint the
+   * Mint one grant per plugin and build its server entry. A plugin the
    * registry refuses (a project plugin bound to another project, a non-project
    * workspace) is skipped rather than failing the launch.
    */
   private mintPluginServers(
     paneId: string,
     port: number,
-    { projectId, endpoints, launchAgentIdHint, isEligible }: PreparePanePluginEndpoints
+    { projectId, servers, launchAgentIdHint, isEligible }: PreparePanePluginServers
   ): LaunchMcpServer[] {
-    const seen = new Set<string>();
-    const minted: Array<{ endpoint: PanePluginEndpoint; token: string }> = [];
-    for (const endpoint of endpoints) {
-      const identity = `${endpoint.pluginInstanceId}\0${endpoint.endpointId}`;
-      if (seen.has(identity)) continue;
-      seen.add(identity);
+    const seenInstances = new Set<string>();
+    const seenKeys = new Set<string>([MCP_SERVER_KEY]);
+    const minted: Array<{ server: PanePluginServer; token: string }> = [];
+    for (const server of servers) {
+      if (seenInstances.has(server.pluginInstanceId) || seenKeys.has(server.serverKey)) continue;
+      seenInstances.add(server.pluginInstanceId);
+      seenKeys.add(server.serverKey);
       try {
-        if (isEligible && !isEligible(endpoint)) continue;
+        if (isEligible && !isEligible(server)) continue;
         const { token } = this.pluginGrants.issue({
-          pluginInstanceId: endpoint.pluginInstanceId,
-          endpointId: endpoint.endpointId,
+          pluginInstanceId: server.pluginInstanceId,
+          scope: server.scope,
+          serverName: server.serverKey,
           projectId,
           terminalId: paneId,
           ...(launchAgentIdHint !== undefined ? { launchAgentIdHint } : {}),
         });
         this.grantedPanes.add(paneId);
-        minted.push({ endpoint, token });
+        minted.push({ server, token });
       } catch (err) {
         console.warn(
-          `[MCP] Skipping plugin MCP endpoint ${endpoint.pluginInstanceId}/${endpoint.endpointId}:`,
+          `[MCP] Skipping plugin MCP server ${server.pluginInstanceId}:`,
           formatErrorMessage(err, "grant refused")
         );
       }
     }
 
-    const keys = pluginServerKeysFor(minted.map((m) => m.endpoint));
     // Streamable HTTP only: the plugin route does not serve SSE.
-    return minted.map(({ endpoint, token }, i) => ({
-      key: keys[i],
-      url: `http://127.0.0.1:${port}${pluginMcpRoutePath(endpoint.pluginInstanceId, endpoint.endpointId)}`,
+    return minted.map(({ server, token }, i) => ({
+      key: server.serverKey,
+      url: `http://127.0.0.1:${port}${pluginMcpRoutePath(server.pluginInstanceId)}`,
       bearer: token,
       bearerEnvVar: `${PLUGIN_MCP_TOKEN_ENV_PREFIX}${i + 1}`,
     }));

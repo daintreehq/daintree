@@ -174,10 +174,10 @@ What the host does with the roster:
 
 Declaring an endpoint exposes nothing. It reaches an agent only when all of these hold:
 
-1. **The endpoint is on for the project.** Exposure is its own per-project decision, separate from installing or trusting the plugin, and off by default. The user switches it in **Project settings → Plugins → Agent tools**, and that answer is stored in Daintree's user store. A repository can turn its _own_ project plugins' endpoints on by default in `.daintree/mcp.json` (below); the user's answer beats that default either way. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
+1. **The plugin has read and write access in the project.** Each plugin has one access setting — **Off**, **Read only** (the host's [database tools](./contribution-points.md#databases--shipped), when the plugin declares databases) or **Read and write** (your endpoint's tools as well) — separate from installing or trusting the plugin, and off by default. The user sets it in **Project settings → Plugins → Agent tools**, and that answer is stored in Daintree's user store. For an installed plugin the user can also make a level the default for every project, which a project's own answer still overrides. A repository can set a default for its _own_ project plugins in `.daintree/mcp.json` (below); the user's answer beats it either way. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
 2. **Daintree's MCP server is enabled** (Settings → MCP server), because the endpoint is served on that listener.
 3. **The plugin is loaded** — enabled, not blocklisted, and for a project plugin, loaded for this project.
-4. **The agent was launched after the endpoint was turned on, by a CLI Daintree can wire.** Each launch in the project is handed one server per enabled endpoint, whether or not the project's Daintree MCP tier is on, through the mechanism its registry entry declares in `capabilities.launchMcp` (`shared/config/launchMcp.ts`). Every mechanism is one the CLI itself merges over the user's own servers, and none writes into the user's agent config or the repository: a file, when one is needed, is written `0600` under `userData` and deleted when the terminal exits, and a bearer travels in that file or the terminal's environment, never on the command line.
+4. **The agent was launched after access was given, by a CLI Daintree can wire.** Each launch in the project is handed one server per plugin with access, whether or not the project's Daintree MCP tier is on, through the mechanism its registry entry declares in `capabilities.launchMcp` (`shared/config/launchMcp.ts`). Every mechanism is one the CLI itself merges over the user's own servers, and none writes into the user's agent config or the repository: a file, when one is needed, is written `0600` under `userData` and deleted when the terminal exits, and a bearer travels in that file or the terminal's environment, never on the command line.
 
 | Agent | How the servers are handed over |
 | --- | --- |
@@ -190,23 +190,23 @@ Declaring an endpoint exposes nothing. It reaches an agent only when all of thes
 | Qwen Code | `--mcp-config <file>` |
 | Mistral Vibe | `VIBE_MCP_SERVERS`, each bearer read from its own environment variable |
 
-Cursor, Grok, Kimi Code, Antigravity, Crush, Kiro and Goose have no launch-time mechanism that adds to the user's servers without replacing them, so they are not handed endpoints; nor are the in-app Daintree Assistant and help sessions. Gemini CLI starts no MCP server at all in a folder the user has not trusted.
+Cursor, Grok, Kimi Code, Antigravity, Crush, Kiro and Goose have no launch-time mechanism that adds to the user's servers without replacing them, so they are not handed plugin servers; nor are the in-app Daintree Assistant and help sessions. Gemini CLI starts no MCP server at all in a folder the user has not trusted.
 
-The agent sees your tools under a server key Daintree derives from the manifest and endpoint ids (`daintree-<manifest>-<endpoint>`, sanitised, and shortened with a hash past 25 characters), so Claude names a tool `mcp__<server key>__<tool>`. Tool names are capped at 32 characters to keep that inside Claude's 64-character limit.
+The agent sees one server per plugin, holding the host's database tools and your endpoint's tools together, under the key `daintree-<mcpName>` — the manifest's [`mcpName`](./manifest.md), or the last segment of the manifest id when there is none — so Claude names a tool `mcp__daintree-ledger__<tool>`. The key is the same in every project. When two plugins in one launch share a name, installed plugins keep it before project plugins, then manifest ids in code-point order; every other one gets eight hex characters of a hash of its origin and manifest id (`daintree-ledger-1a2b3c4d`), so a project copy of an installed plugin has the same key in every project. Tool names are capped at 32 characters to keep `mcp__<key>__<tool>` inside Claude's 64-character limit, and `database_schema` and `database_query` are reserved for the host.
 
 ### Project defaults: `.daintree/mcp.json`
 
-A project that ships its own plugins can turn their endpoints on for everyone who opens it, so an agent launched in a fresh clone already has the project app's tools:
+A project that ships its own plugins can give them access for everyone who opens it, so an agent launched in a fresh clone already has the project app's tools:
 
 ```json
-{ "plugins": { "acme.ledger": ["@databases", "data"], "acme.crm": "*" } }
+{ "plugins": { "acme.ledger": "read-write", "acme.crm": "read-only" } }
 ```
 
-Keys are manifest ids; the value lists endpoint ids, or `"*"` (or `true`) for every endpoint the plugin declares (`@databases` is the host's [read-only database endpoint](./contribution-points.md#databases--shipped)). A default only reaches a **project plugin of the same project**, which loads only once the user trusts the project's plugins — trust that already lets its code run. An installed plugin is never switched on by a repository, because that would let any clone read the user's own plugin data through their agents. The file is re-read at every agent launch; a malformed entry is skipped, and a symlinked file or `.daintree/` directory is ignored. **Agent tools** in Project settings shows which endpoints are on by the project's default, and a switch there is recorded as the user's answer, which the file no longer overrides.
+Keys are manifest ids; the value is `"off"`, `"read-only"` or `"read-write"`. The list form from before access levels still works: endpoint ids, with `@databases` for the database tools, or `"*"` (or `true`) for everything. A default only reaches a **project plugin of the same project**, which loads only once the user trusts the project's plugins — trust that already lets its code run. An installed plugin is never switched on by a repository, because that would let any clone read the user's own plugin data through their agents. The file is re-read at every agent launch; a malformed entry is skipped, and a symlinked file or `.daintree/` directory is ignored. **Agent tools** in Project settings shows which plugins have access by the project's default, and a choice there is recorded as the user's answer, which the file no longer overrides.
 
 Because only CLIs with a launch-time mechanism are handed endpoints, and only once an endpoint is on, an endpoint is an addition to a project app's data path, never the whole of it. Every agent can read and write files and run `sqlite3`, so the data itself, the contract in the plugin's `AGENTS.md` and a report script are what every agent reaches; the endpoint gives the agents that have it a safer, validated way to do the same. See [Patterns → Write the data contract down](./patterns.md#write-the-data-contract-down).
 
-Turning an endpoint off revokes every live credential for it in that project, and running agents lose the tools on their next request. Unloading the plugin — disable, uninstall, project close, trust revoke, reload — does the same for all its endpoints.
+Reducing a plugin's access revokes every live credential for its server in that project, and running agents lose the server on their next request; more access reaches agents launched afterwards. Unloading the plugin — disable, uninstall, project close, trust revoke, reload — revokes them all.
 
 ## Skills
 

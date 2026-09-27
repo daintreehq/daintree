@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "scope": "project",
   "displayName": "Household Ledger",
+  "mcpName": "ledger",
   "description": "A sample data plugin: a SQLite ledger the project owns, and a small tool roster that lets agents in this project read and append to it.",
   "authors": [{ "name": "Daintree", "role": "Maintainer" }],
   "main": "dist/index.mjs",
