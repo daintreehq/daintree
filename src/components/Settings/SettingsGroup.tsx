@@ -328,21 +328,9 @@ export function SettingsRow({
         renderedControl && <div className="min-w-0">{renderedControl}</div>
       )}
       {error && (
-        // The glyph carries the severity; the words stay neutral, because
-        // severity-coloured text falls under 4.5:1 on most themes.
-        <p
-          id={errorId}
-          className={cn(
-            "flex items-start gap-1.5 text-xs text-text-primary",
-            layout === "inline" && "basis-full"
-          )}
-        >
-          <CircleAlert
-            className="w-3.5 h-3.5 mt-px shrink-0 text-status-error"
-            aria-hidden="true"
-          />
-          <span>{error}</span>
-        </p>
+        <SettingsInlineError id={errorId} className={cn(layout === "inline" && "basis-full")}>
+          {error}
+        </SettingsInlineError>
       )}
     </div>
   );
@@ -370,6 +358,39 @@ export function SettingsActions({ children, status }: SettingsActionsProps) {
       </div>
       <div className="flex items-center gap-2 shrink-0">{children}</div>
     </div>
+  );
+}
+
+interface SettingsInlineErrorProps {
+  children: ReactNode;
+  id?: string;
+  className?: string;
+  role?: "alert" | "status";
+  "data-testid"?: string;
+}
+
+/**
+ * A settings error as words: the glyph carries the severity and the words stay
+ * neutral, because severity-coloured text falls under 4.5:1 on most themes. The
+ * form every settings error takes, a row's own or one a custom control states.
+ */
+export function SettingsInlineError({
+  children,
+  id,
+  className,
+  role,
+  "data-testid": testId,
+}: SettingsInlineErrorProps) {
+  return (
+    <p
+      id={id}
+      role={role}
+      data-testid={testId}
+      className={cn("flex items-start gap-1.5 text-xs text-text-primary", className)}
+    >
+      <CircleAlert className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
+      <span className="min-w-0">{children}</span>
+    </p>
   );
 }
 

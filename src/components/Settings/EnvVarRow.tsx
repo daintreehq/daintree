@@ -3,6 +3,7 @@ import { Eye, EyeOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
 
 /**
  * The editable `NAME = value` row shared by the global Environment page and the
@@ -154,9 +155,9 @@ export function EnvVarRow({
           <Trash2 />
         </Button>
         {error && (
-          <p id={errorId} className="col-span-3 mt-1 text-xs text-status-error">
+          <SettingsInlineError id={errorId} className="col-span-3 mt-1">
             {error}
-          </p>
+          </SettingsInlineError>
         )}
       </div>
     </div>

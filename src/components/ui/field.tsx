@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cva } from "class-variance-authority";
+import { CircleAlert } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -350,16 +351,22 @@ export type FieldErrorProps = Omit<React.HTMLAttributes<HTMLParagraphElement>, "
  * No `role="alert"`: settings validation renders on every keystroke, and a live
  * region would interrupt the user mid-word. The control's `aria-invalid` plus
  * the described-by association is what announces it, on focus.
+ *
+ * The glyph carries the severity and the words stay neutral: severity-coloured
+ * text has no contrast floor across the themes.
  */
-function FieldError({ className, ...props }: FieldErrorProps) {
+function FieldError({ className, children, ...props }: FieldErrorProps) {
   const { errorId } = useFieldContext("FieldError");
   return (
     <p
-      className={cn("text-xs text-status-error", className)}
+      className={cn("flex items-start gap-1.5 text-xs text-text-primary", className)}
       {...props}
       id={assertAllocated("FieldError", errorId)}
       data-slot="field-error"
-    />
+    >
+      <CircleAlert className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
+      <span className="min-w-0">{children}</span>
+    </p>
   );
 }
 

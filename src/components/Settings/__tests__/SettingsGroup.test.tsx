@@ -455,3 +455,35 @@ describe("SettingsRow disabled chips", () => {
     expect(screen.getByText("Available once the plugin is turned on")).toBeTruthy();
   });
 });
+
+describe("Settings errors", () => {
+  it("states every settings error in neutral words beside a status glyph", async () => {
+    const { SettingsInlineError } = await import("../SettingsGroup");
+    const { container } = render(
+      <>
+        <SettingsInlineError>Standalone error</SettingsInlineError>
+        <SettingsGroup>
+          <SettingsRow label="Row" error="Row error" control={<input aria-label="x" />} />
+        </SettingsGroup>
+        <SettingsSelect
+          label="Loose select"
+          value="a"
+          options={[{ value: "a", label: "A" }]}
+          onValueChange={noop}
+          error="Select error"
+        />
+      </>
+    );
+    for (const text of ["Standalone error", "Row error", "Select error"]) {
+      const words = screen.getByText(text);
+      const line = words.closest("p")!;
+      expect(line.querySelector("svg")).not.toBeNull();
+      const coloured = [line, ...line.querySelectorAll("*")].filter(
+        (el) =>
+          el.closest("svg") === null && [...el.classList].some((c) => c.startsWith("text-status-"))
+      );
+      expect(coloured).toEqual([]);
+    }
+    expect(container).toBeTruthy();
+  });
+});

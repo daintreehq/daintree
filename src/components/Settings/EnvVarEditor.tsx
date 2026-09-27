@@ -16,6 +16,7 @@ import { ImportEnvDialog } from "./ImportEnvDialog";
 import { Button } from "@/components/ui/button";
 import { useRowFocus } from "./useRowFocus";
 import { ENV_KEY_DUPLICATE_MESSAGE, ENV_KEY_INVALID_MESSAGE, isValidEnvKey } from "./EnvVarRow";
+import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
 
 /**
  * Inline env var CRUD editor with validation and optional inheritance.
@@ -388,9 +389,9 @@ function EnvVarKeyCell({
         </Popover>
       </div>
       {hasError && (
-        <p
+        <SettingsInlineError
           id={messageId}
-          className="px-2.5 pb-2 text-xs text-status-error"
+          className="px-2.5 pb-2"
           data-testid={
             isEmptyKey
               ? "env-editor-error-empty"
@@ -404,7 +405,7 @@ function EnvVarKeyCell({
             : isMalformed
               ? ENV_KEY_INVALID_MESSAGE
               : ENV_KEY_DUPLICATE_MESSAGE}
-        </p>
+        </SettingsInlineError>
       )}
     </div>
   );
@@ -1000,9 +1001,9 @@ export function EnvVarEditor({
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 px-2.5 py-2 border-t border-border-default bg-overlay-subtle">
         {hasBlockingError && (
-          <p className="w-full text-xs text-status-error" role="status">
-            Changes aren't saved until every name is valid and unique
-          </p>
+          <SettingsInlineError className="w-full" role="status">
+            Changes aren&apos;t saved until every name is valid and unique
+          </SettingsInlineError>
         )}
         {addButton}
         {importButton}

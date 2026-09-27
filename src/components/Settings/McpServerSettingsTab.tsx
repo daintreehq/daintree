@@ -10,6 +10,7 @@ import {
   SETTINGS_CONTROL_WIDTH,
   SettingsGroup,
   SettingsRow,
+  SettingsRowActions,
 } from "@/components/Settings/SettingsGroup";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
@@ -857,7 +858,7 @@ export function McpServerSettingsTab() {
                     }
                     layout="stacked"
                     control={
-                      <div className="flex flex-wrap items-center gap-2">
+                      <SettingsRowActions>
                         <Button variant="outline" size="sm" onClick={handleCopyConfig}>
                           {copiedTarget === "plain" ? "Copied!" : "Copy MCP config"}
                         </Button>
@@ -866,7 +867,7 @@ export function McpServerSettingsTab() {
                             {copiedTarget === "scoped" ? "Copied!" : "Copy config for this project"}
                           </Button>
                         ) : null}
-                      </div>
+                      </SettingsRowActions>
                     }
                   />
                 </>

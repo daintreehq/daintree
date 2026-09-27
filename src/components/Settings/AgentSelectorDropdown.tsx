@@ -173,7 +173,7 @@ export function AgentSelectorDropdown({
           role="listbox"
           id="agent-selector-list"
           aria-label="Agents"
-          className="overflow-y-auto max-h-60 p-1"
+          className="overflow-y-auto max-h-[min(28rem,60vh)] p-1"
         >
           {items.map((item, index) => {
             const isActive = index === activeIndex;
