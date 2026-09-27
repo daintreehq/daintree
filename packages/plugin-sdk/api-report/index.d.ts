@@ -2260,11 +2260,13 @@ interface McpServerContribution {
  * the existing loopback listener), the per-terminal credential, the project
  * binding and revocation. The plugin supplies the tool roster at activation via
  * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
- * an endpoint reaches no agent until the user enables it for a project.
+ * reaches no agent until the user gives the plugin read-and-write access. Its
+ * tools share one MCP server with the host's tools for the plugin's databases,
+ * so `database_schema` and `database_query` are reserved.
  */
 interface PluginAgentMcpContribution {
     id: string;
-    /** Shown in the per-project enablement UI. Agents never see it; their server key derives from the ids. */
+    /** Shown in the per-project access UI. Agents never see it; their server name comes from the manifest's `mcpName`. */
     name: string;
     description?: string;
     /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
@@ -2612,6 +2614,14 @@ interface PluginManifest {
     name: string;
     version: string;
     displayName?: string;
+    /**
+     * The short name agents see this plugin's MCP server under, as
+     * `daintree-<mcpName>`: lowercase letters, digits and hyphens, at most 16
+     * characters. Without one the host derives a name from the last segment of
+     * `name`. The same name in every project; see `docs/plugins/manifest.md` for
+     * how a clash between two plugins is settled.
+     */
+    mcpName?: string;
     description?: string;
     /**
      * One-line value proposition shown in catalog rows and cards. `description`

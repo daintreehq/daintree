@@ -4,29 +4,37 @@ import {
   type LoadedPluginInfo,
   type PluginManifest,
 } from "../../../../shared/types/plugin.js";
-import { listDeclaredAgentMcpEndpoints } from "../declaredEndpoints.js";
-import { DATABASE_ENDPOINT_ID, DATABASE_ENDPOINT_NAME } from "../types.js";
+import { listDeclaredAgentMcpPlugins } from "../declaredEndpoints.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
 const loaded = () => true;
+const DATABASES = [{ id: "ledger", location: "local", journalMode: "delete" }];
 
 function plugin(overrides: {
   name?: string;
+  displayName?: string;
+  mcpName?: string;
   instanceId?: string;
   origin?: "global" | "project";
   projectId?: string | null;
   disabled?: boolean;
+  blocklisted?: boolean;
   capabilities?: PluginManifest["capabilities"];
-  agentMcp?: PluginManifest["contributes"]["agentMcp"];
-  databases?: PluginManifest["contributes"]["databases"];
+  agentMcp?: unknown[];
+  databases?: unknown[];
 }): LoadedPluginInfo {
   const name = overrides.name ?? "acme.ledger";
   return {
     manifest: {
       name,
       version: "1.0.0",
-      displayName: "Ledger",
+      ...("displayName" in overrides
+        ? overrides.displayName === undefined
+          ? {}
+          : { displayName: overrides.displayName }
+        : { displayName: "Ledger" }),
+      ...(overrides.mcpName !== undefined ? { mcpName: overrides.mcpName } : {}),
       capabilities: overrides.capabilities ?? ["mcp:expose"],
       contributes: {
         agentMcp: overrides.agentMcp ?? [{ id: "data", name: "Household ledger", mode: "tools" }],
@@ -37,85 +45,156 @@ function plugin(overrides: {
     origin: overrides.origin ?? "global",
     projectId: overrides.projectId ?? null,
     disabled: overrides.disabled ?? false,
+    ...(overrides.blocklisted !== undefined ? { blocklisted: overrides.blocklisted } : {}),
   } as unknown as LoadedPluginInfo;
 }
 
-describe("listDeclaredAgentMcpEndpoints", () => {
-  it("lists an installed plugin's endpoints for any project", () => {
-    const endpoints = listDeclaredAgentMcpEndpoints([plugin({})], PROJECT_A, loaded);
-
-    expect(endpoints).toEqual([
+describe("listDeclaredAgentMcpPlugins", () => {
+  it("lists an installed plugin with its own endpoint for any project", () => {
+    expect(listDeclaredAgentMcpPlugins([plugin({})], PROJECT_A, loaded)).toEqual([
       {
         pluginInstanceId: "acme.ledger",
         pluginManifestId: "acme.ledger",
         pluginDisplayName: "Ledger",
-        endpointId: "data",
-        name: "Household ledger",
+        origin: "global",
+        hasDatabases: false,
+        pluginEndpoint: { id: "data", name: "Household ledger" },
       },
     ]);
+  });
+
+  it("carries mcpName and the endpoint description when declared", () => {
+    const [entry] = listDeclaredAgentMcpPlugins(
+      [
+        plugin({
+          mcpName: "books",
+          agentMcp: [{ id: "data", name: "Ledger", description: "Entries", mode: "tools" }],
+        }),
+      ],
+      PROJECT_A,
+      loaded
+    );
+    expect(entry.mcpName).toBe("books");
+    expect(entry.pluginEndpoint).toEqual({ id: "data", name: "Ledger", description: "Entries" });
+  });
+
+  it("falls back to the manifest name when there is no display name", () => {
+    const [entry] = listDeclaredAgentMcpPlugins(
+      [plugin({ displayName: undefined })],
+      PROJECT_A,
+      loaded
+    );
+    expect(entry.pluginDisplayName).toBe("acme.ledger");
+    expect(entry).not.toHaveProperty("mcpName");
   });
 
   it("lists a project plugin only for the project it was loaded for", () => {
     const instanceId = makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger");
     const projectPlugin = plugin({ instanceId, origin: "project", projectId: PROJECT_A });
 
-    expect(listDeclaredAgentMcpEndpoints([projectPlugin], PROJECT_B, loaded)).toEqual([]);
-    const [endpoint] = listDeclaredAgentMcpEndpoints([projectPlugin], PROJECT_A, loaded);
-    expect(endpoint.pluginInstanceId).toBe(instanceId);
-    expect(endpoint.pluginManifestId).toBe("acme.ledger");
+    expect(listDeclaredAgentMcpPlugins([projectPlugin], PROJECT_B, loaded)).toEqual([]);
+    const [entry] = listDeclaredAgentMcpPlugins([projectPlugin], PROJECT_A, loaded);
+    expect(entry.pluginInstanceId).toBe(instanceId);
+    expect(entry.pluginManifestId).toBe("acme.ledger");
+    expect(entry.origin).toBe("project");
   });
 
-  it("skips disabled plugins and plugins without mcp:expose", () => {
+  it("skips disabled, blocklisted and not-running plugins, and plugins without mcp:expose", () => {
     expect(
-      listDeclaredAgentMcpEndpoints(
-        [plugin({ disabled: true }), plugin({ name: "acme.other", capabilities: [] })],
+      listDeclaredAgentMcpPlugins(
+        [
+          plugin({ disabled: true }),
+          plugin({ name: "acme.blocked", blocklisted: true }),
+          plugin({ name: "acme.other", capabilities: [] }),
+        ],
         PROJECT_A,
         loaded
       )
     ).toEqual([]);
+    expect(listDeclaredAgentMcpPlugins([plugin({})], PROJECT_A, () => false)).toEqual([]);
   });
 
-  it("skips plugins listed but not running", () => {
-    expect(listDeclaredAgentMcpEndpoints([plugin({})], PROJECT_A, () => false)).toEqual([]);
-  });
-
-  it("offers the host's database endpoint for any plugin declaring databases, without mcp:expose", () => {
-    const databases = [{ id: "ledger", location: "local", journalMode: "delete" }] as const;
-    const endpoints = listDeclaredAgentMcpEndpoints(
-      [plugin({ capabilities: [], agentMcp: [], databases: [...databases] })],
+  it("asks isLoaded by instance key", () => {
+    const instanceId = makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger");
+    const seen: string[] = [];
+    listDeclaredAgentMcpPlugins(
+      [plugin({ instanceId, origin: "project", projectId: PROJECT_A })],
       PROJECT_A,
-      loaded
+      (id) => {
+        seen.push(id);
+        return true;
+      }
     );
-    expect(endpoints).toEqual([
-      expect.objectContaining({
+    expect(seen).toEqual([instanceId]);
+  });
+
+  it("offers databases for a plugin declaring them, without mcp:expose", () => {
+    expect(
+      listDeclaredAgentMcpPlugins(
+        [plugin({ capabilities: [], agentMcp: [{ id: "data", name: "x" }], databases: DATABASES })],
+        PROJECT_A,
+        loaded
+      )
+    ).toEqual([
+      {
         pluginInstanceId: "acme.ledger",
-        endpointId: DATABASE_ENDPOINT_ID,
-        name: DATABASE_ENDPOINT_NAME,
-      }),
+        pluginManifestId: "acme.ledger",
+        pluginDisplayName: "Ledger",
+        origin: "global",
+        hasDatabases: true,
+      },
     ]);
+  });
 
-    const both = listDeclaredAgentMcpEndpoints(
-      [plugin({ databases: [...databases] })],
+  it("lists a plugin with both databases and an endpoint as one entry", () => {
+    const entries = listDeclaredAgentMcpPlugins(
+      [plugin({ databases: DATABASES })],
       PROJECT_A,
       loaded
     );
-    expect(both.map((e) => e.endpointId)).toEqual(["data", DATABASE_ENDPOINT_ID]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      hasDatabases: true,
+      pluginEndpoint: { id: "data", name: "Household ledger" },
+    });
   });
 
-  it("offers no database endpoint for a plugin without databases, or one not running here", () => {
-    const databases = [{ id: "ledger", location: "local", journalMode: "delete" }] as const;
+  it("uses only the first agentMcp endpoint", () => {
+    const [entry] = listDeclaredAgentMcpPlugins(
+      [
+        plugin({
+          agentMcp: [
+            { id: "first", name: "First" },
+            { id: "second", name: "Second" },
+          ],
+        }),
+      ],
+      PROJECT_A,
+      loaded
+    );
+    expect(entry.pluginEndpoint?.id).toBe("first");
+  });
+
+  it("offers nothing for a plugin with neither, or one with databases that is not running here", () => {
     expect(
-      listDeclaredAgentMcpEndpoints([plugin({ capabilities: [], agentMcp: [] })], PROJECT_A, loaded)
+      listDeclaredAgentMcpPlugins([plugin({ capabilities: [], agentMcp: [] })], PROJECT_A, loaded)
     ).toEqual([]);
     expect(
-      listDeclaredAgentMcpEndpoints(
-        [plugin({ databases: [...databases], disabled: true })],
+      listDeclaredAgentMcpPlugins(
+        [plugin({ databases: DATABASES, disabled: true })],
         PROJECT_A,
         loaded
       )
     ).toEqual([]);
     expect(
-      listDeclaredAgentMcpEndpoints([plugin({ databases: [...databases] })], PROJECT_A, () => false)
+      listDeclaredAgentMcpPlugins([plugin({ databases: DATABASES })], PROJECT_A, () => false)
     ).toEqual([]);
+    const foreign = plugin({
+      instanceId: makeProjectPluginInstanceKey(PROJECT_B, "acme.ledger"),
+      origin: "project",
+      projectId: PROJECT_B,
+      databases: DATABASES,
+    });
+    expect(listDeclaredAgentMcpPlugins([foreign], PROJECT_A, loaded)).toEqual([]);
   });
 });

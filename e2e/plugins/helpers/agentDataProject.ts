@@ -8,6 +8,8 @@ export const EXPENSES_PLUGIN_ID = "e2e.expenses";
 export const EXPENSES_DATABASE_ID = "expenses";
 export const EXPENSES_WRITE_ENDPOINT = "entry";
 export const DATABASES_ENDPOINT = "@databases";
+/** The manifest sets no `mcpName`, so the key falls back to the id's last segment. */
+export const EXPENSES_SERVER_KEY = "daintree-expenses";
 
 /** Seeded rows. Coffee totals 3250 cents; Alex paid for rows 4 and 5. */
 export const SEEDED_EXPENSES = [
@@ -241,8 +243,8 @@ This project tracks the team's expenses with the **Team Expenses** Daintree plug
 
 The expense data is not a file in this repository. Read it through the plugin's MCP tools:
 
-- \`database_schema\` and \`database_query\` (read-only SQL) on the Team Expenses databases server.
-- \`add_expense\` and \`mark_reimbursed\` on the Team Expenses expense-entry server, for every change.
+- \`database_schema\` and \`database_query\` (read-only SQL) on the Team Expenses server.
+- \`add_expense\` and \`mark_reimbursed\` on the same server, for every change.
 
 Never edit expense data any other way. Amounts are integer cents.
 `;
@@ -254,8 +256,9 @@ export interface AgentDataProject {
 
 /**
  * A git repository holding the Team Expenses project plugin and a
- * `.daintree/mcp.json` that turns both of its agent endpoints on, so an agent
- * launched in the project gets them with no Settings click.
+ * `.daintree/mcp.json` that gives agents read and write access to it, so an
+ * agent launched in the project gets its one server — the host's database
+ * tools and the plugin's own tools together — with no Settings click.
  */
 export function createAgentDataProject(
   name = "agent-data",
@@ -271,11 +274,7 @@ export function createAgentDataProject(
   if (options.defaults !== false) {
     writeFileSync(
       path.join(repo.dir, ".daintree", "mcp.json"),
-      JSON.stringify(
-        { plugins: { [EXPENSES_PLUGIN_ID]: [DATABASES_ENDPOINT, EXPENSES_WRITE_ENDPOINT] } },
-        null,
-        2
-      ) + "\n"
+      JSON.stringify({ plugins: { [EXPENSES_PLUGIN_ID]: "read-write" } }, null, 2) + "\n"
     );
   }
   writeFileSync(path.join(repo.dir, "AGENTS.md"), PROJECT_AGENTS_MD);

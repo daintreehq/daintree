@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Agent launches hand the project's enabled plugin MCP servers to the agent
-// beside the Daintree entry — here in Claude's managed --mcp-config file. Unlike
+// Agent launches hand the project's plugin MCP servers — one per plugin with
+// access here — to the agent beside the Daintree entry, mostly in Claude's
+// managed --mcp-config file. Unlike
 // lifecycle.spawn.test.ts, the pane config service and the grant registry are
 // real here: what matters is the file the agent is handed and which grants are
 // live afterwards, not which calls were made.
@@ -175,8 +176,11 @@ import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
 import { mcpPaneConfigService } from "../../../../services/McpPaneConfigService.js";
 import { pluginMcpGrantRegistry } from "../../../../services/pluginAgentMcp/grantRegistry.js";
-import { setAgentMcpEndpointEnabled } from "../../../../services/pluginAgentMcp/projectEnablement.js";
-import { pluginMcpRoutePath } from "../../../../services/pluginAgentMcp/types.js";
+import {
+  setAllProjectsAgentMcpAccess,
+  setProjectAgentMcpAccess,
+} from "../../../../services/pluginAgentMcp/projectEnablement.js";
+import { pluginServerKeysFor } from "../../../../services/pluginAgentMcp/serverKeys.js";
 import {
   makeProjectPluginInstanceKey,
   type LoadedPluginInfo,
@@ -186,24 +190,31 @@ import {
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
 
+const READ_WRITE_SCOPE = { databases: true, pluginEndpointId: "data" };
+
 function plugin(
   overrides: {
     instanceId?: string;
+    name?: string;
+    mcpName?: string | null;
     origin?: "global" | "project";
     projectId?: string | null;
   } = {}
 ): LoadedPluginInfo {
+  const mcpName = overrides.mcpName === undefined ? "ledger" : overrides.mcpName;
   return {
     manifest: {
-      name: "acme.ledger",
+      name: overrides.name ?? "acme.ledger",
       version: "1.0.0",
       displayName: "Ledger",
+      ...(mcpName !== null ? { mcpName } : {}),
       capabilities: ["mcp:expose"],
       contributes: {
+        databases: [{ id: "ledger", description: "Household transactions" }],
         agentMcp: [{ id: "data", name: "Household ledger", mode: "tools" }],
       },
     } as unknown as PluginManifest,
-    instanceId: overrides.instanceId ?? "acme.ledger",
+    instanceId: overrides.instanceId ?? overrides.name ?? "acme.ledger",
     origin: overrides.origin ?? "global",
     projectId: overrides.projectId ?? null,
     disabled: false,
@@ -283,8 +294,8 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     await fs.rm(testUserData, { recursive: true, force: true });
   });
 
-  it('hands an enabled endpoint of a running plugin to Claude even with the Daintree tier "off"', async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+  it('hands a running plugin with access to Claude as one named server, even with the Daintree tier "off"', async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
 
     const id = await spawn({ id: "term-off" });
 
@@ -292,17 +303,16 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
     const servers = await readServers(configPathFromCommand(spawnArgs.command));
     expect(servers.daintree).toBeUndefined();
-    const entries = Object.values(servers);
-    expect(entries).toHaveLength(1);
-    expect(entries[0].type).toBe("http");
-    expect(entries[0].url).toBe(
-      `http://127.0.0.1:45454${pluginMcpRoutePath("acme.ledger", "data")}`
-    );
+    expect(Object.keys(servers)).toEqual(["daintree-ledger"]);
+    const entry = servers["daintree-ledger"];
+    expect(entry.type).toBe("http");
+    expect(entry.url).toBe("http://127.0.0.1:45454/mcp/plugin/acme.ledger");
 
-    const bearer = entries[0].headers.Authorization.replace(/^Bearer /, "");
+    const bearer = entry.headers.Authorization.replace(/^Bearer /, "");
     expect(pluginMcpGrantRegistry.authenticate(bearer)).toMatchObject({
       pluginInstanceId: "acme.ledger",
-      endpointId: "data",
+      scope: READ_WRITE_SCOPE,
+      serverName: "daintree-ledger",
       projectId: PROJECT_A,
       terminalId: id,
       launchAgentIdHint: "claude",
@@ -313,7 +323,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
   it("adds the plugin entry alongside the Daintree entry when the tier is on", async () => {
     mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
 
     await spawn({ id: "term-core" });
 
@@ -322,12 +332,12 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(mcpPaneConfigService.getTierForToken(token)).toBe("core");
     const servers = await readServers(configPathFromCommand(spawnArgs.command));
     expect(servers.daintree.headers.Authorization).toBe(`Bearer ${token}`);
-    expect(Object.keys(servers)).toHaveLength(2);
+    expect(Object.keys(servers).sort()).toEqual(["daintree", "daintree-ledger"]);
     expect(spawnArgs.command.match(/--mcp-config/g)).toHaveLength(1);
     expect(pluginMcpGrantRegistry.listForTerminal("term-core")).toHaveLength(1);
   });
 
-  it("mints nothing for an endpoint the user has not enabled, and never loads PluginService", async () => {
+  it("mints nothing for a plugin with no access, and never loads PluginService", async () => {
     await spawn({ id: "term-disabled" });
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
@@ -337,8 +347,8 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(mockWaitForInit).not.toHaveBeenCalled();
   });
 
-  it("waits for plugin init before resolving endpoints for a launch at cold start", async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+  it("waits for plugin init before resolving servers for a launch at cold start", async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
     let initialized = false;
     let settleInit!: () => void;
     mockWaitForInit.mockImplementation(
@@ -365,8 +375,8 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(pluginMcpGrantRegistry.listForTerminal("term-cold")).toHaveLength(1);
   });
 
-  it("launches without plugin endpoints when plugin init does not settle in time", async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+  it("launches without plugin servers when plugin init does not settle in time", async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
     mockWaitForInit.mockImplementation(() => new Promise<void>(() => {}));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -385,8 +395,8 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(pluginMcpGrantRegistry.listForTerminal("term-init-timeout")).toEqual([]);
   });
 
-  it("mints nothing for an enabled endpoint whose plugin is not running", async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+  it("mints nothing for a plugin with access that is not running", async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
     mockHasPlugin.mockReturnValue(false);
 
     await spawn({ id: "term-not-running" });
@@ -400,7 +410,9 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     mockListPlugins.mockReturnValue([
       plugin({ instanceId: foreignInstance, origin: "project", projectId: PROJECT_B }),
     ]);
-    setAgentMcpEndpointEnabled(PROJECT_A, foreignInstance, "data", true);
+    storeData.set("projectAgentMcpAccess", {
+      [PROJECT_A]: { [foreignInstance]: { decidedAt: 1, access: "read-write" } },
+    });
 
     await spawn({ id: "term-foreign" });
 
@@ -408,8 +420,101 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(pluginMcpGrantRegistry.listForTerminal("term-foreign")).toEqual([]);
   });
 
+  it("names each plugin over every plugin that could serve here, not only those with access", async () => {
+    const projectLedger = makeProjectPluginInstanceKey(PROJECT_A, "other.ledger");
+    const declared = [
+      plugin(),
+      plugin({
+        instanceId: projectLedger,
+        name: "other.ledger",
+        mcpName: null,
+        origin: "project",
+        projectId: PROJECT_A,
+      }),
+    ];
+    mockListPlugins.mockReturnValue(declared);
+    setProjectAgentMcpAccess(PROJECT_A, projectLedger, "read-write");
+
+    await spawn({ id: "term-keys" });
+
+    const expected = pluginServerKeysFor([
+      {
+        pluginInstanceId: "acme.ledger",
+        pluginManifestId: "acme.ledger",
+        origin: "global",
+        mcpName: "ledger",
+      },
+      { pluginInstanceId: projectLedger, pluginManifestId: "other.ledger", origin: "project" },
+    ]).get(projectLedger)!;
+    expect(expected).not.toBe("daintree-ledger");
+    const servers = await readServers(
+      configPathFromCommand(ptyClient.spawn.mock.calls[0][1].command)
+    );
+    expect(Object.keys(servers)).toEqual([expected]);
+    expect(servers[expected].url).toBe(
+      `http://127.0.0.1:45454/mcp/plugin/${encodeURIComponent(projectLedger)}`
+    );
+    expect(pluginMcpGrantRegistry.listForTerminal("term-keys")).toEqual([
+      expect.objectContaining({ pluginInstanceId: projectLedger, serverName: expected }),
+    ]);
+  });
+
+  it("gives read-only access a grant that reaches the database tools only", async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+
+    await spawn({ id: "term-read-only" });
+
+    expect(pluginMcpGrantRegistry.listForTerminal("term-read-only")).toEqual([
+      expect.objectContaining({
+        pluginInstanceId: "acme.ledger",
+        scope: { databases: true },
+        serverName: "daintree-ledger",
+      }),
+    ]);
+  });
+
+  it("reaches a project with no answer of its own through an installed plugin's all-projects answer", async () => {
+    setAllProjectsAgentMcpAccess("acme.ledger", "read-only");
+
+    await spawn({ id: "term-all-projects" });
+
+    const servers = await readServers(
+      configPathFromCommand(ptyClient.spawn.mock.calls[0][1].command)
+    );
+    expect(Object.keys(servers)).toEqual(["daintree-ledger"]);
+    expect(pluginMcpGrantRegistry.listForTerminal("term-all-projects")).toEqual([
+      expect.objectContaining({ pluginInstanceId: "acme.ledger", scope: { databases: true } }),
+    ]);
+  });
+
+  it("lets the project's own answer override the all-projects answer", async () => {
+    setAllProjectsAgentMcpAccess("acme.ledger", "read-write");
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "off");
+
+    await spawn({ id: "term-project-off" });
+
+    expect(ptyClient.spawn.mock.calls[0][1].command).toBe("claude");
+    expect(pluginMcpGrantRegistry.listForTerminal("term-project-off")).toEqual([]);
+  });
+
+  it("still honours an answer given one endpoint at a time before access levels", async () => {
+    storeData.set("projectAgentMcpEnablement", {
+      [PROJECT_A]: { "acme.ledger": { data: { decidedAt: 1 } } },
+    });
+
+    await spawn({ id: "term-legacy" });
+
+    expect(pluginMcpGrantRegistry.listForTerminal("term-legacy")).toEqual([
+      expect.objectContaining({
+        pluginInstanceId: "acme.ledger",
+        scope: { databases: false, pluginEndpointId: "data" },
+        serverName: "daintree-ledger",
+      }),
+    ]);
+  });
+
   it("revokes the grants when the PTY spawn throws", async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
     ptyClient.spawn.mockImplementation(() => {
       throw new Error("pty-host gone");
     });
@@ -424,7 +529,8 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
   it("a failure before preparation leaves a previous launch's grants for that id alone", async () => {
     const { grant } = pluginMcpGrantRegistry.issue({
       pluginInstanceId: "acme.ledger",
-      endpointId: "data",
+      scope: READ_WRITE_SCOPE,
+      serverName: "daintree-ledger",
       projectId: PROJECT_A,
       terminalId: "term-prior",
     });
@@ -436,24 +542,26 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(pluginMcpGrantRegistry.isLive(grant.credentialId)).toBe(true);
   });
 
-  it("hands a Codex launch the endpoint as a -c override, its bearer in the env", async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+  it("hands a Codex launch the plugin's server as a -c override, its bearer in the env", async () => {
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
 
     await spawn({ id: "term-codex", command: "codex", launchAgentId: "codex" });
 
     const { command, env } = ptyClient.spawn.mock.calls[0][1];
     expect(command).not.toContain("--mcp-config");
-    expect(command).toMatch(/mcp_servers\.daintree-acme_ledger-data\.url=/);
+    expect(command).toContain(
+      'mcp_servers.daintree-ledger.url="http://127.0.0.1:45454/mcp/plugin/acme.ledger"'
+    );
     expect(command).toContain('bearer_token_env_var="DAINTREE_PLUGIN_MCP_TOKEN_1"');
     const bearer = env?.DAINTREE_PLUGIN_MCP_TOKEN_1 as string;
     expect(command).not.toContain(bearer);
     const [grant] = pluginMcpGrantRegistry.listForTerminal("term-codex");
-    expect(grant).toMatchObject({ endpointId: "data", launchAgentIdHint: "codex" });
+    expect(grant).toMatchObject({ scope: READ_WRITE_SCOPE, launchAgentIdHint: "codex" });
     expect(pluginMcpGrantRegistry.authenticate(bearer)).toBe(grant);
   });
 
   it("mints nothing for an agent with no launch mechanism", async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
 
     await spawn({ id: "term-cursor", command: "cursor-agent", launchAgentId: "cursor" });
 
@@ -462,7 +570,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
   });
 
   it("mints nothing for a Claude help-session launch", async () => {
-    setAgentMcpEndpointEnabled(PROJECT_A, "acme.ledger", "data", true);
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
 
     await spawn({ id: "term-help", env: { DAINTREE_MCP_TOKEN: "help-token" } });

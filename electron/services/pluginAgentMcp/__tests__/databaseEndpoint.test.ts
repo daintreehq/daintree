@@ -171,7 +171,8 @@ describe("the database endpoint behind a plugin session", () => {
     const session = new AbortController();
     const server = createPluginSessionServer({
       pluginInstanceId: INSTANCE,
-      endpointId: DATABASE_ENDPOINT_ID,
+      scope: { databases: true },
+      serverName: "daintree-ledger",
       caller: caller(),
       sessionSignal: session.signal,
       activatePlugin,
@@ -186,6 +187,7 @@ describe("the database endpoint behind a plugin session", () => {
       await server.close().catch(() => {});
     });
 
+    expect(client.getServerVersion()?.name).toBe("daintree-ledger");
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toEqual(["database_schema", "database_query"]);
     // Read-only, and said so: a client like Codex runs such a call without an

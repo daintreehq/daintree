@@ -5,9 +5,8 @@ import { fakeAgentEnv } from "../helpers/fakeAgent";
 import {
   createAgentDataProject,
   removeExpensesPluginData,
-  DATABASES_ENDPOINT,
   EXPENSES_PLUGIN_ID,
-  EXPENSES_WRITE_ENDPOINT,
+  EXPENSES_SERVER_KEY,
   SEEDED_COFFEE_CENTS,
   SEEDED_EXPENSES,
 } from "./helpers/agentDataProject";
@@ -23,12 +22,12 @@ import { McpHttpClient, McpHttpError } from "./helpers/mcpClient";
 
 /**
  * Plugin data for agents, through the real app: a project plugin with a local
- * SQLite database and a write-tool endpoint, turned on for agents by the
- * repository's own `.daintree/mcp.json`. Every agent Daintree knows how to
- * wire is launched as a recorder that keeps exactly what it was handed; the
- * spec then connects with that wiring — the URL and bearer out of the agent's
- * own config dialect — and reads and writes the plugin's data as the agent
- * would. No model is involved, so every run is deterministic; the live
+ * SQLite database and its own write tools, given read and write access for
+ * agents by the repository's own `.daintree/mcp.json`. The plugin is one named
+ * MCP server carrying both. Every agent Daintree knows how to wire is launched
+ * as a recorder that keeps exactly what it was handed; the spec then connects
+ * with that wiring — the URL and bearer out of the agent's own config dialect —
+ * and reads and writes the plugin's data as the agent would. No model is involved, so every run is deterministic; the live
  * counterpart with real CLIs is `agent-data-live.spec.ts`.
  *
  *   npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/agent-data.spec.ts
@@ -93,19 +92,26 @@ async function launchAgent(
   return { terminalId, launch: launch! };
 }
 
-function pluginServer(servers: LaunchedServer[], endpointId: string): LaunchedServer {
-  const match = servers.find(
-    (s) =>
-      s.url.includes("/mcp/plugin/") &&
-      s.url.endsWith(`/${encodeURIComponent(endpointId)}`) &&
-      decodeURIComponent(s.url).includes(EXPENSES_PLUGIN_ID)
-  );
+const ALL_TOOLS = ["add_expense", "database_query", "database_schema", "mark_reimbursed"];
+const DATABASE_TOOLS = ["database_query", "database_schema"];
+
+/** The plugin's one server: named for the plugin, routed by its instance key alone. */
+function pluginServer(servers: LaunchedServer[]): LaunchedServer {
+  const match = servers.find((s) => s.key === EXPENSES_SERVER_KEY);
   if (!match) {
     throw new Error(
-      `no ${endpointId} server for ${EXPENSES_PLUGIN_ID} in ${JSON.stringify(servers.map((s) => s.url))}`
+      `no ${EXPENSES_SERVER_KEY} server in ${JSON.stringify(servers.map((s) => [s.key, s.url]))}`
     );
   }
+  const route = new URL(match.url).pathname.match(/^\/mcp\/plugin\/([^/]+)$/);
+  expect(route, match.url).not.toBeNull();
+  expect(decodeURIComponent(route![1]).endsWith(`__${EXPENSES_PLUGIN_ID}`), match.url).toBe(true);
   return match;
+}
+
+async function expensesRow(page: Page) {
+  const snapshot = await page.evaluate(() => window.electron.pluginAgentMcp.listProjectPlugins());
+  return snapshot.plugins.find((p) => p.pluginInstanceId.endsWith(`__${EXPENSES_PLUGIN_ID}`));
 }
 
 async function connect(server: LaunchedServer): Promise<McpHttpClient> {
@@ -177,7 +183,7 @@ test.describe.serial("Plugin agent data: launch wiring", () => {
     if (info.status === info.expectedStatus || !ctx?.window) return;
     const report = await ctx.window
       .evaluate(async () => ({
-        endpoints: await window.electron.pluginAgentMcp.listProjectEndpoints(),
+        agentTools: await window.electron.pluginAgentMcp.listProjectPlugins(),
         plugins: await window.electron.plugin.list?.(),
       }))
       .catch((err) => ({ error: String(err) }));
@@ -190,56 +196,53 @@ test.describe.serial("Plugin agent data: launch wiring", () => {
     console.log(body.slice(0, 6000));
   });
 
-  test("the repository's .daintree/mcp.json turns both endpoints on", async () => {
+  test("the repository's .daintree/mcp.json gives the plugin read and write access", async () => {
     await expect
-      .poll(
-        async () =>
-          (
-            await ctx.window.evaluate(() => window.electron.pluginAgentMcp.listProjectEndpoints())
-          ).endpoints
-            .filter((e) => e.enabled && e.projectDefault && e.available)
-            .map((e) => e.endpointId)
-            .sort(),
-        { timeout: PLUGIN_TIMEOUT }
-      )
-      .toEqual([DATABASES_ENDPOINT, EXPENSES_WRITE_ENDPOINT].sort());
+      .poll(() => expensesRow(ctx.window), { timeout: PLUGIN_TIMEOUT })
+      .toMatchObject({
+        origin: "project",
+        hasDatabases: true,
+        pluginTools: { name: "Expense entry" },
+        access: "read-write",
+        source: "repository",
+        repositoryAccess: "read-write",
+        available: true,
+      });
   });
 
   for (const { id: agentId } of WIRED_AGENTS) {
-    test(`${agentId} is launched with both endpoints and can read and write through them`, async () => {
+    test(`${agentId} is launched with the plugin's one server and can read and write through it`, async () => {
       const launched = await launchAgent(agentId);
       launches.set(agentId, launched);
       const servers = serversFromLaunch(launched.launch);
-      // The project's Daintree tier is off, so these two are all it gets.
-      expect(servers).toHaveLength(2);
+      // The project's Daintree tier is off, so the plugin's server is all it gets.
+      expect(servers.map((s) => s.key)).toEqual([EXPENSES_SERVER_KEY]);
       for (const server of servers) {
         // A bearer is a secret: never on the command line, where any local
         // user can read it from the process table.
         expect(launched.launch.argv.join(" ")).not.toContain(server.bearer);
       }
 
-      const data = await connect(pluginServer(servers, DATABASES_ENDPOINT));
-      expect(await data.listTools()).toEqual(["database_query", "database_schema"]);
+      const data = await connect(pluginServer(servers));
+      expect(await data.listTools()).toEqual(ALL_TOOLS);
       const schema = await data.callJson<{ databases: Array<{ id: string; exists?: boolean }> }>(
         "database_schema"
       );
       expect(schema.databases.map((d) => d.id)).toEqual(["expenses"]);
       expect(await coffeeTotal(data)).toBeGreaterThanOrEqual(SEEDED_COFFEE_CENTS);
 
-      const entry = await connect(pluginServer(servers, EXPENSES_WRITE_ENDPOINT));
-      expect(await entry.listTools()).toEqual(["add_expense", "mark_reimbursed"]);
       const before = await coffeeTotal(data);
-      await entry.callJson("add_expense", {
+      await data.callJson("add_expense", {
         date: "2026-09-20",
         description: `Coffee for ${agentId}`,
         amount_cents: 300,
         category: "coffee",
         paid_by: agentId,
       });
-      // The read-only endpoint sees the plugin's write at once.
+      // The host's database tools see the plugin's write at once.
       expect(await coffeeTotal(data)).toBe(before + 300);
 
-      // And it stays read-only, whatever the SQL says.
+      // And they stay read-only, whatever the SQL says.
       const refused = await data.callTool("database_query", {
         databaseId: "expenses",
         sql: "DELETE FROM expenses",
@@ -267,7 +270,7 @@ test.describe.serial("Plugin agent data: launch wiring", () => {
 
   test("an agent's credentials die with its terminal", async () => {
     const { terminalId, launch } = launches.get("codex")!;
-    const server = pluginServer(serversFromLaunch(launch), DATABASES_ENDPOINT);
+    const server = pluginServer(serversFromLaunch(launch));
     await ctx.window.evaluate((id) => window.electron.terminal.kill(id), terminalId);
     await expect
       .poll(
@@ -281,34 +284,84 @@ test.describe.serial("Plugin agent data: launch wiring", () => {
       .toBe(401);
   });
 
-  test("turning an endpoint off beats the project default and cuts off a running agent", async () => {
+  test("lowering access beats the repository's default and cuts off a running agent's whole grant", async () => {
     const { launch } = launches.get("claude")!;
-    const writer = await connect(pluginServer(serversFromLaunch(launch), EXPENSES_WRITE_ENDPOINT));
-    const reader = await connect(pluginServer(serversFromLaunch(launch), DATABASES_ENDPOINT));
+    const server = pluginServer(serversFromLaunch(launch));
+    const client = await connect(server);
+    expect(await client.listTools()).toEqual(ALL_TOOLS);
 
     const snapshot = await ctx.window.evaluate(
-      async ([endpointId]) => {
-        const current = await window.electron.pluginAgentMcp.listProjectEndpoints();
-        const row = current.endpoints.find((e) => e.endpointId === endpointId)!;
-        return window.electron.pluginAgentMcp.setProjectEndpointEnabled({
+      async ([pluginId]) => {
+        const current = await window.electron.pluginAgentMcp.listProjectPlugins();
+        const row = current.plugins.find((p) => p.pluginInstanceId.endsWith(`__${pluginId}`))!;
+        return window.electron.pluginAgentMcp.setPluginAccess({
           pluginInstanceId: row.pluginInstanceId,
-          endpointId,
-          enabled: false,
+          access: "read-only",
+          scope: "project",
         });
       },
-      [EXPENSES_WRITE_ENDPOINT] as const
+      [EXPENSES_PLUGIN_ID] as const
     );
-    const row = snapshot.endpoints.find((e) => e.endpointId === EXPENSES_WRITE_ENDPOINT)!;
-    expect(row).toMatchObject({ enabled: false, projectDefault: true, userAnswered: true });
+    const row = snapshot.plugins.find((p) =>
+      p.pluginInstanceId.endsWith(`__${EXPENSES_PLUGIN_ID}`)
+    )!;
+    expect(row).toMatchObject({
+      access: "read-only",
+      source: "project",
+      repositoryAccess: "read-write",
+    });
 
-    await expect(writer.listTools()).rejects.toThrow();
-    // The other endpoint's credential is its own and still works.
-    expect(await reader.listTools()).toEqual(["database_query", "database_schema"]);
+    // The grant's scope was fixed at launch, so a narrower level can't trim it:
+    // the whole credential goes, database tools included.
+    await expect(client.listTools()).rejects.toThrow();
+    await expect
+      .poll(
+        async () =>
+          connect(server).then(
+            () => "connected",
+            (err) => (err instanceof McpHttpError ? err.status : String(err))
+          ),
+        { timeout: PLUGIN_TIMEOUT }
+      )
+      .toBe(401);
 
     const relaunched = await launchAgent("claude");
     const servers = serversFromLaunch(relaunched.launch);
-    expect(servers).toHaveLength(1);
-    expect(servers[0].url).toContain(encodeURIComponent(DATABASES_ENDPOINT));
+    expect(servers.map((s) => s.key)).toEqual([EXPENSES_SERVER_KEY]);
+    const reader = await connect(pluginServer(servers));
+    expect(await reader.listTools()).toEqual(DATABASE_TOOLS);
+    expect(await coffeeTotal(reader)).toBeGreaterThanOrEqual(SEEDED_COFFEE_CENTS);
+    // Read only never reaches the plugin's own tools, whichever way the refusal comes back.
+    const refused = await reader
+      .callTool("add_expense", {
+        date: "2026-09-22",
+        description: "Should not land",
+        amount_cents: 100,
+        category: "coffee",
+        paid_by: "nobody",
+      })
+      .then(
+        (result) => result.isError === true,
+        () => true
+      );
+    expect(refused).toBe(true);
+  });
+
+  test("turning access off leaves a relaunched agent without the plugin's server", async () => {
+    await ctx.window.evaluate(
+      async ([pluginId]) => {
+        const current = await window.electron.pluginAgentMcp.listProjectPlugins();
+        const row = current.plugins.find((p) => p.pluginInstanceId.endsWith(`__${pluginId}`))!;
+        await window.electron.pluginAgentMcp.setPluginAccess({
+          pluginInstanceId: row.pluginInstanceId,
+          access: "off",
+          scope: "project",
+        });
+      },
+      [EXPENSES_PLUGIN_ID] as const
+    );
+    const { launch } = await launchAgent("claude");
+    expect(serversFromLaunch(launch)).toEqual([]);
   });
 
   test("with the project's Daintree tier on, Codex also gets the orchestration server", async () => {
