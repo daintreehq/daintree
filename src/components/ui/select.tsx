@@ -159,7 +159,8 @@ const SelectTrigger = React.forwardRef<
       {children}
       <Icon asChild>
         <ChevronDown
-          className="h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform in-data-[state=open]:rotate-180"
+          data-animated-chevron
+          className="h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out in-data-[state=open]:rotate-180"
           aria-hidden="true"
         />
       </Icon>

@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import {
   SECTION_LABELS,
   applyReplacements,
+  applyReplacementsCounted,
   filterLogEntriesByTime,
   filterSections,
   PREBUILT_REDACTIONS,
@@ -47,6 +48,44 @@ describe("applyReplacements", () => {
       { find: "bar", replace: "baz" },
     ];
     expect(applyReplacements("foo", rules)).toBe("baz");
+  });
+});
+
+describe("applyReplacementsCounted", () => {
+  const rules = [
+    { kind: "regex" as const, find: "\\d+", replace: "#" },
+    { find: "cat", replace: "dog" },
+    { find: "", replace: "x" },
+    { kind: "regex" as const, find: "(", replace: "x" },
+  ];
+
+  it("produces exactly what applyReplacements produces", () => {
+    const input = "cat 12 cat 3 concat";
+    expect(applyReplacementsCounted(input, rules).output).toBe(applyReplacements(input, rules));
+  });
+
+  it("reports the output ranges each replacement wrote, not text that already looked replaced", () => {
+    const input = "[x] a1 b22";
+    const { output, ranges } = applyReplacementsCounted(input, [
+      { kind: "regex", find: "\\d+", replace: "[x]" },
+      { find: "b", replace: "BB" },
+    ]);
+    expect(output).toBe("[x] a[x] BB[x]");
+    const marked = ranges.map(([s, e]) => output.slice(s, e + 1));
+    expect(marked).toEqual(["[x]", "BB", "[x]"]);
+    expect(ranges[0]![0]).toBeGreaterThan(0);
+  });
+
+  it("drops a range once a later rule rewrites it", () => {
+    const { output, ranges } = applyReplacementsCounted("secret", [
+      { find: "secret", replace: "[REDACTED]" },
+      { find: "[REDACTED]", replace: "*" },
+    ]);
+    expect(ranges.map(([s, e]) => output.slice(s, e + 1))).toEqual(["*"]);
+  });
+
+  it("counts each rule's matches in order, and zero for skipped or invalid rules", () => {
+    expect(applyReplacementsCounted("cat 12 cat 3 concat", rules).counts).toEqual([2, 3, 0, 0]);
   });
 });
 
