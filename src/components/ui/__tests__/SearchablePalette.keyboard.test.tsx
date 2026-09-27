@@ -309,3 +309,29 @@ describe("SearchablePalette Escape clears before it closes", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("SearchablePalette scroll and bands", () => {
+  it("scrolls an unbanded cursor row into view even when rows carry no id", () => {
+    const scrolled: string[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.textContent ?? "");
+    };
+    renderPalette({ selectedIndex: 1 });
+    expect(scrolled).toContain(items[1]!.id);
+  });
+
+  it("heads each band with an inert option, never a role=group", () => {
+    renderPalette({
+      getSectionLabel: (item: Item) => (items.indexOf(item) < 1 ? "First" : "Second"),
+      renderItem: (item: Item) => (
+        <div key={item.id} id={`palette-option-${item.id}`} role="option" aria-selected={false}>
+          {item.id}
+        </div>
+      ),
+    });
+    const list = screen.getByRole("listbox");
+    expect(list.querySelectorAll('[role="group"]')).toHaveLength(0);
+    const heads = [...list.querySelectorAll('[aria-disabled="true"]')];
+    expect(heads.map((h) => h.getAttribute("aria-label"))).toEqual(["First", "Second"]);
+  });
+});

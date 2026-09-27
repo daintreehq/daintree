@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useRef, useCallback } from "react";
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import {
   AppPaletteDialog,
@@ -17,9 +17,8 @@ import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 
 const noopHoverIndex = () => {};
 
-// Same band head as the action palette's: the header sits inside its group, so
-// the air above a later band goes on the group rather than the label.
-const SECTION_HEADER_CLASS = `${PALETTE_SECTION_LABEL_CLASS} px-3 py-1`;
+// The action palette's band head, so a later band opens with air above it.
+const SECTION_HEADER_CLASS = `${PALETTE_SECTION_LABEL_CLASS} px-3 py-1 not-first:mt-2`;
 
 function sectionRuns<T>(
   items: readonly T[],
@@ -74,9 +73,9 @@ export interface SearchablePaletteProps<T> {
    */
   onSelectIndex?: (index: number) => void;
   /**
-   * Bands consecutive rows that share a label into a labelled `role="group"`
-   * inside the listbox, headed by the palette section label. Results must
-   * already be ordered by band; a label change starts a new band.
+   * Heads each run of consecutive rows that share a label with the palette
+   * section label, as an inert option. Results must already be ordered by
+   * band; a label change starts a new band.
    */
   getSectionLabel?: (item: T) => string;
   /**
@@ -266,17 +265,25 @@ export function SearchablePalette<T>({
     selectedIndex
   );
 
+  const selectedOptionId =
+    selectedIndex >= 0 && selectedIndex < results.length
+      ? `${itemIdPrefix}-${getItemId(results[selectedIndex]!)}`
+      : null;
+  const banded = getSectionLabel !== undefined;
   useEffect(() => {
-    if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
-      // By id, not by child position: section bands put headers and group
-      // wrappers between the listbox and its options.
-      const id = `${itemIdPrefix}-${getItemId(results[selectedIndex]!)}`;
-      const selectedItem = listRef.current.querySelector(`[id="${CSS.escape(id)}"]`);
-      if (selectedItem instanceof HTMLElement) {
-        selectedItem.scrollIntoView({ block: "nearest", behavior: "instant" });
-      }
+    const list = listRef.current;
+    if (!list || selectedOptionId === null) return;
+    // Band heads sit between the options, so a banded list finds the row by
+    // id. Unbanded lists keep child position: some consumers render rows
+    // without ids, and some wrap a row with its heading, which should scroll
+    // in with it.
+    const selectedItem = banded
+      ? list.querySelector(`[id="${CSS.escape(selectedOptionId)}"]`)
+      : list.children[selectedIndex];
+    if (selectedItem instanceof HTMLElement) {
+      selectedItem.scrollIntoView({ block: "nearest", behavior: "instant" });
     }
-  }, [selectedIndex, results, itemIdPrefix, getItemId]);
+  }, [selectedOptionId, selectedIndex, banded, results]);
 
   // One owner for "N results". Two things can end with a count worth saying —
   // a filter pass settling and an announced load landing — and they often end
@@ -590,13 +597,19 @@ export function SearchablePalette<T>({
               >
                 {getSectionLabel
                   ? sectionRuns(results.slice(0, renderLimit), getSectionLabel).map((run) => (
-                      <div
-                        key={`${run.start}-${run.label}`}
-                        role="group"
-                        className="not-first:mt-2"
-                        aria-labelledby={`${listId}-band-${run.start}`}
-                      >
-                        <div id={`${listId}-band-${run.start}`} className={SECTION_HEADER_CLASS}>
+                      <Fragment key={`${run.start}-${run.label}`}>
+                        {/* Not role="group": inside a listbox, Chromium +
+                            VoiceOver drop a group's label and announce "empty
+                            group". The head is an inert option instead, as in
+                            the action palette; arrow keys skip it because it is
+                            not in `results`. */}
+                        <div
+                          className={SECTION_HEADER_CLASS}
+                          role="option"
+                          aria-disabled="true"
+                          aria-selected="false"
+                          aria-label={run.label}
+                        >
                           {run.label}
                         </div>
                         {run.items.map((item, offset) => {
@@ -609,7 +622,7 @@ export function SearchablePalette<T>({
                             matchesById?.get(getItemId(item))
                           );
                         })}
-                      </div>
+                      </Fragment>
                     ))
                   : results
                       .slice(0, renderLimit)

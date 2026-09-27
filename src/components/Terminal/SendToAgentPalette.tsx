@@ -20,7 +20,6 @@ export interface SendToAgentPaletteProps {
   setQuery: (query: string) => void;
   selectPrevious: () => void;
   selectNext: () => void;
-  setSelectedIndex?: (index: number) => void;
   selectItem: (item: SendToAgentItem) => void;
   confirmSelection: () => void;
 }
@@ -88,7 +87,6 @@ export function SendToAgentPalette({
   setQuery,
   selectPrevious,
   selectNext,
-  setSelectedIndex,
   selectItem,
   confirmSelection,
 }: SendToAgentPaletteProps) {
@@ -112,7 +110,6 @@ export function SendToAgentPalette({
       onQueryChange={setQuery}
       onSelectPrevious={selectPrevious}
       onSelectNext={selectNext}
-      onSelectIndex={setSelectedIndex}
       onConfirm={confirmSelection}
       onClose={close}
       getItemId={(item) => item.id}
