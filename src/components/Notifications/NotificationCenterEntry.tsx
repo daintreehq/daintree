@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
@@ -417,14 +419,15 @@ export function NotificationCenterEntry({
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
               const button = (
-                <button
-                  type="button"
-                  // Handle for the `forced-colors: active` block in index.css.
-                  // Primary is marked by its status-info fill and border, and
-                  // the UA flattens both — so "Pull and rebase" and "Open
-                  // review" render as the same white pill and the recommended
-                  // action stops being recommended. Same fix as the destructive
-                  // button in that block: a heavier border.
+                <Button
+                  // Same mapping as the toast, grid bar and inline banners: the
+                  // recommended action is outlined, the alternative is ghost,
+                  // and severity stays on the row's icon.
+                  variant={action.variant === "secondary" ? "ghost" : "outline"}
+                  size="xs"
+                  // Handle for the `forced-colors: active` block in index.css:
+                  // the UA flattens outline and ghost to the same border, so
+                  // this restores the primary's heavier one.
                   data-notification-action={
                     action.variant === "secondary" ? "secondary" : "primary"
                   }
@@ -438,27 +441,16 @@ export function NotificationCenterEntry({
                           )
                       : undefined
                   }
+                  // A list row takes the inline banner's trims: no raised
+                  // shadow, and the 11px label, since the xs size's 10px is
+                  // too small to be the thing the user acts on.
                   className={cn(
-                    "h-6 rounded-[var(--radius-sm)] px-2 text-2xs font-medium transition-colors",
-                    isAvailable
-                      ? action.variant === "secondary"
-                        ? "border border-border-strong text-text-secondary hover:bg-overlay-medium"
-                        : // The primary used to ink its label from `status-info`,
-                          // which `shared/theme/contrast.ts` only gates at 3:1 —
-                          // no body-text guarantee. It measured 4.46:1 against
-                          // its own fill while the secondary beside it measured
-                          // 7.6:1, so the button with primary chrome read as the
-                          // weaker, near-disabled one, and `prefers-contrast:
-                          // more` lifted the secondary and left it behind. Keep
-                          // status-info as the fill and border (that is what
-                          // marks it primary) and take the label from the gated
-                          // text ramp.
-                          "border border-status-info/30 bg-status-info/15 text-text-primary hover:bg-status-info/20"
-                      : "border border-border-subtle text-text-muted cursor-not-allowed"
+                    "px-2 text-2xs shadow-none inset-shadow-none",
+                    !isAvailable && ARIA_DISABLED_CLASSES
                   )}
                 >
                   {action.label}
-                </button>
+                </Button>
               );
               const key = `${action.actionId}-${index}`;
               // Why it can't run, on the button itself: it stays focusable

@@ -4,7 +4,11 @@ import { createPortal } from "react-dom";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AlertTriangle, CheckCircle2, FileEdit, Info, XCircle } from "lucide-react";
-import { InlineStatusBanner, type InlineStatusBannerSeverity } from "../InlineStatusBanner";
+import {
+  InlineStatusBanner,
+  type BannerAction,
+  type InlineStatusBannerSeverity,
+} from "../InlineStatusBanner";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -810,6 +814,31 @@ describe("InlineStatusBanner family invariants", () => {
       expect(button.getAttribute("data-variant")).toBeTruthy();
       expect(button.className).not.toMatch(/(^|\s)rounded(\s|$)/);
     }
+  });
+
+  // Forced colours flatten outline and ghost to one stroke; the index.css hook
+  // restores the heavier border only on actions marked as the recommended one.
+  it("marks the recommended action for the forced-colors hook, and only it", () => {
+    const actions: BannerAction[] = [
+      { id: "a", label: "Retry", variant: "dangerFilled", onClick: () => {} },
+      { id: "b", label: "Later", variant: "dismiss", onClick: () => {} },
+      { id: "c", label: "Discard", variant: "danger", onClick: () => {} },
+      { id: "d", label: "Open", onClick: () => {} },
+    ];
+    render(
+      <InlineStatusBanner
+        title="t"
+        severity="warning"
+        animated={false}
+        onClose={() => {}}
+        actions={actions}
+      />
+    );
+    const marked = screen
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("data-notification-action") === "primary")
+      .map((b) => b.textContent);
+    expect(marked).toEqual(["Retry", "Open"]);
   });
 
   it("places the dismiss after the actions in the single-line layout, never between controls", () => {

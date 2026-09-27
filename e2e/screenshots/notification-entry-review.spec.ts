@@ -38,6 +38,7 @@
  *   DAINTREE_SHOT_THEME   optional theme id (default: the app default)
  *   DAINTREE_SHOT_TAG     optional suffix so rounds sit side by side
  *   DAINTREE_SHOT_ONLY    comma-separated step filter (see step names above)
+ *   DESIGN_CAPTURE_DIR    optional output dir, so review rounds write outside the tree
  *
  * Output: artifacts/notification-entry-shots/<NN-slug>[-tag].png (gitignored).
  */
@@ -59,7 +60,9 @@ const ENABLED = !!process.env.DAINTREE_SHOT_NOTIF;
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "notification-entry-shots");
+const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
+  ? path.resolve(process.env.DESIGN_CAPTURE_DIR)
+  : path.resolve(process.cwd(), "artifacts", "notification-entry-shots");
 
 /** The popover card, so a shot is the inbox rather than the whole app window. */
 const POPOVER = SEL.notifications.center;

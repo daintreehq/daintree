@@ -170,7 +170,16 @@ describe("ReEntrySummary", () => {
     expect(dismiss).toHaveBeenCalledOnce();
   });
 
-  it("Open Notifications button calls openNotificationCenter", async () => {
+  // The card's edge carries severity; the action beside it stays neutral, as
+  // on the toast, and is marked for the forced-colors primary border.
+  it("keeps its primary action neutral and marked for forced colours", () => {
+    render(<ReEntrySummary state={makeState({ rows: [makeRow({ worstType: "error" })] })} />);
+    const open = screen.getByRole("button", { name: "Open notifications" });
+    expect(open.className).not.toMatch(/(?:^|\s)(?:[a-z-]+:)*(?:bg|text|border|ring)-status-/);
+    expect(open.getAttribute("data-notification-action")).toBe("primary");
+  });
+
+  it("Open notifications button calls openNotificationCenter", async () => {
     const { useUIStore } = await import("@/store/uiStore");
     const openSpy = vi.fn();
     useUIStore.setState({ openNotificationCenter: openSpy });
@@ -184,7 +193,7 @@ describe("ReEntrySummary", () => {
         })}
       />
     );
-    fireEvent.click(screen.getByText("Open Notifications"));
+    fireEvent.click(screen.getByText("Open notifications"));
     expect(openSpy).toHaveBeenCalledOnce();
     expect(dismiss).toHaveBeenCalledOnce();
   });
@@ -343,7 +352,7 @@ describe("ReEntrySummary", () => {
     );
 
     fireEvent.click(screen.getByLabelText("Pin summary"));
-    expect(screen.getByLabelText("Unpin summary").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByLabelText("Pin summary").getAttribute("aria-pressed")).toBe("true");
 
     rerender(
       <ReEntrySummary
@@ -580,7 +589,7 @@ describe("ReEntrySummary", () => {
       flushEntry();
 
       fireEvent.click(screen.getByLabelText("Pin summary"));
-      expect(screen.getByLabelText("Unpin summary").getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByLabelText("Pin summary").getAttribute("aria-pressed")).toBe("true");
 
       rerender(
         <ReEntrySummary
