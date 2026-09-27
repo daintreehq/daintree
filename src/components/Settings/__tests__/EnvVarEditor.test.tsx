@@ -26,6 +26,10 @@ vi.mock("lucide-react", () => ({
   Upload: () => <span data-testid="upload-icon" />,
   AlertTriangle: () => <span data-testid="alert-triangle-icon" />,
   ChevronDown: () => <span data-testid="chevron-down-icon" />,
+  // InlineStatusBanner's severity glyphs, reached through ImportEnvDialog.
+  XCircle: () => <span data-testid="x-circle-icon" />,
+  CheckCircle2: () => <span data-testid="check-circle-icon" />,
+  Info: () => <span data-testid="info-icon" />,
 }));
 
 // Render Popover children inline so jsdom doesn't need to wrestle Radix's

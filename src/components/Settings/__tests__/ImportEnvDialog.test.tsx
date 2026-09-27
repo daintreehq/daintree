@@ -42,6 +42,14 @@ function paste(text: string) {
   fireEvent.change(screen.getByTestId("import-env-textarea"), { target: { value: text } });
 }
 
+/** Resolve a control's aria-describedby through the DOM, so no id string is copied into a test. */
+function describedElements(el: HTMLElement): Array<HTMLElement | null> {
+  return (el.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((id) => document.getElementById(id));
+}
+
 const primary = () =>
   screen
     .getByTestId("import-env-dialog")
@@ -149,6 +157,64 @@ describe("ImportEnvDialog", () => {
     });
   });
 
+  describe("secret values", () => {
+    /**
+     * The host editor masks secret-looking values; the review step showed them
+     * in full, so reviewing an import was the one place a credential landed on
+     * a shared screen. Asserts on the raw values' absence, not on any glyph.
+     */
+    it("keeps them off screen until the user asks for them", () => {
+      renderDialog({ ANTHROPIC_API_KEY: "sk-ant-api03-Hk7v2QpLm9xR4tYbN1cZ" });
+      paste("ANTHROPIC_API_KEY=sk-ant-api03-Zq8w3EhTn5vB7mJdX2fK");
+      fireEvent.click(primary());
+      const rows = screen.getByTestId("import-env-conflict-scroller");
+      expect(rows.textContent).not.toContain("Hk7v2QpLm9xR4tYbN1cZ");
+      expect(rows.textContent).not.toContain("Zq8w3EhTn5vB7mJdX2fK");
+
+      fireEvent.click(within(rows).getByTestId("import-env-reveal"));
+      expect(rows.textContent).toContain("sk-ant-api03-Hk7v2QpLm9xR4tYbN1cZ");
+      expect(rows.textContent).toContain("sk-ant-api03-Zq8w3EhTn5vB7mJdX2fK");
+    });
+
+    it("leaves ordinary values readable", () => {
+      renderDialog();
+      goToConflicts();
+      const rows = screen.getByTestId("import-env-conflict-scroller");
+      expect(rows.textContent).toContain("development");
+      expect(rows.textContent).toContain("production");
+    });
+  });
+
+  describe("the counts", () => {
+    /**
+     * The defect: "new" was everything that wasn't a conflict, so a key pasted
+     * with the value it already had was reported — and imported — as new.
+     */
+    it("does not count a key that already has that value as new", () => {
+      renderDialog();
+      paste("NODE_ENV=development\nBRAND_NEW=1");
+      expect(primary().textContent).toMatch(/\b1\b/);
+      expect(primary().textContent).not.toMatch(/\b2\b/);
+    });
+
+    it("offers nothing to import when every pasted value is already set", () => {
+      renderDialog();
+      paste("NODE_ENV=development");
+      expect(primary().getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
+    });
+
+    /** The conflict step is where the user commits, so the additions must still be in view there. */
+    it("keeps the additions in view on the conflict step", () => {
+      renderDialog();
+      // Two conflicts, one addition, so the addition's count cannot be
+      // satisfied by the conflict count.
+      paste("NODE_ENV=production\nANTHROPIC_API_KEY=sk-ant-new\nBRAND_NEW=1");
+      fireEvent.click(primary());
+      expect(screen.getByTestId("import-env-outcome").textContent).toMatch(/\b1\b/);
+    });
+  });
+
   describe("the primary action", () => {
     /**
      * The defect: with four parse errors the disabled button still read
@@ -197,18 +263,56 @@ describe("ImportEnvDialog", () => {
       const textarea = screen.getByTestId("import-env-textarea");
       expect(textarea.getAttribute("aria-invalid")).toBe("true");
 
-      const describedBy = textarea.getAttribute("aria-describedby");
-      expect(describedBy).toBeTruthy();
-      expect(document.getElementById(describedBy!)).toBe(screen.getByTestId("import-env-errors"));
+      expect(describedElements(textarea)).toContain(screen.getByTestId("import-env-errors"));
     });
 
     it("drops the association again once the paste parses", () => {
       renderDialog();
       paste("this line has no equals sign");
+      const errors = screen.getByTestId("import-env-errors");
       paste("FINE=yes");
       const textarea = screen.getByTestId("import-env-textarea");
       expect(textarea.getAttribute("aria-invalid")).toBeNull();
-      expect(textarea.getAttribute("aria-describedby")).toBeNull();
+      expect(describedElements(textarea)).not.toContain(errors);
+      // No dangling reference to a region that is gone.
+      expect(describedElements(textarea)).not.toContain(null);
+    });
+
+    /**
+     * The format help sat in the dialog's description, which is announced with
+     * the dialog and never again — so a user returning to the field after
+     * reading an error could not hear the syntax it expects.
+     */
+    it("keeps the format help associated with the field", () => {
+      renderDialog();
+      const textarea = screen.getByTestId("import-env-textarea");
+      const help = describedElements(textarea).filter((el) => el?.textContent?.includes("="));
+      expect(help.length).toBeGreaterThan(0);
+    });
+
+    /**
+     * Live validation re-renders on every keystroke. An assertive region there
+     * interrupts the user mid-word while they repair the line it describes.
+     */
+    it("does not announce itself while the user types", () => {
+      renderDialog();
+      paste("this line has no equals sign");
+      const errors = screen.getByTestId("import-env-errors");
+      expect(errors.querySelector('[role="alert"], [aria-live="assertive"]')).toBeNull();
+      const polite = errors.querySelector("[role='status'], [aria-live]");
+      if (polite) expect(polite.getAttribute("aria-live")).toBe("off");
+    });
+
+    /** Each problem leads back to its line, so the fix is typed over it rather than hunted for. */
+    it("takes the user to the offending line", () => {
+      renderDialog();
+      paste("GOOD=fine\nthis line has no equals sign");
+      const textarea = screen.getByTestId("import-env-textarea") as HTMLTextAreaElement;
+      fireEvent.click(within(screen.getByTestId("import-env-errors")).getByRole("button"));
+      expect(document.activeElement).toBe(textarea);
+      expect(textarea.value.slice(textarea.selectionStart, textarea.selectionEnd)).toBe(
+        "this line has no equals sign"
+      );
     });
 
     /**
