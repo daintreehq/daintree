@@ -228,4 +228,10 @@ describe("agentMcpSurfaceOf", () => {
     expect(withScopes(["/repo/public"])).not.toBe(withScopes(["/repo"]));
     expect(withScopes(["/repo"])).not.toBe(surface());
   });
+
+  it("changes with the declared MCP server name", () => {
+    expect(surface({ mcpName: "ledger" })).toBe(surface({ mcpName: "ledger" }));
+    expect(surface({ mcpName: "ledger" })).not.toBe(surface());
+    expect(surface({ mcpName: "books" })).not.toBe(surface({ mcpName: "ledger" }));
+  });
 });
