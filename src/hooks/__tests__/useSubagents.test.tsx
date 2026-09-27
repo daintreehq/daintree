@@ -225,9 +225,11 @@ describe("useSubagents", () => {
     await waitFor(() => expect(result.current.refreshError).toBe("protocol-error"));
     expect(result.current.result).toEqual(ok("child-1"));
 
-    // A remount inside the throttle window rehydrates to the list, not the failure.
+    // A remount inside the throttle window rehydrates to the list, not the
+    // failure, and still says the list is the old one.
     const again = renderHook(() => useSubagents("t1", { provider: "codex" }));
     expect(again.result.current.result).toEqual(ok("child-1"));
+    expect(again.result.current.refreshError).toBe("protocol-error");
 
     listSubagents.mockResolvedValueOnce(ok("child-2"));
     act(() => result.current.refresh());

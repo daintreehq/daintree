@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type MouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Network } from "@/components/icons";
@@ -65,7 +65,7 @@ function TranscriptBody({
 }: {
   transcript: AgentSubagentTranscriptResult;
   provider: SubagentProvider;
-  onRetry: () => void;
+  onRetry: (event: MouseEvent) => void;
 }) {
   if (transcript.status === "unavailable") {
     return (
@@ -160,9 +160,13 @@ function SubagentRow({
   // refetches, so there is one load path rather than two.
   // The failed answer is dropped with it, so the retry shows its own progress
   // rather than leaving the old error standing while the read runs.
-  const retry = useCallback(() => {
+  // Retry unmounts itself, so focus goes back to the row rather than falling to
+  // the page; ringed only when the retry came from the keyboard.
+  const rowRef = useRef<HTMLButtonElement>(null);
+  const retry = useCallback((event: MouseEvent) => {
     setTranscript(null);
     setLoadedFor(null);
+    rowRef.current?.focus({ preventScroll: true, focusVisible: event.detail === 0 });
   }, []);
 
   const Chevron = isOpen ? ChevronDown : ChevronRight;
@@ -170,6 +174,7 @@ function SubagentRow({
   return (
     <li className="border-b border-divider last:border-b-0">
       <button
+        ref={rowRef}
         type="button"
         onClick={() => setIsOpen((open) => !open)}
         aria-expanded={isOpen}
@@ -264,6 +269,10 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
 
   const active = hasPty ? provider : null;
   const headingId = useId();
+  // Set by a press of refresh and cleared when the popover next opens, so the
+  // status node speaks for a refresh the user asked for, not a background one
+  // that happened while they were elsewhere.
+  const [refreshRequested, setRefreshRequested] = useState(false);
   const { result, isLoading, refresh, refreshError } = useSubagents(terminalId, {
     provider: active,
     agentState,
@@ -281,20 +290,38 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   const waiting = subagents.filter((subagent) => subagent.status.type === "blocked").length;
   const summary = `${count} ${label} subagent${count === 1 ? "" : "s"}`;
   const waitingNote = waiting > 0 ? `${waiting} waiting on you` : null;
+  const refreshErrorMessage = refreshError ? subagentUnavailableMessage(refreshError, label) : null;
+  const announcement = refreshErrorMessage
+    ? `Couldn't refresh: ${refreshErrorMessage}`
+    : refreshRequested
+      ? isLoading
+        ? "Refreshing subagents"
+        : "Subagents updated"
+      : "";
+  const requestRefresh = () => {
+    if (isLoading) return;
+    setRefreshRequested(true);
+    refresh();
+  };
 
   return (
-    <Popover>
+    <Popover
+      onOpenChange={(open) => {
+        if (open) setRefreshRequested(false);
+      }}
+    >
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <button
               type="button"
               className={cn(
-                "inline-flex items-center gap-1 shrink-0 text-xs font-sans bg-overlay-soft px-1.5 py-0.5 rounded-full border border-divider hover:text-text-primary transition-colors",
+                "inline-flex items-center gap-1 shrink-0 text-xs font-sans bg-overlay-soft px-1.5 py-0.5 rounded-full border border-divider hover:bg-overlay-medium transition-colors",
                 // The chip borrows the waiting hue only while a child is
                 // blocked on the user — the one thing worth seeing from the
-                // header without opening anything.
-                waiting > 0 ? "text-state-waiting" : "text-text-secondary",
+                // header without opening anything — and keeps it under the
+                // pointer, where hover lifts the fill instead.
+                waiting > 0 ? "text-state-waiting" : "text-text-secondary hover:text-text-primary",
                 CHIP_FOCUS_CLASS
               )}
               aria-label={waitingNote ? `${summary}, ${waitingNote}` : summary}
@@ -318,9 +345,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
           </span>
           <button
             type="button"
-            onClick={() => {
-              if (!isLoading) refresh();
-            }}
+            onClick={requestRefresh}
             // Not `disabled`: that would drop keyboard focus to the page the
             // moment the button is pressed. The spin is the busy state.
             aria-disabled={isLoading}
@@ -333,15 +358,28 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
             <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3.5 h-3.5" aria-hidden />
           </button>
         </div>
-        {/* Always mounted, so a failed refresh is announced when it lands. */}
-        <div role="status" aria-live="polite">
-          {refreshError && (
-            <p className="px-3 py-2 border-b border-divider text-2xs text-text-secondary">
-              Couldn't refresh: {subagentUnavailableMessage(refreshError, label)}. Showing the last
-              list.
-            </p>
-          )}
+        {/* Always mounted, so each outcome is announced when it lands. The
+            visible notice sits outside it, with its Retry. */}
+        <div role="status" aria-live="polite" className="sr-only">
+          {announcement}
         </div>
+        {refreshErrorMessage && (
+          <div className="flex items-baseline gap-3 px-3 py-2 border-b border-divider">
+            <p className="flex-1 min-w-0 text-2xs text-text-secondary">
+              Couldn't refresh: {refreshErrorMessage}. Showing the last list.
+            </p>
+            <button
+              type="button"
+              onClick={requestRefresh}
+              className={cn(
+                "shrink-0 rounded-sm text-2xs text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors",
+                CHIP_FOCUS_CLASS
+              )}
+            >
+              Retry
+            </button>
+          </div>
+        )}
         <ScrollShadow compact className="max-h-80">
           <ul>
             {subagents.map((subagent) => (

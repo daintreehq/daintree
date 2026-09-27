@@ -307,7 +307,8 @@ describe("SubagentChip", () => {
     listSubagents.mockResolvedValueOnce({ status: "unavailable", reason: "timeout" });
     fireEvent.click(refresh);
 
-    expect(await screen.findByText(/Couldn't refresh/)).toBeTruthy();
+    // Shown in the popover and announced through the status node.
+    expect((await screen.findAllByText(/Couldn't refresh/)).length).toBeGreaterThan(0);
     expect(screen.getByText("Meitner")).toBeTruthy();
   });
 
@@ -342,5 +343,56 @@ describe("SubagentChip", () => {
 
     await waitFor(() => expect(screen.queryByText(/took too long/)).toBeNull());
     expect(await screen.findByText("Loading transcript")).toBeTruthy();
+  });
+
+  it("hands focus back to the row when Retry takes itself away", async () => {
+    listSubagents.mockResolvedValue(ok([subagent()]));
+    readSubagentTranscript.mockResolvedValueOnce({ status: "unavailable", reason: "timeout" });
+    render(<SubagentChip terminalId="t1" />);
+    fireEvent.click(await screen.findByText("Meitner"));
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    readSubagentTranscript.mockReturnValueOnce(new Promise(() => {}));
+    retry.focus();
+    fireEvent.click(retry, { detail: 0 });
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByText("Meitner").closest("button"));
+  });
+
+  it("tells assistive technology when a refresh it asked for starts and finishes", async () => {
+    listSubagents.mockResolvedValueOnce(ok([subagent()]));
+    render(<SubagentChip terminalId="t1" />);
+    const refresh = await screen.findByRole("button", { name: "Refresh subagents" });
+    const status = () =>
+      screen
+        .getAllByRole("status")
+        .map((node) => node.textContent ?? "")
+        .join(" ");
+    // Nothing to say until the user asks.
+    expect(status()).not.toMatch(/Refresh|updated/);
+
+    let answer: (value: unknown) => void = () => {};
+    listSubagents.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    fireEvent.click(refresh);
+    await waitFor(() => expect(status()).toMatch(/Refreshing subagents/));
+
+    answer(ok([subagent()]));
+    await waitFor(() => expect(status()).toMatch(/Subagents updated/));
+  });
+
+  it("offers Retry beside a failed refresh, and it asks again", async () => {
+    listSubagents.mockResolvedValueOnce(ok([subagent()]));
+    render(<SubagentChip terminalId="t1" />);
+    const refresh = await screen.findByRole("button", { name: "Refresh subagents" });
+
+    listSubagents.mockResolvedValueOnce({ status: "unavailable", reason: "timeout" });
+    fireEvent.click(refresh);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+
+    listSubagents.mockResolvedValueOnce(ok([subagent({ label: "Kant" })]));
+    fireEvent.click(retry);
+    expect(await screen.findByText("Kant")).toBeTruthy();
+    expect(screen.queryByText(/Couldn't refresh/)).toBeNull();
   });
 });

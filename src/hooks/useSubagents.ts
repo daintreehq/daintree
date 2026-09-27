@@ -65,6 +65,8 @@ const TRANSIENT_REASONS: ReadonlySet<AgentSubagentUnavailableReason> = new Set([
 interface CachedLookup {
   at: number;
   result: AgentSubagentsResult;
+  /** Kept with the list it qualifies, so a remount doesn't pass stale children off as current. */
+  refreshError?: AgentSubagentUnavailableReason;
 }
 
 const lookupCache = new Map<string, CachedLookup>();
@@ -88,8 +90,13 @@ function cacheKey(
   return `${provider}:${terminalId}:${generation ?? 0}`;
 }
 
-function rememberLookup(key: string, result: AgentSubagentsResult, at: number): void {
-  lookupCache.set(key, { at, result });
+function rememberLookup(
+  key: string,
+  result: AgentSubagentsResult,
+  at: number,
+  refreshError?: AgentSubagentUnavailableReason
+): void {
+  lookupCache.set(key, { at, result, refreshError });
   if (lookupCache.size <= MAX_CACHED_TERMINALS) return;
   // Expired entries first — they would be refetched anyway — then oldest-first
   // until the cap actually holds, since every entry can be fresh at once.
@@ -123,8 +130,8 @@ export function useSubagents(
     result: AgentSubagentsResult;
     refreshError?: AgentSubagentUnavailableReason;
   } | null>(() => {
-    const cached = lookupCache.get(key)?.result;
-    return cached ? { key, result: cached } : null;
+    const cached = lookupCache.get(key);
+    return cached ? { key, result: cached.result, refreshError: cached.refreshError } : null;
   });
   const [isLoading, setIsLoading] = useState(false);
   const mountedRef = useRef(true);
@@ -155,7 +162,7 @@ export function useSubagents(
       if (!force && cached && now - cached.at < SUBAGENT_REFRESH_THROTTLE_MS) {
         // Still fresh: adopt it so a remount inside the window shows the same
         // list it had before, without spawning anything.
-        setEntry({ key, result: cached.result });
+        setEntry({ key, result: cached.result, refreshError: cached.refreshError });
         return;
       }
       const adapter = SUBAGENT_PROVIDERS[provider];
@@ -187,7 +194,8 @@ export function useSubagents(
           next.status === "unavailable" &&
           TRANSIENT_REASONS.has(next.reason) &&
           previous?.status === "ok";
-        rememberLookup(key, keepPrevious ? previous : next, Date.now());
+        if (keepPrevious) rememberLookup(key, previous, Date.now(), next.reason);
+        else rememberLookup(key, next, Date.now());
       };
       void adapter
         .list({ terminalId })
