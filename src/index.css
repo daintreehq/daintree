@@ -1301,20 +1301,21 @@ body,
 
 /* Anchored list that unrolls from its trigger (`OVERLAY_DROP_MOTION_CLASS`).
  * The clip starts at the trigger edge and sweeps away from it, so the panel
- * holds its full width from the first frame. The sides and far edge sit 8rem
- * outside the box so `shadow-overlay` is never cut off at the sides; the far
- * edge lands on the box at 85% and only then lets the shadow out, so the
- * shadow grows in rather than popping when the clip is removed. */
+ * holds its full width from the first frame. It hugs the box while it moves:
+ * `shadow-overlay` spreads well past the panel, and a clip wide enough to keep
+ * it drew the moving edge as a hard line straight across that halo. Once the
+ * panel is fully out the clip opens past the shadow, which blooms in over the
+ * last fifth rather than popping when the clip is removed. */
 @keyframes overlay-drop-down {
   0% {
     opacity: 0;
-    clip-path: inset(-8rem -8rem 100% -8rem);
+    clip-path: inset(0 0 100% 0);
   }
   40% {
     opacity: 1;
   }
-  85% {
-    clip-path: inset(-8rem -8rem 0 -8rem);
+  80% {
+    clip-path: inset(0);
   }
   100% {
     opacity: 1;
@@ -1325,13 +1326,13 @@ body,
 @keyframes overlay-drop-up {
   0% {
     opacity: 0;
-    clip-path: inset(100% -8rem -8rem -8rem);
+    clip-path: inset(100% 0 0 0);
   }
   40% {
     opacity: 1;
   }
-  85% {
-    clip-path: inset(0 -8rem -8rem -8rem);
+  80% {
+    clip-path: inset(0);
   }
   100% {
     opacity: 1;

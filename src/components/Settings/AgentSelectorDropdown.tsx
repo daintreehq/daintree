@@ -101,9 +101,9 @@ function AgentStatusMarks({ agent }: { agent: AgentOption }) {
   return (
     <span className="flex shrink-0 items-center gap-3 font-normal">
       {agent.dangerousEnabled && (
-        <span className="flex items-center gap-1" title="Skips permission prompts">
+        <span className="flex items-center gap-1.5">
           <ShieldOff className="h-3.5 w-3.5 text-status-error" aria-hidden="true" />
-          <span className="sr-only">Skips permission prompts</span>
+          <span className="text-xs text-text-secondary">Skips permission prompts</span>
         </span>
       )}
       {statusLabel && (
