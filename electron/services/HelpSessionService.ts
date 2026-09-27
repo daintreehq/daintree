@@ -293,6 +293,7 @@ interface BundledClaudeSettings {
   };
   defaultMode?: string;
   enableAllProjectMcpServers?: boolean;
+  autoMemoryEnabled?: boolean;
   [key: string]: unknown;
 }
 
@@ -2613,6 +2614,11 @@ export class HelpSessionService {
     // .mcp.json. Without this, Claude Code prompts the user to approve each
     // server interactively on first launch, which would block the assistant.
     merged.enableAllProjectMcpServers = true;
+
+    // The session folder is reused per project, so Claude's auto-memory for it
+    // would persist unreviewed notes across every help session and reload them
+    // with more weight than the help prompt's own rules (#12880).
+    merged.autoMemoryEnabled = false;
 
     // Always assign defaultMode explicitly so a baseline change (or a future
     // bundled template that ships with `defaultMode` set) can never silently

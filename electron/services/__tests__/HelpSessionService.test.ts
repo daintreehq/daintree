@@ -749,6 +749,25 @@ describe("HelpSessionService", () => {
     expect(settings.enableAllProjectMcpServers).toBe(true);
   });
 
+  it("disables Claude auto-memory in .claude/settings.json even if the bundled baseline enables it", async () => {
+    const bundledPath = path.join(helpFolder, ".claude", "settings.json");
+    const bundled = JSON.parse(await fs.readFile(bundledPath, "utf-8"));
+    await fs.writeFile(bundledPath, JSON.stringify({ ...bundled, autoMemoryEnabled: true }));
+
+    const readSettings = async (sessionPath: string) =>
+      JSON.parse(await fs.readFile(path.join(sessionPath, ".claude", "settings.json"), "utf-8"));
+
+    const first = await service.provisionSession(provisionInput());
+    if (!first) throw new Error("expected result");
+    expect((await readSettings(first.sessionPath)).autoMemoryEnabled).toBe(false);
+
+    await service.revokeSession(first.sessionId);
+    const second = await service.provisionSession(provisionInput());
+    if (!second) throw new Error("expected result");
+    expect(second.sessionPath).toBe(first.sessionPath);
+    expect((await readSettings(second.sessionPath)).autoMemoryEnabled).toBe(false);
+  });
+
   it("lets Claude read the project it serves without a prompt, but never edit it", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
