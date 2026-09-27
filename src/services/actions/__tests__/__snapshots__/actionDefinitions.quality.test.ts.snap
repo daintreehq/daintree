@@ -5379,7 +5379,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read the last reply an agent this connection launched or was handed wrote to its transcript, plus any unanswered tool calls such as a question and its options. Claude Code only. Says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
+    "description": "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed; Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
     "examples": [
       {
         "args": {

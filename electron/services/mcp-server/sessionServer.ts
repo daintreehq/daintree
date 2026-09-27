@@ -952,6 +952,15 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     terminalId: string
   ) => Promise<import("../../../shared/types/agent.js").AgentState | null>;
   /**
+   * Whether a terminal belongs to the workspace of this session's pinned view,
+   * re-resolved on every call (#12883). What admits Daintree's own assistant to
+   * `terminal.readLastMessageOwned` for a pane it did not create: it already
+   * types into that view's panes, so reading what they ask is no wider. Must
+   * answer `false` whenever either side is unknown. Absent, every such read is
+   * refused.
+   */
+  isTerminalInPinnedWorkspace?: (terminalId: string) => Promise<boolean>;
+  /**
    * Terminal notices. Optional so fixtures that never exercise them need not
    * stub them; absent, `terminal.notifyWhenIdle` and `notify: true` answer
    * not-eligible.
@@ -2502,28 +2511,45 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             };
             return buildToolError({ code: "VALIDATION_ERROR", message });
           }
+          // Daintree's own assistant reads by the view it is pinned to rather
+          // than by the ledger (#12883): it holds unscoped input to every pane
+          // in that view, so a pane the user started is one it can already
+          // answer, and the question behind the answer is what it needs. The
+          // view is the whole boundary here — a creation record does not stand
+          // in for it — and every other `*Owned` tool keeps the ledger.
+          const readsByPinnedView =
+            rendererOwnedOrigin && actionId === TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL;
+          const inPinnedView =
+            readsByPinnedView &&
+            (await deps.isTerminalInPinnedWorkspace?.(resourceId).catch(() => false)) === true;
           // A hand-over is consulted only after the ownership ledger, and only
           // by the tools that declare it enough (#12490). The cleanup tools
           // never reach it, so an adopted terminal cannot be closed through
           // one.
-          const createdRecord = ownedRecordFor(ownedResource.resourceKind, resourceId);
+          const createdRecord = readsByPinnedView
+            ? undefined
+            : ownedRecordFor(ownedResource.resourceKind, resourceId);
           const record =
             createdRecord ??
-            (ownedResource.acceptsAdoption
+            (ownedResource.acceptsAdoption && !readsByPinnedView
               ? adoptedRecordFor(ownedResource.resourceKind, resourceId)
               : undefined);
           // One message for "never existed", "another session's", and "the
           // user's" — see RESOURCE_NOT_OWNED_CODE for why the three must not be
           // distinguishable.
-          if (record === undefined) {
-            const message = ownedResource.acceptsAdoption
-              ? `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session or ` +
-                `handed to it by the user, so '${actionId}' will not act on it. This tool only acts on ` +
-                `terminals this connection created or the user handed to this pane; ids from listings ` +
-                `may belong to the user, another client, or a plugin.`
-              : `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
-                `'${actionId}' will not act on it. This tool only acts on resources this ` +
-                `connection created; ids from listings may belong to the user, another client, or a plugin.`;
+          if (record === undefined && !inPinnedView) {
+            const message = readsByPinnedView
+              ? `No agent ${ownedResource.resourceKind} with id '${resourceId}' is in the project this ` +
+                `assistant is open in, so '${actionId}' will not read it. Take the id from ` +
+                `'terminal.list' in this project.`
+              : ownedResource.acceptsAdoption
+                ? `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session or ` +
+                  `handed to it by the user, so '${actionId}' will not act on it. This tool only acts on ` +
+                  `terminals this connection created or the user handed to this pane; ids from listings ` +
+                  `may belong to the user, another client, or a plugin.`
+                : `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
+                  `'${actionId}' will not act on it. This tool only acts on resources this ` +
+                  `connection created; ids from listings may belong to the user, another client, or a plugin.`;
             outcome = {
               kind: "result",
               value: { ok: false, error: { code: RESOURCE_NOT_OWNED_CODE, message } },
@@ -2533,7 +2559,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           ownedResourceId = resourceId;
           ownedResourceRecord = record;
           admittedAdoption =
-            createdRecord === undefined
+            createdRecord === undefined && !readsByPinnedView
               ? sessionStore.terminalAdoption.get(ownershipOwner, resourceId)
               : undefined;
         }

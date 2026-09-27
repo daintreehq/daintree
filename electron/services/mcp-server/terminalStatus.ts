@@ -225,6 +225,24 @@ function isVisibleToBoundSession(record: TerminalRecord, workspaceId: string): b
   return true;
 }
 
+/**
+ * Whether a terminal is an agent pane of this workspace, judged from the
+ * pty-host's own record (#12883) — the one the transcript read resolves
+ * against, so a spawn still in flight under the id cannot vouch for it, and a
+ * pane whose PTY exited but whose record was kept still can. Excludes what
+ * {@link isVisibleToBoundSession} does, the assistant overlay among them. An
+ * unreadable record is not a pane.
+ */
+export async function isAgentPaneInWorkspace(
+  ptyClient: Pick<PtyClient, "getTerminalAsync"> | null | undefined,
+  terminalId: string,
+  workspaceId: string
+): Promise<boolean> {
+  if (!ptyClient) return false;
+  const record = await ptyClient.getTerminalAsync(terminalId);
+  return record ? isVisibleToBoundSession(record, workspaceId) : false;
+}
+
 function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalStatusEntry {
   const agentState = record.agentState ?? null;
 

@@ -796,13 +796,14 @@ export function registerTerminalQueryActions(
   // (electron/services/mcp-server/sessionServer.ts): the ownership ledger it
   // authorizes against is keyed by MCP session id, which the renderer never
   // sees, and the transcript it reads is a file only main can open. Main checks
-  // ownership, then reads the agent's session from host state alone (#12479).
+  // ownership — for Daintree's own assistant, the pinned view's project instead
+  // (#12883) — then reads the agent's session from host state alone (#12479).
   // `run()` throws if the renderer ever invokes it directly.
   actions.set("terminal.readLastMessageOwned", () => ({
     id: "terminal.readLastMessageOwned",
     title: "Read owned agent's last message",
     description:
-      "Read the last reply an agent this connection launched or was handed wrote to its transcript, plus any unanswered tool calls such as a question and its options. Claude Code only. Says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
+      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed; Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -815,7 +816,7 @@ export function registerTerminalQueryActions(
         .string()
         .min(1)
         .describe(
-          "Agent panel `id` this session created or was handed. Required; no focus fallback."
+          "Agent panel `id` the description says you may read. Required; no focus fallback."
         ),
       maxBytes: z
         .number()

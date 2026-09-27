@@ -1925,7 +1925,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Read the last reply an agent this connection launched or was handed wrote to its transcript, plus any unanswered tool calls such as a question and its options. Claude Code only. Says nothing of whether the agent is waiting; a permission prompt is only on the live screen.",
+      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed; Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
     enabled: true,
     examples: [
       {
@@ -1945,7 +1945,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "Agent panel `id` this session created or was handed. Required; no focus fallback.",
+            "Agent panel `id` the description says you may read. Required; no focus fallback.",
         },
         maxBytes: {
           description: "Text budget in escaped bytes, 1024 to 49152; default 24576.",

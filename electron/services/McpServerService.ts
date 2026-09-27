@@ -37,7 +37,10 @@ import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
-import { handleTerminalGetStatusViewless } from "./mcp-server/terminalStatus.js";
+import {
+  handleTerminalGetStatusViewless,
+  isAgentPaneInWorkspace,
+} from "./mcp-server/terminalStatus.js";
 import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
 import { TerminalNotifyService, paneNotifyKey } from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
@@ -367,6 +370,8 @@ export class McpServerService {
         if (info === null) throw new Error(`Could not read terminal '${terminalId}'.`);
         return info.agentState ?? null;
       },
+      isAgentPaneInWorkspace: (terminalId, workspaceId) =>
+        isAgentPaneInWorkspace(getPtyClient(), terminalId, workspaceId),
       terminalNotify: this.terminalNotify,
       replyWaiter: this.replyWaiter,
       getCachedManifest: () => this.bridge.getCachedManifest(),

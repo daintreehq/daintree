@@ -8353,6 +8353,180 @@ describe("session-scoped resource ownership (#11909)", () => {
         expect.objectContaining({ outcome: expect.objectContaining({ kind: "throw" }) })
       );
     });
+
+    // Daintree's own assistant already types into every pane in its view, so it
+    // reads by that view rather than by the ledger (#12883).
+    describe("from Daintree's own assistant (#12883)", () => {
+      function assistantReadHarness(
+        sessionId: string,
+        origin: "help" | "assistant-pane",
+        inView: (terminalId: string) => boolean
+      ) {
+        const isTerminalInPinnedWorkspace = vi.fn(async (id: string) => inView(id));
+        const h = readHarness(sessionId);
+        // The assistant's own tier, not the external one the harness seeds:
+        // the external allowlist admits this tool too, so it would prove nothing.
+        h.store.sessionTierMap.set(sessionId, "core");
+        h.store.sessionOriginMap.set(sessionId, origin);
+        const deps = { ...h.deps, isTerminalInPinnedWorkspace };
+        return {
+          ...h,
+          deps,
+          isTerminalInPinnedWorkspace,
+          server: createSessionServer(sessionId, deps),
+        };
+      }
+
+      it.each(["help", "assistant-pane"] as const)(
+        "%s reads a pane the user started in its pinned view, without claiming it",
+        async (origin) => {
+          const { store, server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
+            assistantReadHarness(`s-assist-${origin}`, origin, (id) => id === "user-pane");
+
+          const result = await callTool(server, {
+            name: "terminal.readLastMessageOwned",
+            arguments: { terminalId: "user-pane", maxBytes: 4096 },
+          });
+
+          expect(result.isError).toBeUndefined();
+          expect(result.structuredContent).toEqual(READ_RESULT);
+          expect(isTerminalInPinnedWorkspace).toHaveBeenCalledWith("user-pane");
+          expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+            "user-pane",
+            { maxBytes: 4096 },
+            expect.any(AbortSignal)
+          );
+          expect(store.resourceOwnership.owns(`s-assist-${origin}`, "terminal", "user-pane")).toBe(
+            false
+          );
+        }
+      );
+
+      it.each(["help", "assistant-pane"] as const)(
+        "%s is refused a pane outside its pinned view, without reading",
+        async (origin) => {
+          const { server, deps, handleTerminalReadLastMessageOwned } = assistantReadHarness(
+            `s-assist-foreign-${origin}`,
+            origin,
+            () => false
+          );
+
+          const result = await callTool(server, {
+            name: "terminal.readLastMessageOwned",
+            arguments: { terminalId: "elsewhere" },
+          });
+
+          expect(result.isError).toBe(true);
+          expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+          expect(errorText(result)).toContain("project this assistant is open in");
+          expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+          expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+            expect.objectContaining({
+              outcome: {
+                kind: "result",
+                value: expect.objectContaining({
+                  ok: false,
+                  error: expect.objectContaining({ code: "RESOURCE_NOT_OWNED" }),
+                }),
+              },
+            })
+          );
+        }
+      );
+
+      // The view is the whole boundary: a pane the assistant created, but whose
+      // view it can no longer resolve, is refused like any other.
+      it("does not fall back to the ledger when the view check fails", async () => {
+        const { server, handleTerminalReadLastMessageOwned } = assistantReadHarness(
+          "s-assist-owned",
+          "help",
+          () => false
+        );
+
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
+
+        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+      });
+
+      it("refuses every read when the view check is not wired", async () => {
+        const { store, server, handleTerminalReadLastMessageOwned } =
+          readHarness("s-assist-unwired");
+        store.sessionOriginMap.set("s-assist-unwired", "help");
+
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
+
+        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+      });
+
+      it("decides the view before looking at the options", async () => {
+        const { server, handleTerminalReadLastMessageOwned } = assistantReadHarness(
+          "s-assist-foreign-options",
+          "help",
+          () => false
+        );
+
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "elsewhere", maxBytes: "lots" },
+        });
+
+        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+        expect(errorText(result)).not.toContain("maxBytes");
+        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+      });
+
+      // An agent pane's bearer is an external origin: the ledger still decides,
+      // however the view check would answer.
+      it("never consults the view for an agent pane's session", async () => {
+        const isTerminalInPinnedWorkspace = vi.fn(async () => true);
+        const { deps, handleTerminalReadLastMessageOwned } = readHarness("s-pane-read");
+        const server = createSessionServer("s-pane-read", {
+          ...deps,
+          isTerminalInPinnedWorkspace,
+        });
+
+        const refused = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "user-pane" },
+        });
+        const owned = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
+
+        expect(toolErrorPayload(refused).code).toBe("RESOURCE_NOT_OWNED");
+        expect(owned.isError).toBeUndefined();
+        expect(isTerminalInPinnedWorkspace).not.toHaveBeenCalled();
+        expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(1);
+      });
+
+      // Only the read reads by view; the assistant's other owned tools keep the
+      // ledger.
+      it("keeps the ledger for the assistant's other owned tools", async () => {
+        const { server, dispatchAction, isTerminalInPinnedWorkspace } = assistantReadHarness(
+          "s-assist-interrupt",
+          "help",
+          () => true
+        );
+
+        const result = await callTool(server, {
+          name: "terminal.interruptOwned",
+          arguments: { terminalId: "user-pane" },
+        });
+
+        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+        expect(isTerminalInPinnedWorkspace).not.toHaveBeenCalled();
+        expect(dispatchAction).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe("owned terminal input (#12407)", () => {

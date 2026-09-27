@@ -85,7 +85,8 @@ export const CORE_TIER_TOOLS = [
   "terminal.getStatus",
   "terminal.getOutput",
   // What an agent this session launched last said (#12479). Scoped to panels
-  // the session created.
+  // the session created — or, for the assistant, to any panel in the project
+  // its view shows, the panes its unscoped input already reaches (#12883).
   "terminal.readLastMessageOwned",
   // Reaches any panel, so sessions that are not Daintree's own assistant get
   // `terminal.sendCommandOwned` in its place — see `OWNED_TWIN_TOOLS`.
