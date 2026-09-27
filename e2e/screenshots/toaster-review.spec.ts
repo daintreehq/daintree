@@ -206,7 +206,7 @@ async function show(page: Page, fixtures: Fixture[], overflow = 0): Promise<void
     ({ sel, n }) => {
       const region = document.querySelector<HTMLElement>(sel);
       if (!region) return false;
-      const cards = Array.from(region.querySelectorAll<HTMLElement>(":scope > [role]"));
+      const cards = Array.from(region.querySelectorAll<HTMLElement>(":scope > [data-toast]"));
       return cards.length === n && cards.every((c) => getComputedStyle(c).opacity === "1");
     },
     { sel: REGION, n: fixtures.length },

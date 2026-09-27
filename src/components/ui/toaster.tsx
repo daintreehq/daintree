@@ -89,9 +89,10 @@ function CountBadge({
   onBumpEnd: () => void;
 }) {
   return (
+    // The count is spoken as text inside the live region: an aria-label on a
+    // plain span is not exposed, so the glyph alone would read as "times 5".
     <span
       data-testid="toast-coalesce-badge"
-      aria-label={formatNotificationCountAriaLabel(count)}
       className={cn(
         "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[3.5ch] text-center",
         isBumping && "animate-badge-bump"
@@ -101,7 +102,8 @@ function CountBadge({
         if (e.animationName === "badge-bump") onBumpEnd();
       }}
     >
-      {formatNotificationCountGlyph(count, "×")}
+      <span aria-hidden="true">{formatNotificationCountGlyph(count, "×")}</span>
+      <span className="sr-only">{formatNotificationCountAriaLabel(count)}</span>
     </span>
   );
 }
@@ -130,13 +132,14 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   const [isWindowBlurred, setIsWindowBlurred] = useState(
     () => typeof document !== "undefined" && !document.hasFocus()
   );
-  // Blurred time doesn't count against the visible-duration cap — the cap
-  // bounds *visible* time (see MAX_VISIBLE_DURATION_MS), and a toast in a
-  // blurred window isn't visible. Without this credit, a blur outlasting the
-  // cap would compute a 0ms delay on refocus and instant-dismiss the toast
-  // the user came back for (e.g. a watch-priority toast born blurred).
-  const blurredAccumRef = useRef(0);
-  const blurredSinceRef = useRef<number | null>(
+  // Paused time doesn't count against the visible-duration cap. The cap bounds
+  // unattended time (see MAX_VISIBLE_DURATION_MS): a toast in a blurred window
+  // isn't visible, and one under the pointer or focus is being read. Without
+  // this credit, a pause outlasting the cap computes a 0ms delay on resume and
+  // instant-dismisses the toast the user came back for (e.g. a watch-priority
+  // toast born blurred, or one read with the pointer resting on it).
+  const pausedAccumRef = useRef(0);
+  const pausedSinceRef = useRef<number | null>(
     typeof document !== "undefined" && !document.hasFocus() ? Date.now() : null
   );
   const toastRef = useRef<HTMLDivElement>(null);
@@ -150,6 +153,16 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   const isActionPending = activeActionIndex !== null && actionStatus !== "success";
   const isPaused =
     isHovered || isFocusInside || isDropdownOpen || isWindowBlurred || isActionPending;
+  // Layout phase, so the credit is settled before the dismiss effect below
+  // reads it in the same commit.
+  useLayoutEffect(() => {
+    if (isPaused) {
+      if (pausedSinceRef.current === null) pausedSinceRef.current = Date.now();
+    } else if (pausedSinceRef.current !== null) {
+      pausedAccumRef.current += Date.now() - pausedSinceRef.current;
+      pausedSinceRef.current = null;
+    }
+  }, [isPaused]);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const busyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -228,16 +241,10 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
         clearTimeout(dismissTimerRef.current);
         dismissTimerRef.current = null;
       }
-      if (blurredSinceRef.current === null) blurredSinceRef.current = Date.now();
+      if (pausedSinceRef.current === null) pausedSinceRef.current = Date.now();
       setIsWindowBlurred(true);
     };
-    const handleFocus = (): void => {
-      if (blurredSinceRef.current !== null) {
-        blurredAccumRef.current += Date.now() - blurredSinceRef.current;
-        blurredSinceRef.current = null;
-      }
-      setIsWindowBlurred(false);
-    };
+    const handleFocus = (): void => setIsWindowBlurred(false);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", handleFocus);
     return () => {
@@ -329,8 +336,8 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
     const cap = hasActions
       ? duration * VISIBLE_DURATION_MULTIPLIER
       : Math.min(duration * VISIBLE_DURATION_MULTIPLIER, MAX_VISIBLE_DURATION_MS);
-    // Credit accumulated blurred time so the cap only consumes visible time.
-    const deadline = (notification.firstShownAt ?? Date.now()) + cap + blurredAccumRef.current;
+    // Credit accumulated paused time so the cap only consumes unattended time.
+    const deadline = (notification.firstShownAt ?? Date.now()) + cap + pausedAccumRef.current;
     const delay = Math.min(duration, Math.max(0, deadline - Date.now()));
     dismissTimerRef.current = setTimeout(() => dismissRef.current(), delay);
     return () => {
@@ -347,6 +354,23 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
     notification.action,
     notification.actions,
   ]);
+
+  // The success confirmation dwells, then dismisses. It holds while the pointer
+  // rests on the card or the window is blurred, so it's never cut off unseen.
+  // Focus doesn't hold it: Chromium focuses a clicked button, so focus-inside
+  // would pin every pointer-confirmed toast open until the user clicked away.
+  useEffect(() => {
+    if (actionStatus !== "success" || isHovered || isWindowBlurred) return;
+    dwellTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) dismissRef.current();
+    }, UI_ACTION_SUCCESS_DWELL_MS);
+    return () => {
+      if (dwellTimerRef.current) {
+        clearTimeout(dwellTimerRef.current);
+        dwellTimerRef.current = null;
+      }
+    };
+  }, [actionStatus, isHovered, isWindowBlurred]);
 
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
   const countBadge =
@@ -420,13 +444,14 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
           setIsFocusInside(false);
         }
       }}
-      role={notification.type === "error" ? "alert" : "status"}
-      aria-busy={isCountBusy || undefined}
+      data-toast=""
     >
       <div
         className={cn(
           "flex w-full items-start gap-3",
-          "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
+          // The severity edge must follow `border`: cn() resolves conflicts
+          // last-wins, and a later `border` erases a left width set before it.
+          "rounded-[var(--radius-sm)] border border-tint/[0.08] border-l-[3px]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-text-primary",
@@ -435,33 +460,44 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
           accentClass
         )}
       >
-        <div className={cn("shrink-0 mt-0.5", iconClassName)}>
-          <Icon className="h-4 w-4" />
-        </div>
-        <div className="flex-1 space-y-1 min-w-0 py-0.5">
-          {notification.title ? (
-            <h4 className="font-medium leading-tight tracking-tight text-xs text-text-primary flex items-start gap-1.5">
-              <span className="min-w-0 line-clamp-2">{notification.title}</span>
-              {countBadge}
-            </h4>
-          ) : null}
-          <div className="flex items-start gap-1.5">
-            {typeof notification.message !== "string" && notification.inboxMessage ? (
-              <>
-                <span className="sr-only">{notification.inboxMessage}</span>
-                <div
-                  aria-hidden="true"
-                  className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words"
-                >
-                  {notification.message}
-                </div>
-              </>
-            ) : (
-              <div className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words">
-                {notification.message}
+        <div className="min-w-0 flex-1">
+          {/* The live region holds only what the toast says. Its controls sit
+              outside it, so an announcement (and every re-announcement on a
+              count or label change) reads the event, not a list of buttons. */}
+          <div
+            role={notification.type === "error" ? "alert" : "status"}
+            aria-busy={isCountBusy || undefined}
+            className="flex items-start gap-3"
+          >
+            <div className={cn("shrink-0 mt-0.5", iconClassName)}>
+              <Icon className="h-4 w-4" />
+            </div>
+            <div className="flex-1 space-y-1 min-w-0 py-0.5">
+              {notification.title ? (
+                <h4 className="font-medium leading-tight tracking-tight text-xs text-text-primary flex items-start gap-1.5">
+                  <span className="min-w-0 line-clamp-2">{notification.title}</span>
+                  {countBadge}
+                </h4>
+              ) : null}
+              <div className="flex items-start gap-1.5">
+                {typeof notification.message !== "string" && notification.inboxMessage ? (
+                  <>
+                    <span className="sr-only">{notification.inboxMessage}</span>
+                    <div
+                      aria-hidden="true"
+                      className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words"
+                    >
+                      {notification.message}
+                    </div>
+                  </>
+                ) : (
+                  <div className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words">
+                    {notification.message}
+                  </div>
+                )}
+                {!notification.title && countBadge}
               </div>
-            )}
-            {!notification.title && countBadge}
+            </div>
           </div>
           {(() => {
             const actions = [
@@ -507,9 +543,6 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
                       ? `${notification.title}: ${action.successLabel}`
                       : action.successLabel!;
                     useAnnouncerStore.getState().announce(announcementText, "polite");
-                    dwellTimerRef.current = setTimeout(() => {
-                      if (mountedRef.current) dismissRef.current();
-                    }, UI_ACTION_SUCCESS_DWELL_MS);
                   })
                   .catch(() => {
                     settled = true;
@@ -531,9 +564,6 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
                   ? `${notification.title}: ${action.successLabel}`
                   : action.successLabel!;
                 useAnnouncerStore.getState().announce(announcementText, "polite");
-                dwellTimerRef.current = setTimeout(() => {
-                  if (mountedRef.current) dismissRef.current();
-                }, UI_ACTION_SUCCESS_DWELL_MS);
               }
             };
 
@@ -543,7 +573,9 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
             return (
               <div
                 className={cn(
-                  "mt-1.5 flex flex-wrap gap-1.5",
+                  // pl-7 aligns the row with the text column: the 16px icon
+                  // plus the live region's 12px gap.
+                  "mt-2 pl-7 flex flex-wrap gap-1.5",
                   isSuccess && "animate-action-row-bump"
                 )}
               >

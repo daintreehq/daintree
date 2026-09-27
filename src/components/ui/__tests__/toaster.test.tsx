@@ -47,6 +47,14 @@ function addToast(overrides: Record<string, unknown> = {}) {
 
 let fixtureElements: HTMLElement[] = [];
 
+// The animated shell that owns motion and pause handlers; the live region
+// (role=status/alert) sits inside it and holds only the toast's text.
+function toastShell(el: HTMLElement): HTMLElement {
+  const shell = el.closest<HTMLElement>("[data-toast]");
+  if (!shell) throw new Error("element is not inside a toast");
+  return shell;
+}
+
 function createFixtureButton(text: string): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.textContent = text;
@@ -282,7 +290,7 @@ describe("Toast accessibility", () => {
       vi.advanceTimersByTime(16);
     });
 
-    const toast = screen.getByRole("status");
+    const toast = toastShell(screen.getByRole("status"));
     expect(toast.style.transitionDuration).toBe("200ms");
     // EASE_SPRING_CRITICAL is a multi-stop linear() spring.
     expect(toast.style.transitionTimingFunction).toContain("linear(");
@@ -302,7 +310,7 @@ describe("Toast accessibility", () => {
       fireEvent.click(dismissButton);
     });
 
-    const toast = screen.getByRole("status");
+    const toast = toastShell(screen.getByRole("status"));
     expect(toast.style.transitionDuration).toBe("120ms");
     expect(toast.style.transitionTimingFunction).toBe("cubic-bezier(0.2, 0, 0.7, 0)");
   });
@@ -791,19 +799,21 @@ describe("Toast count chip overflow & live-region throttling (issue #6427)", () 
       vi.advanceTimersByTime(16);
     });
 
-    const chip = screen.getByLabelText("5 events");
-    expect(chip.textContent).toBe("×5");
+    const chip = screen.getByTestId("toast-coalesce-badge");
+    expect(chip.querySelector('[aria-hidden="true"]')?.textContent).toBe("×5");
+    expect(screen.getByRole("status").textContent).toContain("5 events");
   });
 
-  it("caps the visible glyph at ×99+ but keeps the exact count in aria-label", async () => {
+  it("caps the visible glyph at ×99+ but announces the exact count", async () => {
     render(<Toaster />);
     await act(async () => {
       addToast({ title: "Build", message: "x", count: 150 });
       vi.advanceTimersByTime(16);
     });
 
-    const chip = screen.getByLabelText("150 events");
-    expect(chip.textContent).toBe("×99+");
+    const chip = screen.getByTestId("toast-coalesce-badge");
+    expect(chip.querySelector('[aria-hidden="true"]')?.textContent).toBe("×99+");
+    expect(screen.getByRole("status").textContent).toContain("150 events");
   });
 
   it("caps the visible glyph on the no-title path", async () => {
@@ -813,8 +823,9 @@ describe("Toast count chip overflow & live-region throttling (issue #6427)", () 
       vi.advanceTimersByTime(16);
     });
 
-    const chip = screen.getByLabelText("200 events");
-    expect(chip.textContent).toBe("×99+");
+    const chip = screen.getByTestId("toast-coalesce-badge");
+    expect(chip.querySelector('[aria-hidden="true"]')?.textContent).toBe("×99+");
+    expect(screen.getByRole("status").textContent).toContain("200 events");
   });
 
   it("sets aria-busy on the live region while count updates are in flight", async () => {
@@ -1645,14 +1656,14 @@ describe("Toast a11y, focus, and ergonomics polish (issue #7238)", () => {
       useNotificationStore.getState().updateNotification(id, { count: 2 });
       vi.advanceTimersByTime(16);
     });
-    const chip = screen.getByLabelText(/2 events/i) as HTMLElement;
+    const chip = screen.getByTestId("toast-coalesce-badge");
     expect(chip.className).toContain("animate-badge-bump");
 
     // Without firing onAnimationEnd, the 200ms safety fallback must clear it.
     await act(async () => {
       vi.advanceTimersByTime(250);
     });
-    const chipAfter = screen.getByLabelText(/2 events/i) as HTMLElement;
+    const chipAfter = screen.getByTestId("toast-coalesce-badge");
     expect(chipAfter.className).not.toContain("animate-badge-bump");
   });
 });
@@ -1832,7 +1843,7 @@ describe("Toast stack motion (issue #9618)", () => {
       vi.advanceTimersByTime(16);
     });
 
-    const toasts = screen.getAllByRole("status");
+    const toasts = screen.getAllByRole("status").map(toastShell);
     expect(toasts).toHaveLength(3);
     const transforms = toasts.map((t) => t.style.transform);
     for (const transform of transforms) {
@@ -1851,7 +1862,7 @@ describe("Toast stack motion (issue #9618)", () => {
     // The animated outer wrapper owns the transform/opacity transition; the
     // backdrop blur lives only on the inner card so the compositor doesn't drop
     // it mid-animation.
-    const wrapper = screen.getByRole("status");
+    const wrapper = toastShell(screen.getByRole("status"));
     expect(wrapper.className).toContain("transition-[transform,opacity]");
     expect(wrapper.className).not.toContain("backdrop-blur");
 
@@ -1867,7 +1878,7 @@ describe("Toast stack motion (issue #9618)", () => {
       vi.advanceTimersByTime(16);
     });
 
-    const wrapper = screen.getByRole("status");
+    const wrapper = toastShell(screen.getByRole("status"));
     expect(wrapper.className).toContain("motion-reduce:transition-none");
     const card = wrapper.firstElementChild as HTMLElement;
     expect(card.className).not.toContain("motion-reduce:transition-none");
@@ -2023,6 +2034,96 @@ describe("Toast controls and layering", () => {
     });
 
     expect(document.activeElement).toBe(after);
+  });
+
+  it("keeps every control outside the live region", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        type: "error",
+        title: "Push failed",
+        message: "Rejected",
+        context: { projectId: "p1" },
+        actions: [
+          { label: "Retry", onClick: vi.fn() },
+          { label: "Details", variant: "secondary", onClick: vi.fn() },
+        ],
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    const live = screen.getByRole("alert");
+    expect(live.textContent).toContain("Push failed");
+    expect(live.querySelectorAll("button, [role='button'], a[href]")).toHaveLength(0);
+    expect(toastShell(live).querySelectorAll("button").length).toBeGreaterThanOrEqual(4);
+  });
+
+  // cn() is last-wins: a `border` utility after the left width erases it, and
+  // the severity edge collapses to the same hairline as the other three sides.
+  it("keeps the severity edge wider than the card's hairline border", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ type: "warning" });
+      vi.advanceTimersByTime(16);
+    });
+
+    const card = toastShell(screen.getByRole("status")).firstElementChild;
+    const width = /(?:^|\s)border-l-\[(\d+)px\](?:\s|$)/.exec(card?.className ?? "");
+    expect(Number(width?.[1] ?? 0)).toBeGreaterThan(1);
+  });
+
+  it("doesn't spend the visible-time cap while the pointer rests on the toast", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "Read me", duration: 1000 });
+      vi.advanceTimersByTime(16);
+    });
+
+    const shell = toastShell(screen.getByRole("status"));
+    fireEvent.mouseEnter(shell);
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    fireEvent.mouseLeave(shell);
+    // The hover grace, then the timer it re-arms, land in separate commits.
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    const live = useNotificationStore.getState().notifications.find((n) => !n.dismissed);
+    expect(live?.message).toBe("Read me");
+  });
+
+  it("holds the success confirmation while the pointer rests on the toast", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        message: "Branch",
+        duration: 0,
+        actions: [{ label: "Copy", successLabel: "Copied", onClick: vi.fn() }],
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    const shell = toastShell(screen.getByRole("status"));
+    fireEvent.mouseEnter(shell);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(useNotificationStore.getState().notifications.some((n) => !n.dismissed)).toBe(true);
+
+    fireEvent.mouseLeave(shell);
+    // The hover grace, then the dwell it releases, land in separate commits.
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(useNotificationStore.getState().notifications.some((n) => !n.dismissed)).toBe(false);
   });
 
   // An untitled toast's count belongs beside the event it counts, not on an
