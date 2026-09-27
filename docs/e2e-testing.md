@@ -52,6 +52,20 @@ Tests are split into twelve Playwright projects:
 
 It is a second config rather than a thirteenth project on purpose: `npm run test:e2e` is a bare `npx playwright test`, which runs _every_ project in `playwright.config.ts`, and these generate several hundred megabytes of encoded fixtures per run. Don't fold it in.
 
+### Assistant workflow runs (separate config)
+
+`playwright.assistant.config.ts` drives the Daintree Assistant (Codex or Claude Code) through real workflows against the installed agent CLIs on your own subscriptions: a seeded project, the user's messages typed into the assistant pane, and a check against what the run left behind. Opt-in and local only, never in a suite, a release gate or `npm run test:e2e`, for the same reason as the configs above; nothing runs unless `DAINTREE_E2E_ASSISTANT_WORKFLOW` names scenarios.
+
+```bash
+npm run build:e2e
+DAINTREE_E2E_ASSISTANT_WORKFLOW=facts-vote DAINTREE_E2E_AUTO_TRUST=1 npm run test:e2e:assistant                                   # Codex assistant
+DAINTREE_E2E_ASSISTANT_WORKFLOW=facts-vote DAINTREE_E2E_AUTO_TRUST=1 DAINTREE_E2E_ASSISTANT_AGENT=claude npm run test:e2e:assistant  # Claude Code assistant
+```
+
+`DAINTREE_E2E_AUTO_TRUST=1` answers worker trust dialogs as a user whose project every CLI already trusts (a CLI may remember that answer for the temporary project path in its own config); leave it off to exercise the assistant's own dialog handling. An unknown scenario id fails the run instead of skipping everything, and so does a turn that never settles within the scenario's budget or a run whose assistant transcript cannot be found. Each run writes a timeline, screenshots, every terminal's final text, the assistant's instructions and transcript, copies of its session files and `metrics.json` (turns, notices, tool calls, tokens, and every reply a `waitForReply` returned with its outcome and handback summary, or `unread` when a result could not be parsed) under `test-results-assistant/`, which the next run clears.
+
+A new workflow is one entry in `e2e/assistant/scenarios.ts`: an `id`, the project files (`e2e/assistant/projects.ts` has a small inventory CLI), the messages, a timeout and a `check`. Checks match text against `answer` (what the assistant said, from its transcript) rather than the screen, which also shows the user's prompt. Each turn waits until every agent is idle, so notices land inside it; `settleOnAssistant` sends the next message as soon as the assistant is idle instead. The kit is `e2e/assistant/harness.ts`.
+
 ### Live plugin checks (separate config)
 
 `playwright.plugins.config.ts` drives a plugin through the real app against the real toolchain it targets, on request only — never in a suite, a release gate or `npm run test:e2e`, for the same reason as the mechanism checks. One spec per plugin under `e2e/plugins/`:

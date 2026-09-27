@@ -83,6 +83,7 @@ coverage/
 .nyc_output/
 test-results/
 test-results-mechanism/
+test-results-assistant/
 test-results-plugins/
 playwright-report/
 blob-report/
