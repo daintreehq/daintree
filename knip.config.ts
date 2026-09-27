@@ -100,6 +100,7 @@ const baseConfig: KnipConfig = {
     "src/components/Plugin/__preview__/installProgressPreview.tsx",
     "src/components/Panel/__preview__/transitionPreview.tsx",
     "src/components/Sidebar/__preview__/worktreeLoadError.tsx",
+    "src/components/Sidebar/__preview__/deletedWorktreeGroup.tsx",
     "src/components/Terminal/__preview__/preview.tsx",
     "src/components/Terminal/__preview__/hybridInput.tsx",
     "src/components/Terminal/__preview__/artifactOverlay.tsx",
