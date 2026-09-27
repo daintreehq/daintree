@@ -61,6 +61,7 @@ const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 
 const WIDE = { width: 1680, height: 1050 };
 const NARROW = { width: 900, height: 1050 };
+const FEATURE_BRANCH = "feature/agent-refactor";
 const SPOT_THEMES = ["daintree", "namib", "bali", "atacama"];
 
 const PANEL = '[data-testid="conflict-panel"]';
@@ -421,8 +422,8 @@ test("conflict panel review — merge, rebase, resolved, confirm, themes", async
           .click();
         // The file still carries its markers, so the panel asks first — that
         // confirmation is a state worth seeing in its own right.
-        const markerDialog = page.locator('[role="alertdialog"]:has-text("still has")');
-        await expectState(page, '[role="alertdialog"]:has-text("still has")', {
+        const markerDialog = page.locator('[role="dialog"]:has-text("still has")');
+        await expectState(page, '[role="dialog"]:has-text("still has")', {
           label: "marker confirm",
         });
         await snap(page, "15-confirm-markers-remain");
@@ -477,7 +478,9 @@ test("conflict panel review — merge, rebase, resolved, confirm, themes", async
           .getByRole("menuitem", { name: /^Take ours/ })
           .first()
           .click();
-        await expectState(page, ':text("Take ours for")', { label: "take-ours confirm" });
+        await expectState(page, ':text("current branch version of")', {
+          label: "take-ours confirm",
+        });
         await snap(page, "31-confirm-take-ours");
         await page.keyboard.press("Escape");
       },

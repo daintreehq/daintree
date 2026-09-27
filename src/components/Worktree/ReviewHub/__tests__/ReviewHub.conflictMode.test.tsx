@@ -316,7 +316,7 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
 async function confirmCheckout(side: "ours" | "theirs"): Promise<void> {
   const dialog = await screen.findByRole("alertdialog");
   const confirmBtn = within(dialog).getByRole("button", {
-    name: side === "ours" ? "Take ours" : "Take theirs",
+    name: side === "ours" ? "Use current branch" : "Use incoming changes",
   });
   fireEvent.click(confirmBtn);
 }
@@ -636,7 +636,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("menuitem", { name: /Take ours for src\/app\.ts/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
@@ -651,7 +651,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeTheirs = screen.getByRole("menuitem", { name: /Take theirs for src\/app\.ts/i });
+      const takeTheirs = screen.getByRole("menuitem", { name: /of src\/app\.ts \(theirs\)/i });
       fireEvent.click(takeTheirs);
       await confirmCheckout("theirs");
 
@@ -666,7 +666,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      fireEvent.click(screen.getByRole("menuitem", { name: /Take ours for src\/app\.ts/i }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i }));
 
       // Dialog is open but unconfirmed — the IPC must not have fired.
       await screen.findByRole("alertdialog");
@@ -696,10 +696,14 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      expect(screen.queryByTestId("conflict-resolved-list")).toBeNull();
+      const toggle = screen.getByTestId("conflict-resolved-toggle");
+      const list = screen.getByTestId("conflict-resolved-list");
+      expect(list.hidden).toBe(true);
+      // The disclosure always names a real element, collapsed or not.
+      expect(toggle.getAttribute("aria-controls")).toBe(list.id);
 
-      fireEvent.click(screen.getByTestId("conflict-resolved-toggle"));
-      await waitFor(() => screen.getByTestId("conflict-resolved-list"));
+      fireEvent.click(toggle);
+      await waitFor(() => expect(list.hidden).toBe(false));
       screen.getByText("done.ts");
     });
 
@@ -756,13 +760,13 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("menuitem", { name: /Take ours for src\/app\.ts/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
       await waitFor(() => {
         // The row reappears after rollback — the Take ours button is still rendered.
-        expect(screen.getByRole("menuitem", { name: /Take ours for src\/app\.ts/i })).toBeTruthy();
+        expect(screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i })).toBeTruthy();
       });
     });
 
@@ -785,7 +789,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      const takeOurs = screen.getByRole("menuitem", { name: /Take ours for src\/app\.ts/i });
+      const takeOurs = screen.getByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i });
       fireEvent.click(takeOurs);
       await confirmCheckout("ours");
 
@@ -875,11 +879,15 @@ describe("ReviewHub", () => {
         .getAllByRole("button")
         .map((b) => b.getAttribute("aria-label") ?? b.textContent ?? "");
       expect(directNames.some((name) => /^Open /.test(name))).toBe(true);
-      expect(directNames.some((name) => /^Take /i.test(name))).toBe(false);
-      // Each overwrite names the side it restores, so the rebase swap of
-      // ours/theirs never has to be remembered.
-      for (const item of within(row).getAllByRole("menuitem")) {
-        expect(item.getAttribute("aria-label")).toMatch(/\((.+) version\)$/);
+      expect(directNames.some((name) => /\((ours|theirs)\)$/.test(name))).toBe(false);
+      // Each overwrite leads with the source it restores; git's ours/theirs is
+      // only the trailing qualifier, so the rebase swap never has to be
+      // remembered to choose safely.
+      const items = within(row).getAllByRole("menuitem");
+      expect(items).toHaveLength(2);
+      for (const item of items) {
+        expect(item.textContent?.trim().startsWith("Use ")).toBe(true);
+        expect(item.textContent).not.toMatch(/^\s*(ours|theirs)/i);
       }
     });
 
@@ -889,7 +897,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await screen.findByTestId("conflict-panel");
       const rebaseOurs = screen
-        .getByRole("menuitem", { name: /Take ours/ })
+        .getByRole("menuitem", { name: /\(ours\)$/ })
         .getAttribute("aria-label");
       cleanup();
 
@@ -897,7 +905,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await screen.findByTestId("conflict-panel");
       const mergeOurs = screen
-        .getByRole("menuitem", { name: /Take ours/ })
+        .getByRole("menuitem", { name: /\(ours\)$/ })
         .getAttribute("aria-label");
 
       expect(rebaseOurs).not.toBe(mergeOurs);
@@ -920,6 +928,43 @@ describe("ReviewHub", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Mark resolved" }));
       await waitFor(() => {
         expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+      });
+    });
+
+    it("asks before staging when the marker re-read fails", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockRejectedValue(new Error("EACCES"));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await screen.findByRole("alertdialog");
+      expect(stageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("hands focus to the next file when a confirm dialog resolves the row", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [
+            { path: "src/app.ts", xy: "UU", label: "both modified" },
+            { path: "src/other.ts", xy: "UU", label: "both modified" },
+          ],
+          conflicted: ["src/app.ts", "src/other.ts"],
+        })
+      );
+      checkoutOursTheirsMock.mockImplementationOnce(() => new Promise<void>(() => {}));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(await screen.findByRole("menuitem", { name: /of src\/app\.ts \(ours\)/i }));
+      await confirmCheckout("ours");
+
+      await waitFor(() => {
+        expect(document.activeElement?.getAttribute("aria-label")).toBe(
+          "Open src/other.ts in external editor"
+        );
       });
     });
 

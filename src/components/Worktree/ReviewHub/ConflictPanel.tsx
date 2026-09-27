@@ -3,6 +3,7 @@ import type { RebaseAction, RebaseEntry, StagingStatus } from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
+import { UI_EXIT_DURATION } from "@/lib/animationUtils";
 import {
   AlertTriangle,
   Check,
@@ -125,9 +126,7 @@ function RebaseSequenceRow({ entry }: { entry: RebaseDisplayEntry }) {
   // with Continue — the one action this view exists to reach.
   const rowTone = isCurrent
     ? "text-text-primary font-medium bg-overlay-subtle"
-    : isDone
-      ? "text-text-muted"
-      : "text-text-secondary";
+    : "text-text-secondary";
 
   const StateIcon = isCurrent
     ? ChevronRight
@@ -182,6 +181,9 @@ function splitPath(filePath: string): { dir: string; base: string } {
 
 type Side = "ours" | "theirs";
 
+// A dialog's exit plus a margin for its focus restore to run first.
+const DIALOG_EXIT_SETTLE_MS = UI_EXIT_DURATION * 2 + 60;
+
 export function ConflictPanel({
   status,
   worktreePath,
@@ -198,7 +200,8 @@ export function ConflictPanel({
   } | null>(null);
   const [pendingMarkerConfirm, setPendingMarkerConfirm] = useState<{
     filePath: string;
-    hunkCount: number;
+    // `null` when the re-read failed, so nothing is known either way.
+    hunkCount: number | null;
   } | null>(null);
   const [isAborting, setIsAborting] = useState(false);
   const [isContinuing, setIsContinuing] = useState(false);
@@ -212,7 +215,8 @@ export function ConflictPanel({
   const continueRef = useRef<HTMLDivElement>(null);
   // Where focus goes once a row the user was working in leaves the list.
   // `null` means Continue; `undefined` means nothing is pending.
-  const pendingFocusRef = useRef<{ path: string | null; visible: boolean } | undefined>(undefined);
+  const pendingFocusRef = useRef<{ path: string | null } | undefined>(undefined);
+  const focusRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resolvedListId = useId();
   const summaryId = useId();
 
@@ -251,7 +255,8 @@ export function ConflictPanel({
 
   // A row that leaves the list takes its focused control with it, which would
   // drop the keyboard user on <body>. Hand focus to the neighbouring file's
-  // Open, or to Continue once the last conflict is gone.
+  // Open, or to Continue once the last conflict is gone. Plain programmatic
+  // focus, so Chromium's own heuristic decides whether it rings.
   useEffect(() => {
     const pending = pendingFocusRef.current;
     if (pending === undefined) return;
@@ -261,8 +266,26 @@ export function ConflictPanel({
         : continueRef.current?.querySelector<HTMLButtonElement>("button");
     if (!target) return;
     pendingFocusRef.current = undefined;
-    target.focus({ preventScroll: true, focusVisible: pending.visible } as FocusOptions);
+    target.focus({ preventScroll: true });
+    // A confirm dialog that resolved the row is still closing here, and its own
+    // restore aims at a trigger that no longer exists — landing on <body>.
+    // Re-apply once its exit has run.
+    if (focusRetryRef.current) clearTimeout(focusRetryRef.current);
+    focusRetryRef.current = setTimeout(() => {
+      focusRetryRef.current = null;
+      const active = document.activeElement;
+      if (target.isConnected && (active === null || active === document.body)) {
+        target.focus({ preventScroll: true });
+      }
+    }, DIALOG_EXIT_SETTLE_MS);
   }, [liveConflicts]);
+
+  useEffect(
+    () => () => {
+      if (focusRetryRef.current) clearTimeout(focusRetryRef.current);
+    },
+    []
+  );
 
   const conflictCount = liveConflicts.length;
   const canContinue = conflictCount === 0;
@@ -346,27 +369,21 @@ export function ConflictPanel({
     }
   }, [continueBlocked, onContinue]);
 
-  const queueFocusHandoff = useCallback(
-    (filePath: string) => {
-      const row = rowRefs.current.get(filePath);
-      const active = document.activeElement;
-      if (!row || !active || !row.contains(active)) return;
-      const idx = liveConflicts.findIndex((c) => c.path === filePath);
-      const neighbour = liveConflicts[idx + 1] ?? liveConflicts[idx - 1];
-      let visible = true;
-      try {
-        visible = active.matches(":focus-visible");
-      } catch {
-        // Engines without :focus-visible support keep the ring.
-      }
-      pendingFocusRef.current = { path: neighbour ? neighbour.path : null, visible };
-    },
-    [liveConflicts]
-  );
+  // Read at the moment of intent: by the time a resolve starts, the busy row
+  // has disabled the control that held focus, or a dialog holds it.
+  const rowHasFocus = (filePath: string): boolean => {
+    const row = rowRefs.current.get(filePath);
+    const active = document.activeElement;
+    return !!row && !!active && row.contains(active);
+  };
 
   const resolveOptimistically = useCallback(
-    async (filePath: string, run: () => Promise<void> | void) => {
-      queueFocusHandoff(filePath);
+    async (filePath: string, handOffFocus: boolean, run: () => Promise<void> | void) => {
+      if (handOffFocus) {
+        const idx = liveConflicts.findIndex((c) => c.path === filePath);
+        const neighbour = liveConflicts[idx + 1] ?? liveConflicts[idx - 1];
+        pendingFocusRef.current = { path: neighbour ? neighbour.path : null };
+      }
       setBusyFile(filePath);
       setOptimisticResolved((prev) => {
         if (prev.has(filePath)) return prev;
@@ -391,41 +408,43 @@ export function ConflictPanel({
         setBusyFile((current) => (current === filePath ? null : current));
       }
     },
-    [queueFocusHandoff]
+    [liveConflicts]
   );
 
   const markResolved = useCallback(
-    (filePath: string) => resolveOptimistically(filePath, () => onMarkResolved(filePath)),
+    (filePath: string, handOffFocus: boolean) =>
+      resolveOptimistically(filePath, handOffFocus, () => onMarkResolved(filePath)),
     [resolveOptimistically, onMarkResolved]
   );
 
   // `git add` stages marker text as happily as a resolution. Re-read the file
-  // first and make leftover markers a deliberate choice. Advisory only: a
-  // failed scan must not stop the user staging their own file.
+  // first and make leftover markers — or a re-read that failed — a deliberate
+  // choice rather than something staged silently.
   const handleMarkResolvedClick = useCallback(
     async (filePath: string) => {
+      const handOffFocus = rowHasFocus(filePath);
       setBusyFile(filePath);
-      let hunkCount = 0;
+      let hunkCount: number | null;
       try {
         const [entry] = await window.electron.git.scanConflictMarkers(worktreePath, [filePath]);
         hunkCount = entry?.hunkCount ?? 0;
       } catch {
-        // Fall through and stage: the check is a courtesy, not a gate.
+        hunkCount = null;
       } finally {
         setBusyFile((current) => (current === filePath ? null : current));
       }
-      if (hunkCount > 0) {
+      if (hunkCount !== 0) {
         setPendingMarkerConfirm({ filePath, hunkCount });
         return;
       }
-      await markResolved(filePath);
+      await markResolved(filePath, handOffFocus);
     },
     [worktreePath, markResolved]
   );
 
   const handleCheckoutSide = useCallback(
     (filePath: string, side: Side) =>
-      resolveOptimistically(filePath, () => onCheckoutOursTheirs(filePath, side)),
+      resolveOptimistically(filePath, true, () => onCheckoutOursTheirs(filePath, side)),
     [resolveOptimistically, onCheckoutOursTheirs]
   );
 
@@ -563,11 +582,9 @@ export function ConflictPanel({
                           directory is gone. */}
                       <span className="min-w-0 flex items-baseline font-mono text-2xs">
                         {dir && (
-                          <PathTail className="min-w-0 shrink-[1000] text-text-secondary">
-                            {`${dir}/`}
-                          </PathTail>
+                          <PathTail className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
                         )}
-                        <span className="min-w-0 truncate text-text-primary font-medium">
+                        <span className="shrink-0 max-w-full truncate text-text-primary font-medium">
                           {base}
                         </span>
                       </span>
@@ -624,10 +641,10 @@ export function ConflictPanel({
                             key={side}
                             destructive
                             onSelect={() => setPendingCheckout({ filePath: file.path, side })}
-                            aria-label={`Take ${side} for ${file.path} (${sideSource[side]} version)`}
+                            aria-label={`Use ${sideSource[side]} version of ${file.path} (${side})`}
                           >
-                            Take {side}
-                            <DropdownMenuMeta>{sideSource[side]}</DropdownMenuMeta>
+                            Use {sideSource[side]} version
+                            <DropdownMenuMeta>{side}</DropdownMenuMeta>
                           </DropdownMenuItem>
                         ))}
                       </DropdownMenuContent>
@@ -662,37 +679,38 @@ export function ConflictPanel({
               Resolved
               <span className={cn(REVIEW_HUB_COUNT_CHIP, "ml-0")}>{status.staged.length}</span>
             </button>
-            {showResolved && (
-              <ul
-                id={resolvedListId}
-                className="px-2 pb-1 flex flex-col gap-0.5"
-                role="list"
-                aria-label="Resolved files"
-                data-testid="conflict-resolved-list"
-              >
-                {status.staged.map((file) => {
-                  const { dir, base } = splitPath(file.path);
-                  return (
-                    <li
-                      key={`resolved-${file.path}`}
-                      className="flex items-center gap-2 pl-2 pr-1 py-1 text-xs"
-                    >
-                      <Check className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden />
-                      <TruncatedTooltip content={file.path}>
-                        <div className="flex-1 min-w-0 flex items-baseline font-mono text-2xs">
-                          {dir && (
-                            <PathTail className="min-w-0 shrink-[1000] text-text-muted">
-                              {`${dir}/`}
-                            </PathTail>
-                          )}
-                          <span className="min-w-0 truncate text-text-secondary">{base}</span>
-                        </div>
-                      </TruncatedTooltip>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            {/* Kept mounted while collapsed so `aria-controls` always names a
+                real element. */}
+            <ul
+              id={resolvedListId}
+              hidden={!showResolved}
+              className="px-2 pb-1 flex flex-col gap-0.5"
+              role="list"
+              aria-label="Resolved files"
+              data-testid="conflict-resolved-list"
+            >
+              {status.staged.map((file) => {
+                const { dir, base } = splitPath(file.path);
+                return (
+                  <li
+                    key={`resolved-${file.path}`}
+                    className="flex items-center gap-2 pl-2 pr-1 py-1 text-xs"
+                  >
+                    <Check className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden />
+                    <TruncatedTooltip content={file.path}>
+                      <div className="flex-1 min-w-0 flex items-baseline font-mono text-2xs">
+                        {dir && (
+                          <PathTail className="min-w-0 text-text-muted">{`${dir}/`}</PathTail>
+                        )}
+                        <span className="shrink-0 max-w-full truncate text-text-secondary">
+                          {base}
+                        </span>
+                      </div>
+                    </TruncatedTooltip>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
       </div>
@@ -732,7 +750,7 @@ export function ConflictPanel({
         onClose={() => setPendingCheckout(null)}
         title={
           pendingCheckout
-            ? `Take ${pendingCheckout.side} for '${splitPath(pendingCheckout.filePath).base}'?`
+            ? `Use the ${sideSource[pendingCheckout.side]} version of '${splitPath(pendingCheckout.filePath).base}'?`
             : ""
         }
         description={
@@ -746,7 +764,7 @@ export function ConflictPanel({
             ""
           )
         }
-        confirmLabel={pendingCheckout ? `Take ${pendingCheckout.side}` : "Confirm"}
+        confirmLabel={pendingCheckout ? `Use ${sideSource[pendingCheckout.side]}` : "Confirm"}
         cancelLabel="Cancel"
         variant="destructive"
         onConfirm={() => {
@@ -762,17 +780,28 @@ export function ConflictPanel({
         onClose={() => setPendingMarkerConfirm(null)}
         title={
           pendingMarkerConfirm
-            ? `Mark '${splitPath(pendingMarkerConfirm.filePath).base}' resolved?`
+            ? pendingMarkerConfirm.hunkCount === null
+              ? `Mark '${splitPath(pendingMarkerConfirm.filePath).base}' resolved without checking?`
+              : `Mark '${splitPath(pendingMarkerConfirm.filePath).base}' resolved?`
             : ""
         }
         description={
           pendingMarkerConfirm ? (
-            <span>
-              <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> still has{" "}
-              {pendingMarkerConfirm.hunkCount} conflict{" "}
-              {pendingMarkerConfirm.hunkCount === 1 ? "region" : "regions"}. Marking it resolved
-              stages the conflict markers as file content.
-            </span>
+            pendingMarkerConfirm.hunkCount === null ? (
+              <span>
+                Couldn&apos;t re-read{" "}
+                <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> to
+                check for leftover conflict markers. Marking it resolved stages the file exactly as
+                it is.
+              </span>
+            ) : (
+              <span>
+                <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> still
+                has {pendingMarkerConfirm.hunkCount} conflict{" "}
+                {pendingMarkerConfirm.hunkCount === 1 ? "region" : "regions"}. Marking it resolved
+                stages the conflict markers as file content.
+              </span>
+            )
           ) : (
             ""
           )
@@ -784,7 +813,7 @@ export function ConflictPanel({
           if (!pendingMarkerConfirm) return;
           const { filePath } = pendingMarkerConfirm;
           setPendingMarkerConfirm(null);
-          markResolved(filePath).catch(() => {});
+          markResolved(filePath, true).catch(() => {});
         }}
       />
     </div>
