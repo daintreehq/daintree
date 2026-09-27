@@ -60,7 +60,7 @@ const AGENT_STATES: Array<[string, AgentAvailabilityState, boolean]> = [
   ["gemini", "unauthenticated", false],
   ["opencode", "ready", false],
   ["cursor", "missing", false],
-  ["copilot", "installed", false],
+  ["copilot", "installed", true],
   ["goose", "blocked", false],
   ["kimi", "missing", false],
   ["grok", "ready", false],
