@@ -867,7 +867,7 @@ describe("ProjectViewManager — eviction safety", () => {
       await managerWithLimit.switchTo("proj-c", "/path/c");
       await flushImmediates();
       const wcC = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-c")!.view
-        .webContents as ReturnType<typeof createMockWebContents>;
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
       await managerWithLimit.switchTo("proj-d", "/path/d");
       await flushImmediates();
       await managerWithLimit.switchTo("proj-c", "/path/c");
