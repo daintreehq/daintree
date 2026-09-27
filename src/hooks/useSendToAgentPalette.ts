@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { usePanelStore, usePreferencesStore } from "@/store";
-import { isPtyPanel, type PanelKind } from "@shared/types/panel";
+import { isPtyPanel, type PanelKind, type PtyPanelData } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -30,19 +30,29 @@ export interface SendToAgentItem {
 // Module-level state for the opener function (object to avoid react-compiler reassignment warning)
 const pendingState = { sourceId: null as string | null, selection: "" };
 
+type PanelRecord = ReturnType<typeof usePanelStore.getState>["panelsById"][string];
+
+/**
+ * A pane the palette lists: a live PTY that is on screen. The one predicate
+ * behind the opener, the list and the send, so a pane that leaves the list
+ * mid-pick can't still be written to.
+ */
+function isListedTarget(t: PanelRecord | undefined): t is Extract<PanelRecord, PtyPanelData> {
+  return (
+    !!t &&
+    t.location !== "trash" &&
+    t.location !== "background" &&
+    t.location !== "overlay" &&
+    isPtyPanel(t) &&
+    t.hasPty !== false
+  );
+}
+
 function hasSendTargets(sourceTerminalId: string | null): boolean {
   const { panelsById, panelIds } = usePanelStore.getState();
   return panelIds.some((id) => {
     const t = panelsById[id];
-    return (
-      t &&
-      t.id !== sourceTerminalId &&
-      t.location !== "trash" &&
-      t.location !== "background" &&
-      t.location !== "overlay" &&
-      isPtyPanel(t) &&
-      t.hasPty !== false
-    );
+    return isListedTarget(t) && t.id !== sourceTerminalId;
   });
 }
 
@@ -83,8 +93,8 @@ const FUSE_OPTIONS: IFuseOptions<SendToAgentItem> = {
     // token past roughly the first 40 characters of one will not match. Turning
     // location scoring off repairs that but reranks the primary field, where an
     // incidental substring ("pre-fix-es") then beats the whole word — too high a
-    // price, and out of scope here. useFleetPicker pays for it with a matching
-    // threshold and minimum match length; this palette has neither.
+    // price. The filter below catches the tail with a plain substring pass
+    // instead, appended after the ranked results.
     { name: "worktreeName", weight: 0.5 },
   ],
   threshold: 0.4,
@@ -121,7 +131,7 @@ function subtitleFor(
  */
 function isSendableTarget(targetId: string): boolean {
   const t = usePanelStore.getState().panelsById[targetId];
-  return !!t && isPtyPanel(t) && t.hasPty !== false && !t.isInputLocked;
+  return isListedTarget(t) && !t.isInputLocked;
 }
 
 function sendSelectionToTarget(targetId: string): void {
@@ -179,12 +189,8 @@ export function useSendToAgentPalette() {
 
     for (const id of panelIds) {
       const t = panelsById[id];
-      if (!t) continue;
+      if (!isListedTarget(t)) continue;
       if (sourceId && t.id === sourceId) continue;
-      if (t.location === "trash" || t.location === "background" || t.location === "overlay")
-        continue;
-      if (!isPtyPanel(t)) continue;
-      if (t.hasPty === false) continue;
 
       const chrome = deriveTerminalChrome(t);
       if (t.worktreeId) worktreeIds.add(t.worktreeId);
@@ -225,8 +231,18 @@ export function useSendToAgentPalette() {
 
   const filterFn = useCallback(
     (allItems: SendToAgentItem[], query: string): SendToAgentItem[] => {
-      if (!query.trim()) return allItems;
-      return fuse.search(query).map((r) => r.item);
+      const q = query.trim().toLowerCase();
+      if (!q) return allItems;
+      const ranked = fuse.search(query).map((r) => r.item);
+      // Fuse scores by position, so the tail of a long worktree name
+      // ("…-exponential-backoff") never matches — see FUSE_OPTIONS. A plain
+      // substring hit there is appended below the ranked results rather than
+      // turning location scoring off, which would rerank the titles.
+      const seen = new Set(ranked);
+      const tails = allItems.filter(
+        (item) => !seen.has(item) && item.worktreeName?.toLowerCase().includes(q)
+      );
+      return tails.length > 0 ? [...ranked, ...tails] : ranked;
     },
     [fuse]
   );

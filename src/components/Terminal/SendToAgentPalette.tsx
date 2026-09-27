@@ -75,9 +75,12 @@ function SendToAgentItemRow({
         {/* Locked steps the title down the ramp instead of fading the row, as
             the rest of the palette family does: opacity took the reason line
             with it, and the reason is the one line here that has to be read. */}
+        {/* Two lines before it clips: a task title is often the only thing that
+            tells two panes of one agent apart, and cutting it at one line hid
+            the part that differs. */}
         <span
           className={cn(
-            "text-sm font-medium truncate block",
+            "text-sm font-medium line-clamp-2 break-words",
             locked ? "text-text-secondary" : "text-text-primary"
           )}
         >

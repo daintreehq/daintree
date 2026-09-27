@@ -347,3 +347,33 @@ describe("useSendToAgentPalette row subtitles", () => {
     expect(open.subtitle ?? "").not.toMatch(/locked/i);
   });
 });
+
+describe("useSendToAgentPalette search by worktree tail", () => {
+  beforeEach(() => {
+    useWorktreeStoreOptionalMock.mockReset();
+    usePaletteStore.setState({ activePaletteId: "send-to-agent" });
+  });
+
+  afterEach(() => {
+    cleanup();
+    usePaletteStore.setState({ activePaletteId: null });
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  });
+
+  it("finds a pane by the far end of a long worktree name", async () => {
+    const long = "streaming-token-refresh-with-exponential-backoff-and-jitter";
+    seedWorktrees([
+      ["/repo", "main"],
+      ["/repo-long", long],
+    ]);
+    seedPanels([panel("a", { worktreeId: "/repo" }), panel("b", { worktreeId: "/repo-long" })]);
+
+    const { result } = renderHook(() => useSendToAgentPalette());
+    const tail = long.slice(-6);
+    await act(async () => {
+      result.current.setQuery(tail);
+    });
+
+    expect(result.current.results.map((item) => item.id)).toEqual(["b"]);
+  });
+});

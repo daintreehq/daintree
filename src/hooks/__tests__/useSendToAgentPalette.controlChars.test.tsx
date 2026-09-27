@@ -209,3 +209,41 @@ describe("send to agent, a target that locks while the palette is open", () => {
     expect(usePaletteStore.getState().activePaletteId).toBe("send-to-agent");
   });
 });
+
+describe("send to agent, a target that leaves the grid while the palette is open", () => {
+  beforeEach(() => {
+    useWorktreeStoreOptionalMock.mockImplementation(
+      (_selector: unknown, fallback: unknown) => fallback
+    );
+    writeMock.mockReset();
+    instances.byId = {};
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  });
+
+  afterEach(() => {
+    cleanup();
+    usePaletteStore.setState({ activePaletteId: null });
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  });
+
+  it("writes nothing to a pane the palette would no longer list", () => {
+    usePanelStore.setState({
+      panelsById: { a: panel("a"), b: panel("b") },
+      panelIds: ["a", "b"],
+    });
+    expect(openSendToAgentPaletteWithText("hello", "a")).toBe(true);
+
+    const { result } = renderHook(() => useSendToAgentPalette());
+    const target = result.current.results.find((item) => item.id === "b")!;
+    act(() => {
+      usePanelStore.setState((s) => ({
+        panelsById: { ...s.panelsById, b: { ...panel("b"), location: "trash" } },
+      }));
+    });
+    act(() => {
+      result.current.selectItem(target);
+    });
+
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+});
