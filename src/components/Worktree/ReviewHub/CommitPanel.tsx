@@ -732,9 +732,10 @@ export function CommitPanel({
             }}
             aria-disabled={!canCommit || actionsBusy || undefined}
             aria-describedby={statusId}
-            // Solid ink rather than opacity: a faded label is a slash-alpha text
-            // colour by another route. Matches the primary's unavailable ink.
-            className="aria-disabled:text-text-muted aria-disabled:cursor-not-allowed forced-colors:aria-disabled:text-[GrayText]"
+            // Opacity, as the Button primitive's own disabled state does: a ghost has
+            // no surface to change, and muted ink alone sits too close to its
+            // secondary resting ink to read as unavailable.
+            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed forced-colors:aria-disabled:text-[GrayText]"
           >
             {pendingAction === "commit" ? (
               <Spinner size="sm" className="mr-1.5" />
