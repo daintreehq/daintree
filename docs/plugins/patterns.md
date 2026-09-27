@@ -65,14 +65,16 @@ Broadcast and targeted pushes are disjoint: `on` never receives a targeted push 
 An agent edits your data knowing only what it reads. Put the contract in the plugin's own `AGENTS.md` and point to it from the project's root `AGENTS.md` / `CLAUDE.md`:
 
 ```markdown
-## Ledger data (acme.ledger)
+## Budget data (acme.budget)
 
-- Transactions live in `.daintree/data/acme.ledger/ledger.db`, table `tx`. Run `sqlite3` from the main checkout, `"$(git rev-parse --path-format=absolute --git-common-dir)/.."`, never a linked worktree's copy.
+- Transactions live in `data/budget.db`, table `tx`. Run `sqlite3` from the main checkout, `"$(git rev-parse --path-format=absolute --git-common-dir)/.."`, never a linked worktree's copy.
 - `amount_cents` is an integer; spending is negative. `category` is one of the rows in `categories`.
-- Totals, balances and "this month": run `node scripts/ledger-report.mjs`, never add rows up by hand.
+- Totals, balances and "this month": run `node scripts/budget-report.mjs`, never add rows up by hand.
 - Leave `_daintree_meta`, `.daintree/plugin-settings/` and `.daintree/plugins/` alone.
 - Example: `INSERT INTO tx (date, amount_cents, category, memo) VALUES ('2026-03-14', -1899, 'books', 'Field guide');`
 ```
+
+`plugins/sample-project/acme.ledger/AGENTS.md` is a complete contract for a working data plugin: where the file is, every column, which rules the triggers enforce and the one they cannot, and when to use the plugin's tools rather than `sqlite3`.
 
 What it needs, learned from the first app plugins agents edited:
 

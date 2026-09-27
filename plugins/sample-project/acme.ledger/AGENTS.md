@@ -1,12 +1,21 @@
 # Ledger data (acme.ledger)
 
-The household ledger is a SQLite database this project owns. You can read and write it directly with `sqlite3`; the rules below are what keeps it correct.
+The household ledger is a SQLite database this project owns. You can read and write it directly with `sqlite3`, or through the ledger's tools when Daintree has given you them; the rules below are what keeps it correct.
 
 ## Where it is
 
 - `.daintree/data/acme.ledger/ledger.db`, relative to the root of the project as Daintree opened it — normally the main checkout, `"$(git rev-parse --path-format=absolute --git-common-dir)/.."`. Never write a linked worktree's copy: the plugin reads the project root's file, and a worktree's copy is a different file that nothing reads.
-- The plugin creates the file and its schema the first time one of its tools runs. If the file does not exist yet, ask the user to enable the ledger's agent tools and call one, rather than creating it yourself.
+- The plugin creates the file and its schema the first time one of its tools runs. If the file does not exist yet, ask the user to turn on the **Household ledger** tools and call one, rather than creating it yourself; the read-only database tools report it missing and never create it.
 - `sqlite3 .daintree/data/acme.ledger/ledger.db .schema` shows the schema. In a ledger this plugin created, the original columns carry comments.
+
+## Tools
+
+Daintree may give you two sets of tools for this ledger, each turned on separately for the project. Use them when you have them:
+
+- **Databases (read-only)**: `database_schema` shows the schema, and `database_query` runs one read-only `SELECT`, `WITH` or pragma with `databaseId` `ledger`, binding values with `?` and `params`. It always reads the project root's file, whichever worktree you are in, and it cannot write.
+- **Household ledger**: `list_transactions` and `summarize_by_category` to read, `add_transaction` and `add_split_transaction` to write. They apply every rule below for you.
+
+Neither set updates or deletes a row. For that, or without the tools, use `sqlite3` under the rules below.
 
 ## Table `transactions`
 
