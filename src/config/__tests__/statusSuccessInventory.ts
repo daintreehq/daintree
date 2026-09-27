@@ -501,14 +501,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Per-file diff insertion count",
     },
   ],
-  "src/components/Worktree/ReviewHub/CommitPanel.tsx": [
-    {
-      category: "verification",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "One mark per commit blocker that has to clear before committing",
-    },
-  ],
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx": [
     {
       category: "verification",
