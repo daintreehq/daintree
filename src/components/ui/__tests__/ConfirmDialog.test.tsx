@@ -405,6 +405,101 @@ describe("ConfirmDialog — typed-name gate", () => {
     expect(button.hasAttribute("aria-disabled")).toBe(false);
   });
 
+  it("freezes the typed field while the confirm runs", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="my-repo"
+        isConfirmLoading={true}
+      />
+    );
+    // The attestation on screen has to stay the one that was submitted — and
+    // the field keeps focus, since a submit that re-checks can hand it back.
+    const input = findTypedInput();
+    expect(input.readOnly).toBe(true);
+    expect(input.disabled).toBe(false);
+  });
+
+  it("hands focus to Cancel when a focused typed gate is withdrawn", async () => {
+    const props = {
+      isOpen: true,
+      onClose: () => {},
+      title: "Remove 2 worktrees?",
+      confirmLabel: "Remove 2 worktrees",
+      onConfirm: () => {},
+      variant: "destructive" as const,
+    };
+    const { rerender } = render(<ConfirmDialog {...props} typedNameTarget="2 worktrees" />);
+    findTypedInput().focus();
+    expect(document.activeElement).toBe(findTypedInput());
+
+    rerender(<ConfirmDialog {...props} typedNameTarget={undefined} />);
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    });
+    expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+  });
+
+  it("says what enables the primary while the typed gate is unmatched, and only then", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="my-repo"
+      />
+    );
+    const hint = () => document.querySelector('[data-testid="app-dialog-hint"]');
+    expect(hint()?.textContent).toMatch(/to enable$/);
+    fireEvent.change(findTypedInput(), { target: { value: "my-repo" } });
+    expect(hint()).toBeNull();
+  });
+
+  it("lets a caller's own hint outrank the typed-gate hint", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="my-repo"
+        hint="Checking first"
+      />
+    );
+    expect(document.querySelector('[data-testid="app-dialog-hint"]')?.textContent).toBe(
+      "Checking first"
+    );
+  });
+
+  it("states the typed gate's preamble inside the gate", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="my-repo"
+        typedNamePreamble="This discards the work listed above."
+      />
+    );
+    const input = findTypedInput();
+    const describedBy = (input.getAttribute("aria-describedby") ?? "").split(" ");
+    const texts = describedBy.map((id) => document.getElementById(id)?.textContent ?? "");
+    expect(texts).toContain("This discards the work listed above.");
+  });
+
   /**
    * A queue-driven singleton (`McpConfirmDialog`) stays mounted and OPEN while
    * it promotes the next request, so a typed value that survived the swap would

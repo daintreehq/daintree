@@ -4,6 +4,7 @@ import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 import { TitleEntity } from "@/components/ui/TitleEntity";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
+import { PathText } from "@/components/Worktree/PathText";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
@@ -29,7 +30,7 @@ import {
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
 } from "@/components/Worktree/worktreeDeletePreview";
-import { Button } from "@/components/ui/button";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
@@ -835,25 +836,22 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // Retry lives here rather than in the footer: after a failed check the plain
   // delete is still the right first move and keeps the primary slot.
   const verifyFailedBanner = verifyFailed ? (
-    <div
+    <InlineStatusBanner
+      // A warning, not a refusal: the host re-reads for itself and the plain
+      // delete stays on offer.
+      severity="warning"
       role="alert"
-      className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs"
-    >
-      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
-      <p className="flex-1 min-w-0">
-        Couldn't check this worktree for uncommitted work. Force delete may discard changes that
-        aren't listed here.
-      </p>
-      <Button
-        variant="subtle"
-        size="xs"
-        className="shrink-0"
-        aria-disabled={previewPending || isDeleting || undefined}
-        onClick={recheck}
-      >
-        Retry
-      </Button>
-    </div>
+      animated={false}
+      className="rounded-[var(--radius-md)]"
+      title="Couldn't check this worktree for uncommitted work"
+      description="Force delete may discard changes that aren't listed here."
+      action={{
+        id: "retry",
+        label: "Retry",
+        onClick: recheck,
+        disabled: previewPending || isDeleting,
+      }}
+    />
   ) : null;
 
   const atRiskCommitLocation =
@@ -878,54 +876,52 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
    * the same thing twice.
    */
   const submoduleBlockBanner = submoduleBlock ? (
-    <div
-      role="alert"
-      data-testid="delete-worktree-blocked"
-      className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs"
-    >
-      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
-      <div className="flex-1 min-w-0">
-        <p className="font-medium">
-          {submoduleBlock === "at-risk-commits"
+    <div data-testid="delete-worktree-blocked">
+      <InlineStatusBanner
+        severity="error"
+        role="alert"
+        animated={false}
+        className="rounded-[var(--radius-md)]"
+        title={
+          submoduleBlock === "at-risk-commits"
             ? "Push the submodule commits first"
-            : "Couldn't finish checking this worktree's submodules"}
-        </p>
-        <p className="mt-0.5">
-          {submoduleBlock === "at-risk-commits" ? (
-            // "On no remote this clone knows about" and not "exists nowhere
-            // else": the inventory can only prove a commit is unreachable
-            // from this module repository's own remote-tracking refs, so a
-            // fetch is a real remedy alongside a push.
-            <>
-              {atRiskCommitLabel} on no remote this clone knows about, so this worktree can&apos;t
-              be deleted. Push {atRiskCommitsPlural ? "them" : "it"} from inside{" "}
-              {atRiskCommitPaths.length > 1 ? (
-                "each submodule listed below"
-              ) : (
-                <>
-                  the submodule
-                  {atRiskCommitPaths.length === 1 && <> {atRiskCommitLocation}</>}
-                </>
-              )}{" "}
-              — or fetch, if {atRiskCommitsPlural ? "they are" : "it is"} already on the remote —
-              then retry.
-            </>
-          ) : (
-            "Deleting it could destroy nested work that isn't listed here, so it can't be deleted until the check completes."
-          )}
-        </p>
-      </div>
-      {/* Re-reads; it never pushes or deletes. Stays mounted through the
-          recheck, which keeps the refusal on screen until the answer lands. */}
-      <Button
-        variant="subtle"
-        size="xs"
-        className="shrink-0"
-        aria-disabled={previewPending || undefined}
-        onClick={recheck}
-      >
-        Retry
-      </Button>
+            : "Couldn't finish checking this worktree's submodules"
+        }
+        description={
+          <>
+            {submoduleBlock === "at-risk-commits" ? (
+              // "On no remote this clone knows about" and not "exists nowhere
+              // else": the inventory can only prove a commit is unreachable
+              // from this module repository's own remote-tracking refs, so a
+              // fetch is a real remedy alongside a push.
+              <>
+                {atRiskCommitLabel} on no remote this clone knows about, so this worktree can&apos;t
+                be deleted. Push {atRiskCommitsPlural ? "them" : "it"} from inside{" "}
+                {atRiskCommitPaths.length > 1 ? (
+                  "each submodule listed below"
+                ) : (
+                  <>
+                    the submodule
+                    {atRiskCommitPaths.length === 1 && <> {atRiskCommitLocation}</>}
+                  </>
+                )}{" "}
+                — or fetch, if {atRiskCommitsPlural ? "they are" : "it is"} already on the remote —
+                then retry.
+              </>
+            ) : (
+              "Deleting it could destroy nested work that isn't listed here, so it can't be deleted until the check completes."
+            )}
+          </>
+        }
+        // Re-reads; it never pushes or deletes. Stays mounted through the
+        // recheck, which keeps the refusal on screen until the answer lands.
+        action={{
+          id: "retry",
+          label: "Retry",
+          onClick: recheck,
+          disabled: previewPending,
+        }}
+      />
     </div>
   ) : null;
 
@@ -1404,25 +1400,6 @@ const SUBMIT_CHECK_LABEL = "Checking current work before deleting";
 
 const CHECKBOX_CLASSES =
   "checkbox-neutral mt-0.5 rounded-[var(--radius-xs)] border-border-strong bg-surface-canvas disabled:opacity-50";
-
-/**
- * A path or branch with a line-break opportunity after every separator, so a
- * long one wraps at a directory boundary instead of mid-name. The wrapper's
- * `overflow-wrap: anywhere` still catches a single segment wider than the box.
- */
-function PathText({ value }: { value: string }) {
-  const parts = value.split(/(?<=[/\\])/);
-  return (
-    <>
-      {parts.map((part, index) => (
-        <Fragment key={index}>
-          {part}
-          {index < parts.length - 1 && <wbr />}
-        </Fragment>
-      ))}
-    </>
-  );
-}
 
 const TEARDOWN_COMMAND_LIMIT = 4;
 

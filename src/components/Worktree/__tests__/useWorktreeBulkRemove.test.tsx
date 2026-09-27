@@ -32,7 +32,12 @@ vi.mock("@/utils/logger", () => ({ logError: logErrorMock }));
   },
 };
 
-import { useWorktreeBulkRemove, isBulkRemoveEligible } from "../useWorktreeBulkRemove";
+import {
+  useWorktreeBulkRemove,
+  isBulkRemoveEligible,
+  bulkRemoveEvidenceKey,
+  type BulkRemoveTarget,
+} from "../useWorktreeBulkRemove";
 import type { WorktreeState } from "@/types";
 import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
@@ -167,6 +172,8 @@ describe("useWorktreeBulkRemove — confirm derivation", () => {
 
     expect(hook.result.current.targets.map((t) => t.id)).toEqual(["feature"]);
     expect(hook.result.current.excludedMainCount).toBe(1);
+    // Named, so the confirm can say which selection it dropped.
+    expect(hook.result.current.excludedMainNames).toEqual(["branch-main"]);
     expect(hook.result.current.typedNameTarget).toBe("1 worktree");
   });
 
@@ -1086,5 +1093,117 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
     });
 
     expect(deletedIds()).toEqual(["a", "b"]);
+  });
+});
+
+describe("useWorktreeBulkRemove — the evidence is re-read before anything runs", () => {
+  async function confirm(hook: ReturnType<typeof setup>["hook"]) {
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+  }
+
+  it("re-reads every target, then runs when nothing changed", async () => {
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+    const readsAtOpen = worktreeClientMock.getFreshChanges.mock.calls.length;
+
+    await confirm(hook);
+
+    // One more read per target, all before the first delete.
+    expect(worktreeClientMock.getFreshChanges.mock.calls.length - readsAtOpen).toBe(2);
+    const lastRead = Math.max(...worktreeClientMock.getFreshChanges.mock.invocationCallOrder);
+    const firstDelete = Math.min(...worktreeClientMock.delete.mock.invocationCallOrder);
+    expect(lastRead).toBeLessThan(firstDelete);
+    expect(worktreeClientMock.delete).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds the whole run when a target changed since the check, and resets consent", async () => {
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+    const consentBefore = hook.result.current.consentKey;
+
+    // An agent writes into "b" after the user read its clean preview.
+    worktreeClientMock.getFreshChanges.mockImplementation((id: string) =>
+      Promise.resolve(id === "b" ? fresh(id, [change("/repo/b/new.ts", "modified")]) : fresh(id))
+    );
+    await confirm(hook);
+
+    expect(worktreeClientMock.delete).not.toHaveBeenCalled();
+    expect(hook.result.current.isConfirmOpen).toBe(true);
+    expect(hook.result.current.isExecuting).toBe(false);
+    // The new evidence is what's on screen now, and the typed count was for
+    // the old one.
+    const b = hook.result.current.targets.find((t) => t.id === "b")!;
+    expect(b.status.state === "verified" && b.status.preview.changes).toHaveLength(1);
+    expect(hook.result.current.consentKey).not.toBe(consentBefore);
+  });
+
+  it("holds the run when a re-read fails, and leaves that target out", async () => {
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+
+    worktreeClientMock.getFreshChanges.mockImplementation((id: string) =>
+      id === "b" ? Promise.reject(new Error("port closed")) : Promise.resolve(fresh(id))
+    );
+    await confirm(hook);
+
+    expect(worktreeClientMock.delete).not.toHaveBeenCalled();
+    const b = hook.result.current.targets.find((t) => t.id === "b")!;
+    expect(isBulkRemoveEligible(b)).toBe(false);
+    expect(hook.result.current.eligibleCount).toBe(1);
+  });
+});
+
+describe("bulkRemoveEvidenceKey", () => {
+  function row(submodules: SubmoduleDeleteRisk): BulkRemoveTarget {
+    return {
+      id: "a",
+      name: "a",
+      branch: "feature/a",
+      path: "/repo/a",
+      aheadCount: 0,
+      status: {
+        state: "verified",
+        preview: {
+          trackedChangeCount: 0,
+          untrackedFileCount: 0,
+          hasTrackedChanges: false,
+          hasUntrackedFiles: false,
+          changes: [],
+          rootPath: "/repo/a",
+          submodules: { status: "verified", risk: submodules },
+        },
+      },
+    };
+  }
+
+  it("changes when a nested file moves between untracked and modified", () => {
+    // The row's glyph and the loss line's wording both change, so consent
+    // given to the old one can't stand.
+    expect(bulkRemoveEvidenceKey(row(risk({ untrackedFiles: ["vendor/lib/x.c"] })))).not.toBe(
+      bulkRemoveEvidenceKey(row(risk({ dirtyFiles: ["vendor/lib/x.c"] })))
+    );
+  });
+
+  it("changes when a submodule checkout moves", () => {
+    const entry = (headOid: string) => ({
+      path: "vendor/lib",
+      state: "moved" as const,
+      recordedOid: "a".repeat(40),
+      headOid,
+      hasModifiedContent: false,
+      hasUntrackedContent: false,
+    });
+    expect(bulkRemoveEvidenceKey(row(risk({ entries: [entry("b".repeat(40))] })))).not.toBe(
+      bulkRemoveEvidenceKey(row(risk({ entries: [entry("c".repeat(40))] })))
+    );
+  });
+
+  it("is stable across reads that list the same evidence in another order", () => {
+    expect(bulkRemoveEvidenceKey(row(risk({ dirtyFiles: ["vendor/b.c", "vendor/a.c"] })))).toBe(
+      bulkRemoveEvidenceKey(row(risk({ dirtyFiles: ["vendor/a.c", "vendor/b.c"] })))
+    );
   });
 });

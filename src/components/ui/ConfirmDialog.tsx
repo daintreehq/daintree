@@ -19,6 +19,13 @@ const ARE_YOU_SURE_TITLE_RE = /^\s*are\s+you\s+sure/i;
 
 const CANNOT_BE_UNDONE_BODY_RE = /cannot be undone|can['’]t be undone/i;
 
+/**
+ * No identifier interpolated: the gate shows the exact string. No direction
+ * either — in a long body the gate can sit below the fold, where "above" is
+ * a pointer to nothing on screen.
+ */
+const TYPED_GATE_HINT = "Type the confirmation phrase to enable";
+
 const devWarnedKeys = new Set<string>();
 
 export const __devWarnedKeys = devWarnedKeys;
@@ -39,6 +46,8 @@ type ConfirmDialogBaseProps = {
   isOpen: boolean;
   onClose?: () => void;
   title: React.ReactNode;
+  /** Forwarded to {@link AppDialog.Title.icon} — e.g. `Trash2` on a delete. */
+  titleIcon?: React.ReactNode;
   description?: React.ReactNode;
   children?: React.ReactNode;
   confirmLabel: string;
@@ -114,6 +123,12 @@ export type ConfirmDialogProps =
   | (ConfirmDialogBaseProps & {
       variant: "destructive";
       typedNameTarget?: string;
+      /**
+       * Forwarded to {@link TypedNameConfirmInput.preamble}: the concrete
+       * consequence the typed attestation is for, stated inside the gate so it
+       * isn't a second warning box beside it.
+       */
+      typedNamePreamble?: React.ReactNode;
     })
   | (ConfirmDialogBaseProps & {
       variant: "default" | "info";
@@ -125,6 +140,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     isOpen,
     onClose,
     title,
+    titleIcon,
     description,
     children,
     confirmLabel,
@@ -145,6 +161,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
+  const typedNamePreamble = props.variant === "destructive" ? props.typedNamePreamble : undefined;
 
   const handleClose = onClose ?? (() => {});
   const [typedValue, setTypedValue] = useState("");
@@ -253,7 +270,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       restoreFocusTo={restoreFocusTo}
     >
       <AppDialog.Header>
-        <AppDialog.Title>{title}</AppDialog.Title>
+        <AppDialog.Title icon={titleIcon}>{title}</AppDialog.Title>
         {onClose && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
@@ -268,12 +285,20 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             onMatchSubmit={() => {
               void handleConfirm();
             }}
+            preamble={typedNamePreamble}
+            // Frozen while the confirm runs, so the attestation on screen is the
+            // one that was submitted. Read-only rather than disabled: a submit
+            // that re-checks first can hand the gate back, and the Enter that
+            // started it left focus here.
+            readOnly={isConfirmLoading}
           />
         )}
       </AppDialog.Body>
 
       <AppDialog.Footer
-        hint={hint}
+        // An unmatched gate is the one reason for a disabled primary the caller
+        // can't see, since the typed value lives here.
+        hint={hint ?? (hasTypedNameGate && !isTypedMatched ? TYPED_GATE_HINT : undefined)}
         secondaryAction={{
           label: cancelLabel,
           onClick: handleClose,
