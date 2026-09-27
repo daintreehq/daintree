@@ -234,12 +234,19 @@ describe("help.launchAgent", () => {
   });
 
   it("never launches an agent with a model saved for a different agent", async () => {
-    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "/mock/help"
-    );
-    (window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+    vi.mocked(window.electron.help.getFolderPath).mockResolvedValue("/mock/help");
+    vi.mocked(window.electron.helpAssistant.getSettings).mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      runbookSearch: true,
+      tier: "core",
+      bypassPermissions: false,
+      auditRetention: 7,
       modelIds: { claude: "opus" },
       customArgs: "",
+      idleHibernateMinutes: 5,
+      debugLogging: false,
+      loadGlobalHooksAndServers: false,
     });
 
     await action.run({ agentId: "codex" }, stubCtx);

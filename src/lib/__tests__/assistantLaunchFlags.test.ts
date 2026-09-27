@@ -50,7 +50,10 @@ describe("loadCustomLaunchFlags — model + custom args composition", () => {
   });
 
   it("prepends the model flag before custom args so a custom --model wins (last-flag semantics)", async () => {
-    getSettings.mockResolvedValue({ modelIds: { claude: "sonnet" }, customArgs: "--model opus --verbose" });
+    getSettings.mockResolvedValue({
+      modelIds: { claude: "sonnet" },
+      customArgs: "--model opus --verbose",
+    });
     expect(await loadCustomLaunchFlags("claude")).toEqual([
       "--model",
       "sonnet",

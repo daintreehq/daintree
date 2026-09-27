@@ -902,7 +902,7 @@ describe("DaintreeAssistantSettingsTab", () => {
 
       it("rolls a failed save back to that agent's previous choice", async () => {
         renderWith("codex", { codex: "gpt-6-astra", claude: "opus" });
-        (window.electron.helpAssistant.setSettings as ReturnType<typeof vi.fn>).mockRejectedValue(
+        vi.mocked(window.electron.helpAssistant.setSettings).mockRejectedValue(
           new Error("disk full")
         );
         const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
