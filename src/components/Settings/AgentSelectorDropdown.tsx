@@ -1,5 +1,6 @@
 import type { ComponentType, CSSProperties } from "react";
 import { Settings2, ShieldOff } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";
 import type { AgentAvailabilityState } from "@shared/types";
 import { getAgentHealth } from "./agentHealth";
@@ -79,7 +80,7 @@ export function AgentSelectorDropdown({
               <item.Icon size={16} />
             </BrandMark>
             <span className="flex-1 min-w-0 truncate">{item.name}</span>
-            <AgentStatusMarks agent={item} />
+            <AgentStatusMarks agent={item} stackable />
           </>
         )
       }
@@ -93,13 +94,29 @@ export function AgentSelectorDropdown({
  * than a coloured dot — a dot alone could not tell "not installed" from "blocked", and
  * said nothing at all to anyone who can't see its colour. Ready agents show nothing.
  */
-function AgentStatusMarks({ agent }: { agent: AgentOption }) {
+function AgentStatusMarks({
+  agent,
+  stackable = false,
+}: {
+  agent: AgentOption;
+  /**
+   * In a list row both marks side by side outrun a 384px panel and squeeze the name
+   * to nothing, so a row carrying two stacks them on the right edge instead.
+   */
+  stackable?: boolean;
+}) {
   const health = getAgentHealth(agent.availability);
   const statusLabel =
     health.kind === "attention" || health.kind === "missing" ? health.label : null;
   if (!statusLabel && !agent.dangerousEnabled) return null;
+  const stacked = stackable && statusLabel !== null && agent.dangerousEnabled;
   return (
-    <span className="flex shrink-0 items-center gap-3 font-normal">
+    <span
+      className={cn(
+        "flex shrink-0 font-normal",
+        stacked ? "flex-col items-end gap-0.5" : "items-center gap-3"
+      )}
+    >
       {agent.dangerousEnabled && (
         <span className="flex items-center gap-1.5">
           <ShieldOff className="h-3.5 w-3.5 text-status-error" aria-hidden="true" />
