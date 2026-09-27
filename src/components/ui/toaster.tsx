@@ -149,6 +149,9 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   const [actionStatus, setActionStatus] = useState<ActionStatus>("idle");
   const [activeActionIndex, setActiveActionIndex] = useState<number | null>(null);
   const [actionActivatedByKeyboard, setActionActivatedByKeyboard] = useState(false);
+  // Any key pressed inside the toast: the user is navigating it by keyboard,
+  // even if the action itself was clicked.
+  const [isKeyboardEngaged, setIsKeyboardEngaged] = useState(false);
   // An action still running holds the toast: letting the timer dismiss it
   // mid-flight would drop the result (and its confirmation) on the floor.
   const isActionPending = activeActionIndex !== null && actionStatus !== "success";
@@ -357,13 +360,20 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   ]);
 
   // The success confirmation dwells, then dismisses. It holds while the pointer
-  // rests on the card, the window is blurred, or — after a keyboard activation —
-  // focus stays inside. Focus only counts for the keyboard: Chromium focuses a
-  // clicked button, so for a pointer activation focus-inside would pin the
-  // toast open until the user clicked away.
-  const holdsDwellOnFocus = isFocusInside && actionActivatedByKeyboard;
+  // rests on the card, the window is blurred, the options menu is open, or
+  // focus stays inside while the user is on the keyboard. Focus alone doesn't
+  // count: Chromium focuses a clicked button, so for a pointer activation
+  // focus-inside would pin the toast open until the user clicked away.
+  const holdsDwellOnFocus = isFocusInside && (actionActivatedByKeyboard || isKeyboardEngaged);
   useEffect(() => {
-    if (actionStatus !== "success" || isHovered || isWindowBlurred || holdsDwellOnFocus) return;
+    if (
+      actionStatus !== "success" ||
+      isHovered ||
+      isWindowBlurred ||
+      isDropdownOpen ||
+      holdsDwellOnFocus
+    )
+      return;
     dwellTimerRef.current = setTimeout(() => {
       if (mountedRef.current) dismissRef.current();
     }, UI_ACTION_SUCCESS_DWELL_MS);
@@ -373,7 +383,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
         dwellTimerRef.current = null;
       }
     };
-  }, [actionStatus, isHovered, isWindowBlurred, holdsDwellOnFocus]);
+  }, [actionStatus, isHovered, isWindowBlurred, isDropdownOpen, holdsDwellOnFocus]);
 
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
   const countBadge =
@@ -448,6 +458,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
         }
       }}
       data-toast=""
+      onKeyDown={() => setIsKeyboardEngaged(true)}
     >
       <div
         className={cn(

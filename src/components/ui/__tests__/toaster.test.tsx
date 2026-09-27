@@ -2182,6 +2182,32 @@ describe("Toast controls and layering", () => {
     expect(useNotificationStore.getState().notifications.some((n) => !n.dismissed)).toBe(false);
   });
 
+  it("holds a pointer-confirmed toast once the user moves through it by keyboard", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        message: "Branch",
+        duration: 0,
+        actions: [{ label: "Copy", successLabel: "Copied", onClick: vi.fn() }],
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    const copy = screen.getByRole("button", { name: "Copy" });
+    await act(async () => {
+      copy.focus();
+    });
+    fireEvent.click(copy, { detail: 1 });
+    fireEvent.keyDown(copy, { key: "Tab" });
+    await act(async () => {
+      screen.getByLabelText("Dismiss notification").focus();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(useNotificationStore.getState().notifications.some((n) => !n.dismissed)).toBe(true);
+  });
+
   // An untitled toast's count belongs beside the event it counts, not on an
   // otherwise empty row above it.
   it("sets an untitled toast's count badge on the message row", async () => {
