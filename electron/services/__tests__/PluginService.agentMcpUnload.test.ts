@@ -183,6 +183,27 @@ describe("PluginService agent MCP teardown", () => {
       expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(false);
     });
 
+    it("revokes a project's held grants as soon as it closes, not when its reload settles", async () => {
+      const { service, grants } = await loadTwoInstances();
+      service.unloadPlugin(KEY_A, { reload: true });
+      service.unloadPlugin(KEY_B, { reload: true });
+
+      void service.onProjectClosed(PROJECT_A);
+
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(false);
+      expect(pluginMcpGrantRegistry.isHeld(grants[KEY_B])).toBe(true);
+      service.dispose();
+    });
+
+    it("revokes every held grant when the service is disposed", async () => {
+      const { service, grants } = await loadTwoInstances();
+      service.unloadPlugin(KEY_A, { reload: true });
+
+      service.dispose();
+
+      expect(pluginMcpGrantRegistry.isLive(grants[KEY_A])).toBe(false);
+    });
+
     it("revokes held grants when nothing came back, or the reload was overtaken", async () => {
       const { service, grants } = await loadTwoInstances();
       service.unloadPlugin(KEY_A, { reload: true });
@@ -205,6 +226,7 @@ describe("PluginService agent MCP teardown", () => {
         hasQueuedWork: (projectId: string) => boolean;
         whenSettled: (projectId: string) => Promise<void>;
         onProjectOpened: (projectId: string, root: string) => Promise<void>;
+        dispose: () => void;
       };
     }
 
@@ -224,6 +246,7 @@ describe("PluginService agent MCP teardown", () => {
             queued.add(projectId);
             await settled;
           },
+          dispose: () => {},
         },
       };
     }
@@ -257,6 +280,17 @@ describe("PluginService agent MCP teardown", () => {
       await waiting;
       await opening;
       expect(result).toBe(true);
+    });
+
+    it("wakes a waiting launch as not ready when the service is disposed", async () => {
+      const fake = fakeController();
+      const service = serviceWith(fake);
+      const waiting = service.waitForProjectPlugins(PROJECT_A, 60_000);
+
+      service.dispose();
+
+      await expect(waiting).resolves.toBe(false);
+      await expect(service.waitForProjectPlugins(PROJECT_A, 60_000)).resolves.toBe(false);
     });
 
     it("gives up after the timeout and forgets the waiter", async () => {

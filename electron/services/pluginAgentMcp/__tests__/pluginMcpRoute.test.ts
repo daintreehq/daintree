@@ -22,6 +22,7 @@ import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
 import { setProjectAgentMcpAccess } from "../projectEnablement.js";
 import {
+  MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL,
   MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL,
   PluginMcpRoute,
   parsePluginMcpRoute,
@@ -486,11 +487,12 @@ describe("PluginMcpRoute", () => {
     pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
     loaded.delete(INSTANCE);
     endpoints.unregisterPlugin(INSTANCE);
+    const base = listener.inFlight();
     let listed: string[] | undefined;
     const listing = client.listTools().then(({ tools }) => {
       listed = tools.map((tool) => tool.name);
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitFor(() => listener.inFlight() > base);
     expect(listed).toBeUndefined();
     expect(route.sessionCount).toBe(1);
 
@@ -512,12 +514,59 @@ describe("PluginMcpRoute", () => {
     await connect(token);
 
     pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
+    const base = listener.inFlight();
     const parked = rawRequest({ token });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => listener.inFlight() > base);
     pluginMcpGrantRegistry.releasePlugin(INSTANCE, "surface-2");
 
     expect((await parked).status).toBe(401);
     expect(route.sessionCount).toBe(0);
+  });
+
+  it("wakes a parked request to a 401 when its terminal exits mid-reload", async () => {
+    const { token } = issue();
+    pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
+    const base = listener.inFlight();
+    const parked = rawRequest({ token });
+    await waitFor(() => listener.inFlight() > base);
+
+    pluginMcpGrantRegistry.revokeTerminal("term-1");
+    pluginMcpGrantRegistry.releasePlugin(INSTANCE, "surface-1");
+
+    expect((await parked).status).toBe(401);
+    expect(route.sessionCount).toBe(0);
+  });
+
+  it("wakes parked requests when the listener stops, without filing a session", async () => {
+    const { token } = issue();
+    pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
+    const base = listener.inFlight();
+    const parked = rawRequest({ token });
+    await waitFor(() => listener.inFlight() > base);
+
+    route.closeAllSessions();
+
+    expect((await parked).status).toBe(503);
+    expect(route.sessionCount).toBe(0);
+    pluginMcpGrantRegistry.revokeAll();
+  });
+
+  it("parks only a bounded number of one credential's requests", async () => {
+    const { token } = issue();
+    pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
+    const base = listener.inFlight();
+    const parked = Array.from({ length: MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL }, () =>
+      rawRequest({ token })
+    );
+    await waitFor(
+      () => listener.inFlight() >= base + MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL
+    );
+
+    const overflow = await rawRequest({ token });
+    expect(overflow.status).toBe(503);
+
+    pluginMcpGrantRegistry.releasePlugin(INSTANCE, "surface-2");
+    for (const response of await Promise.all(parked)) expect(response.status).toBe(401);
   });
 
   it("answers a retryable 503 when the reload outlasts the wait", async () => {
@@ -535,6 +584,7 @@ describe("PluginMcpRoute", () => {
     expect(
       pluginMcpGrantRegistry.isLive(pluginMcpGrantRegistry.authenticate(token)!.credentialId)
     ).toBe(true);
+    pluginMcpGrantRegistry.revokeAll();
   });
 
   it("rejects a request when the plugin instance is not loaded", async () => {

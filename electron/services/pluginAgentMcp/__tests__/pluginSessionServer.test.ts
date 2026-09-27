@@ -173,20 +173,44 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe("createPluginSessionServer", () => {
-  it("refuses to dispatch while the session's credential is not servable", async () => {
+  it("neither lists, activates nor dispatches while the credential is not servable", async () => {
     const invoke = vi.fn(async () => "ok");
     let servable = false;
-    const { client } = await connect(invoke, { isCallerServable: () => servable });
+    const { client, activatePlugin } = await connect(invoke, {
+      isCallerServable: () => servable,
+    });
 
+    await expect(client.listTools()).rejects.toThrow(/reloading/);
     const refused = await client.callTool({ name: "lookup", arguments: {} });
     expect(refused.isError).toBe(true);
     expect(textOf(refused)).toMatch(/reloading/);
+    expect(activatePlugin).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
 
     servable = true;
     const served = await client.callTool({ name: "lookup", arguments: {} });
     expect(served.isError).toBeUndefined();
     expect(invoke).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a call that became unservable while it waited on activation", async () => {
+    const invoke = vi.fn(async () => "ok");
+    let servable = true;
+    const { client, activatePlugin } = await connect(invoke, {
+      isCallerServable: () => servable,
+    });
+    const gate = deferred<void>();
+    activatePlugin.mockImplementation(() => gate.promise);
+
+    const call = client.callTool({ name: "lookup", arguments: {} });
+    await waitFor(() => activatePlugin.mock.calls.length > 0);
+    servable = false;
+    gate.resolve();
+
+    const result = await call;
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/reloading/);
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("advertises tools only, with no instructions", async () => {

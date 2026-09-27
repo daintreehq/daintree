@@ -59,7 +59,9 @@ export function listDeclaredAgentMcpPlugins(
 
 /**
  * Everything a manifest declares that decides what an agent credential for it
- * can reach: its capabilities, its `agentMcp` endpoints and its databases. Two
+ * can reach: its capabilities and their scopes (a tool reading through
+ * `host.fs` reaches exactly the declared paths), its `agentMcp` endpoints and
+ * its databases. Two
  * generations of a plugin with the same surface expose the same authority, so
  * a credential issued against one may keep working against the other; any
  * difference, including a reordering, reads as a change.
@@ -67,6 +69,7 @@ export function listDeclaredAgentMcpPlugins(
 export function agentMcpSurfaceOf(manifest: Readonly<PluginManifest>): string {
   return JSON.stringify({
     capabilities: [...(manifest.capabilities ?? [])].sort(),
+    scopes: manifest.scopes ?? null,
     agentMcp: manifest.contributes.agentMcp ?? [],
     databases: manifest.contributes.databases ?? [],
   });

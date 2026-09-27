@@ -41,6 +41,8 @@ const PLUGIN_MCP_HANDSHAKE_TIMEOUT_MS = 10_000;
  * request is answered 503 and the client retries.
  */
 const PLUGIN_MCP_RELOAD_WAIT_MS = 15_000;
+/** Requests one credential may have parked on a reload at once; the rest get 503 now. */
+export const MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL = 8;
 
 export interface PluginMcpRouteDeps {
   /** Whether the plugin instance is loaded right now (`PluginService.hasPlugin`). */
@@ -152,6 +154,8 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly idleTimeoutMs: number;
   private readonly handshakeTimeoutMs: number;
   private readonly reloadWaitMs: number;
+  /** Requests parked on a reload, by credential, each with its way out. */
+  private readonly parked = new Map<string, Set<AbortController>>();
   private readonly callTimeoutMs: number | undefined;
   private readonly maxResultBytes: number | undefined;
   private readonly offRevoked: () => void;
@@ -197,6 +201,10 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
 
   closeAllSessions(): void {
     this.epoch += 1;
+    // Parked requests wake to the epoch bump and the re-checks after it.
+    for (const waits of this.parked.values()) {
+      for (const wait of waits) wait.abort();
+    }
     for (const credentialId of [...this.pendingByCredential.keys()]) {
       this.abandonHandshakes(credentialId);
     }
@@ -249,7 +257,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     // list_changed then gets the new roster, not an error. The re-reads below
     // catch a credential the reload revoked.
     if (this.grants.isHeld(grant.credentialId)) {
-      await this.grants.whenNotHeld(grant.credentialId, this.reloadWaitMs);
+      await this.park(grant.credentialId, res);
     }
 
     let loaded = false;
@@ -348,6 +356,33 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       await this.handleNewSession(req, res, grant, port, epoch, newSessionId);
     } finally {
       this.releaseHandshake(grant.credentialId, newSessionId);
+    }
+  }
+
+  /**
+   * Wait out a reload holding this credential, bounded in time and in how many
+   * of its requests may wait at once, and given up when the client goes away or
+   * the listener stops. The caller re-checks everything afterwards.
+   */
+  private async park(credentialId: string, res: http.ServerResponse): Promise<void> {
+    let waits = this.parked.get(credentialId);
+    if (!waits) {
+      waits = new Set();
+      this.parked.set(credentialId, waits);
+    }
+    if (waits.size >= MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL) return;
+    const wait = new AbortController();
+    const onClose = (): void => wait.abort();
+    res.once("close", onClose);
+    waits.add(wait);
+    try {
+      await this.grants.whenNotHeld(credentialId, this.reloadWaitMs, wait.signal);
+    } finally {
+      res.off("close", onClose);
+      waits.delete(wait);
+      if (waits.size === 0 && this.parked.get(credentialId) === waits) {
+        this.parked.delete(credentialId);
+      }
     }
   }
 

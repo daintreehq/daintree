@@ -216,16 +216,53 @@ describe("runDatabaseToolInProcess", () => {
       await expect(next).resolves.toBe(3);
     });
 
-    it("answers DB_BUSY only once the queue is full", async () => {
+    it("answers DB_BUSY only once the queue is full, and admits again after a queued abort", async () => {
       const d = deps();
       fillSlots(d);
-      const queue = Array.from({ length: MAX_QUEUED_DATABASE_CALLS }, () =>
-        runDatabaseToolInProcess(request, queuedSignal(), d).catch(() => {})
-      );
+      const controllers = Array.from({ length: MAX_QUEUED_DATABASE_CALLS }, () => {
+        const controller = new AbortController();
+        waiting.push(controller);
+        runDatabaseToolInProcess(request, controller.signal, d).catch(() => {});
+        return controller;
+      });
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
       await expect(
         runDatabaseToolInProcess(request, new AbortController().signal, d)
       ).rejects.toMatchObject({ code: "DB_BUSY" });
-      expect(queue).toHaveLength(MAX_QUEUED_DATABASE_CALLS);
+
+      controllers[3]!.abort();
+      const replacement = runDatabaseToolInProcess(
+        { ...request, targets: ["replacement"] } as DatabaseToolRequest,
+        queuedSignal(),
+        d
+      );
+      replacement.catch(() => {});
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
+      // The replacement waits behind every earlier waiter still queued.
+      for (let i = 0; i < MAX_QUEUED_DATABASE_CALLS; i++) children[i]!.exit();
+      expect(d.child().posted[0]).toMatchObject({ targets: ["replacement"] });
+    });
+
+    it("hands a slot freed by the spawn deadline to the oldest waiter", async () => {
+      vi.useFakeTimers();
+      const d = deps();
+      const stuck = Array.from({ length: MAX_CONCURRENT_DATABASE_PROCESSES }, () =>
+        runDatabaseToolInProcess(request, new AbortController().signal, d).catch(() => {})
+      );
+      const waiter = runDatabaseToolInProcess(
+        { ...request, targets: ["waiter"] } as DatabaseToolRequest,
+        queuedSignal(),
+        d
+      );
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES);
+
+      vi.advanceTimersByTime(SPAWN_DEADLINE_MS);
+      await Promise.all(stuck);
+
+      expect(children).toHaveLength(MAX_CONCURRENT_DATABASE_PROCESSES + 1);
+      expect(d.child().posted[0]).toMatchObject({ targets: ["waiter"] });
+      d.child().emit("message", { ok: true, value: 5 });
+      await expect(waiter).resolves.toBe(5);
     });
 
     it("passes the slot on when a waiter's launch throws", async () => {

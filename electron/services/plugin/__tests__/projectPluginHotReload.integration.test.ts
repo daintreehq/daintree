@@ -55,6 +55,8 @@ interface Harness {
   running: Map<string, string>;
   loads: string[];
   unloads: string[];
+  /** Every reload settlement, as [instance key, kept]. */
+  settles: Array<[string, boolean]>;
   open: () => Promise<void>;
 }
 
@@ -73,6 +75,7 @@ function makeHarness(root: string): Harness {
     ],
   ]);
   const running = new Map<string, string>();
+  const settles: Array<[string, boolean]> = [];
   const loads: string[] = [];
   const unloads: string[] = [];
 
@@ -90,7 +93,9 @@ function makeHarness(root: string): Harness {
       running.delete(instanceKey);
       unloads.push(instanceKey);
     },
-    settleProjectPluginReload: vi.fn(),
+    settleProjectPluginReload: (instanceKey, kept) => {
+      settles.push([instanceKey, kept]);
+    },
     purgeConsentForInstance: vi.fn(),
     listGlobalPluginIds: () => new Set<string>(),
     getPluginLoadError: () => undefined,
@@ -124,6 +129,7 @@ function makeHarness(root: string): Harness {
     running,
     loads,
     unloads,
+    settles,
     open: async () => {
       await controller.onProjectOpened(PROJECT_ID, root);
       await watcher.ensure(PROJECT_ID, root);
@@ -169,6 +175,9 @@ describe("project-local plugin hot reload (end to end)", () => {
     expect(harness.unloads).toEqual([instanceKey]);
     expect(harness.loads).toEqual([instanceKey, instanceKey]);
     expect(harness.running.get(instanceKey)).toBe(rebuilt);
+    // Agent credentials held across the swap are settled as kept.
+    expect(await waitFor(() => harness.settles.length === 1)).toBe(true);
+    expect(harness.settles).toEqual([[instanceKey, true]]);
   });
 
   it("survives a half-written plugin.json without dropping the running plugin", async () => {

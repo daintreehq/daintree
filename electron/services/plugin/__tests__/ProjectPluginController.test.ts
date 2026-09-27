@@ -1016,29 +1016,34 @@ describe("hot-reload hook", () => {
   it("whenSettled waits for queued work, including work queued while waiting", async () => {
     enable(PROJECT_A, ["acme.dashboard"]);
     h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
-    let releaseScan!: () => void;
-    h.deps.discover.mockImplementationOnce(
+    const scans: Array<() => void> = [];
+    h.deps.discover.mockImplementation(
       async () =>
         new Promise<ProjectPluginDiscoveryResult>((resolve) => {
-          releaseScan = () => resolve({ root: "/x", plugins: [discovered("acme.dashboard")] });
+          scans.push(() => resolve({ root: "/x", plugins: [discovered("acme.dashboard")] }));
         })
     );
 
     await h.controller.whenSettled(PROJECT_B);
     expect(h.controller.hasQueuedWork(PROJECT_A)).toBe(false);
     const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.hasQueuedWork(PROJECT_A)).toBe(true);
     let settled = false;
     const waiting = h.controller.whenSettled(PROJECT_A).then(() => {
       settled = true;
     });
+    // Queued after the waiter started: it still has to be waited for.
     const reopening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
-    expect(h.controller.hasQueuedWork(PROJECT_A)).toBe(true);
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    releaseScan();
-    await waiting;
+
+    await vi.waitFor(() => expect(scans).toHaveLength(1));
+    scans[0]!();
     await opening;
+    await vi.waitFor(() => expect(scans).toHaveLength(2));
+    expect(settled).toBe(false);
+    scans[1]!();
+    await waiting;
     await reopening;
+    expect(settled).toBe(true);
     expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
   });
 

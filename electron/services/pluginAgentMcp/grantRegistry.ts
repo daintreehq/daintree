@@ -180,11 +180,11 @@ export class PluginMcpGrantRegistry {
 
   /**
    * Resolves once `credentialId` is no longer held — kept or revoked — or after
-   * `timeoutMs`, whichever is first. Re-check {@link isHeld} and
+   * `timeoutMs`, or when `signal` aborts, whichever is first. Re-check {@link isHeld} and
    * {@link isLive} afterwards; this only says the wait is over.
    */
-  whenNotHeld(credentialId: string, timeoutMs: number): Promise<void> {
-    if (!this.isHeld(credentialId)) return Promise.resolve();
+  whenNotHeld(credentialId: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (!this.isHeld(credentialId) || signal?.aborted) return Promise.resolve();
     return new Promise<void>((resolve) => {
       const check = (): void => {
         if (!this.isHeld(credentialId)) done();
@@ -192,12 +192,27 @@ export class PluginMcpGrantRegistry {
       const done = (): void => {
         clearTimeout(timer);
         this.heldWaiters.delete(check);
+        signal?.removeEventListener("abort", done);
         resolve();
       };
       const timer = setTimeout(done, timeoutMs);
       timer.unref?.();
       this.heldWaiters.add(check);
+      signal?.addEventListener("abort", done, { once: true });
     });
+  }
+
+  /**
+   * Settle every hold on an instance `matches` as "nothing came back", without
+   * waiting for the reload that placed it. For teardown that cannot wait on a
+   * reload stuck behind filesystem work: a close, or the service going away.
+   */
+  revokeHeld(matches: (pluginInstanceId: string) => boolean): PluginMcpGrant[] {
+    const revoked: PluginMcpGrant[] = [];
+    for (const pluginInstanceId of [...this.held.keys()]) {
+      if (matches(pluginInstanceId)) revoked.push(...this.releasePlugin(pluginInstanceId, null));
+    }
+    return revoked;
   }
 
   /** Whether a live credential is suspended by a reload still in progress. */

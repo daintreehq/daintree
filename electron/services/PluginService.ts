@@ -1281,6 +1281,14 @@ export class PluginService {
     // so the controller cannot re-load into a service that is going away.
     this.projectPluginController?.dispose();
     this.projectPluginController = null;
+    // A reload can be parked on discovery with its instance absent from every
+    // map the sweep below walks; its held credentials go now rather than
+    // whenever that filesystem work settles.
+    pluginMcpGrantRegistry.revokeHeld(() => true);
+    for (const waiters of this.projectOpenWaiters.values()) {
+      for (const wake of waiters) wake();
+    }
+    this.projectOpenWaiters.clear();
     // Run each loaded plugin's full disposer cascade (cleanupMap, event-cleanups,
     // contribution unregisters, best-effort MCP shutdown) so service teardown
     // honors the Disposable contract. App-quit MCP teardown remains owned by
@@ -5183,14 +5191,14 @@ export class PluginService {
    * first open.
    */
   async waitForProjectPlugins(projectId: string, timeoutMs: number): Promise<boolean> {
-    if (this.disposed) return true;
+    if (this.disposed) return false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let wake: (() => void) | undefined;
     const timedOut = new Promise<false>((resolve) => {
       timer = setTimeout(() => resolve(false), timeoutMs);
       timer.unref?.();
     });
-    const settled = (async (): Promise<true> => {
+    const settled = (async (): Promise<boolean> => {
       // A background restore signals the open only after its view has loaded,
       // so a pane restored into it can ask before the project is known at all.
       if (!this.projectPlugins.hasQueuedWork(projectId)) {
@@ -5204,6 +5212,8 @@ export class PluginService {
           waiters.add(resolve);
         });
       }
+      // Woken by dispose: the getter would build a fresh controller.
+      if (this.disposed) return false;
       await this.projectPlugins.whenSettled(projectId);
       return true;
     })();
@@ -5224,6 +5234,12 @@ export class PluginService {
     // Stop the watcher first: it is the one thing that could otherwise queue a
     // reload behind the teardown.
     this.projectPluginWatcherRegistry?.stop(projectId);
+    // A reload of this project's plugins may be held up behind discovery, and
+    // the close queues behind it; its held credentials must not outlive the
+    // close by however long that takes.
+    pluginMcpGrantRegistry.revokeHeld(
+      (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
+    );
     if (!this.projectPluginController) return;
     await this.projectPluginController.onProjectClosed(projectId);
     await this.pushSnapshotToProject(projectId);

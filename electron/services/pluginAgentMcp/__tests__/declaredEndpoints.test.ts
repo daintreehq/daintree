@@ -218,4 +218,14 @@ describe("agentMcpSurfaceOf", () => {
     ).not.toBe(base);
     expect(surface({ databases: [{ id: "main", name: "Main" }] as never })).not.toBe(base);
   });
+
+  it("changes with the declared capability scopes", () => {
+    const withScopes = (allowedPaths: string[]) => {
+      const info = plugin({});
+      (info.manifest as { scopes?: unknown }).scopes = { fs: { allowedPaths } };
+      return agentMcpSurfaceOf(info.manifest);
+    };
+    expect(withScopes(["/repo/public"])).not.toBe(withScopes(["/repo"]));
+    expect(withScopes(["/repo"])).not.toBe(surface());
+  });
 });

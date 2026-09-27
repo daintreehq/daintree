@@ -306,6 +306,32 @@ describe("PluginMcpGrantRegistry", () => {
       await expect(registry.whenNotHeld("not-held", 60_000)).resolves.toBeUndefined();
     });
 
+    it("revokeHeld settles only the matching instances' holds, as revoked", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const mine = issue(registry);
+      const theirs = issue(registry, { pluginInstanceId: "acme.other" });
+      registry.holdPlugin("acme.ledger", "surface-1");
+      registry.holdPlugin("acme.other", "surface-1");
+
+      const revoked = registry.revokeHeld((id) => id === "acme.ledger");
+
+      expect(revoked).toEqual([mine.grant]);
+      expect(registry.isHeld(theirs.grant.credentialId)).toBe(true);
+    });
+
+    it("stops waiting when the caller's signal aborts", async () => {
+      const registry = new PluginMcpGrantRegistry();
+      const { grant } = issue(registry);
+      registry.holdPlugin("acme.ledger", "surface-1");
+      const controller = new AbortController();
+
+      const waiting = registry.whenNotHeld(grant.credentialId, 60_000, controller.signal);
+      controller.abort();
+
+      await waiting;
+      expect(registry.isHeld(grant.credentialId)).toBe(true);
+    });
+
     it("holds nothing for an instance with no grants", () => {
       const registry = new PluginMcpGrantRegistry();
       registry.holdPlugin("acme.ledger", "surface-1");

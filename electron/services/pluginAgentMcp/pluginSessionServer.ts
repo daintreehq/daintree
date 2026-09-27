@@ -61,6 +61,8 @@ export interface PluginSessionServerOptions {
 /** Long enough for a respawned worker to re-register; short enough to stay inside a call's budget. */
 const DEFAULT_ROSTER_WAIT_MS = 5_000;
 
+const RELOADING_MESSAGE = "The plugin is reloading. Retry in a moment.";
+
 type AbortCause = "timeout" | "cancelled" | "session-closed" | "endpoint-changed";
 
 const ABORT_MESSAGES: Record<AbortCause, (timeoutMs: number) => string> = {
@@ -142,6 +144,8 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
   if (sessionSignal.aborted) offRosterChange();
 
   const ensureActivated = async (): Promise<void> => {
+    // A credential held by a reload must not start the next generation.
+    if (!isCallerServable()) return;
     try {
       await activatePlugin(pluginInstanceId);
     } catch (err) {
@@ -189,12 +193,22 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     return awaitRegistration(scope.pluginEndpointId, signal);
   };
 
+  const assertServable = (): void => {
+    if (!isCallerServable()) {
+      throw new McpError(ErrorCode.InternalError, RELOADING_MESSAGE);
+    }
+  };
+
   server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
+    // Not an empty list: that reads to the client as "this server has no
+    // tools". The roster being judged is not this credential's to see yet.
+    assertServable();
     const signal = AbortSignal.any([extra.signal, sessionSignal]);
     const [databases, own] = await Promise.all([
       databaseRegistration(signal),
       pluginRegistration(signal),
     ]);
+    assertServable();
     const tools: Tool[] = [
       ...(databases?.tools ?? []),
       // Registration already refuses the reserved names; this keeps the two
@@ -260,6 +274,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
 
     try {
       if (controller.signal.aborted) return abortedResult();
+      if (!isCallerServable()) return toolError(RELOADING_MESSAGE);
 
       // A database tool is the host's and is answered without the plugin; any
       // other name can only be the plugin's own. A client that cached its tool
@@ -318,9 +333,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
         abort("endpoint-changed");
       }
       if (controller.signal.aborted) return abortedResult();
-      if (!isCallerServable()) {
-        return toolError("The plugin is reloading. Retry the call in a moment.");
-      }
+      if (!isCallerServable()) return toolError(RELOADING_MESSAGE);
 
       let invocation: Promise<unknown>;
       try {
