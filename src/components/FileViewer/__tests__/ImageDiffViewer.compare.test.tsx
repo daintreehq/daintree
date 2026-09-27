@@ -228,6 +228,39 @@ describe("ImageDiffViewer comparison", () => {
       }
     );
 
+    it.each(["Two-up", "Swipe", "Onion skin"])(
+      "draws both versions at their natural size at 100%% in %s",
+      async (mode) => {
+        mockReadFileVersions.mockResolvedValue(versions());
+        render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
+        fireEvent.click(await screen.findByRole("button", { name: mode }));
+        fireEvent.click(screen.getByRole("button", { name: "Actual size" }));
+
+        expect(renderedWidth("HEAD version of logo.png")).toBe(NATURAL[HEAD_URL]!.w);
+        expect(renderedWidth("Working tree version of logo.png")).toBe(NATURAL[WORKING_URL]!.w);
+        fireEvent.click(screen.getByRole("button", { name: "Fit to pane" }));
+        expect(renderedWidth("Working tree version of logo.png")).toBeLessThanOrEqual(300);
+      }
+    );
+
+    it("keeps both two-up panes on the same region when one scrolls at 100%", async () => {
+      mockReadFileVersions.mockResolvedValue(versions());
+      render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
+      fireEvent.click(await screen.findByRole("button", { name: "Actual size" }));
+
+      const frameOf = (alt: string) => screen.getByAltText(alt).parentElement!;
+      const head = frameOf("HEAD version of logo.png");
+      const working = frameOf("Working tree version of logo.png");
+      head.scrollLeft = 120;
+      head.scrollTop = 45;
+      fireEvent.scroll(head);
+      expect(working.scrollLeft).toBe(head.scrollLeft);
+      expect(working.scrollTop).toBe(head.scrollTop);
+      working.scrollLeft = 7;
+      fireEvent.scroll(working);
+      expect(head.scrollLeft).toBe(working.scrollLeft);
+    });
+
     it("never upscales an image smaller than its frame", async () => {
       NATURAL[HEAD_URL] = { w: 64, h: 40 };
       NATURAL[WORKING_URL] = { w: 64, h: 40 };
@@ -236,6 +269,10 @@ describe("ImageDiffViewer comparison", () => {
         render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
         await screen.findByRole("button", { name: "Swipe" });
         expect(renderedWidth("HEAD version of logo.png")).toBe(64);
+        // Everything already shows at actual size, so 100% would change nothing.
+        expect(screen.getByRole("button", { name: "Actual size" }).hasAttribute("disabled")).toBe(
+          true
+        );
       } finally {
         NATURAL[HEAD_URL] = { w: 640, h: 400 };
         NATURAL[WORKING_URL] = { w: 760, h: 360 };

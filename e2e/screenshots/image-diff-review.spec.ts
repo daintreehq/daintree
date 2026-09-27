@@ -203,8 +203,21 @@ test("image diff viewer — modes, states and themes", async ({ page }) => {
     written.push(await snap(shell, `swipe-end-${theme}-narrow.png`));
   }
 
+  // Actual size: the frames scroll instead of fitting, in the first theme only.
+  {
+    const theme = THEMES[0]!;
+    const shell = await open(page, "resized", theme, DEFAULT_WIDTH);
+    await imagesSettled(page, 2);
+    await page.getByRole("button", { name: "Actual size" }).click();
+    await page.waitForTimeout(200);
+    written.push(await snap(shell, `two-up-actual-${theme}.png`));
+    await selectMode(page, "Swipe");
+    await imagesSettled(page, 2);
+    written.push(await snap(shell, `swipe-actual-${theme}.png`));
+  }
+
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * 12 + 5);
+  expect(onDisk.length).toBe(THEMES.length * 12 + 7);
   console.log(`[image-diff-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

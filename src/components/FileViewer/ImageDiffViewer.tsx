@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type UIEvent } from "react";
 import { GripVertical, ImageOff } from "lucide-react";
 import type { DiffMediaFileVersions, DiffMediaSide, GitStatus } from "@shared/types";
 import { getDiffMediaImageMime } from "@shared/types/ipc/diffMedia";
@@ -32,6 +32,19 @@ const MODE_OPTIONS: Array<{ value: ImageDiffMode; label: string }> = [
   { value: "onion", label: "Onion skin" },
 ];
 
+type ImageZoom = "fit" | "actual";
+
+interface ZoomControl {
+  level: ImageZoom;
+  /** Reports the fitted scale upward, so the viewer can tell when 100% would change nothing. */
+  onFitScale: (scale: number | null) => void;
+}
+
+const ZOOM_OPTIONS: Array<{ value: ImageZoom; label: string; ariaLabel: string }> = [
+  { value: "fit", label: "Fit", ariaLabel: "Fit to pane" },
+  { value: "actual", label: "100%", ariaLabel: "Actual size" },
+];
+
 const SWIPE_KEYBOARD_STEP = 2;
 const SWIPE_PAGE_STEP = 10;
 
@@ -39,7 +52,7 @@ const CHECKERBOARD_STYLE: CSSProperties = TRANSPARENCY_CHECKERBOARD_STYLE;
 
 type OkSide = Extract<DiffMediaSide, { ok: true }>;
 
-export interface ImageDims {
+interface ImageDims {
   width: number;
   height: number;
 }
@@ -140,9 +153,13 @@ function unionDims(a: ImageDims | null, b: ImageDims | null): ImageDims | null {
  * two different scales, which reads as a content change that never happened.
  * Never upscales: a 64px icon stays 64px rather than blurring to fill the pane.
  * Null until the frame has been measured or when the natural size is unknown,
- * and callers fall back to fitting each image independently.
+ * and callers fall back to fitting each image independently. At "actual" the
+ * scale is 1 and the frame scrolls instead.
  */
-function useFitScale(box: ImageDims | null): [(el: HTMLDivElement | null) => void, number | null] {
+function useFitScale(
+  box: ImageDims | null,
+  zoom: ZoomControl
+): [(el: HTMLDivElement | null) => void, number | null] {
   const [frame, setFrame] = useState<HTMLDivElement | null>(null);
   const [size, setSize] = useState<ImageDims | null>(null);
   useResizeObserverRaf(frame, (entry) => {
@@ -151,11 +168,16 @@ function useFitScale(box: ImageDims | null): [(el: HTMLDivElement | null) => voi
       prev && prev.width === width && prev.height === height ? prev : { width, height }
     );
   });
-  const scale =
+  const fitScale =
     box && size && size.width > 0 && size.height > 0 && box.width > 0 && box.height > 0
       ? Math.min(1, size.width / box.width, size.height / box.height)
       : null;
-  return [setFrame, scale];
+  const { onFitScale } = zoom;
+  useEffect(() => {
+    onFitScale(fitScale);
+  }, [fitScale, onFitScale]);
+  if (zoom.level === "actual" && box) return [setFrame, 1];
+  return [setFrame, fitScale];
 }
 
 function scaledSize(dims: ImageDims, scale: number): CSSProperties {
@@ -179,14 +201,19 @@ function SideChip({ label }: { label: string }) {
 function FactsLine({ parts, className }: { parts?: string[]; className?: string }) {
   return (
     <p
-      className={cn("min-h-4 min-w-0 text-2xs tabular-nums text-text-secondary", className)}
+      className={cn(
+        "min-h-4 min-w-0 text-2xs tabular-nums text-text-secondary [overflow-wrap:anywhere]",
+        className
+      )}
       aria-hidden={parts ? undefined : true}
     >
       {parts
         ? parts.map((part, index) => (
+            // Non-breaking inside a fact, breakable between them; `anywhere`
+            // only fires when one fact alone is wider than the pane.
             <span key={part}>
               {index > 0 ? " · " : null}
-              <span className="whitespace-nowrap">{part}</span>
+              {part.replaceAll(" ", "\u00a0")}
             </span>
           ))
         : " "}
@@ -268,6 +295,43 @@ async function decodeOffscreen(dataUrl: string): Promise<{ ok: boolean; dims: Im
   }
 }
 
+/**
+ * `safe` centring: a small image sits in the middle of its frame, a large one
+ * starts at its top-left edge and scrolls, instead of centring its overflow
+ * off the unreachable side.
+ */
+const PANE_FRAME_CLASS =
+  "relative flex min-h-0 [align-items:safe_center] [justify-content:safe_center] rounded-md border border-border-default";
+
+interface ScrollSync {
+  register: (el: HTMLElement | null) => (() => void) | undefined;
+  onScroll: (event: UIEvent<HTMLElement>) => void;
+}
+
+/** Keeps two-up frames on the same pixel at actual size, so both sides show the same region. */
+function useScrollSync(): ScrollSync {
+  // Created on first registration: a Set handed to useRef and then mutated is
+  // a value the compiler treats as frozen.
+  const members = useRef<Set<HTMLElement> | null>(null);
+  const register = useCallback((el: HTMLElement | null) => {
+    if (!el) return undefined;
+    const set = (members.current ??= new Set());
+    set.add(el);
+    return () => {
+      set.delete(el);
+    };
+  }, []);
+  const onScroll = useCallback((event: UIEvent<HTMLElement>) => {
+    const source = event.currentTarget;
+    for (const el of members.current ?? []) {
+      if (el === source) continue;
+      if (el.scrollLeft !== source.scrollLeft) el.scrollLeft = source.scrollLeft;
+      if (el.scrollTop !== source.scrollTop) el.scrollTop = source.scrollTop;
+    }
+  }, []);
+  return { register, onScroll };
+}
+
 interface ImagePaneProps {
   label: string;
   side: DiffMediaSide;
@@ -277,6 +341,9 @@ interface ImagePaneProps {
   dims: ImageDims | null;
   /** The box every pane in the comparison fits, so they share one scale. */
   fitBox: ImageDims | null;
+  zoom: ZoomControl;
+  /** Joins the pane to its siblings' scroll position at actual size. */
+  scrollSync?: ScrollSync;
   /** What the facts line measures a change against (the working tree's HEAD). */
   baseline?: { side: OkSide; dims: ImageDims | null };
   /**
@@ -298,13 +365,15 @@ function ImagePane({
   caption,
   dims: knownDims,
   fitBox,
+  zoom,
+  scrollSync,
   baseline,
   initialDecodeFailed,
   onRetry,
 }: ImagePaneProps) {
   const [loadedDims, setLoadedDims] = useState<ImageDims | null>(null);
   const [decodeFailed, setDecodeFailed] = useState(initialDecodeFailed ?? false);
-  const [frameRef, scale] = useFitScale(fitBox);
+  const [frameRef, scale] = useFitScale(fitBox, zoom);
   const dims = knownDims ?? loadedDims;
   const showImage = side.ok && !decodeFailed;
 
@@ -318,8 +387,15 @@ function ImagePane({
         {caption ? <span className="truncate text-xs text-text-secondary">{caption}</span> : null}
       </div>
       <div
-        ref={frameRef}
-        className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-md border border-border-default"
+        ref={(el) => {
+          frameRef(el);
+          return scrollSync?.register(el);
+        }}
+        onScroll={scrollSync?.onScroll}
+        className={cn(
+          PANE_FRAME_CLASS,
+          zoom.level === "actual" ? "overflow-auto" : "overflow-hidden"
+        )}
       >
         {showImage ? (
           <img
@@ -370,6 +446,7 @@ interface OverlayProps {
   sides: OkSides;
   dims: SideDims;
   relPath: string;
+  zoom: ZoomControl;
 }
 
 /**
@@ -379,9 +456,9 @@ interface OverlayProps {
  * shows as resized instead of being stretched to match. Without them it falls
  * back to both layers filling the frame with `object-contain`.
  */
-function useOverlayGeometry(dims: SideDims) {
+function useOverlayGeometry(dims: SideDims, zoom: ZoomControl) {
   const box = dims.head && dims.working ? unionDims(dims.head, dims.working) : null;
-  const [frameRef, scale] = useFitScale(box);
+  const [frameRef, scale] = useFitScale(box, zoom);
   const exact = scale !== null && box !== null;
   const stageStyle: CSSProperties = exact
     ? { position: "relative", ...scaledSize(box, scale), ...CHECKERBOARD_STYLE }
@@ -428,13 +505,24 @@ function OverlayFacts({ sides, dims }: { sides: OkSides; dims: SideDims }) {
 const PANE_ROWS_CLASS = "grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-x-3 gap-y-1.5";
 
 const OVERLAY_FRAME_CLASS =
-  "relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-border-default";
+  "relative flex min-h-0 flex-1 overflow-hidden rounded-md border border-border-default";
 
-function SwipeCompare({ sides, dims, relPath }: OverlayProps) {
+/**
+ * The overlay's scroller sits inside the bordered frame rather than being it,
+ * so the corner labels stay pinned while the stage scrolls at actual size.
+ */
+function overlayScrollerClass(zoom: ZoomControl): string {
+  return cn(
+    "absolute inset-0 flex [align-items:safe_center] [justify-content:safe_center]",
+    zoom.level === "actual" ? "overflow-auto" : "overflow-hidden"
+  );
+}
+
+function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(50);
   const draggingRef = useRef(false);
-  const { frameRef, stageStyle, layerImg } = useOverlayGeometry(dims);
+  const { frameRef, stageStyle, layerImg } = useOverlayGeometry(dims, zoom);
 
   // Measured against the stage, not the frame, so the divider tracks the image
   // rather than the letterbox around it. Clicks in the letterbox clamp to an end.
@@ -455,7 +543,6 @@ function SwipeCompare({ sides, dims, relPath }: OverlayProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
-        ref={frameRef}
         className={cn(OVERLAY_FRAME_CLASS, "touch-none")}
         onPointerDown={(event) => {
           draggingRef.current = true;
@@ -472,61 +559,66 @@ function SwipeCompare({ sides, dims, relPath }: OverlayProps) {
           draggingRef.current = false;
         }}
       >
-        <div ref={stageRef} style={stageStyle}>
-          {/* Complementary clips over one shared stage: HEAD only left of the
+        <div ref={frameRef} className={overlayScrollerClass(zoom)}>
+          <div ref={stageRef} style={stageStyle}>
+            {/* Complementary clips over one shared stage: HEAD only left of the
               divider, the working tree only right of it. Clipping HEAD alone
               let working-tree pixels show through wherever HEAD is transparent. */}
-          <div className="absolute inset-0" style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}>
-            <img
-              src={sides.head.dataUrl}
-              alt={`HEAD version of ${relPath}`}
-              draggable={false}
-              className={head.className}
-              style={head.style}
-            />
-          </div>
-          <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${position}%)` }}>
-            <img
-              src={sides.working.dataUrl}
-              alt={`Working tree version of ${relPath}`}
-              draggable={false}
-              className={working.className}
-              style={working.style}
-            />
-          </div>
-          {/* Dual-tone and opaque: a text-primary core between two canvas
+            <div
+              className="absolute inset-0"
+              style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
+            >
+              <img
+                src={sides.head.dataUrl}
+                alt={`HEAD version of ${relPath}`}
+                draggable={false}
+                className={head.className}
+                style={head.style}
+              />
+            </div>
+            <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${position}%)` }}>
+              <img
+                src={sides.working.dataUrl}
+                alt={`Working tree version of ${relPath}`}
+                draggable={false}
+                className={working.className}
+                style={working.style}
+              />
+            </div>
+            {/* Dual-tone and opaque: a text-primary core between two canvas
               rails, so one of the two holds contrast over any image. Borders,
               not a shadow, because forced colours drop box-shadow. Snapped to
               a whole pixel so the core never smears across two columns. */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 z-10 -ml-px w-[3px] border-x border-surface-canvas bg-text-primary forced-colors:border-[Canvas] forced-colors:bg-[CanvasText]"
-            style={{ left: `clamp(1px, ${dividerLeft}, calc(100% - 2px))` }}
-          />
-          {/* The handle is the slider, so its focus ring is its own and sits on
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 z-10 -ml-px w-[3px] border-x border-surface-canvas bg-text-primary forced-colors:border-[Canvas] forced-colors:bg-[CanvasText]"
+              style={{ left: `clamp(1px, ${dividerLeft}, calc(100% - 2px))` }}
+            />
+            {/* The handle is the slider, so its focus ring is its own and sits on
               the handle rather than on a full-height column. The frame behind
               it takes the drag and the click-to-jump, so the handle only has to
               be findable; the pseudo-element widens its hit area to 24px.
               Colour on the wrapper: forced colours keep an SVG's own colour. */}
-          <div
-            role="slider"
-            tabIndex={0}
-            aria-label="Swipe divider"
-            aria-orientation="horizontal"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(position)}
-            aria-valuetext={swipeValueText(position)}
-            className="absolute top-1/2 z-10 -ml-[7px] -mt-4 flex h-8 w-[15px] cursor-ew-resize items-center justify-center rounded-sm border border-text-secondary bg-surface-panel-elevated text-text-secondary before:absolute before:inset-y-0 before:-inset-x-[5px] before:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-            style={{ left: handleLeft }}
-            onKeyDown={(event) => {
-              const next = nextSwipePosition(event.key, position);
-              if (next === null) return;
-              event.preventDefault();
-              setPosition(next);
-            }}
-          >
-            <GripVertical className="h-3 w-3" />
+            <div
+              role="slider"
+              tabIndex={0}
+              aria-label="Swipe divider"
+              aria-orientation="horizontal"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(position)}
+              aria-valuetext={swipeValueText(position)}
+              className="absolute top-1/2 z-10 -ml-[7px] -mt-4 flex h-8 w-[15px] cursor-ew-resize items-center justify-center rounded-sm border border-text-secondary bg-surface-panel-elevated text-text-secondary before:absolute before:inset-y-0 before:-inset-x-[5px] before:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+              style={{ left: handleLeft }}
+              onKeyDown={(event) => {
+                const next = nextSwipePosition(event.key, position);
+                if (next === null) return;
+                event.preventDefault();
+                setPosition(next);
+              }}
+            >
+              <GripVertical className="h-3 w-3" />
+            </div>
           </div>
         </div>
         <OverlayChips />
@@ -536,29 +628,31 @@ function SwipeCompare({ sides, dims, relPath }: OverlayProps) {
   );
 }
 
-function OnionCompare({ sides, dims, relPath, opacity }: OverlayProps & { opacity: number }) {
-  const { frameRef, stageStyle, layerImg } = useOverlayGeometry(dims);
+function OnionCompare({ sides, dims, relPath, zoom, opacity }: OverlayProps & { opacity: number }) {
+  const { frameRef, stageStyle, layerImg } = useOverlayGeometry(dims, zoom);
   const head = layerImg("head");
   const working = layerImg("working");
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div ref={frameRef} className={OVERLAY_FRAME_CLASS}>
-        <div style={stageStyle}>
-          {/* HEAD as the base layer; the working-tree layer fades in on top. */}
-          <img
-            src={sides.head.dataUrl}
-            alt={`HEAD version of ${relPath}`}
-            draggable={false}
-            className={head.className}
-            style={head.style}
-          />
-          <img
-            src={sides.working.dataUrl}
-            alt={`Working tree version of ${relPath}`}
-            draggable={false}
-            className={working.className}
-            style={{ ...working.style, opacity: opacity / 100 }}
-          />
+      <div className={OVERLAY_FRAME_CLASS}>
+        <div ref={frameRef} className={overlayScrollerClass(zoom)}>
+          <div style={stageStyle}>
+            {/* HEAD as the base layer; the working-tree layer fades in on top. */}
+            <img
+              src={sides.head.dataUrl}
+              alt={`HEAD version of ${relPath}`}
+              draggable={false}
+              className={head.className}
+              style={head.style}
+            />
+            <img
+              src={sides.working.dataUrl}
+              alt={`Working tree version of ${relPath}`}
+              draggable={false}
+              className={working.className}
+              style={{ ...working.style, opacity: opacity / 100 }}
+            />
+          </div>
         </div>
         <OverlayChips />
       </div>
@@ -588,6 +682,17 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
   const [failedRequestKey, setFailedRequestKey] = useState<string | null>(null);
   const [fetchNonce, setFetchNonce] = useState(0);
   const [mode, setMode] = useState<ImageDiffMode>("two-up");
+  const [zoom, setZoom] = useState<ImageZoom>("fit");
+  // The fitted scale the panes last measured; 1 means everything already shows
+  // at actual size, so the 100% option would change nothing.
+  const [fitScale, setFitScale] = useState<number | null>(null);
+  const actualIsNoop = fitScale !== null && fitScale >= 1;
+  const zoomLevel: ImageZoom = actualIsNoop ? "fit" : zoom;
+  const zoomControl: ZoomControl = { level: zoomLevel, onFitScale: setFitScale };
+  const zoomOptions = ZOOM_OPTIONS.map((option) =>
+    option.value === "actual" ? { ...option, disabled: actualIsNoop } : option
+  );
+  const scrollSync = useScrollSync();
   const [onionOpacity, setOnionOpacity] = useState(50);
   // Bumped once per fetch; stamped into each snapshot so ImagePane keys are
   // unique per attempt (see CommittedSnapshot.attempt).
@@ -727,9 +832,20 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
   if (singleSide !== null) {
     const caption =
       singleSide === "working" ? "Added — no previous version" : "Deleted — no working version";
+    const zoomable = view.dims[singleSide] !== null && !view.decodeFailures[singleSide];
     return (
-      <div className="flex h-full min-h-0 w-full flex-col p-3" aria-busy={isHolding || undefined}>
-        <div className={PANE_ROWS_CLASS}>
+      <div className="flex h-full min-h-0 w-full flex-col" aria-busy={isHolding || undefined}>
+        {zoomable ? (
+          <div className="flex shrink-0 px-3 pt-3">
+            <SegmentedToggle
+              ariaLabel="Zoom"
+              options={zoomOptions}
+              value={zoomLevel}
+              onChange={setZoom}
+            />
+          </div>
+        ) : null}
+        <div className={cn(PANE_ROWS_CLASS, "p-3")}>
           <ImagePane
             key={`${view.attempt}:${singleSide}`}
             label={singleSide === "working" ? "Working tree" : "HEAD"}
@@ -738,6 +854,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
             caption={caption}
             dims={view.dims[singleSide]}
             fitBox={view.dims[singleSide]}
+            zoom={zoomControl}
             initialDecodeFailed={view.decodeFailures[singleSide]}
             onRetry={retry}
           />
@@ -758,14 +875,30 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
   const showModes = bothOk && !anyDecodeFailed;
   const effectiveMode: ImageDiffMode = showModes ? mode : "two-up";
   const headSide = view.versions.head;
+  // Actual size only means something once a natural size is known to scale from.
+  const zoomable =
+    (view.dims.head !== null && view.versions.head.ok && !view.decodeFailures.head) ||
+    (view.dims.working !== null && view.versions.working.ok && !view.decodeFailures.working);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" aria-busy={isHolding || undefined}>
-      {showModes ? (
+      {showModes || zoomable ? (
         // Wraps rather than squeezes: in a narrow pane the opacity control
         // drops to its own row instead of breaking its label over two lines.
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 pt-3">
-          <SegmentedToggle options={MODE_OPTIONS} value={effectiveMode} onChange={setMode} />
+          <div className="flex items-center gap-2">
+            {showModes ? (
+              <SegmentedToggle options={MODE_OPTIONS} value={effectiveMode} onChange={setMode} />
+            ) : null}
+            {zoomable ? (
+              <SegmentedToggle
+                ariaLabel="Zoom"
+                options={zoomOptions}
+                value={zoomLevel}
+                onChange={setZoom}
+              />
+            ) : null}
+          </div>
           {effectiveMode === "onion" ? (
             <label className="flex items-center gap-2 whitespace-nowrap text-2xs text-text-secondary">
               Working tree opacity
@@ -797,6 +930,8 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
               relPath={view.relPath}
               dims={view.dims.head}
               fitBox={unionDims(view.dims.head, view.dims.working)}
+              zoom={zoomControl}
+              scrollSync={scrollSync}
               initialDecodeFailed={view.decodeFailures.head}
               onRetry={retry}
             />
@@ -807,18 +942,26 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
               relPath={view.relPath}
               dims={view.dims.working}
               fitBox={unionDims(view.dims.head, view.dims.working)}
+              zoom={zoomControl}
+              scrollSync={scrollSync}
               baseline={headSide.ok ? { side: headSide, dims: view.dims.head } : undefined}
               initialDecodeFailed={view.decodeFailures.working}
               onRetry={retry}
             />
           </div>
         ) : effectiveMode === "swipe" ? (
-          <SwipeCompare sides={okSides} dims={view.dims} relPath={view.relPath} />
+          <SwipeCompare
+            sides={okSides}
+            dims={view.dims}
+            relPath={view.relPath}
+            zoom={zoomControl}
+          />
         ) : (
           <OnionCompare
             sides={okSides}
             dims={view.dims}
             relPath={view.relPath}
+            zoom={zoomControl}
             opacity={onionOpacity}
           />
         )}
