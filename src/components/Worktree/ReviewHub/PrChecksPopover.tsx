@@ -261,7 +261,7 @@ export function PrChecksPopover({
                   testId="pr-checks-error"
                   icon={<AlertTriangle className="text-status-error" />}
                   title="Couldn't load checks"
-                  body="The forge didn't answer. Retry, or open the pull request to see its checks there."
+                  body="The check results couldn't be read. Retry, or open the pull request to see them there."
                 />
               )}
               {state.kind === "no-pr" && (
@@ -276,8 +276,8 @@ export function PrChecksPopover({
                 <ChecksNotice
                   testId="pr-checks-empty"
                   icon={<CircleDashed className="text-text-secondary" />}
-                  title="No checks yet"
-                  body={`Nothing has reported on #${prNumber}. Refresh once a workflow starts.`}
+                  title="Refresh once CI starts"
+                  body={`No checks have reported on #${prNumber} yet.`}
                 />
               )}
               {state.kind === "loaded" && (
@@ -370,6 +370,7 @@ function ChecksList({
   // read; an all-green run is exactly the list the reader opened.
   const collapsible = leading.length > 0 && settled.length > 0;
   const settledVisible = !collapsible || showSettled;
+  const detailsLabels = labelDetailsButtons(rows);
 
   return (
     <>
@@ -380,7 +381,9 @@ function ChecksList({
       <ScrollShadow compact className="max-h-80" scrollClassName="p-1 scroll-py-4">
         {/* One stable child: the shadow hook observes the scroller's first element. */}
         <div data-testid="pr-checks-list">
-          {leading.length > 0 && <CheckRows rows={leading} onOpenExternal={onOpenExternal} />}
+          {leading.length > 0 && (
+            <CheckRows rows={leading} labels={detailsLabels} onOpenExternal={onOpenExternal} />
+          )}
           {collapsible && (
             <button
               type="button"
@@ -402,7 +405,12 @@ function ChecksList({
             </button>
           )}
           {settledVisible && settled.length > 0 && (
-            <CheckRows id={settledId} rows={settled} onOpenExternal={onOpenExternal} />
+            <CheckRows
+              id={settledId}
+              rows={settled}
+              labels={detailsLabels}
+              onOpenExternal={onOpenExternal}
+            />
           )}
         </div>
       </ScrollShadow>
@@ -410,13 +418,36 @@ function ChecksList({
   );
 }
 
+/**
+ * Matrix jobs repeat names, so the name alone leaves two buttons identically
+ * labelled when a reader tabs the list without hearing the rows between them.
+ * The outcome separates most of them; an ordinal separates whatever is left.
+ */
+function labelDetailsButtons(rows: readonly PrCheckRow[]): Map<string, string> {
+  const base = new Map(rows.map((row) => [row.key, `${row.name} (${describeOutcome(row)})`]));
+  const totals = new Map<string, number>();
+  for (const text of base.values()) totals.set(text, (totals.get(text) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  const labels = new Map<string, string>();
+  for (const row of rows) {
+    const text = base.get(row.key)!;
+    const total = totals.get(text)!;
+    const nth = (seen.get(text) ?? 0) + 1;
+    seen.set(text, nth);
+    labels.set(row.key, `Open details for ${text}${total > 1 ? `, ${nth} of ${total}` : ""}`);
+  }
+  return labels;
+}
+
 function CheckRows({
   id,
   rows,
+  labels,
   onOpenExternal,
 }: {
   id?: string;
   rows: PrCheckRow[];
+  labels: ReadonlyMap<string, string>;
   onOpenExternal: (url: string) => void;
 }) {
   return (
@@ -443,10 +474,7 @@ function CheckRows({
                 variant="ghost"
                 size="icon-xs"
                 onClick={() => onOpenExternal(detailsUrl)}
-                // Matrix jobs repeat names, so the name alone leaves two
-                // buttons identically labelled when a reader tabs the list
-                // without hearing the rows between them.
-                aria-label={`Open details for ${row.name} (${outcomeText})`}
+                aria-label={labels.get(row.key)}
                 className="-my-1 transition-colors"
               >
                 <ExternalLink aria-hidden="true" />

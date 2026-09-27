@@ -416,20 +416,23 @@ describe("summarizePrChecks", () => {
         check({ status: "in_progress", conclusion: undefined }),
       ])
     );
-    expect(summary.headline).toMatch(/^2 need attention · 1 required$/);
+    expect(summary.headline).toBe("1 failing · 1 more need attention · 1 required");
   });
 
-  it("calls the attention group failing only when every check in it broke", () => {
-    const broke = summarizePrChecks(
-      preparePrChecks([check({ conclusion: "failure" }), check({ conclusion: "timed_out" })])
-    );
-    expect(broke.headline).toMatch(/failing/);
-    for (const conclusion of ["cancelled", "action_required"] as const) {
-      const mixed = summarizePrChecks(
-        preparePrChecks([check({ conclusion: "failure" }), check({ conclusion })])
+  it("counts as failing only the checks that broke", () => {
+    const failingIn = (headline: string) => Number(/(\d+) failing/.exec(headline)?.[1] ?? 0);
+    const cases: Array<Array<ForgeCheckRun["conclusion"]>> = [
+      ["failure", "timed_out"],
+      ["failure", "cancelled"],
+      ["cancelled", "action_required"],
+      ["timed_out", "action_required", "cancelled"],
+    ];
+    for (const conclusions of cases) {
+      const summary = summarizePrChecks(
+        preparePrChecks(conclusions.map((c) => check({ conclusion: c })))
       );
-      expect(mixed.headline).not.toMatch(/failing/);
-      expect(mixed.headline).toMatch(/^2 /);
+      const broke = conclusions.filter((c) => c === "failure" || c === "timed_out").length;
+      expect(failingIn(summary.headline)).toBe(broke);
     }
   });
 
@@ -444,7 +447,11 @@ describe("summarizePrChecks", () => {
       check({ conclusion: undefined }),
     ]);
     const summary = summarizePrChecks(rows);
-    expect(Number.parseInt(summary.headline, 10) + counted(summary.detail)).toBe(rows.length);
+    const inHeadline = [...summary.headline.matchAll(/(\d+) (?!required)/g)].reduce(
+      (sum, m) => sum + Number(m[1]),
+      0
+    );
+    expect(inHeadline + counted(summary.detail)).toBe(rows.length);
   });
 
   it("counts a skip or a missing verdict as itself, never as a pass", () => {

@@ -192,6 +192,26 @@ describe("PrChecksPopover", () => {
     expect(new Set(names).size).toBe(2);
   });
 
+  it("keeps details names distinct even when name, outcome and requiredness all repeat", async () => {
+    getChecksMock.mockResolvedValue({
+      checks: [
+        check({ name: "test", conclusion: "failure", detailsUrl: "https://e.com/a" }),
+        check({ name: "test", conclusion: "failure", detailsUrl: "https://e.com/b" }),
+        check({ name: "test", conclusion: "failure", detailsUrl: "https://e.com/c" }),
+        check({ name: "lint", conclusion: "failure", detailsUrl: "https://e.com/d" }),
+      ],
+    });
+    renderPopover();
+    await openAndSettle();
+    await screen.findByTestId("pr-checks-list");
+    const names = screen
+      .getAllByRole("button", { name: /open details for/i })
+      .map((b) => b.getAttribute("aria-label"));
+    expect(names).toHaveLength(4);
+    expect(new Set(names).size).toBe(4);
+    expect(names.find((n) => n?.includes("lint"))).not.toMatch(/of \d/);
+  });
+
   it("offers no link at all for a details URL it cannot validate", async () => {
     getChecksMock.mockResolvedValue({
       checks: [check({ name: "build", conclusion: "failure", detailsUrl: "javascript:alert(1)" })],
@@ -207,7 +227,9 @@ describe("PrChecksPopover", () => {
     getChecksMock.mockResolvedValue({ checks: [] });
     const { unmount } = renderPopover();
     await openAndSettle();
-    expect((await screen.findByTestId("pr-checks-empty")).textContent).toContain("No checks yet");
+    expect((await screen.findByTestId("pr-checks-empty")).textContent).toContain(
+      "Refresh once CI starts"
+    );
     unmount();
     cleanup();
 

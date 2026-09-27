@@ -280,11 +280,15 @@ export function summarizePrChecks(rows: readonly PrCheckRow[]): PrChecksSummary 
   let detailRows: readonly PrCheckRow[] = rest;
   if (attention.length > 0) {
     const required = attention.filter((row) => row.required === true).length;
-    // "Failing" only when every one of them broke; a cancellation or a check
-    // waiting on approval is attention-worthy without being a failure.
-    const allBroke = attention.every((row) => BROKE.has(row.outcome));
-    const noun = allBroke ? "failing" : "need attention";
-    headline = `${attention.length} ${noun}${required > 0 ? ` · ${required} required` : ""}`;
+    // A cancellation or a check waiting on approval is attention-worthy
+    // without being a failure, so the two are counted apart.
+    const broke = attention.filter((row) => BROKE.has(row.outcome)).length;
+    const other = attention.length - broke;
+    const parts = [];
+    if (broke > 0) parts.push(`${broke} failing`);
+    if (other > 0) parts.push(`${other} ${broke > 0 ? "more " : ""}need attention`);
+    if (required > 0) parts.push(`${required} required`);
+    headline = parts.join(" · ");
   } else if (inFlight > 0) {
     headline = `${inFlight} in progress`;
     detailRows = rest.filter((row) => row.outcome !== RUNNING && row.outcome !== QUEUED);
@@ -346,7 +350,7 @@ export function composePrChecksAgentText({
   };
 
   const text = [
-    `Investigate the failing CI checks on pull request #${prNumber}.`,
+    `Investigate the CI checks that need attention on pull request #${prNumber}.`,
     "",
     `Pull request: ${JSON.stringify(safeDetailsUrl(prUrl) ?? null)}`,
     `Worktree: ${JSON.stringify(worktreePath)}`,
