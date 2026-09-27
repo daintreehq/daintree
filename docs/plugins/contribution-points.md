@@ -212,7 +212,7 @@ Bump `stateVersion` when the shape changes incompatibly, never for an additive k
       },
       {
         "id": "export",
-        "title": "Export ledger",
+        "title": "Export transactions",
         "description": "",
         "category": "general",
         "kind": "command",
@@ -221,13 +221,13 @@ Bump `stateVersion` when the shape changes incompatibly, never for an additive k
     ],
     "panels": [
       {
-        "id": "ledger",
-        "name": "Ledger",
+        "id": "main",
+        "name": "Budget",
         "iconId": "wallet",
         "color": "var(--theme-category-green)",
         "menu": [
-          { "actionId": "acme.ledger.refresh" },
-          { "actionId": "acme.ledger.export", "label": "Export as CSV…" }
+          { "actionId": "acme.budget.refresh" },
+          { "actionId": "acme.budget.export", "label": "Export as CSV…" }
         ]
       }
     ]

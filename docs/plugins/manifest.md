@@ -274,15 +274,15 @@ A few notes on individual points; the [Contribution points reference](./contribu
 
 ## An app-style project plugin
 
-A project plugin that is really an application — here a household ledger committed to the project's own repository at `.daintree/plugins/acme.ledger/` — typically combines a database, settings, a panel with its own menu, and a command to open it:
+A project plugin that is really an application — here a household budget committed to the project's own repository at `.daintree/plugins/acme.budget/` — typically combines a database, settings, a panel with its own menu, and a command to open it:
 
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.project.schema.json",
-  "name": "acme.ledger",
+  "name": "acme.budget",
   "version": "0.1.0",
-  "displayName": "Ledger",
-  "description": "Household ledger: transactions, categories and budgets.",
+  "displayName": "Budget",
+  "description": "Household budget: transactions, categories and budgets.",
   "scope": "project",
   "main": "dist/index.mjs",
   "engines": { "daintree": ">=0.39.0" },
@@ -292,7 +292,7 @@ A project plugin that is really an application — here a household ledger commi
       {
         "id": "ledger",
         "description": "Transactions, categories and budgets.",
-        "path": "data/ledger.db"
+        "path": "data/budget.db"
       }
     ],
     "settings": [
@@ -319,9 +319,9 @@ A project plugin that is really an application — here a household ledger commi
     "commands": [
       {
         "id": "open",
-        "title": "Open ledger",
-        "description": "Open the ledger panel.",
-        "category": "Ledger",
+        "title": "Open budget",
+        "description": "Open the budget panel.",
+        "category": "Budget",
         "kind": "command",
         "danger": "safe",
         "requires": []
@@ -330,7 +330,7 @@ A project plugin that is really an application — here a household ledger commi
         "id": "send-uncategorised",
         "title": "Send uncategorised transactions to an agent",
         "description": "Draft the uncategorised transactions into an agent's input for review.",
-        "category": "Ledger",
+        "category": "Budget",
         "kind": "command",
         "danger": "safe",
         "requires": ["agent:input"]
@@ -338,22 +338,22 @@ A project plugin that is really an application — here a household ledger commi
     ],
     "panels": [
       {
-        "id": "ledger",
-        "name": "Ledger",
+        "id": "main",
+        "name": "Budget",
         "iconId": "wallet",
         "color": "var(--theme-category-green)",
         "stateVersion": 1,
         "menu": [
-          { "actionId": "acme.ledger.send-uncategorised", "label": "Send uncategorised to agent…" }
+          { "actionId": "acme.budget.send-uncategorised", "label": "Send uncategorised to agent…" }
         ]
       }
     ],
     "views": [
-      { "id": "ledger", "componentPath": "dist/panel.js", "location": "panel" },
+      { "id": "main", "componentPath": "dist/panel.js", "location": "panel" },
       { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
     ],
     "toolbarButtons": [
-      { "id": "open-ledger", "label": "Ledger", "iconId": "wallet", "actionId": "acme.ledger.open" }
+      { "id": "open-budget", "label": "Budget", "iconId": "wallet", "actionId": "acme.budget.open" }
     ]
   }
 }
@@ -362,12 +362,12 @@ A project plugin that is really an application — here a household ledger commi
 What each part buys:
 
 - **`scope: "project"`** makes it a project plugin, loaded only while this project is open. It is what allows a `"project"` database, and why `$schema` names the project variant.
-- **`databases`** declares `data/ledger.db`, a file in the repository that agents in the project's terminals can open with `sqlite3`. A project database needs `fs:project-write`; the worker opens it with `host.db.open("ledger", { migrations })`. Every panel of the plugin gets **Back up data…**.
-- **`settings`** declares a committed `currency` shared by everyone who clones the project, and a `bankToken` secret each collaborator enters on their own machine. Both are `required`, so the panel shows a "Ledger needs setup" strip until they are stored; `editor: "view"` leaves the token to the plugin's own settings view rather than a generated field. Every panel gets **Plugin settings…**.
-- **`views`** pairs `dist/panel.js` with the `ledger` panel, and declares `dist/settings.js` as the custom settings section, which mounts in Project settings → Plugins.
+- **`databases`** declares `data/budget.db`, a file in the repository that agents in the project's terminals can open with `sqlite3`. A project database needs `fs:project-write`; the worker opens it with `host.db.open("ledger", { migrations })`. Every panel of the plugin gets **Back up data…**.
+- **`settings`** declares a committed `currency` shared by everyone who clones the project, and a `bankToken` secret each collaborator enters on their own machine. Both are `required`, so the panel shows a "Budget needs setup" strip until they are stored; `editor: "view"` leaves the token to the plugin's own settings view rather than a generated field. Every panel gets **Plugin settings…**.
+- **`views`** pairs `dist/panel.js` with the `main` panel, and declares `dist/settings.js` as the custom settings section, which mounts in Project settings → Plugins.
 - **`panels[].menu`** puts **Send uncategorised to agent…** on the panel's ⋯ and right-click menus, dispatched with `{ panelId }`.
-- **`commands`** puts both actions in the palette. `agent:input` and `fs:project-write` are high-risk, so without `requires` every action would ask for confirmation; `"requires": []` keeps **Open ledger** one click, while `send-uncategorised` names the capability it actually uses and asks first. Both handlers need the host, so the worker (`main`) registers them with `host.registerAction` in `activate()`, passing the same descriptor, `requires` included — the imperative registration replaces the manifest one. The send handler calls `host.sendToAgent`, which drafts into an agent the user picks and never submits.
-- **`toolbarButtons`** puts a **Ledger** button in the plugin tray that runs `acme.ledger.open`.
+- **`commands`** puts both actions in the palette. `agent:input` and `fs:project-write` are high-risk, so without `requires` every action would ask for confirmation; `"requires": []` keeps **Open budget** one click, while `send-uncategorised` names the capability it actually uses and asks first. Both handlers need the host, so the worker (`main`) registers them with `host.registerAction` in `activate()`, passing the same descriptor, `requires` included — the imperative registration replaces the manifest one. The send handler calls `host.sendToAgent`, which drafts into an agent the user picks and never submits.
+- **`toolbarButtons`** puts a **Budget** button in the plugin tray that runs `acme.budget.open`.
 
 [Building apps](./building-apps.md) walks through writing the worker and views behind a manifest like this.
 

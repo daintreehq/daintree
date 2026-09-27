@@ -121,9 +121,9 @@ An `agentMcp` endpoint is the inbound direction: Daintree hosts an MCP server on
   "contributes": {
     "agentMcp": [
       {
-        "id": "ledger",
-        "name": "Ledger",
-        "description": "Read and record entries in this project's ledger.",
+        "id": "data",
+        "name": "Household ledger",
+        "description": "Read and append transactions in this project's ledger database.",
         "mode": "tools"
       }
     ]
@@ -141,26 +141,26 @@ Bind the roster from `activate()` with [`host.mcp.registerTools`](./host-api.md#
 import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
 export async function activate(host: PluginHostApi) {
-  await host.mcp.registerTools("ledger", {
-    list_entries: {
-      description: "List ledger entries, newest first.",
+  await host.mcp.registerTools("data", {
+    list_transactions: {
+      description: "A page of this project's ledger transactions, newest first.",
       inputSchema: {
         type: "object",
-        properties: { limit: { type: "integer", minimum: 1, maximum: 100 } },
+        properties: { limit: { type: "integer", minimum: 1, maximum: 200 } },
         additionalProperties: false,
       },
       async execute(args, caller, signal) {
         // `args` already matches inputSchema; `limit` is optional, so default it.
-        const limit = typeof args.limit === "number" ? args.limit : 20;
+        const limit = typeof args.limit === "number" ? args.limit : 50;
         // `caller.projectId` is the project the calling terminal belongs to.
-        return { entries: await readEntries(caller.projectId, limit, signal) };
+        return { transactions: await readTransactions(caller.projectId, limit, signal) };
       },
     },
   });
 }
 ```
 
-`plugins/sample-project/acme.ledger` is a working project plugin built on this surface: a roster over a database declared in `contributes.databases` and opened with [`host.db`](./host-api.md#db--host-managed-sqlite), with an `AGENTS.md` data contract and a tool for the one write rule the schema cannot hold. Copy its roster, argument checks and storage.
+`plugins/sample-project/acme.ledger` is a working project plugin built on this surface: a roster over a database declared in `contributes.databases` and opened with [`host.db`](./host-api.md#db--host-managed-sqlite), with an `AGENTS.md` data contract and a tool for the one write rule the schema cannot hold. It is a data plugin with no view: besides this endpoint it contributes only the database, with the `fs:project-write` capability a project database needs. Copy its roster, argument checks and storage. Because it declares a database it also offers the host's read-only `@databases` endpoint beside `data`, each switched on separately: agents can then read the ledger with `database_schema` and `database_query` and write it through `data`.
 
 What the host does with the roster:
 
