@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
+import { Check } from "lucide-react";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
@@ -12,23 +15,30 @@ import { appThemeClient } from "@/clients/appThemeClient";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { resolveAppTheme } from "@shared/theme";
 import type { AppColorScheme } from "@shared/types/appTheme";
+import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
+import { THEME_MODE_LABEL, searchThemes } from "./themeSearch";
+
+const filterThemes = (items: AppColorScheme[], query: string): AppColorScheme[] =>
+  searchThemes(items, query).items;
 
 interface ThemePaletteProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const getThemeActionLabel = (_item: AppColorScheme | null): string => "Apply theme";
+const getThemeSectionLabel = (scheme: AppColorScheme): string => THEME_MODE_LABEL[scheme.type];
 
 function ThemeListItem({
   scheme,
   isSelected,
-  isActive,
+  isCurrent,
+  matches,
   onClick,
 }: {
   scheme: AppColorScheme;
   isSelected: boolean;
-  isActive: boolean;
+  isCurrent: boolean;
+  matches: readonly FuseResultMatch[] | undefined;
   onClick: () => void;
 }) {
   return (
@@ -39,34 +49,40 @@ function ThemeListItem({
       id={`theme-option-${scheme.id}`}
       onClick={onClick}
       role="option"
+      // The cursor, and only the cursor — the live preview follows it. What is
+      // saved is `aria-current` with a check, so "running this, trying that"
+      // is two marks rather than two competing backgrounds.
       aria-selected={isSelected}
+      aria-current={isCurrent ? "true" : undefined}
       className={cn(
-        // Was a hand-rolled copy of the shared row: a visible resting outline
-        // and a JS-ternary selected state. `PALETTE_ROW_CLASS` is the same
-        // visual driven off `aria-selected`, so this row now matches every
-        // other palette in the family.
         PALETTE_ROW_CLASS,
-        "group w-full text-left px-3 py-2 rounded-[var(--radius-md)] flex items-center gap-3",
+        "w-full text-left px-3 py-1.5 rounded-[var(--radius-md)] flex items-center gap-3",
         "hover:bg-overlay-subtle"
       )}
     >
-      <PaletteStrip scheme={scheme} />
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-text-primary truncate">{scheme.name}</div>
+        <div className="text-sm font-medium text-text-primary truncate">
+          <HighlightedText text={scheme.name} indices={findMatchIndices(matches, "name")} />
+        </div>
         {scheme.location && (
-          <div className="text-2xs text-text-secondary truncate">{scheme.location}</div>
+          <div className="text-xs text-text-secondary truncate">
+            <HighlightedText
+              text={scheme.location}
+              indices={findMatchIndices(matches, "location")}
+            />
+          </div>
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <span className="text-3xs uppercase tracking-wider text-text-secondary transition-colors group-aria-selected:text-text-primary">
-          {scheme.type === "light" ? "Light" : "Dark"}
-        </span>
-        {isActive && (
-          <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-3xs font-semibold">
-            Active
-          </span>
+      <PaletteStrip scheme={scheme} variant="compact" />
+      {/* Reserved whether or not it is filled, so the strips hold one column. */}
+      <span className="flex w-4 shrink-0 justify-center">
+        {isCurrent && (
+          <>
+            <Check className="w-4 h-4 text-text-primary" aria-hidden="true" />
+            <span className="sr-only">Current theme</span>
+          </>
         )}
-      </div>
+      </span>
     </button>
   );
 }
@@ -90,10 +106,17 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     selectNext,
   } = useSearchablePalette<AppColorScheme>({
     items: allSchemes,
-    fuseOptions: { keys: ["name"], threshold: 0.4 },
+    filterFn: filterThemes,
+    // Every theme stays reachable by browsing: the shell's default cap of 20
+    // cut imported themes off the end, including a committed one.
+    maxResults: allSchemes.length,
+    // Match marks are computed from the live query below, so the rows must be
+    // too — a deferred pass would pair one query's rows with another's marks.
+    deferFiltering: false,
     paletteId: "theme",
     getItemId: (scheme) => scheme.id,
   });
+  const matchesById = useMemo(() => searchThemes(allSchemes, query).matches, [allSchemes, query]);
 
   const originalSchemeIdRef = useRef<string | null>(null);
   const committedRef = useRef(false);
@@ -146,7 +169,15 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   // the seeded selectedIndex has rendered.
   useEffect(() => {
     if (!isOpen) return;
-    if (results.length === 0) return;
+    if (results.length === 0) {
+      // Nothing left to try, so go back to the saved theme rather than keep
+      // painting one the filter has hidden, which no row or footer could name.
+      const originalId = originalSchemeIdRef.current;
+      if (livePreviewReadyRef.current && originalId) {
+        injectSchemeToDOM(resolveAppTheme(originalId, useAppThemeStore.getState().customSchemes));
+      }
+      return;
+    }
     if (!livePreviewReadyRef.current) {
       livePreviewReadyRef.current = true;
       return;
@@ -174,6 +205,39 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     [setSelectedSchemeId, onClose]
   );
 
+  const savedScheme = useMemo(
+    () => allSchemes.find((s) => s.id === selectedSchemeId) ?? null,
+    [allSchemes, selectedSchemeId]
+  );
+
+  // Two facts, because once the cursor leaves the saved theme they differ:
+  // what Enter will do, and what Escape goes back to. The saved row's check
+  // can be scrolled or filtered out of view; the footer can't.
+  const getThemeFooter = useCallback(
+    (scheme: AppColorScheme | null) => {
+      if (!scheme) return null;
+      const onSaved = scheme.id === savedScheme?.id;
+      return (
+        <div className="flex w-full min-w-0 items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <PaletteFooterHints
+              primaryHint={{
+                keys: ["↵"],
+                label: onSaved ? `to keep ${scheme.name}` : `to apply ${scheme.name}`,
+              }}
+            />
+          </div>
+          {!onSaved && savedScheme && (
+            <span className="min-w-0 max-w-[40%] truncate text-text-secondary">
+              Current: {savedScheme.name}
+            </span>
+          )}
+        </div>
+      );
+    },
+    [savedScheme]
+  );
+
   const handleConfirm = useCallback(() => {
     if (results.length === 0 || selectedIndex < 0 || selectedIndex >= results.length) {
       onClose();
@@ -194,14 +258,18 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       onSelectNext={selectNext}
       onConfirm={handleConfirm}
       onClose={onClose}
+      onSelectIndex={setSelectedIndex}
       getItemId={(scheme) => scheme.id}
-      getActionLabel={getThemeActionLabel}
-      renderItem={(scheme, _index, isSelected) => (
+      getFooter={getThemeFooter}
+      getSectionLabel={getThemeSectionLabel}
+      matchesById={matchesById}
+      renderItem={(scheme, _index, isSelected, _onHover, matches) => (
         <ThemeListItem
           key={scheme.id}
           scheme={scheme}
           isSelected={isSelected}
-          isActive={scheme.id === selectedSchemeId}
+          isCurrent={scheme.id === selectedSchemeId}
+          matches={matches}
           onClick={() => commit(scheme)}
         />
       )}

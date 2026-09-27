@@ -135,7 +135,7 @@ function ThemeRow({
       <PaletteStrip scheme={effectiveScheme} variant="compact" />
       <div className="w-11 shrink-0 flex items-center justify-end">
         {isCommitted ? (
-          <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-accent-primary">
+          <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-text-primary">
             <Check className="w-3 h-3" />
             Current
           </span>

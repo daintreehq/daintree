@@ -520,7 +520,7 @@ export const SEL = {
     dialog: '[role="dialog"][aria-label="Theme palette"]',
     searchInput: '[aria-label="Search themes"]',
     list: "#theme-palette-list",
-    options: '#theme-palette-list [role="option"]',
+    options: '#theme-palette-list [role="option"]:not([aria-disabled="true"])',
   },
   logLevelPalette: {
     // Two-step picker. Both steps reuse SearchablePalette's default listId.
