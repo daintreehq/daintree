@@ -749,7 +749,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
-      modelIds: { claude: "opus" },
+      modelIds: { claude: "opus", codex: "gpt-6-astra" },
       customArgs: "",
     });
     mockGetFolderPath.mockResolvedValue("/help");
@@ -761,10 +761,10 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     });
 
     const launch = mockDispatch.mock.calls.find(([id]) => id === "agent.launch");
-    expect(launch?.[1]).toMatchObject({ agentId: "codex" });
-    expect((launch?.[1] as { agentLaunchFlags?: string[] }).agentLaunchFlags ?? []).not.toContain(
-      "opus"
-    );
+    expect(launch?.[1]).toMatchObject({
+      agentId: "codex",
+      agentLaunchFlags: ["--model", "gpt-6-astra"],
+    });
   });
 
   it("falls back to settings when no installed agent can run the assistant", () => {
