@@ -467,6 +467,13 @@ export interface StoreSchema {
    */
   pendingUpdateInstallStage?: PendingUpdateInstallStage;
   /**
+   * The running version and when it first launched on this profile, recorded
+   * at boot on every install path. `firstRunAtMs` is null for a baseline taken
+   * without an observed version change. Absent means "nothing recorded yet" —
+   * no migration entry required (mirrors `dismissedUpdateVersion`).
+   */
+  versionFirstRun?: { version: string; firstRunAtMs: number | null };
+  /**
    * Windows Store notifier state. All fields are optional and read with `??`
    * fallbacks at the call site so an absent value behaves like a default —
    * no migration entry required (mirrors `dismissedUpdateVersion` pattern).
