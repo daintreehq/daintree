@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { looksLikeSecret } from "../secretDetection";
+import { isSecretEnvEntry, looksLikeSecret, maskSecretValue } from "../secretDetection";
 
 describe("looksLikeSecret", () => {
   describe("safe-form bypass", () => {
@@ -120,5 +120,35 @@ describe("looksLikeSecret", () => {
         looksLikeSecret("https://example.com/very/long/path/to/resource?query=value&other=thing")
       ).toBe(false);
     });
+  });
+});
+
+describe("isSecretEnvEntry", () => {
+  it("flags a secret-sounding name whatever its value", () => {
+    expect(isSecretEnvEntry("GITHUB_TOKEN", "short")).toBe(true);
+  });
+
+  it("flags a secret-looking value under any name", () => {
+    expect(isSecretEnvEntry("UPSTREAM", "plain", "sk-ant-api03-Zq8w3EhTn5vB7mJdX2fK")).toBe(true);
+  });
+
+  /** The safe form names the shell variable to set — hiding it hides the instruction. */
+  it("does not mask a ${VAR} reference under a secret-sounding name", () => {
+    expect(isSecretEnvEntry("ANTHROPIC_API_KEY", "${MY_API_KEY}")).toBe(false);
+    expect(isSecretEnvEntry("ANTHROPIC_API_KEY", "${MY_API_KEY}", "sk-live-value")).toBe(true);
+  });
+
+  it("leaves ordinary entries alone", () => {
+    expect(isSecretEnvEntry("NODE_ENV", "production", "development")).toBe(false);
+  });
+});
+
+describe("maskSecretValue", () => {
+  it("never reveals more than the last four characters", () => {
+    for (const value of ["tiny", "sk-ant-api03-Zq8w3EhTn5vB7mJdX2fK", "x".repeat(15)]) {
+      const masked = maskSecretValue(value);
+      expect(masked).not.toContain(value.slice(0, -4) || value);
+      expect(masked.replace(/•/g, "").length).toBeLessThanOrEqual(4);
+    }
   });
 });

@@ -10,6 +10,8 @@
  * the value. Nothing about the value is logged, transmitted, or stored.
  */
 
+import { isSensitiveEnvKey } from "@shared/utils/envVars";
+
 // Matches a shell-style env var reference like `${ANTHROPIC_API_KEY}` or
 // `${home}`. Allows lowercase to avoid false positives on legitimate
 // lowercase variable names (e.g. POSIX `$path`).
@@ -43,4 +45,27 @@ export function looksLikeSecret(value: string): boolean {
     if (re.test(value)) return true;
   }
   return LONG_OPAQUE_RE.test(value);
+}
+
+/**
+ * Whether an env entry is masked wherever it is displayed: a secret-sounding
+ * name, or any of its values looking like a secret. One test for every
+ * surface, so an editor and a preview of the same variable never disagree
+ * about whether it is safe to show.
+ */
+export function isSecretEnvEntry(key: string, ...values: string[]): boolean {
+  if (values.some(looksLikeSecret)) return true;
+  // A `${VAR}` reference under a secret-sounding name is the safe form, not a
+  // secret — and the variable it names is exactly what the reader needs.
+  const allReferences = values.length > 0 && values.every((v) => SAFE_FORM_RE.test(v));
+  return isSensitiveEnvKey(key) && !allReferences;
+}
+
+/**
+ * A masked value keeps its last four characters when it is long enough for
+ * that to give nothing useful away, so two different secrets still read as
+ * different at a glance.
+ */
+export function maskSecretValue(value: string): string {
+  return value.length >= 16 ? `••••••••${value.slice(-4)}` : "••••••••";
 }

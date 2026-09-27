@@ -1,10 +1,14 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
-import { AlertTriangle } from "lucide-react";
-import { AppDialog } from "@/components/ui/AppDialog";
+import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
+import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { Textarea } from "@/components/ui/textarea";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { cn } from "@/lib/utils";
 import { parseEnvPaste, type ParseEnvResult } from "@/utils/parseEnvPaste";
+import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 
 type ConflictResolution = "keep" | "overwrite";
 type Step = "paste" | "conflicts";
@@ -20,6 +24,8 @@ interface ImportEnvDialogProps {
   onClose: () => void;
   env: Record<string, string>;
   onImport: (merged: Record<string, string>) => void;
+  /** Where focus goes on close if the button that opened the dialog is gone by then. */
+  restoreFocusTo?: RestoreFocusTarget;
 }
 
 /**
@@ -33,15 +39,49 @@ const STEP_TITLE: Record<Step, string> = {
   conflicts: "Resolve conflicts",
 };
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 /**
- * The merge policy restated where the evidence is. Without it the conflict list
- * shows the same old/new pair under both policies, which reads as "all of these
- * are about to change" even when "Keep existing" means none of them are.
+ * The merge policy restated where the evidence is, as what the import will
+ * actually do. Without it the conflict list shows the same old/new pair under
+ * both policies, which reads as "all of these are about to change" even when
+ * "Keep existing" means none of them are — and naming the additions here keeps
+ * the other half of the import in view at the point of commitment.
  */
-const OUTCOME_LABEL: Record<ConflictResolution, string> = {
-  keep: "Existing values kept",
-  overwrite: "Incoming values applied",
-};
+function outcomeLabel(mode: ConflictResolution, conflictCount: number, newCount: number): string {
+  const existing = `${mode === "keep" ? "keeps" : "replaces"} ${plural(conflictCount, "existing value")}`;
+  return newCount > 0 ? `Adds ${newCount} new · ${existing}` : `No new keys · ${existing}`;
+}
+
+/**
+ * A rejected line echoed back under its error is still pasted text, and a
+ * malformed secret is still a secret — mask its value the way the comparison
+ * rows do. The key stays readable because the key is usually what is wrong.
+ */
+function redactRaw(raw: string): string {
+  const eq = raw.indexOf("=");
+  if (eq === -1) return raw;
+  const head = raw.slice(0, eq + 1);
+  const value = raw.slice(eq + 1).trim();
+  const bare = value.replace(/^["']|["']$/g, "");
+  const key = head
+    .replace(/^\s*export\s+/, "")
+    .slice(0, -1)
+    .trim();
+  return isSecretEnvEntry(key, bare) ? `${head}${maskSecretValue(bare)}` : raw;
+}
+
+/**
+ * Character offsets of a 1-based line in the paste, for selecting it. Split on
+ * LF alone: a textarea's value has its newlines normalized to LF, so a CRLF
+ * paste arrives here without its CRs and the offsets match the field.
+ */
+function lineRange(text: string, line: number): [number, number] {
+  const lines = text.split("\n");
+  let start = 0;
+  for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i]!.length + 1;
+  return [start, start + (lines[line - 1]?.length ?? 0)];
+}
 
 /** The caption-strip recipe shared by the app's other destructive previews. */
 const PREVIEW_FRAME = "rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04] text-xs";
@@ -57,14 +97,24 @@ function collapsePairs(result: ParseEnvResult): Record<string, string> {
   return out;
 }
 
-function findConflicts(env: Record<string, string>, incoming: Record<string, string>): Conflict[] {
-  const out: Conflict[] = [];
+interface Classified {
+  conflicts: Conflict[];
+  /** Keys the env does not have yet. */
+  newCount: number;
+  /** Keys the env already holds with exactly this value — importing them changes nothing. */
+  unchangedCount: number;
+}
+
+function classify(env: Record<string, string>, incoming: Record<string, string>): Classified {
+  const conflicts: Conflict[] = [];
+  let newCount = 0;
+  let unchangedCount = 0;
   for (const [key, newValue] of Object.entries(incoming)) {
-    if (Object.prototype.hasOwnProperty.call(env, key) && env[key] !== newValue) {
-      out.push({ key, oldValue: env[key] ?? "", newValue });
-    }
+    if (!Object.prototype.hasOwnProperty.call(env, key)) newCount++;
+    else if (env[key] === newValue) unchangedCount++;
+    else conflicts.push({ key, oldValue: env[key] ?? "", newValue });
   }
-  return out;
+  return { conflicts, newCount, unchangedCount };
 }
 
 function buildMerged(
@@ -94,7 +144,17 @@ function buildMerged(
  * (WCAG 1.4.1, 1.3.1). `(empty)` is italicised so a value being blanked cannot
  * be mistaken for a value named "(empty)".
  */
-function ConflictSide({ label, value, kept }: { label: string; value: string; kept: boolean }) {
+function ConflictSide({
+  label,
+  value,
+  kept,
+  masked,
+}: {
+  label: string;
+  value: string;
+  kept: boolean;
+  masked: boolean;
+}) {
   const isEmpty = value === "";
   return (
     <>
@@ -111,18 +171,36 @@ function ConflictSide({ label, value, kept }: { label: string; value: string; ke
           isEmpty && "italic"
         )}
       >
-        {isEmpty ? "(empty)" : value}
+        {isEmpty ? (
+          "(empty)"
+        ) : masked ? (
+          <>
+            <span aria-hidden="true">{maskSecretValue(value)}</span>
+            <span className="sr-only">Hidden</span>
+          </>
+        ) : (
+          value
+        )}
       </dd>
     </>
   );
 }
 
-export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDialogProps) {
+export function ImportEnvDialog({
+  isOpen,
+  onClose,
+  env,
+  onImport,
+  restoreFocusTo,
+}: ImportEnvDialogProps) {
   const [pastedText, setPastedText] = useState("");
   const [step, setStep] = useState<Step>("paste");
   const [conflictResolution, setConflictResolution] = useState<ConflictResolution>("keep");
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
 
-  const errorsId = useId();
+  const headingId = useId();
+  const helpId = useId();
+  const errorSummaryId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const prevStepRef = useRef<Step>("paste");
@@ -133,6 +211,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
       setPastedText("");
       setStep("paste");
       setConflictResolution("keep");
+      setRevealed(new Set());
       prevStepRef.current = "paste";
     }
   }, [isOpen]);
@@ -169,13 +248,39 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
 
   const parsed = useMemo(() => parseEnvPaste(pastedText), [pastedText]);
   const incoming = useMemo(() => collapsePairs(parsed), [parsed]);
-  const conflicts = useMemo(() => findConflicts(env, incoming), [env, incoming]);
+  const { conflicts, newCount, unchangedCount } = useMemo(
+    () => classify(env, incoming),
+    [env, incoming]
+  );
 
   const incomingCount = Object.keys(incoming).length;
-  const newCount = incomingCount - conflicts.length;
   const hasErrors = parsed.errors.length > 0;
-  const canProceed = !hasErrors && incomingCount > 0;
+  // A paste of values that are all already set would "import" nothing, so the
+  // button that says it will must not be pressable.
+  const changesSomething = newCount > 0 || conflicts.length > 0;
+  const canProceed = !hasErrors && changesSomething;
+  // Keeping every existing value when nothing is new is a cancel that looks
+  // like a success: the dialog would close having changed nothing.
+  const keepIsNoOp = step === "conflicts" && conflictResolution === "keep" && newCount === 0;
+  const canCommit = step === "conflicts" ? !keepIsNoOp : canProceed;
   const duplicateInPasteCount = parsed.pairs.length - incomingCount;
+
+  const toggleReveal = (key: string) =>
+    setRevealed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  /** Put the caret on the offending line, selected, so the fix is one keystroke away. */
+  const goToLine = (line: number) => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const [start, end] = lineRange(pastedText, line);
+    el.focus();
+    el.setSelectionRange(start, end);
+  };
 
   const handleImport = (mode: ConflictResolution) => {
     onImport(buildMerged(env, incoming, mode));
@@ -183,7 +288,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
   };
 
   const handlePrimary = () => {
-    if (!canProceed) return;
+    if (!canCommit) return;
     if (step === "paste") {
       if (conflicts.length > 0) {
         setStep("conflicts");
@@ -210,21 +315,25 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
         ? "Import"
         : conflicts.length > 0
           ? `Review ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
-          : `Import ${incomingCount} variable${incomingCount === 1 ? "" : "s"}`;
+          : `Import ${plural(newCount, "variable")}`;
 
   /** Why the primary action is dead. A disabled button that explains nothing is a dead end. */
-  const blockedHint =
-    step !== "paste" || canProceed
+  const blockedHint = keepIsNoOp
+    ? "No new keys to add"
+    : step !== "paste" || canProceed
       ? null
       : hasErrors
-        ? `Fix ${parsed.errors.length} parse error${parsed.errors.length === 1 ? "" : "s"} to continue`
-        : pastedText.trim() !== ""
-          ? "No variables found in that paste"
-          : null;
+        ? `Fix ${plural(parsed.errors.length, "parse error")} to continue`
+        : incomingCount > 0
+          ? "Every variable in that paste is already set"
+          : pastedText.trim() !== ""
+            ? "No variables found in that paste"
+            : null;
 
   const secondaryLabel = step === "conflicts" ? "Back" : "Cancel";
   const handleSecondary = () => {
     if (step === "conflicts") {
+      setRevealed(new Set());
       setStep("paste");
       return;
     }
@@ -238,6 +347,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
       size="md"
       zIndex="nested"
       initialFocus="none"
+      restoreFocusTo={restoreFocusTo}
       data-testid="import-env-dialog"
     >
       <AppDialog.Header>
@@ -249,6 +359,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
         <div className="space-y-1">
           <h3
             ref={stepHeadingRef}
+            id={headingId}
             tabIndex={-1}
             className="text-sm font-medium text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-xs"
             data-testid="import-env-step-heading"
@@ -257,14 +368,16 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
           </h3>
           <AppDialog.Description>
             {step === "paste" ? (
-              <>
-                Keys must match <code className="text-2xs">[A-Za-z_][A-Za-z0-9_]*</code>. Quoted
-                values, comments, and <code className="text-2xs">export</code> prefixes are
-                supported.
-              </>
+              // Its own id so the field can point at it: the dialog's
+              // description is announced with the dialog, not with the field
+              // a user comes back to after reading an error.
+              <span id={helpId}>
+                Paste one <code className="text-2xs">KEY=value</code> per line. Quotes, comments,
+                and <code className="text-2xs">export</code> are supported.
+              </span>
             ) : (
               <>
-                {conflicts.length} key{conflicts.length === 1 ? "" : "s"} already exist
+                {plural(conflicts.length, "key")} already exist
                 {conflicts.length === 1 ? "s" : ""} with a different value. Choose which one wins.
               </>
             )}
@@ -273,83 +386,109 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
 
         {step === "paste" ? (
           <>
-            <textarea
-              ref={textareaRef}
-              value={pastedText}
-              onChange={(e) => setPastedText(e.target.value)}
-              placeholder={'FOO=bar\nexport BAZ="hello world"\n# comments supported'}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              // Focus ring is the documented shared recipe rather than a local
-              // `focus:ring-*`: `docs/themes/interaction-state-recipes.md` calls
-              // for `focus-visible:outline-*` for keyboard focus, and the ring
-              // this replaced measured ~2.2:1 — under the 3:1 floor for a
-              // non-text indicator, on the step's primary input.
-              className="w-full h-56 resize-y font-mono text-xs leading-[inherit] bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-text-primary placeholder:text-text-placeholder transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-              aria-label="Paste .env content"
-              aria-invalid={hasErrors || undefined}
-              aria-describedby={hasErrors ? errorsId : undefined}
-              data-testid="import-env-textarea"
-            />
+            <div className="space-y-2">
+              <Textarea
+                ref={textareaRef}
+                variant="code"
+                // Tall enough for a typical .env at a glance, short enough that
+                // a handful of parse problems and the summary still fit above
+                // the footer. It resizes when a paste is longer than that.
+                className="h-40 leading-[inherit]"
+                value={pastedText}
+                onChange={(e) => setPastedText(e.target.value)}
+                placeholder={'FOO=bar\nexport BAZ="hello world"\n# comments supported'}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                // Named by the heading above it, so the name a voice-control
+                // user reads off the screen is the name that reaches the field.
+                aria-labelledby={headingId}
+                invalid={hasErrors}
+                aria-invalid={hasErrors || undefined}
+                aria-describedby={hasErrors ? `${errorSummaryId} ${helpId}` : helpId}
+                data-testid="import-env-textarea"
+              />
+              {/* Directly under the field, ahead of any errors: it is the
+                  answer to "did that work", and it is shown alongside parse
+                  errors too — gating it on a clean parse meant a paste with a
+                  bad line and a duplicated key reported the bad line and
+                  silently dropped the duplicate. */}
+              {incomingCount > 0 && (
+                <p className="text-xs text-text-secondary" data-testid="import-env-summary">
+                  {plural(incomingCount, "variable")} detected
+                  {newCount > 0 && newCount !== incomingCount ? ` · ${newCount} new` : ""}
+                  {conflicts.length > 0 ? ` · ${plural(conflicts.length, "conflict")}` : ""}
+                  {unchangedCount > 0 ? ` · ${unchangedCount} already set` : ""}
+                  {conflicts.length === 0 && newCount > 0 ? " · existing values unchanged" : ""}
+                  {duplicateInPasteCount > 0 ? (
+                    <span className="text-text-primary">
+                      {" "}
+                      · {plural(duplicateInPasteCount, "duplicate key")} in paste (last value kept)
+                    </span>
+                  ) : null}
+                </p>
+              )}
+            </div>
             {hasErrors && (
-              <div
-                id={errorsId}
-                role="alert"
-                className="rounded-[var(--radius-md)] border border-status-error/30 bg-status-error/10 px-3 py-2 text-xs leading-[inherit]"
-                data-testid="import-env-errors"
-              >
-                <div className="flex items-center gap-1.5 font-medium mb-1 text-status-error">
-                  <AlertTriangle size={12} aria-hidden="true" />
-                  <span>
-                    {parsed.errors.length} parse error
-                    {parsed.errors.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                {/* The tint, border and icon carry "this blocks the import". The
-                    lines themselves are what the user has to read and act on,
-                    so they run on the audited text tiers — the amber tri-tone
-                    this replaced flattened to one uniform run under
-                    `forced-colors: active` anyway. */}
-                <ul className="space-y-0.5 font-mono text-2xs">
-                  {parsed.errors.map((e) => (
-                    <li key={`${e.line}-${e.raw}`}>
-                      <span className="text-text-secondary">Line {e.line}:</span>{" "}
-                      <span className="font-medium text-text-primary">{e.reason}</span>
-                      {/* Weight ranks the reason above the line it came from,
-                          the same way the outcome rows above rank a kept value.
-                          The raw line drops to its own row rather than sitting
-                          inline: it is arbitrary pasted text, and reasons like
-                          `Invalid key "2BAD_KEY"` already end in a quoted piece
-                          of it, so inline it reads as a continuation of the
-                          reason with or without a separator. */}
-                      {e.raw.trim() !== "" && (
-                        <div className="pl-4 break-all text-text-secondary">{e.raw}</div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+              // The shared error banner, not a live region: it re-renders on
+              // every keystroke, and an alert would interrupt the user
+              // mid-word while they repair the very line it describes. The
+              // field's aria-invalid and its describedby link to this are what
+              // announce it, on focus — the same contract as `FieldError`.
+              <div data-testid="import-env-errors">
+                {/* What the field is described by: the count and the first
+                    problem, not the whole interactive list — landing back in
+                    the field from a Line link would otherwise read every
+                    reason, fix and pasted line again. */}
+                <span
+                  id={errorSummaryId}
+                  className="sr-only"
+                  data-testid="import-env-error-summary"
+                >
+                  {plural(parsed.errors.length, "parse error")}. Line {parsed.errors[0]!.line}:{" "}
+                  {parsed.errors[0]!.reason}.
+                </span>
+                <InlineStatusBanner
+                  severity="error"
+                  role="status"
+                  ariaLive="off"
+                  animated={false}
+                  className="rounded-[var(--radius-md)]"
+                  title={`${plural(parsed.errors.length, "parse error")}`}
+                  descriptionExtras={
+                    <ul className="mt-1.5 space-y-1.5 text-xs">
+                      {parsed.errors.map((e) => (
+                        <li key={`${e.line}-${e.raw}`}>
+                          <div className="flex flex-wrap items-baseline gap-x-2">
+                            {/* The line number is the way to the line: it
+                                selects it in the field, so the fix is typed
+                                over the problem rather than hunted for. */}
+                            <button
+                              type="button"
+                              onClick={() => goToLine(e.line)}
+                              aria-label={`Go to line ${e.line}`}
+                              className="shrink-0 rounded-xs font-mono text-2xs text-text-secondary underline decoration-dotted underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                            >
+                              Line {e.line}
+                            </button>
+                            <span className="font-medium text-text-primary">{e.reason}</span>
+                            {e.fix && <span className="text-text-secondary">{e.fix}</span>}
+                          </div>
+                          {/* The raw line on its own row: it is arbitrary
+                              pasted text, and reasons like `Invalid key
+                              "2BAD_KEY"` already end in a quoted piece of it,
+                              so inline it reads as a continuation. */}
+                          {e.raw.trim() !== "" && (
+                            <div className="mt-0.5 break-all font-mono text-2xs text-text-secondary">
+                              {redactRaw(e.raw)}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  }
+                />
               </div>
-            )}
-            {/* Shown alongside parse errors too. Gating this on a clean parse
-                meant a paste that had both a bad line and a duplicated key
-                reported the bad line and silently dropped the duplicate. */}
-            {incomingCount > 0 && (
-              <p className="text-2xs text-text-secondary" data-testid="import-env-summary">
-                {incomingCount} variable{incomingCount === 1 ? "" : "s"} detected
-                {conflicts.length > 0
-                  ? ` · ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
-                  : ""}
-                {newCount > 0 && conflicts.length > 0 ? ` · ${newCount} new` : ""}
-                {conflicts.length === 0 ? " · existing values unchanged" : ""}
-                {duplicateInPasteCount > 0 ? (
-                  <span className="text-text-primary">
-                    {" "}
-                    · {duplicateInPasteCount} duplicate key
-                    {duplicateInPasteCount === 1 ? "" : "s"} in paste (last value kept)
-                  </span>
-                ) : null}
-              </p>
             )}
           </>
         ) : (
@@ -389,8 +528,8 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                   Conflicts
                   <span className={PREVIEW_COUNT}>{conflicts.length}</span>
                 </span>
-                <span className="text-2xs text-text-secondary">
-                  {OUTCOME_LABEL[conflictResolution]}
+                <span className="text-2xs text-text-secondary" data-testid="import-env-outcome">
+                  {outcomeLabel(conflictResolution, conflicts.length, newCount)}
                 </span>
               </div>
               {/* Bounded and scrolled inside itself so the footer never moves,
@@ -404,27 +543,55 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                 scrollClassName="scroll-py-8"
                 tabIndex={0}
                 role="region"
-                aria-label={`Conflicting keys — ${OUTCOME_LABEL[conflictResolution].toLowerCase()}`}
+                aria-label={`Conflicting keys — ${outcomeLabel(conflictResolution, conflicts.length, newCount).toLowerCase()}`}
                 data-testid="import-env-conflict-scroller"
               >
                 <ul className="divide-y divide-tint/[0.06]">
-                  {conflicts.map((c) => (
-                    <li key={c.key} className="px-3 py-2">
-                      <div className="font-mono text-2xs text-text-primary">{c.key}</div>
-                      <dl className="mt-0.5 grid grid-cols-[max-content_1fr] items-baseline gap-x-3 gap-y-0.5">
-                        <ConflictSide
-                          label="Existing"
-                          value={c.oldValue}
-                          kept={conflictResolution === "keep"}
-                        />
-                        <ConflictSide
-                          label="Incoming"
-                          value={c.newValue}
-                          kept={conflictResolution === "overwrite"}
-                        />
-                      </dl>
-                    </li>
-                  ))}
+                  {conflicts.map((c) => {
+                    const secret = isSecretEnvEntry(c.key, c.oldValue, c.newValue);
+                    const masked = secret && !revealed.has(c.key);
+                    return (
+                      <li key={c.key} className="px-3 py-2">
+                        <div className="flex min-h-5 items-center justify-between gap-2">
+                          <span className="min-w-0 break-all font-mono text-2xs text-text-primary">
+                            {c.key}
+                          </span>
+                          {/* Masked like the editor this imports into: a review
+                            step is exactly when a screen is being shared. One
+                            toggle per row, because the comparison needs both
+                            sides at once. */}
+                          {secret && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              className="-my-1 shrink-0"
+                              onClick={() => toggleReveal(c.key)}
+                              aria-pressed={!masked}
+                              aria-label={`Show values of ${c.key}`}
+                              data-testid="import-env-reveal"
+                            >
+                              {masked ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
+                            </Button>
+                          )}
+                        </div>
+                        <dl className="mt-0.5 grid grid-cols-[max-content_1fr] items-baseline gap-x-3 gap-y-0.5">
+                          <ConflictSide
+                            label="Existing"
+                            value={c.oldValue}
+                            kept={conflictResolution === "keep"}
+                            masked={masked}
+                          />
+                          <ConflictSide
+                            label="Incoming"
+                            value={c.newValue}
+                            kept={conflictResolution === "overwrite"}
+                            masked={masked}
+                          />
+                        </dl>
+                      </li>
+                    );
+                  })}
                 </ul>
               </ScrollShadow>
             </div>
@@ -438,7 +605,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
         primaryAction={{
           label: primaryLabel,
           onClick: handlePrimary,
-          disabled: !canProceed,
+          disabled: !canCommit,
         }}
       />
     </AppDialog>

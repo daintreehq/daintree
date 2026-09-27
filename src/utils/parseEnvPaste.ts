@@ -22,6 +22,8 @@ export interface ParseError {
   line: number;
   raw: string;
   reason: string;
+  /** What to change on the line, when the parser knows (WCAG 3.3.3). */
+  fix?: string;
 }
 
 export interface ParseEnvResult {
@@ -82,7 +84,7 @@ function findUnescapedQuote(body: string, quote: string): number {
   return -1;
 }
 
-function parseValue(raw: string): { value: string; ok: boolean; reason?: string } {
+function parseValue(raw: string): { value: string; ok: boolean; reason?: string; fix?: string } {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
     return { value: "", ok: true };
@@ -93,13 +95,23 @@ function parseValue(raw: string): { value: string; ok: boolean; reason?: string 
     const rest = trimmed.slice(1);
     const closeIdx = findUnescapedQuote(rest, first);
     if (closeIdx === -1) {
-      return { value: "", ok: false, reason: "Unterminated quoted value" };
+      return {
+        value: "",
+        ok: false,
+        reason: "Unterminated quoted value",
+        fix: `Close the value with a matching ${first}`,
+      };
     }
     const body = rest.slice(0, closeIdx);
     // Anything after the closing quote must be whitespace or a `# comment`.
     const tail = rest.slice(closeIdx + 1).trim();
     if (tail.length > 0 && !tail.startsWith("#")) {
-      return { value: "", ok: false, reason: "Unexpected text after closing quote" };
+      return {
+        value: "",
+        ok: false,
+        reason: "Unexpected text after closing quote",
+        fix: "Quote the whole value, or start a comment with #",
+      };
     }
     const value = first === '"' ? decodeDoubleQuoted(body) : body;
     return { value, ok: true };
@@ -134,7 +146,12 @@ export function parseEnvPaste(text: string): ParseEnvResult {
     const withoutExport = trimmed.replace(EXPORT_RE, "");
     const eqIdx = withoutExport.indexOf("=");
     if (eqIdx === -1) {
-      errors.push({ line: lineNumber, raw, reason: "Missing '='" });
+      errors.push({
+        line: lineNumber,
+        raw,
+        reason: "Missing '='",
+        fix: "Separate the key and value with =",
+      });
       continue;
     }
 
@@ -142,17 +159,27 @@ export function parseEnvPaste(text: string): ParseEnvResult {
     const valuePart = withoutExport.slice(eqIdx + 1);
 
     if (keyPart === "") {
-      errors.push({ line: lineNumber, raw, reason: "Empty key" });
+      errors.push({ line: lineNumber, raw, reason: "Empty key", fix: "Add a name before =" });
       continue;
     }
     if (!KEY_RE.test(keyPart)) {
-      errors.push({ line: lineNumber, raw, reason: `Invalid key "${keyPart}"` });
+      errors.push({
+        line: lineNumber,
+        raw,
+        reason: `Invalid key "${keyPart}"`,
+        fix: "Use letters, digits and _, not starting with a digit",
+      });
       continue;
     }
 
     const parsed = parseValue(valuePart);
     if (!parsed.ok) {
-      errors.push({ line: lineNumber, raw, reason: parsed.reason ?? "Invalid value" });
+      errors.push({
+        line: lineNumber,
+        raw,
+        reason: parsed.reason ?? "Invalid value",
+        ...(parsed.fix ? { fix: parsed.fix } : {}),
+      });
       continue;
     }
 
