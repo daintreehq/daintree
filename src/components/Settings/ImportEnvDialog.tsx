@@ -8,8 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { cn } from "@/lib/utils";
 import { parseEnvPaste, type ParseEnvResult } from "@/utils/parseEnvPaste";
-import { looksLikeSecret } from "@/utils/secretDetection";
-import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 
 type ConflictResolution = "keep" | "overwrite";
 type Step = "paste" | "conflicts";
@@ -54,20 +53,6 @@ function outcomeLabel(mode: ConflictResolution, conflictCount: number, newCount:
   return newCount > 0 ? `Adds ${newCount} new · ${existing}` : `No new keys · ${existing}`;
 }
 
-/** Same test the host editor masks its value cells by, so the two never disagree. */
-function isSecretPair(key: string, a: string, b: string): boolean {
-  return isSensitiveEnvKey(key) || looksLikeSecret(a) || looksLikeSecret(b);
-}
-
-/**
- * A masked value keeps its last four characters when it is long enough for
- * that to give nothing useful away, so two different secrets still read as
- * different at a glance — which is the whole point of the comparison.
- */
-function maskValue(value: string): string {
-  return value.length >= 16 ? `••••••••${value.slice(-4)}` : "••••••••";
-}
-
 /**
  * A rejected line echoed back under its error is still pasted text, and a
  * malformed secret is still a secret — mask its value the way the comparison
@@ -83,7 +68,7 @@ function redactRaw(raw: string): string {
     .replace(/^\s*export\s+/, "")
     .slice(0, -1)
     .trim();
-  return isSecretPair(key, bare, "") ? `${head}${maskValue(bare)}` : raw;
+  return isSecretEnvEntry(key, bare) ? `${head}${maskSecretValue(bare)}` : raw;
 }
 
 /**
@@ -186,7 +171,16 @@ function ConflictSide({
           isEmpty && "italic"
         )}
       >
-        {isEmpty ? "(empty)" : masked ? maskValue(value) : value}
+        {isEmpty ? (
+          "(empty)"
+        ) : masked ? (
+          <>
+            <span aria-hidden="true">{maskSecretValue(value)}</span>
+            <span className="sr-only">Hidden</span>
+          </>
+        ) : (
+          value
+        )}
       </dd>
     </>
   );
@@ -554,7 +548,7 @@ export function ImportEnvDialog({
               >
                 <ul className="divide-y divide-tint/[0.06]">
                   {conflicts.map((c) => {
-                    const secret = isSecretPair(c.key, c.oldValue, c.newValue);
+                    const secret = isSecretEnvEntry(c.key, c.oldValue, c.newValue);
                     const masked = secret && !revealed.has(c.key);
                     return (
                       <li key={c.key} className="px-3 py-2">

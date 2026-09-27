@@ -11,8 +11,7 @@ import {
 } from "lucide-react";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { looksLikeSecret } from "@/utils/secretDetection";
-import { isSensitiveEnvKey } from "../../../shared/utils/envVars";
+import { isSecretEnvEntry, looksLikeSecret } from "@/utils/secretDetection";
 import { ImportEnvDialog } from "./ImportEnvDialog";
 import { Button } from "@/components/ui/button";
 import { useRowFocus } from "./useRowFocus";
@@ -818,7 +817,10 @@ export function EnvVarEditor({
             !row.isInherited && trimmedKey !== "" && duplicateKeys.has(trimmedKey);
           const isMalformed = !row.isInherited && trimmedKey !== "" && !isValidEnvKey(trimmedKey);
           const hasSecretWarning = !row.isInherited && looksLikeSecret(row.value);
-          const isSecret = !row.isInherited && (isSensitiveEnvKey(row.key) || hasSecretWarning);
+          // Inherited rows are masked too: read-only is not the same as safe
+          // to show, and the value is the same secret it is in the editor it
+          // came from.
+          const isSecret = isSecretEnvEntry(row.key, row.value);
           const isRevealed = revealedRows.has(row.rowId);
           const valueInputType = isSecret && !isRevealed ? "password" : "text";
           const isOverride =

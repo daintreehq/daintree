@@ -14,6 +14,7 @@ import { useRowFocus } from "@/components/Settings/useRowFocus";
 import { useSettingsTabFlush } from "@/components/Settings/SettingsFlushRegistry";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { isSecretEnvEntry } from "@/utils/secretDetection";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { EnvVar } from "./projectSettingsDirty";
 import type { ProjectSettings } from "@shared/types/project";
@@ -199,7 +200,9 @@ export function EnvironmentVariablesEditor({
           <SettingsGroup>
             {sortedGlobalEntries.map(([key, value]) => {
               const isOverridden = overriddenGlobalKeys.has(key);
-              const isSensitive = isSensitiveEnvKey(key);
+              // Name or value, the same test the editors mask by — a token
+              // under a neutral name is still a token.
+              const isSensitive = isSecretEnvEntry(key, value);
               return (
                 <div
                   key={`global-${key}`}

@@ -566,6 +566,19 @@ describe("EnvVarEditor", () => {
       expect(queryAllByTestId("env-editor-revert")).toHaveLength(0);
     });
 
+    /** Read-only is not the same as safe to show: an inherited secret is the same secret. */
+    it("masks an inherited secret the same way it masks an editable one", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor
+          env={{}}
+          onChange={onChange}
+          inheritedEnv={{ ANTHROPIC_API_KEY: "from-global", NODE_ENV: "dev" }}
+        />
+      );
+      const types = getAllByTestId("env-editor-value").map((el) => el.getAttribute("type"));
+      expect(types).toEqual(["password", "text"]);
+    });
+
     it("shows overrides first (insertion order), then inherited-only keys (insertion order)", () => {
       const { getAllByTestId } = render(
         <EnvVarEditor
