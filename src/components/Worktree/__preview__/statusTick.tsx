@@ -276,6 +276,9 @@ function Card({
               badges={{}}
               gitStateIndicator={null}
               menu={menu}
+              // As the card wires it: the delete shortcut appears once a
+              // worktree's work is ready for cleanup.
+              onCleanupWorktree={row.id === "cleanup" && !row.noGrip ? noop : undefined}
             />
           </div>
           {!collapsed && (

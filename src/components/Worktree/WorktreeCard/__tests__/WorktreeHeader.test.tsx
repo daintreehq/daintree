@@ -924,6 +924,20 @@ describe("WorktreeHeader cleanup button", () => {
     expect(button.getAttribute("data-testid")).toBe("worktree-cleanup-button");
   });
 
+  it("keeps the cleanup button neutral until it is pointed at or focused", () => {
+    renderHeader({ onCleanupWorktree: vi.fn() });
+    const button = screen.getByTestId("worktree-cleanup-button");
+    // Sidebar chrome is quiet at rest; the red belongs to the interaction and
+    // to the confirm, not to a resting icon.
+    const restingDanger = button.className
+      .split(/\s+/)
+      .filter((c) => c.includes("status-error") && !/^(hover|focus-visible):/.test(c));
+    expect(restingDanger).toEqual([]);
+    expect(button.className).toMatch(/(^|\s)hover:text-status-error(\s|$)/);
+    // Nor does it borrow the merged badge's colour and compete with it.
+    expect(button.className).not.toContain("text-pr-merged");
+  });
+
   it("does not render the cleanup button when onCleanupWorktree is omitted", () => {
     renderHeader();
     expect(screen.queryByRole("button", { name: "Delete worktree" })).toBeNull();
@@ -975,14 +989,6 @@ describe("WorktreeHeader cleanup button", () => {
     const wrapper = screen.getByTestId("worktree-actions-wrapper");
     const cleanupButton = screen.getByTestId("worktree-cleanup-button");
     expect(wrapper.firstElementChild).toBe(cleanupButton);
-  });
-
-  it("uses muted destructive coloring at idle and full red on hover", () => {
-    renderHeader({ onCleanupWorktree: vi.fn() });
-    const button = screen.getByTestId("worktree-cleanup-button");
-    expect(button.className).toContain("text-status-error/70");
-    expect(button.className).toContain("hover:text-status-error");
-    expect(button.className).not.toContain("text-pr-merged");
   });
 
   it("calls onCleanupWorktree and stops propagation when clicked", () => {
