@@ -144,6 +144,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       onQueryChange={palette.setQuery}
       onSelectPrevious={palette.selectPrevious}
       onSelectNext={palette.selectNext}
+      onSelectIndex={palette.setSelectedIndex}
       onConfirm={palette.confirmSelection}
       onClose={handleClose}
       getItemId={(item) => item.id}
