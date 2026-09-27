@@ -173,39 +173,34 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
     steps: [
       {
         id: "issue",
-        title: "Work on GitHub Issue",
-        description:
-          "Create an isolated worktree for the issue. By default, the worktree is created in a sibling " +
-          "directory, allowing you to work on multiple issues simultaneously without conflicts.",
+        title: "Work on a GitHub issue",
+        description: "Creates a worktree for the issue beside this one and switches to it.",
+        submitLabel: "Create worktree",
         fields: [
           {
             name: "issueNumber",
-            label: "Issue Number",
+            label: "Issue number",
             type: "number",
-            placeholder: "e.g., 123",
+            placeholder: "123",
             validation: {
               min: 1,
-              message: "Issue number must be a positive integer",
+              integer: true,
+              message: "Enter a whole issue number, like 123",
             },
-            helpText: "The GitHub issue number. Leave empty to let the agent help you find one.",
           },
           {
             name: "branchName",
-            label: "Branch Name (Optional)",
+            label: "Branch name",
             type: "text",
-            placeholder: "issue-1234-add-dark-mode",
-            helpText:
-              "Leave empty to auto-generate from issue title. Format: issue-{number}-{slugified-title}. " +
-              "If the branch already exists, a suffix will be added automatically.",
+            placeholder: "issue-123-add-dark-mode",
+            helpText: "Leave blank to name it from the issue title.",
           },
           {
             name: "baseBranch",
-            label: "Base Branch (Optional)",
+            label: "Base branch",
             type: "text",
             placeholder: "develop",
-            helpText:
-              "Branch to start from. Auto-detects: uses 'develop' if it exists, otherwise tries 'trunk', 'main', then 'master'. " +
-              "Override for hotfixes (use 'main') or feature branches (use specific branch).",
+            helpText: "Leave blank to use develop, trunk, main or master, whichever exists first.",
           },
         ],
       },
@@ -233,7 +228,9 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
         success: false,
         error: {
           code: "INVALID_ARGS",
-          message: "Issue number must be a positive integer",
+          message: issueNumber
+            ? "Issue number must be a positive integer"
+            : "Enter the number of the issue to work on.",
         },
       };
     }
@@ -490,21 +487,17 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
     } catch (error) {
       // Non-fatal - worktree was created, just couldn't switch
       const errorMessage = formatErrorMessage(error, "Failed to switch worktree");
-      switchWarning = `Worktree created but failed to switch: ${errorMessage}`;
+      switchWarning = `Couldn't switch to it: ${errorMessage}`;
       console.warn("Failed to switch to new worktree:", errorMessage);
     }
 
     // The forge provider returns a canonical issue URL in its response.
     const issueUrl = issue.url;
 
-    // Build success message with warning if switch failed
-    const successMessage = switchWarning
-      ? `Created worktree for issue #${issueNumber}: ${issue.title}. Warning: ${switchWarning}`
-      : `Created worktree for issue #${issueNumber}: ${issue.title}`;
-
     return {
       success: true,
-      message: successMessage,
+      message: `Worktree created for #${issueNumber}`,
+      detail: switchWarning ?? `Switched to ${finalBranchName}`,
       data: {
         worktreeId,
         worktreePath,
