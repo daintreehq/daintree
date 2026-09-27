@@ -390,6 +390,17 @@ describe("preparePrChecks grouping", () => {
     }
   });
 
+  it("leads the attention group with what broke, ahead of what was only stopped", () => {
+    const rows = preparePrChecks([
+      check({ name: "approve", conclusion: "action_required", required: true }),
+      check({ name: "deploy", conclusion: "cancelled" }),
+      check({ name: "slow", conclusion: "timed_out" }),
+      check({ name: "unit", conclusion: "failure" }),
+    ]);
+    const names = rows.map((row) => row.name);
+    expect(names.slice(0, 2).sort()).toEqual(["slow", "unit"]);
+  });
+
   it("never folds a check without a clean verdict in with the settled results", () => {
     const rows = preparePrChecks(mix);
     const settled = rows.filter((row) => row.group === "settled").map((row) => row.name);

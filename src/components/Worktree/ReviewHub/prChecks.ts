@@ -205,7 +205,7 @@ function groupFor(sortKey: number): PrCheckGroup {
 
 /**
  * Normalizes the provider's list for display: sanitized names, validated links,
- * attention-first ordering, required checks ahead of optional ones within a
+ * attention-first ordering (broken checks ahead of stopped ones), required checks ahead of optional ones within a
  * group, provider order preserved for ties. Duplicates are kept — matrix jobs
  * legitimately repeat a name, and collapsing them would hide a failing shard.
  */
@@ -227,6 +227,11 @@ export function preparePrChecks(checks: readonly ForgeCheckRun[]): PrCheckRow[] 
 
   rows.sort((a, b) => {
     if (a.sortKey !== b.sortKey) return a.sortKey - b.sortKey;
+    // Within the attention group, what broke leads what was merely stopped,
+    // in the same order the summary counts them.
+    const aBroke = BROKE.has(a.row.outcome) ? 0 : 1;
+    const bBroke = BROKE.has(b.row.outcome) ? 0 : 1;
+    if (aBroke !== bBroke) return aBroke - bBroke;
     const aRequired = a.row.required === true ? 0 : 1;
     const bRequired = b.row.required === true ? 0 : 1;
     if (aRequired !== bRequired) return aRequired - bRequired;
