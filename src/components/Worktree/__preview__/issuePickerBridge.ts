@@ -31,7 +31,7 @@ function issue(number: number, title: string, over: Partial<Issue> = {}): Issue 
     state: "open",
     rawState: "OPEN",
     url: `https://github.com/helios-labs/helios-dashboard/issues/${number}`,
-    author: { login: "mira-okafor", avatarUrl: "" },
+    author: { login: "mira-okafor", avatarUrl: "", rawData: null },
     assignees: [],
     labels: [],
     commentCount: 0,

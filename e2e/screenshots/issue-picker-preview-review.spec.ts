@@ -43,6 +43,8 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
 const ATTACH_TIMEOUT_MS = 30_000;
 /** The search debounce is 300ms; the fixture answers 40ms after that. */
 const FETCH_SETTLE_MS = 600;
+/** A control the state needs is missing: fail the capture, not the whole budget. */
+const CLICK_TIMEOUT_MS = 5_000;
 
 const snap = makeSnap(OUT_DIR);
 
@@ -151,7 +153,7 @@ const STATES: State[] = [
   {
     name: "20-closed-filter",
     run: async (page) => {
-      await page.getByRole("button", { name: /^closed$/i }).click();
+      await page.getByRole("radio", { name: "Closed" }).click({ timeout: CLICK_TIMEOUT_MS });
       await page.waitForTimeout(FETCH_SETTLE_MS);
     },
     expectText: "Theme picker previews",
@@ -159,7 +161,7 @@ const STATES: State[] = [
   {
     name: "22-all-filter",
     run: async (page) => {
-      await page.getByRole("button", { name: /^all$/i }).click();
+      await page.getByRole("radio", { name: "All" }).click({ timeout: CLICK_TIMEOUT_MS });
       await page.waitForTimeout(FETCH_SETTLE_MS);
     },
   },
@@ -175,9 +177,19 @@ const STATES: State[] = [
   {
     name: "30-search-results",
     run: async (page) => {
+      await search(page).fill("memory");
+      await page.waitForTimeout(FETCH_SETTLE_MS);
+    },
+    expectText: "Renderer memory climbs",
+  },
+  {
+    // The only match is closed, so the open-scoped search comes up empty.
+    name: "32-no-matches-in-scope",
+    run: async (page) => {
       await search(page).fill("worktree");
       await page.waitForTimeout(FETCH_SETTLE_MS);
     },
+    expectText: "worktree",
   },
   {
     name: "35-no-matches",
