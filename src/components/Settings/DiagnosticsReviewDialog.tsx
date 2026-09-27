@@ -433,7 +433,7 @@ export function DiagnosticsReviewDialog({
 
       <AppDialog.Footer
         primaryAction={{
-          label: isSaving ? "Saving…" : "Save report",
+          label: "Save report",
           onClick: handleSave,
           disabled: isSaving,
           loading: isSaving,
