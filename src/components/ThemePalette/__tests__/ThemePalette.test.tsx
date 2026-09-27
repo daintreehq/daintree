@@ -100,4 +100,15 @@ describe("ThemePalette", () => {
     const ids = rows().map((o) => o.id);
     for (const c of customs) expect(ids).toContain(`theme-option-${c.id}`);
   });
+
+  it("names the saved theme in the footer once the cursor leaves it", async () => {
+    renderOpen();
+    await act(async () => {});
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain(`to keep ${COMMITTED.name}`);
+    expect(dialog.textContent).not.toContain("Current:");
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+    await act(async () => {});
+    expect(dialog.textContent).toContain(`Current: ${COMMITTED.name}`);
+  });
 });

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
@@ -193,13 +194,37 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     [setSelectedSchemeId, onClose]
   );
 
-  // Names the theme so the footer says what Enter will do to the app. On the
-  // saved theme Enter changes nothing, and saying "apply" there would claim
-  // it does.
-  const getThemeActionLabel = useCallback(
-    (scheme: AppColorScheme) =>
-      scheme.id === selectedSchemeId ? `Keep ${scheme.name}` : `Apply ${scheme.name}`,
-    [selectedSchemeId]
+  const savedScheme = useMemo(
+    () => allSchemes.find((s) => s.id === selectedSchemeId) ?? null,
+    [allSchemes, selectedSchemeId]
+  );
+
+  // Two facts, because once the cursor leaves the saved theme they differ:
+  // what Enter will do, and what Escape goes back to. The saved row's check
+  // can be scrolled or filtered out of view; the footer can't.
+  const getThemeFooter = useCallback(
+    (scheme: AppColorScheme | null) => {
+      if (!scheme) return null;
+      const onSaved = scheme.id === savedScheme?.id;
+      return (
+        <div className="flex w-full min-w-0 items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <PaletteFooterHints
+              primaryHint={{
+                keys: ["↵"],
+                label: onSaved ? `to keep ${scheme.name}` : `to apply ${scheme.name}`,
+              }}
+            />
+          </div>
+          {!onSaved && savedScheme && (
+            <span className="shrink-0 truncate text-text-secondary">
+              Current: {savedScheme.name}
+            </span>
+          )}
+        </div>
+      );
+    },
+    [savedScheme]
   );
 
   const handleConfirm = useCallback(() => {
@@ -224,7 +249,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       onClose={onClose}
       onSelectIndex={setSelectedIndex}
       getItemId={(scheme) => scheme.id}
-      getActionLabel={getThemeActionLabel}
+      getFooter={getThemeFooter}
       getSectionLabel={getThemeSectionLabel}
       matchesById={matchesById}
       renderItem={(scheme, _index, isSelected, _onHover, matches) => (

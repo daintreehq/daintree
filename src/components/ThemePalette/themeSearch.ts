@@ -74,19 +74,53 @@ function fuseFor(items: readonly AppColorScheme[]): Fuse<AppColorScheme> {
   return fuse;
 }
 
+type MatchKey = "name" | "location";
+const MATCH_KEYS: readonly MatchKey[] = ["name", "location"];
+
+/**
+ * Whole-substring hits, with their ranges. When any exist they are the answer:
+ * Fuse's typo tolerance let "japan" pull in Fiordland through "Zealand" and
+ * mark "aland" as the reason. Fuzzy only runs when nothing contains the text.
+ */
+function substringMatches(
+  items: readonly AppColorScheme[],
+  text: string
+): { items: AppColorScheme[]; matches: Map<string, readonly FuseResultMatch[]> } {
+  const needle = text.toLowerCase();
+  const hits: { item: AppColorScheme; rank: number }[] = [];
+  const matches = new Map<string, readonly FuseResultMatch[]>();
+  for (const item of items) {
+    const found: FuseResultMatch[] = [];
+    let rank = Infinity;
+    MATCH_KEYS.forEach((key, k) => {
+      const value = item[key];
+      const at = value ? value.toLowerCase().indexOf(needle) : -1;
+      if (value && at >= 0) {
+        found.push({ key, value, indices: [[at, at + needle.length - 1]] });
+        rank = Math.min(rank, k * 1000 + at);
+      }
+    });
+    if (found.length > 0) {
+      hits.push({ item, rank });
+      matches.set(item.id, found);
+    }
+  }
+  hits.sort((a, b) => a.rank - b.rank);
+  return { items: hits.map((h) => h.item), matches };
+}
+
 export function searchThemes(items: readonly AppColorScheme[], query: string): ThemeSearchResult {
   const { mode, text } = parseThemeQuery(query);
+  const pool = mode ? items.filter((s) => s.type === mode) : items;
+  if (!text) return { items: orderByMode(pool), matches: new Map() };
+  const exact = substringMatches(pool, text);
+  if (exact.items.length > 0) return { items: orderByMode(exact.items), matches: exact.matches };
   const matches = new Map<string, readonly FuseResultMatch[]>();
-  let ranked: AppColorScheme[];
-  if (text) {
-    ranked = [];
-    for (const r of fuseFor(items).search(text)) {
-      ranked.push(r.item);
-      if (r.matches?.length) matches.set(r.item.id, r.matches);
-    }
-  } else {
-    ranked = [...items];
+  const ranked: AppColorScheme[] = [];
+  for (const r of fuseFor(items).search(text)) {
+    if (mode && r.item.type !== mode) continue;
+    ranked.push(r.item);
+    if (r.matches?.length) matches.set(r.item.id, r.matches);
   }
-  if (mode) ranked = ranked.filter((s) => s.type === mode);
   return { items: orderByMode(ranked), matches };
 }

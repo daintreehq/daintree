@@ -56,3 +56,26 @@ describe("parseThemeQuery", () => {
     expect(parseThemeQuery("Dark  fjord")).toEqual({ mode: "dark", text: "fjord" });
   });
 });
+
+describe("searchThemes precision", () => {
+  it("drops fuzzy neighbours when something contains the query", () => {
+    for (const s of searchThemes(BUILT_IN_APP_SCHEMES, "japan").items) {
+      expect(`${s.name} ${s.location ?? ""}`.toLowerCase()).toContain("japan");
+    }
+  });
+
+  it("still forgives a typo when nothing contains the query", () => {
+    expect(ids("fiordlnd")).toContain("fiordland");
+  });
+
+  it("only marks the text it matched on", () => {
+    const { items, matches } = searchThemes(BUILT_IN_APP_SCHEMES, "bal");
+    for (const s of items) {
+      for (const m of matches.get(s.id) ?? []) {
+        for (const [a, b] of m.indices) {
+          expect(m.value!.slice(a, b + 1).toLowerCase()).toBe("bal");
+        }
+      }
+    }
+  });
+});
