@@ -240,15 +240,9 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
       });
     });
 
-    await bridge.dispatchActionForWebContents(
-      703,
-      "worktree.delete",
-      {},
-      true,
-      undefined,
-      "help",
-      "skip-preference"
-    );
+    await bridge.dispatchActionForWebContents(703, "worktree.delete", {}, true, undefined, "help", {
+      authorization: "skip-preference",
+    });
     await bridge.dispatchActionForWebContents(
       703,
       "worktree.delete",
@@ -256,7 +250,7 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
       false,
       undefined,
       "help",
-      "skip-preference"
+      { authorization: "skip-preference" }
     );
 
     expect(sent[0]).toMatchObject({ confirmed: true, authorization: "skip-preference" });

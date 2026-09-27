@@ -1878,6 +1878,26 @@ describe("filterIntrospectionResultForSession", () => {
         expect(pane.confirmationMayEscalate).toBe(false);
       });
 
+      // The skip preference (#12874) covers only what a native grant could, and
+      // neither covers these gates: a declared-safe closeAll still asks, and a
+      // guarded close still reports that it may.
+      it("keeps the assistant's close gates under the skip preference", () => {
+        const closes = {
+          permittedActionIds: new Set([
+            ...permitted,
+            "terminal.close",
+            "terminal.closeMany",
+            "terminal.closeAll",
+          ]),
+          policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
+        };
+        for (const id of ["terminal.close", "terminal.closeMany"]) {
+          expect(policyOf(lookup(makeEntry({ id }), closes)).confirmationMayEscalate).toBe(true);
+        }
+        const closeAll = policyOf(lookup(makeEntry({ id: "terminal.closeAll" }), closes));
+        expect(closeAll.requiresConfirmation).toBe(true);
+      });
+
       it("never reports escalation for a target already declared confirm", () => {
         const policy = policyOf(
           lookup(

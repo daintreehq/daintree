@@ -10971,6 +10971,7 @@ describe("assistant skip preference (#12874)", () => {
     skipped: boolean;
     tier?: "core" | "full";
     entries?: ActionManifestEntry[];
+    extraDeps?: Partial<SessionServerDeps>;
   }) {
     const sessionStore = fakeSessionStore(options.tier ?? "full");
     sessionStore.sessionOriginMap.set("s", options.origin as never);
@@ -10988,6 +10989,7 @@ describe("assistant skip preference (#12874)", () => {
         () =>
           options.entries ?? [confirmEntry("worktree.delete"), makeManifestEntry("worktree.list")]
       ),
+      ...options.extraDeps,
     });
     const server = createSessionServer("s", deps);
     return {
@@ -11157,6 +11159,77 @@ describe("assistant skip preference (#12874)", () => {
 
     expect(help.dispatchAction.mock.calls.at(-1)?.[2]).toBe(false);
     consoleError.mockRestore();
+    help.sessionStore.grantCache.dispose();
+  });
+
+  // #12881's protected close is asked whatever a grant says, and the skip
+  // preference covers only what a grant could, so it never waives that ask.
+  it("still asks before closing a panel the assistant did not open", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: true, result: { selectedTargetIds: ["t-user"] } },
+      confirmationDecision: "approved",
+    });
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.close", arguments: { terminalId: "t-user" } });
+
+    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+    expect(help.dispatchAction).toHaveBeenCalledTimes(1);
+    expect(help.dispatchAction.mock.calls[0][3]).not.toBe("skip-preference");
+    expect(lastAudit(help.appendAuditRecord).authorization).not.toBe("skip-preference");
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("closes nothing unasked when the user declines a protected close under the preference", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: false, error: { code: "USER_REJECTED", message: "declined" } },
+      confirmationDecision: "rejected",
+    });
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    await help.server.connect(makeMockTransport());
+
+    const result = await callTool(help.server, {
+      name: "terminal.close",
+      arguments: { terminalId: "t-user" },
+    });
+
+    expect(help.dispatchAction).not.toHaveBeenCalled();
+    expect(toolErrorPayload(result).code).toBe("USER_REJECTED");
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("leaves an agent's close-all to its dialog, which is where the sweep is approved", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.closeAll")],
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.closeAll", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([false]);
+    expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.closeAll", danger: true })
+    );
     help.sessionStore.grantCache.dispose();
   });
 });

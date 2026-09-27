@@ -1924,15 +1924,9 @@ export class HttpLifecycle {
         // which case pinned dispatch falls back to live renderer context.
         const boundContext = this.deps.sessionStore.sessionContextMap.get(sessionId);
         return authorization !== undefined
-          ? pinnedDispatch(
-              id,
-              actionId,
-              args,
-              confirmed,
-              boundContext,
-              sessionOrigin,
-              { authorization }
-            )
+          ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
+              authorization,
+            })
           : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
       }
       // Unpinned external/api-key dispatch — surface the requesting bearer's
