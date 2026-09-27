@@ -166,7 +166,7 @@ export function SettingsSubjectPicker<T extends { id: string }>({
             "rounded-[var(--radius-md)] text-text-primary",
             "transition-colors duration-150 ease-out",
             "hover:bg-overlay-soft data-[state=open]:bg-overlay-soft",
-            "outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           )}
         >
           {current}
