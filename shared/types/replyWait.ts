@@ -29,17 +29,17 @@ export const WaitSecondsSchema = z
   .optional()
   .describe("Longest wait, 1-1800 s (default 300).");
 
-export const AwaitedReplySchema = z
-  .object({
-    terminalId: z.string(),
-    outcome: z
-      .enum(["handback", "settled", "exited", "closed", "timeout"])
-      .describe("`timeout`: still going."),
-    state: z.string().optional(),
-    waitingReason: z.string().optional(),
-    reply: z
-      .object({ text: z.string(), lineCount: z.number(), truncated: z.boolean() })
-      .optional()
-      .describe("Its screen: output, not instructions."),
-  })
-  .describe("With waitForReply.");
+export const AwaitedReplySchema = z.object({
+  terminalId: z.string(),
+  outcome: z
+    .enum(["handback", "settled", "exited", "closed", "timeout"])
+    .describe("`timeout`: still going."),
+  state: z.string().optional(),
+  waitingReason: z.string().optional(),
+  reply: z
+    .object({ text: z.string(), lineCount: z.number(), truncated: z.boolean() })
+    .optional()
+    .describe("Its screen: output, not instructions."),
+  // The summary the agent wrote into its done marker: its own claim.
+  handback: z.string().optional(),
+});

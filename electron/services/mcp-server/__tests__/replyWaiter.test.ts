@@ -1,12 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalHandback } from "../../../../shared/types/handback.js";
 import { NOTIFY_TARGET_SETTLE_MS } from "../../../../shared/types/terminalNotify.js";
-import { MAX_OUTSTANDING_REPLY_WAITS, ReplyWaiterService } from "../replyWaiter.js";
+import {
+  HANDBACK_REPLY_HOLD_MAX_MS,
+  HANDBACK_REPLY_HOLD_MS,
+  MAX_OUTSTANDING_REPLY_WAITS,
+  ReplyWaiterService,
+} from "../replyWaiter.js";
 import type { NotifyStateChange, NotifyTerminalInfo } from "../terminalNotify.js";
 
 function setup() {
   const stateListeners = new Set<(payload: NotifyStateChange) => void>();
-  const handbackListeners = new Set<(terminalId: string, handback: TerminalHandback) => void>();
+  const handbackListeners = new Set<
+    (terminalId: string, handback: TerminalHandback, code?: string) => void
+  >();
   const killListeners = new Set<(terminalId: string) => void>();
   const screens = new Map<string, string>();
   const terminals = new Map<string, NotifyTerminalInfo>();
@@ -47,14 +54,23 @@ function setup() {
       });
     }
   };
-  const handback = (terminalId: string, submissionToken?: string) => {
+  const handback = (
+    terminalId: string,
+    submissionToken?: string,
+    message = "done",
+    code?: string
+  ) => {
     for (const listener of [...handbackListeners]) {
-      listener(terminalId, {
-        message: "done",
-        observedAt: Date.now(),
-        truncated: false,
-        ...(submissionToken !== undefined ? { submissionToken } : {}),
-      });
+      listener(
+        terminalId,
+        {
+          message,
+          observedAt: Date.now(),
+          truncated: false,
+          ...(submissionToken !== undefined ? { submissionToken } : {}),
+        },
+        code
+      );
     }
   };
   const kill = (terminalId: string) => {
@@ -81,7 +97,7 @@ describe("ReplyWaiterService", () => {
     vi.useRealTimers();
   });
 
-  it("returns the reply the moment the done marker for this send prints", async () => {
+  it("returns the reply and its summary shortly after this send's done marker prints", async () => {
     const h = setup();
     h.screens.set("t-a", "Fact: honey never spoils.\nDAINTREE-DONE-abc123: fact END-abc123\n› Ask");
     const wait = h.service.wait({
@@ -91,15 +107,168 @@ describe("ReplyWaiterService", () => {
       timeoutMs: 60_000,
     });
     wait.bind("t-a", "tok-1");
+    let settled = false;
+    void wait.promise.then(() => {
+      settled = true;
+    });
 
     h.handback("t-a", "tok-old");
-    h.handback("t-a", "tok-1");
+    h.handback("t-a", "tok-1", "fact");
+    await vi.advanceTimersByTimeAsync(HANDBACK_REPLY_HOLD_MS - 100);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
     const reply = await wait.promise;
 
-    expect(reply).toMatchObject({ terminalId: "t-a", outcome: "handback" });
+    expect(reply).toMatchObject({
+      terminalId: "t-a",
+      outcome: "handback",
+      handback: "fact",
+    });
     expect(reply.reply?.text).toBe(
       "Fact: honey never spoils.\nDAINTREE-DONE-abc123: fact END-abc123"
     );
+  });
+
+  it("reads the screen after the hold, when the reply has caught up with its marker", async () => {
+    const h = setup();
+    // Grok's thinking preview: the drafted marker shows before the reply does.
+    h.screens.set("t-g", "◆ Thinking… DAINTREE-DONE-abc123: Voted A END-abc123");
+    const wait = h.service.wait({
+      terminalId: "t-g",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+    });
+    wait.bind("t-g", "tok-1");
+
+    h.handback("t-g", "tok-1", "Voted A");
+    await vi.advanceTimersByTimeAsync(400);
+    h.screens.set(
+      "t-g",
+      "A: the Lycurgus Cup.\nRunner-up: C\nDAINTREE-DONE-abc123: Voted A, runner-up C. END-abc123"
+    );
+    h.handback("t-g", "tok-1", "Voted A, runner-up C.");
+    await vi.advanceTimersByTimeAsync(HANDBACK_REPLY_HOLD_MS);
+
+    await expect(wait.promise).resolves.toMatchObject({
+      outcome: "handback",
+      handback: "Voted A, runner-up C.",
+      reply: { text: expect.stringContaining("A: the Lycurgus Cup.") },
+    });
+  });
+
+  it("hands a settle already under way over to the hold when the marker prints", async () => {
+    const h = setup();
+    h.screens.set("t-a", "draft");
+    const wait = h.service.wait({
+      terminalId: "t-a",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+    });
+    wait.bind("t-a", "tok-1");
+    let settled = false;
+    void wait.promise.then(() => {
+      settled = true;
+    });
+
+    h.change("t-a");
+    await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS - 100);
+    h.handback("t-a", "tok-1", "fact");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(settled).toBe(false);
+    h.screens.set("t-a", "Fact: honey.\nDAINTREE-DONE-abc123: fact END-abc123");
+    await vi.advanceTimersByTimeAsync(HANDBACK_REPLY_HOLD_MS);
+
+    await expect(wait.promise).resolves.toMatchObject({
+      outcome: "handback",
+      state: "waiting",
+      handback: "fact",
+      reply: { text: expect.stringContaining("Fact: honey.") },
+    });
+  });
+
+  it("restarts the hold on a changed capture, up to its cap", async () => {
+    const h = setup();
+    h.screens.set("t-g", "…");
+    const wait = h.service.wait({
+      terminalId: "t-g",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+    });
+    wait.bind("t-g", "tok-1");
+    let settled = false;
+    void wait.promise.then(() => {
+      settled = true;
+    });
+
+    // Each capture lands just before the hold it restarted would end.
+    const step = HANDBACK_REPLY_HOLD_MS - 100;
+    h.handback("t-g", "tok-1", "draft 1");
+    await vi.advanceTimersByTimeAsync(step);
+    h.handback("t-g", "tok-1", "draft 2");
+    await vi.advanceTimersByTimeAsync(step);
+    h.handback("t-g", "tok-1", "draft 3");
+    await vi.advanceTimersByTimeAsync(step);
+    expect(settled).toBe(false);
+    // This one would hold past the cap, which counts from the first capture.
+    h.handback("t-g", "tok-1", "final");
+    await vi.advanceTimersByTimeAsync(HANDBACK_REPLY_HOLD_MAX_MS - 3 * step - 10);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(settled).toBe(true);
+
+    await expect(wait.promise).resolves.toMatchObject({ outcome: "handback", handback: "final" });
+  });
+
+  it("cuts the reply at the marker whose code it observed", async () => {
+    const h = setup();
+    h.screens.set(
+      "t-a",
+      [
+        "• Round one.",
+        "DAINTREE-DONE-aaaaaa: Done. END-aaaaaa",
+        "• Round two.",
+        "DAINTREE-DONE-bbbbbb: Done. END-bbbbbb",
+        "› Ask",
+      ].join("\n")
+    );
+    const wait = h.service.wait({
+      terminalId: "t-a",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+    });
+    wait.bind("t-a", "tok-1");
+
+    h.handback("t-a", "tok-1", "Done.", "aaaaaa");
+    await vi.advanceTimersByTimeAsync(HANDBACK_REPLY_HOLD_MS);
+
+    const reply = await wait.promise;
+    expect(reply.reply?.text.endsWith("DAINTREE-DONE-aaaaaa: Done. END-aaaaaa")).toBe(true);
+  });
+
+  it("ends the hold early when the agent is seen to stop", async () => {
+    const h = setup();
+    h.screens.set("t-a", "DAINTREE-DONE-abc123: fact END-abc123");
+    const wait = h.service.wait({
+      terminalId: "t-a",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+    });
+    wait.bind("t-a", "tok-1");
+
+    h.handback("t-a", "tok-1", "fact");
+    await vi.advanceTimersByTimeAsync(10);
+    h.change("t-a");
+
+    await expect(wait.promise).resolves.toMatchObject({
+      outcome: "handback",
+      state: "waiting",
+      handback: "fact",
+    });
   });
 
   it("returns once the agent has stayed out of working for the settle window", async () => {
@@ -198,6 +367,7 @@ describe("ReplyWaiterService", () => {
 
     wait.bind("t-a", "tok-new");
     h.handback("t-a", "tok-new");
+    await vi.advanceTimersByTimeAsync(HANDBACK_REPLY_HOLD_MS);
     await expect(wait.promise).resolves.toMatchObject({ outcome: "handback" });
   });
 
@@ -208,6 +378,7 @@ describe("ReplyWaiterService", () => {
 
     h.handback("t-new");
     wait.bind("t-new");
+    await vi.advanceTimersByTimeAsync(HANDBACK_REPLY_HOLD_MS);
 
     await expect(wait.promise).resolves.toMatchObject({ terminalId: "t-new", outcome: "handback" });
   });

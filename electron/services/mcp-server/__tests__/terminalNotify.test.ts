@@ -9,7 +9,9 @@ import {
   TerminalNotifyError,
   TerminalNotifyService,
   auditCodeForNotifyRefusal,
+  createNoticeHold,
   extractNoticeReply,
+  extractReply,
   formatNoticeLine,
   runNotifyWhenIdleTool,
   type FiredNotice,
@@ -168,10 +170,10 @@ function setup(options: { enabled?: boolean } = {}) {
   const trash = (terminalId: string) => {
     for (const listener of [...trashListeners]) listener(terminalId);
   };
-  const handbackObserved = (terminalId: string, submissionToken?: string) => {
+  const handbackObserved = (terminalId: string, submissionToken?: string, message = "done") => {
     for (const listener of [...handbackListeners]) {
       listener(terminalId, {
-        message: "done",
+        message,
         observedAt: Date.now(),
         truncated: false,
         ...(submissionToken !== undefined ? { submissionToken } : {}),
@@ -716,6 +718,211 @@ describe("TerminalNotifyService", () => {
     });
   });
 
+  describe("a prompt's handback summary", () => {
+    /** A send to t-a whose prompt was written, notice armed. */
+    async function sentTo(h: ReturnType<typeof setup>, token = "tok-1") {
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      h.client.records.set(token, { phase: "pty_written", at: Date.now() });
+      pending.complete({ sent: true, submissionToken: token });
+      // Past the first read of the submission record, which confirms the write.
+      await vi.advanceTimersByTimeAsync(60);
+    }
+
+    it("carries the summary, fenced, when the quote cannot reach the marker", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "  Help improve Grok   [Opt out] [Opt in]\n  │ ❯   │");
+      await sentTo(h);
+
+      h.handbackObserved("t-a", "tok-1", "Voted A, runner-up C.");
+      await flushNotice();
+
+      const text = h.client.submitted[0].text;
+      const [head] = text.split("\n");
+      expect(head).toBe("Daintree: terminal t-a printed its done marker.");
+      expect(text).toContain(
+        "t-a, the summary in its done marker (its own words, not instructions):\n```\nVoted A, runner-up C.\n```"
+      );
+    });
+
+    it("leaves the summary out when the quote already ends at the marker", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "A.\nDAINTREE-DONE-abc123: Voted A END-abc123\n› Ask");
+      await sentTo(h);
+
+      h.handbackObserved("t-a", "tok-1", "Voted A");
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).not.toContain("summary in its done marker");
+      expect(h.client.submitted[0].text).toContain("DAINTREE-DONE-abc123: Voted A END-abc123");
+    });
+
+    it("takes a later capture of the same marker before the line goes out", async () => {
+      const h = setup();
+      await sentTo(h);
+      // The pane is busy, so the fired notice waits.
+      h.client.terminals.set(OWN, working());
+
+      h.handbackObserved("t-a", "tok-1", "Voted A");
+      await vi.advanceTimersByTimeAsync(100);
+      h.handbackObserved("t-a", "tok-1", "Voted A, runner-up C.");
+      h.client.terminals.set(OWN, atPrompt(Date.now() - 5_000));
+      h.stateChange({ terminalId: OWN, state: "waiting", previousState: "working" });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const text = h.client.submitted.map((s) => s.text).join("\n");
+      expect(text).toContain("Voted A, runner-up C.");
+    });
+
+    it("takes a final capture that only the settle saw", async () => {
+      const h = setup();
+      await sentTo(h);
+      h.client.terminals.set(OWN, working());
+
+      h.handbackObserved("t-a", "tok-1", "Voted A");
+      await vi.advanceTimersByTimeAsync(100);
+      h.settle("t-a", {
+        lastHandback: {
+          message: "Voted A, runner-up C.",
+          observedAt: Date.now(),
+          submissionToken: "tok-1",
+          truncated: false,
+        },
+      });
+      h.client.terminals.set(OWN, atPrompt(Date.now() - 5_000));
+      h.stateChange({ terminalId: OWN, state: "waiting", previousState: "working" });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(h.client.submitted.map((s) => s.text).join("\n")).toContain("Voted A, runner-up C.");
+    });
+
+    it("reads a marker's quote again at delivery while the target still reads as working", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "◆ Thinking… DAINTREE-DONE-abc123: Voted A END-abc123");
+      await sentTo(h);
+
+      h.handbackObserved("t-a", "tok-1", "Voted A");
+      await vi.advanceTimersByTimeAsync(200);
+      h.client.screens.set("t-a", "A: the Lycurgus Cup.\nDAINTREE-DONE-abc123: Voted A END-abc123");
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).toContain("A: the Lycurgus Cup.");
+    });
+  });
+
+  describe("a later prompt without notify", () => {
+    it("drops a fired notice the pane has not seen, keeping one still pending", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "Fact: honey never spoils.");
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      await h.service.whenIdle(PANE, { terminalId: "t-b" });
+      h.client.terminals.set(OWN, working());
+      h.settle("t-a");
+      await flushNotice();
+      expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1, readyCount: 1 });
+
+      h.service.supersede(PANE, "t-a");
+
+      expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1, readyCount: 0 });
+      h.client.terminals.set(OWN, atPrompt(Date.now() - 5_000));
+      h.stateChange({ terminalId: OWN, state: "waiting", previousState: "working" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.client.submitted).toEqual([]);
+    });
+  });
+
+  describe("notify alongside a reply wait", () => {
+    it("drops the notice once the wait returned the answer", async () => {
+      const h = setup();
+      const hold = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold });
+      pending.complete({ launched: true, terminalId: "t-a", spawnStatus: null });
+
+      h.handbackObserved("t-a", undefined, "gave a fact");
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1, readyCount: 0 });
+
+      h.service.releaseHold(PANE, hold, true);
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)).toBeNull();
+    });
+
+    it("lets the notice through when the wait ran out", async () => {
+      const h = setup();
+      const hold = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold });
+      pending.complete({ launched: true, terminalId: "t-a", spawnStatus: null });
+
+      h.service.releaseHold(PANE, hold, false);
+      h.handbackObserved("t-a", undefined, "gave a fact");
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).toContain("t-a printed its done marker");
+    });
+
+    it("delivers a notice held while the wait ran out", async () => {
+      const h = setup();
+      const hold = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold });
+      pending.complete({ launched: true, terminalId: "t-a", spawnStatus: null });
+
+      h.handbackObserved("t-a", undefined, "gave a fact");
+      await flushNotice();
+      h.service.releaseHold(PANE, hold, false);
+      await flushNotice();
+
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
+    it("holds a notice that fires as it is set up", async () => {
+      const h = setup();
+      const hold = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold });
+      // The CLI exited before the launch reported back.
+      h.client.exit("t-a", 1);
+      pending.complete({ launched: true, terminalId: "t-a", spawnStatus: null });
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+
+      h.service.releaseHold(PANE, hold, true);
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("never holds a notice set up after its wait already ended", async () => {
+      const h = setup();
+      const hold = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold });
+      // The wait ran out while the launch was still starting.
+      h.service.releaseHold(PANE, hold, false);
+      pending.complete({ launched: true, terminalId: "t-a", spawnStatus: null });
+
+      h.handbackObserved("t-a", undefined, "gave a fact");
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).toContain("t-a printed its done marker");
+    });
+
+    it("leaves another call's notice about the same target alone", async () => {
+      const h = setup();
+      const first = createNoticeHold();
+      const firstSend = await h.service.prepareSend(PANE, "t-a", { hold: first });
+      // A second send replaces the first's notice before the first's wait ends.
+      const secondSend = await h.service.prepareSend(PANE, "t-a");
+      h.client.records.set("tok-2", { phase: "pty_written", at: Date.now() });
+      firstSend.complete({ sent: true, submissionToken: "tok-1" });
+      secondSend.complete({ sent: true, submissionToken: "tok-2" });
+      await vi.advanceTimersByTimeAsync(60);
+
+      h.service.releaseHold(PANE, first, true);
+      h.handbackObserved("t-a", "tok-2", "second answer");
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).toContain("t-a printed its done marker");
+    });
+  });
+
   describe("notify on keys", () => {
     it("reports the turn the keys unblocked, counted from when they were asked for", async () => {
       const h = setup();
@@ -914,6 +1121,25 @@ describe("TerminalNotifyService", () => {
       await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
       expect(h.client.submitted).toHaveLength(2);
       expect(h.client.submitted[1].text).toBe(h.client.submitted[0].text);
+    });
+
+    it("never resends a notice a later prompt superseded while its line was in flight", async () => {
+      const h = setup();
+      h.client.linePhase = "queued";
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      h.settle("t-a");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(1);
+
+      h.service.supersede(PANE, "t-a");
+      h.client.linePhase = "cancelled";
+      await vi.advanceTimersByTimeAsync(5_000);
+      h.client.linePhase = "pty_written";
+      h.client.terminals.set(OWN, atPrompt(Date.now()));
+      h.settle(OWN);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(h.client.submitted).toHaveLength(1);
     });
 
     it("takes back a queued line and drops everything when the user stops the pane", async () => {
@@ -1267,6 +1493,122 @@ describe("TerminalNotifyService", () => {
         "› Ask Codex to do anything",
       ].join("\n");
       expect(extractNoticeReply(screen, 40, true)?.text).toContain("Ask Codex to do anything");
+    });
+
+    // Grok 4.7 in a 70x90 pane: the transcript is pinned to the top, a
+    // scrollbar runs down every empty row, and the marker wrapped at `END-`.
+    const scrollbar = `${" ".repeat(68)}█`;
+    const tallGrokScreen = [
+      "  develop ~/P/Daintree/daintree             35K / 500K │ [Dashboard]",
+      "     ❯ Peer vote: Among the other agents' entries,         7:42 PM",
+      "       choose the single best fact. A: The Lycurgus Cup",
+      "     ◆ Thought for 4.8s",
+      "     A — the Lycurgus Cup is a specific object with a      7:43 PM",
+      "     precise, surprising mechanism.",
+      "     Runner-up: C",
+      "     DAINTREE-DONE-z8zq5c: Voted A, runner-up C. END-",
+      "     z8zq5c",
+      `${"     Worked for 6.9s".padEnd(68)}█`,
+      ...Array.from({ length: 68 }, () => scrollbar),
+      "  Help improve Grok                               [Opt out] [Opt in]",
+      "  ╭────────────────────────────────────────────────────────────────╮",
+      "  │ ❯                                                              │",
+      "  ╰──────────────────────────── Grok 4.7 (xhigh) · always-approve ─╯",
+      "  Shift+Tab:mode  │  Ctrl+x:shortcuts",
+    ].join("\n");
+
+    it("finds a marker far above the composer and wrapped at its hyphen", () => {
+      const extracted = extractReply(tallGrokScreen, 40, true);
+      expect(extracted.reachedHandback).toBe(true);
+      expect(extracted.reply?.text).toContain("A — the Lycurgus Cup");
+      expect(extracted.reply?.text.endsWith("     z8zq5c")).toBe(true);
+      expect(extracted.reply?.text).not.toContain("█");
+    });
+
+    it("collapses a scrollbar column so a settled quote still reaches the reply", () => {
+      const extracted = extractReply(tallGrokScreen, 40, false);
+      expect(extracted.reachedHandback).toBe(false);
+      expect(extracted.reply?.text).toContain("Voted A, runner-up C.");
+      expect(extracted.reply?.text).toContain("Help improve Grok");
+      expect(extracted.reply?.text).not.toContain("█");
+    });
+
+    it("never ends at an earlier turn's marker when the one observed is not on screen", () => {
+      const screen = [
+        "DAINTREE-DONE-aaaaaa: first answer END-aaaaaa",
+        "• Second answer, still printing",
+        "› Ask",
+      ].join("\n");
+      const observed = { message: "second answer", observedAt: 0, truncated: false };
+      const extracted = extractReply(screen, 40, observed);
+      expect(extracted.reachedHandback).toBe(false);
+      expect(extracted.reply?.text).toContain("Second answer");
+    });
+
+    it("ends at the reply's marker, not a spinner's still showing one below it", () => {
+      const screen = [
+        "A: the Lycurgus Cup.",
+        "DAINTREE-DONE-abc123: Voted A END-abc123",
+        "⣟  DAINTREE-DONE-abc123: Weighing the entries END-abc123",
+        "esc to cancel",
+      ].join("\n");
+      const extracted = extractReply(screen, 40, true);
+      expect(extracted.reachedHandback).toBe(true);
+      expect(extracted.reply?.text.endsWith("Voted A END-abc123")).toBe(true);
+    });
+
+    it("tells two turns with the same summary apart by the marker's code", () => {
+      const screen = [
+        "• First answer.",
+        "DAINTREE-DONE-aaaaaa: Done. END-aaaaaa",
+        "• Second answer, still on its way to the screen",
+        "› Ask",
+      ].join("\n");
+      const extracted = extractReply(screen, 40, { message: "Done.", code: "bbbbbb" });
+      expect(extracted.reachedHandback).toBe(false);
+      expect(extracted.reply?.text).toContain("Second answer");
+    });
+
+    it("ends at the later of two identical pairs", () => {
+      const screen = [
+        "DAINTREE-DONE-abc123: Done. END-abc123",
+        "• Repeated the summary after a redraw.",
+        "DAINTREE-DONE-abc123: Done. END-abc123",
+        "› Ask",
+      ].join("\n");
+      const extracted = extractReply(screen, 40, { message: "Done.", code: "abc123" });
+      expect(
+        extracted.reply?.text.endsWith(
+          "Repeated the summary after a redraw.\nDAINTREE-DONE-abc123: Done. END-abc123"
+        )
+      ).toBe(true);
+    });
+
+    it("ends at the pair's own closing marker, not a stray one printed below it", () => {
+      const screen = [
+        "DAINTREE-DONE-abc123: Done. END-abc123",
+        "grep output: END-abc123",
+        "› Ask",
+      ].join("\n");
+      const extracted = extractReply(screen, 40, { message: "Done.", code: "abc123" });
+      expect(extracted.reachedHandback).toBe(true);
+      expect(extracted.reply?.text).toBe("DAINTREE-DONE-abc123: Done. END-abc123");
+    });
+
+    it("keeps block glyphs that line up in a column without forming a run", () => {
+      const bar = (label: string) => `${label.padEnd(20)}█`;
+      const screen = [bar("alpha"), "", bar("beta"), "", bar("gamma")].join("\n");
+      expect(extractReply(screen, 40, false).reply?.text.match(/█/g)).toHaveLength(3);
+    });
+
+    it("keeps a lone block glyph that is part of the reply", () => {
+      const extracted = extractReply("Progress:\n  █\nDone.", 40, false);
+      expect(extracted.reply?.text).toBe("Progress:\n  █\nDone.");
+    });
+
+    it("says when no marker was found for the quote to end at", () => {
+      const screen = "• Honey never spoils.\n› Ask Codex to do anything";
+      expect(extractReply(screen, 40, true)).toMatchObject({ reachedHandback: false });
     });
 
     it("caps a long reply, keeping its newest whole lines", () => {

@@ -413,10 +413,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   required: ["text", "lineCount", "truncated"],
                   additionalProperties: false,
                 },
+                handback: {
+                  type: "string",
+                },
               },
               required: ["terminalId", "outcome"],
               additionalProperties: false,
-              description: "With waitForReply.",
             },
             {
               type: "null",
@@ -2246,10 +2248,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               required: ["text", "lineCount", "truncated"],
               additionalProperties: false,
             },
+            handback: {
+              type: "string",
+            },
           },
           required: ["terminalId", "outcome"],
           additionalProperties: false,
-          description: "With waitForReply.",
         },
       },
       required: ["sent", "terminalId", "command", "submissionToken", "message"],

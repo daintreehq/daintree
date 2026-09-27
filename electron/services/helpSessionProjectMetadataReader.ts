@@ -1,9 +1,18 @@
 import { projectStore } from "./ProjectStore.js";
+import { getEffectiveRegistry } from "../../shared/config/agentRegistry.js";
+import {
+  LAUNCHABLE_AGENT_IDS,
+  isAssistantOnlyAgentId,
+  isBuiltInAgentId,
+} from "../../shared/config/agentIds.js";
+import { isAgentLaunchable } from "../../shared/utils/agentAvailability.js";
+import type { CliAvailability } from "../../shared/types/ipc/system.js";
 import { gitServiceCache } from "./GitServiceCache.js";
 import { listMatchingProviders } from "./forgeProviderRegistry.js";
 import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
 import {
   sanitizeGitRemoteUrl,
+  type HelpSessionAgentsFact,
   type HelpSessionProjectFacts,
 } from "./helpSessionProjectMetadata.js";
 
@@ -40,11 +49,38 @@ async function readForgeRemote(
   return url ? { name: remote.name, url } : undefined;
 }
 
+/**
+ * The agents a launch accepts, in `agent.listAvailable`'s order: built-ins,
+ * then user and plugin agents by id. Once the CLIs have been probed only the
+ * launchable ones are listed; before that, every registered one is.
+ */
+export function listLaunchableAgents(availability: CliAvailability | null): HelpSessionAgentsFact {
+  const registry = getEffectiveRegistry();
+  const ids = [
+    ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
+    ...Object.keys(registry)
+      .filter((id) => !isBuiltInAgentId(id) && !isAssistantOnlyAgentId(id))
+      .sort(),
+  ];
+  return {
+    agents: ids
+      .filter((id) => availability === null || isAgentLaunchable(availability[id]))
+      .map((id) => ({ id, name: registry[id]?.name ?? id })),
+    availabilityChecked: availability !== null,
+  };
+}
+
 export async function readHelpSessionProjectFacts(
   projectId: string,
-  projectPath: string
+  projectPath: string,
+  readAvailability: () => CliAvailability | null = () => null
 ): Promise<HelpSessionProjectFacts> {
   const facts: HelpSessionProjectFacts = {};
+  try {
+    facts.launchableAgents = listLaunchableAgents(readAvailability());
+  } catch (err) {
+    warnLookupFailed("agents", err);
+  }
   try {
     const name = projectStore.getProjectById(projectId)?.name;
     if (name) facts.name = name;

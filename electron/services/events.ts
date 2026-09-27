@@ -705,6 +705,8 @@ export type DaintreeEventMap = {
   "agent:handback-observed": {
     terminalId: string;
     handback: import("../../shared/types/handback.js").TerminalHandback;
+    /** The code minted for the prompt, which names this marker on screen. */
+    code?: string;
     timestamp: number;
   };
 

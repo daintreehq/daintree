@@ -713,6 +713,7 @@ export type PtyHostEvent =
       type: "agent-handback-observed";
       terminalId: string;
       handback: TerminalHandback;
+      code?: string;
       timestamp: number;
     }
   | {

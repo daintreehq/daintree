@@ -30,7 +30,10 @@ vi.mock("../forgeProviderRegistry.js", () => ({
   listMatchingProviders: mocks.listMatchingProviders,
 }));
 
-import { readHelpSessionProjectFacts } from "../helpSessionProjectMetadataReader.js";
+import {
+  listLaunchableAgents,
+  readHelpSessionProjectFacts,
+} from "../helpSessionProjectMetadataReader.js";
 
 describe("readHelpSessionProjectFacts", () => {
   beforeEach(() => {
@@ -55,6 +58,7 @@ describe("readHelpSessionProjectFacts", () => {
       name: "Example",
       worktrees: [{ path: "/work/example", branch: "main", isMainWorktree: false }],
       forgeRemote: { name: "origin", url: "https://github.com/acme/x.git" },
+      launchableAgents: { agents: expect.any(Array), availabilityChecked: false },
     });
     expect(mocks.getProjectById).toHaveBeenCalledWith("proj-1");
     expect(mocks.listRemotes).toHaveBeenCalledWith("/work/example");
@@ -139,5 +143,27 @@ describe("readHelpSessionProjectFacts", () => {
     const facts = await readHelpSessionProjectFacts("proj-1", "/work/example");
     expect(facts.worktrees).toBeUndefined();
     expect(facts.name).toBe("Example");
+  });
+});
+
+describe("listLaunchableAgents", () => {
+  it("lists only launchable agents once the CLIs were probed, built-ins first", () => {
+    const listed = listLaunchableAgents({
+      claude: "ready",
+      antigravity: "unauthenticated",
+      codex: "missing",
+      grok: "blocked",
+    } as never);
+    expect(listed.availabilityChecked).toBe(true);
+    expect(listed.agents.map((agent) => agent.id)).toEqual(["claude", "antigravity"]);
+    expect(listed.agents.find((agent) => agent.id === "antigravity")?.name).toBe("Antigravity");
+  });
+
+  it("lists every registered agent, and never the assistant's own, before a probe", () => {
+    const listed = listLaunchableAgents(null);
+    const ids = listed.agents.map((agent) => agent.id);
+    expect(listed.availabilityChecked).toBe(false);
+    expect(ids).toContain("antigravity");
+    expect(ids).not.toContain("daintree-assistant");
   });
 });

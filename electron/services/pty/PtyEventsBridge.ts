@@ -7,6 +7,7 @@
  */
 
 import { events } from "../events.js";
+import { HANDBACK_CODE_PATTERN } from "../../../shared/types/handback.js";
 import type { PtyHostEvent, TerminalFlowStatus } from "../../../shared/types/pty-host.js";
 import type { AgentStateChangeTrigger } from "../../types/index.js";
 
@@ -125,6 +126,10 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       events.emit("agent:handback-observed", {
         terminalId: event.terminalId,
         handback: event.handback,
+        // Crossed a process boundary, so only a well-formed code is passed on.
+        ...(typeof event.code === "string" && HANDBACK_CODE_PATTERN.test(event.code)
+          ? { code: event.code }
+          : {}),
         timestamp: event.timestamp,
       });
       return true;

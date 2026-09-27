@@ -19,6 +19,12 @@ export interface HandbackRequest {
    * was spawned with it. Only delivered requests are looked for at a settle.
    */
   delivered: boolean;
+  /**
+   * The capture already reported for this code while its agent was still
+   * working. The code stays open then: a marker seen mid-turn can sit in a
+   * draft or a status line that the reply goes on to replace.
+   */
+  reported?: { message: string | null };
 }
 
 /**
@@ -77,6 +83,18 @@ export class HandbackTracker {
       });
     }
     return () => this.markWritten(seq);
+  }
+
+  /**
+   * Note a hit for `code`. False when it repeats the capture already reported
+   * for that code, so sampling the same screen again reports nothing new.
+   */
+  noteReported(code: string, message: string | null): boolean {
+    const request = this.requests.find((candidate) => candidate.code === code);
+    if (request === undefined) return true;
+    if (request.reported !== undefined && request.reported.message === message) return false;
+    request.reported = { message };
+    return true;
   }
 
   /** Drop the request whose marker was just observed, so a code fires once. */

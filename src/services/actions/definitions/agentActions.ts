@@ -36,6 +36,7 @@ import {
   LAUNCHABLE_AGENT_IDS,
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
+import { unknownAgentIdMessage } from "@/utils/agentLaunchValidation";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
 import { AwaitedReplySchema, WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
@@ -556,9 +557,20 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           "handback asks the agent to mark the end of its reply to `prompt`, so it needs a non-empty `prompt`. Pass one, or launch without handback."
         );
       }
-      // A plain shell, a non-terminal panel or an unknown id has no agent to
-      // answer it. The panel ids are checked by name: the launcher opens their
-      // panel even when a registry entry happens to share the id.
+      // An id nothing registers is most often a misspelt agent ("anti-gravity"
+      // for `antigravity`): say that, rather than blaming the handback or the
+      // notice that came with it.
+      if (
+        (handback === true || notify === true) &&
+        agentId !== "terminal" &&
+        !HANDBACK_PANEL_LAUNCH_IDS.has(agentId) &&
+        !isRegisteredAgent(agentId)
+      ) {
+        throw new UnactionableTargetError(unknownAgentIdMessage(agentId));
+      }
+      // A plain shell or a non-terminal panel has no agent to answer it. The
+      // panel ids are checked by name: the launcher opens their panel even
+      // when a registry entry happens to share the id.
       if (
         handback === true &&
         (HANDBACK_PANEL_LAUNCH_IDS.has(agentId) || !isRegisteredAgent(agentId))

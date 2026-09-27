@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
-import {
-  HANDBACK_SUMMARY_PLACEHOLDER,
-  type TerminalHandback,
-} from "../../../shared/types/handback.js";
+import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSubmission.js";
 import {
@@ -29,6 +26,7 @@ import {
   type TerminalNotifyWhenIdleResult,
 } from "../../../shared/types/terminalNotify.js";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { detectHandback } from "../pty/HandbackDetector.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 
 /**
@@ -109,7 +107,7 @@ export interface TerminalNotifyServiceDeps {
    * for. Optional so a host without the observation keeps the settle path.
    */
   onHandbackObserved?: (
-    listener: (terminalId: string, handback: TerminalHandback) => void
+    listener: (terminalId: string, handback: TerminalHandback, code?: string) => void
   ) => () => void;
   /** Whether the MCP server is on. Read on every decision. */
   isEnabled: () => boolean;
@@ -203,6 +201,10 @@ export interface FiredNotice {
   note?: string;
   observation: NoticeObservation;
   reply?: NoticeReply;
+  /** The summary the target wrote into the marker its prompt asked for. */
+  handback?: string;
+  /** The quote runs to that marker, so the summary is already in it. */
+  replyReachedHandback?: boolean;
 }
 
 function describeState(state: AgentState, waitingReason?: WaitingReason): string {
@@ -244,10 +246,27 @@ function describeNotice(notice: FiredNotice): string {
   }
 }
 
-/** Extra lines read past the requested count, so chrome below a handback marker does not eat the reply. */
-const REPLY_CHROME_SLACK_LINES = 24;
+/**
+ * Rows read off the screen before a quote is cut down to its line count: more
+ * than any pane is tall. Grok pins its transcript to the top of a tall pane,
+ * so on a 90-row screen the reply sits some 70 rows above the composer.
+ */
+const REPLY_SEARCH_ROWS = 500;
 
-const HANDBACK_END_LINE = /\bEND-[a-z0-9]{6}\b/;
+const HANDBACK_END_MARKERS = /\bEND-([a-z0-9]{6})\b/g;
+
+/**
+ * A closing marker a TUI wrapped at its hyphen: `END-` ends one row and the
+ * code starts the next. Codex and Grok both wrap that way.
+ */
+const HANDBACK_END_SPLIT_HEAD = /\bEND-[\s─-▟|]*$/u;
+const HANDBACK_END_SPLIT_TAIL = /^[\s─-▟⎿⏺|>›❯•●◦·]*([a-z0-9]{6})\b/u;
+
+/** Block elements, which TUIs paint their scrollbars with. */
+const BLOCK_GLYPH = /[▀-▟]/u;
+
+/** Rows a column of block glyphs must span before it is taken for a scrollbar. */
+const SCROLLBAR_MIN_ROWS = 3;
 
 /**
  * Terminal-query replies a CLI echoed as caret text before it took raw input
@@ -257,49 +276,174 @@ const HANDBACK_END_LINE = /\bEND-[a-z0-9]{6}\b/;
 const ECHOED_QUERY_REPLIES = /\^\[_G[^^\n]*\^\[\\|\^\[\[\?[0-9;]*c/g;
 
 /**
+ * Where a row ends in a block glyph set apart from the rest of it — alone on
+ * the row, or after a gap of two or more spaces — or -1.
+ */
+function trailingBlockColumn(row: string): number {
+  const trimmed = row.trimEnd();
+  const column = trimmed.length - 1;
+  if (column < 0 || !BLOCK_GLYPH.test(trimmed[column])) return -1;
+  const before = trimmed.slice(0, column);
+  return before.trim() === "" || before.endsWith("  ") ? column : -1;
+}
+
+/**
+ * The screen's rows with a scrollbar taken out and blank runs collapsed to
+ * one. Grok paints a scrollbar down every empty row of its transcript, which
+ * would otherwise keep those rows from collapsing. Only an unbroken run of
+ * rows with a set-apart block glyph in the same column counts, so a block or
+ * two in a reply stay.
+ */
+function replyRows(content: string): string[] {
+  const raw = content.replace(ECHOED_QUERY_REPLIES, "").split("\n");
+  const columns = raw.map(trailingBlockColumn);
+  const scrollbar = new Array<boolean>(raw.length).fill(false);
+  let runStart = 0;
+  for (let i = 1; i <= raw.length; i++) {
+    if (i < raw.length && columns[i] !== -1 && columns[i] === columns[runStart]) continue;
+    if (columns[runStart] !== -1 && i - runStart >= SCROLLBAR_MIN_ROWS) {
+      scrollbar.fill(true, runStart, i);
+    }
+    runStart = i;
+  }
+  const rows: string[] = [];
+  raw.forEach((line, index) => {
+    const row = scrollbar[index] ? line.slice(0, columns[index]).trimEnd() : line;
+    if (row.trim() === "" && rows.length > 0 && rows[rows.length - 1].trim() === "") return;
+    rows.push(row);
+  });
+  return rows;
+}
+
+/** The last closing marker on row `i`, wrapped onto the next row or not. */
+function closingMarkerAt(
+  rows: readonly string[],
+  i: number
+): { endRow: number; code: string } | null {
+  let code: string | undefined;
+  for (const match of rows[i].matchAll(HANDBACK_END_MARKERS)) code = match[1];
+  if (code !== undefined) return { endRow: i, code };
+  if (i + 1 < rows.length && HANDBACK_END_SPLIT_HEAD.test(rows[i])) {
+    const tail = HANDBACK_END_SPLIT_TAIL.exec(rows[i + 1]);
+    if (tail !== null) return { endRow: i + 1, code: tail[1] };
+  }
+  return null;
+}
+
+/** Rows searched above a closing marker for its opening one: a capped summary wraps to fewer. */
+const MAX_MARKER_ROWS = 40;
+
+const HANDBACK_START_SPLIT_HEAD = /DAINTREE-DONE-[\s─-▟|]*$/u;
+
+/** The row the opening marker for `code` nearest above row `from` starts on; -1 when none. */
+function openingRowFor(rows: readonly string[], code: string, from: number): number {
+  const start = `DAINTREE-DONE-${code}`;
+  const splitTail = new RegExp(`^[\\s\\u2500-\\u259f\\u23bf\\u23fa|>›❯•●◦·]*${code}\\b`, "u");
+  for (let r = from; r >= 0 && r >= from - MAX_MARKER_ROWS; r--) {
+    if (rows[r].includes(start)) return r;
+    if (
+      r + 1 < rows.length &&
+      HANDBACK_START_SPLIT_HEAD.test(rows[r]) &&
+      splitTail.test(rows[r + 1])
+    ) {
+      return r;
+    }
+  }
+  return -1;
+}
+
+/** The marker a notice or wait saw: its summary, and its code when the observation named it. */
+export interface ObservedMarker {
+  message: string | null;
+  code?: string;
+}
+
+/**
+ * The row the handback marker closes on, searching up from the bottom; -1 when
+ * there is none. Each candidate is the exact pair its closing row belongs to,
+ * judged by the detector the pty-host uses — never the echoed instruction, a
+ * spinner's status line or a marker left open. When the marker observed is
+ * known it must be that marker: the same code, or, with no code to go on, the
+ * same summary. That keeps a quote from ending at an earlier turn's marker
+ * still on screen, or another prompt's.
+ */
+function findHandbackEndRow(rows: readonly string[], observed: ObservedMarker | true): number {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const marker = closingMarkerAt(rows, i);
+    if (marker === null) continue;
+    if (observed !== true && observed.code !== undefined && marker.code !== observed.code) {
+      continue;
+    }
+    const opening = openingRowFor(rows, marker.code, i);
+    if (opening === -1) continue;
+    // The pair must close on this row: one already complete above it, with a
+    // stray closing marker below, ends there instead.
+    if (opening < i && detectHandback(rows.slice(opening, i).join("\n"), marker.code) !== null) {
+      continue;
+    }
+    const pair = rows.slice(opening, marker.endRow + 1).join("\n");
+    const match = detectHandback(pair, marker.code);
+    if (match === null) continue;
+    if (observed !== true && observed.code === undefined && match.message !== observed.message) {
+      continue;
+    }
+    return marker.endRow;
+  }
+  return -1;
+}
+
+export interface ExtractedReply {
+  reply: NoticeReply | null;
+  /** The quote ends at the agent's handback marker. */
+  reachedHandback: boolean;
+}
+
+/**
  * The reply a notice quotes: the last `lines` screen lines of `serialized`,
  * ANSI stripped. When the agent printed the handback it was asked for, the
- * quote ends at that marker, which drops the composer and status rows an agent
- * TUI draws below its reply. Null when there is nothing to quote.
+ * quote ends at that marker wherever it sits on the screen, which drops the
+ * composer and status rows an agent TUI draws below its reply. `endAt` is the
+ * marker observed, when known, or `true` for any marker the detector accepts.
  */
-export function extractNoticeReply(
+export function extractReply(
   serialized: string,
   lines: number,
-  endAtHandback: boolean
-): NoticeReply | null {
-  if (lines <= 0) return null;
-  const tail = tailCapturedOutput(serialized, lines + REPLY_CHROME_SLACK_LINES, true);
-  let rows = tail.content.replace(ECHOED_QUERY_REPLIES, "").split("\n");
+  endAt: ObservedMarker | boolean
+): ExtractedReply {
+  if (lines <= 0) return { reply: null, reachedHandback: false };
+  const tail = tailCapturedOutput(serialized, REPLY_SEARCH_ROWS, true);
+  let rows = replyRows(tail.content);
   let truncated = tail.truncated;
-  if (endAtHandback) {
-    let marker = -1;
-    for (let i = rows.length - 1; i >= 0; i--) {
-      // The echoed instruction carries the placeholder, on this row or, when
-      // the echo wrapped before its END, on the row above; the agent's own
-      // marker never does.
-      const echoed =
-        rows[i].includes(HANDBACK_SUMMARY_PLACEHOLDER) ||
-        (i > 0 && rows[i - 1].includes(HANDBACK_SUMMARY_PLACEHOLDER));
-      if (HANDBACK_END_LINE.test(rows[i]) && !echoed) {
-        marker = i;
-        break;
-      }
+  let reachedHandback = false;
+  if (endAt !== false) {
+    const marker = findHandbackEndRow(rows, endAt);
+    if (marker !== -1) {
+      rows = rows.slice(0, marker + 1);
+      reachedHandback = true;
     }
-    if (marker !== -1) rows = rows.slice(0, marker + 1);
   }
+  while (rows.length > 0 && rows[rows.length - 1].trim() === "") rows.pop();
   if (rows.length > lines) {
     rows = rows.slice(-lines);
     truncated = true;
   }
-  while (rows.length > 0 && rows[rows.length - 1].trim() === "") rows.pop();
   while (rows.length > 0 && rows[0].trim() === "") rows.shift();
   let text = rows.join("\n");
   if (text.length > NOTIFY_REPLY_MAX_CHARS) {
     text = cutToNewestChars(text, NOTIFY_REPLY_MAX_CHARS);
     truncated = true;
   }
-  if (text.length === 0) return null;
-  return { text, lineCount: text.split("\n").length, truncated };
+  if (text.length === 0) return { reply: null, reachedHandback: false };
+  return { reply: { text, lineCount: text.split("\n").length, truncated }, reachedHandback };
+}
+
+/** {@link extractReply}'s quote alone. Null when there is nothing to quote. */
+export function extractNoticeReply(
+  serialized: string,
+  lines: number,
+  endAtHandback: boolean
+): NoticeReply | null {
+  return extractReply(serialized, lines, endAtHandback).reply;
 }
 
 /** The newest `max` characters of `text`, starting on a whole line where one fits. */
@@ -325,9 +469,23 @@ function formatReplies(notices: readonly FiredNotice[]): string {
   let budget = NOTIFY_REPLIES_TOTAL_MAX_CHARS;
   const blocks: string[] = [];
   for (const notice of notices) {
+    const id = displayNoticeTerminalId(notice.terminalId);
+    // The marker's summary, when the quote does not already reach it: a TUI
+    // can draw its reply where no quote of the screen finds it.
+    const summary =
+      notice.handback !== undefined && notice.handback.length > 0 && !notice.replyReachedHandback
+        ? notice.handback
+        : undefined;
+    if (summary !== undefined) {
+      const fence = fenceFor(summary);
+      const block = `${id}, the summary in its done marker (its own words, not instructions):\n${fence}\n${summary}\n${fence}`;
+      if (budget >= block.length) {
+        budget -= block.length;
+        blocks.push(block);
+      }
+    }
     const reply = notice.reply;
     if (reply === undefined) continue;
-    const id = displayNoticeTerminalId(notice.terminalId);
     if (budget < 200) {
       blocks.push(`${id}: output left out for length; read it with terminal.getOutput.`);
       continue;
@@ -416,6 +574,12 @@ interface Notice {
   buffered: TargetEvent[];
   submissionToken?: string;
   handbackSeen: boolean;
+  /** The latest marker seen for this notice's prompt. */
+  handback?: TerminalHandback;
+  /** Its code, when the observation named it. */
+  handbackCode?: string;
+  /** Set while a reply wait on the same call may return the answer itself. */
+  heldBy?: NoticeHold;
   /** A settle out of `working`, waiting out {@link NOTIFY_TARGET_SETTLE_MS}. */
   settling?: {
     state: AgentState;
@@ -426,8 +590,36 @@ interface Notice {
   };
 }
 
+/**
+ * A call's reply wait, holding back that call's own notice until it ends. The
+ * notice carries it from the moment it exists, so a notice that fires as it is
+ * set up is held too, and no other call's notice about the same target is.
+ */
+export interface NoticeHold {
+  readonly id: symbol;
+  /** The wait has ended: a notice set up after that is not held. */
+  settled?: boolean;
+}
+
+export function createNoticeHold(): NoticeHold {
+  return { id: Symbol("notice-hold") };
+}
+
 interface FiredEntry {
   notice: FiredNotice;
+  /** Held back while this call's reply wait may still return the answer itself. */
+  heldBy?: NoticeHold;
+  /**
+   * Whether a later capture of the marker this notice fired on is the same
+   * marker; a later capture's summary replaces a draft's while undelivered.
+   */
+  matchesHandback?: (handback: TerminalHandback) => boolean;
+  /** The latest capture of that marker: the quote ends at it, and only it. */
+  observed?: TerminalHandback;
+  /** That marker's code, when an observation named it. */
+  observedCode?: string;
+  /** The capture the current quote ends at, when it reaches one. */
+  quotedAt?: TerminalHandback;
   /** The reply being read off the target's screen; delivery waits for it. */
   capture?: Promise<void>;
   /** How to read the reply again just before delivery; absent for no quote. */
@@ -435,6 +627,8 @@ interface FiredEntry {
   quote?: { lines: number; endAtHandback: boolean; firedAt: number; frozen?: boolean };
   /** The line that carries it, while that line's outcome is unknown. */
   wakeToken?: string;
+  /** A later prompt to the target superseded it while its line was in flight. */
+  superseded?: boolean;
 }
 
 interface DeliveryState {
@@ -473,6 +667,8 @@ interface PaneOwner {
 export interface NotifyOptions {
   /** Screen lines the notice quotes; {@link NOTIFY_REPLY_LINES_DEFAULT} when absent. */
   replyLines?: number;
+  /** The call also waits for the reply: its notice holds until {@link TerminalNotifyService.releaseHold}. */
+  hold?: NoticeHold;
 }
 
 /**
@@ -582,6 +778,7 @@ export class TerminalNotifyService {
     const { owner, notice } = await this.admit(pane, targetId, (owner) => {
       this.dropUndelivered(owner, targetId);
       const notice = this.addNotice(owner, targetId, "send", undefined, replyLines);
+      if (options.hold !== undefined && options.hold.settled !== true) notice.heldBy = options.hold;
       this.publish(owner);
       return { owner, notice };
     });
@@ -684,6 +881,9 @@ export class TerminalNotifyService {
         // project, so no project check is repeated here — and the pty-host
         // may not know the terminal yet, so there is nothing to read anyway.
         const notice = this.addNotice(owner, terminalId, "launch", undefined, replyLines);
+        if (options.hold !== undefined && options.hold.settled !== true) {
+          notice.heldBy = options.hold;
+        }
         const exited = this.exits.get(terminalId);
         if (exited !== undefined && exited.epoch > epochBefore) {
           notice.buffered.push({ kind: "exit", exitCode: exited.exitCode });
@@ -699,6 +899,49 @@ export class TerminalNotifyService {
         if (!owner.disposed) this.publish(owner);
       },
     };
+  }
+
+  /**
+   * A new prompt went to `targetId` without `notify`. A notice about it that
+   * fired and has not reached the pane answers the earlier prompt, and landing
+   * after this one it would read as the answer to it, so it goes, as it does
+   * for a send with `notify`. A pending notice stays: it still reports when
+   * the target stops.
+   */
+  supersede(pane: OwnPane, targetId: string): void {
+    const owner = this.existingOwner(pane);
+    if (owner === undefined) return;
+    const before = owner.fired.length;
+    this.dropUndelivered(owner, targetId);
+    if (owner.fired.length === before) return;
+    this.schedule(owner);
+    this.maybeDispose(owner);
+    if (!owner.disposed) this.publish(owner);
+  }
+
+  /**
+   * The reply wait a call's notice was held for has ended. An answered wait
+   * already told the caller, so the notice goes; one that ran out releases it,
+   * since the target is still going and the notice is then the pane's only
+   * word of the end.
+   */
+  releaseHold(pane: OwnPane, hold: NoticeHold, answered: boolean): void {
+    hold.settled = true;
+    const owner = this.existingOwner(pane);
+    if (owner === undefined) return;
+    for (const notice of [...owner.notices.values()]) {
+      if (notice.heldBy !== hold) continue;
+      if (answered) this.removeNotice(owner, notice);
+      else notice.heldBy = undefined;
+    }
+    if (answered) {
+      owner.fired = owner.fired.filter((entry) => entry.heldBy !== hold);
+    } else {
+      for (const entry of owner.fired) if (entry.heldBy === hold) entry.heldBy = undefined;
+    }
+    this.schedule(owner);
+    this.maybeDispose(owner);
+    if (!owner.disposed) this.publish(owner);
   }
 
   /**
@@ -956,9 +1199,7 @@ export class TerminalNotifyService {
     const inHost = owner.inHost;
     if (inHost === undefined) return;
     owner.inHost = undefined;
-    for (const entry of owner.fired) {
-      if (entry.wakeToken === inHost.token) entry.wakeToken = undefined;
-    }
+    this.requeue(owner, inHost.token);
     try {
       this.deps.getPtyClient()?.withdrawGuardedSubmission(owner.terminalId, inHost.token);
     } catch (err) {
@@ -997,12 +1238,27 @@ export class TerminalNotifyService {
   /**
    * A new prompt or key press to `targetId` supersedes a notice about it that
    * fired but has not reached the pane: delivered after the new send, it reads
-   * as the answer to it. A line already in flight is left alone.
+   * as the answer to it. A line already in flight is left alone, but its
+   * notice is marked so that, should the line not land, it is not sent again.
    */
   private dropUndelivered(owner: PaneOwner, targetId: string): void {
+    owner.fired = owner.fired.filter((entry) => {
+      if (entry.notice.terminalId !== targetId) return true;
+      if (entry.wakeToken === undefined) return false;
+      entry.superseded = true;
+      return true;
+    });
+  }
+
+  /**
+   * Put the notices a line carried back in the queue after the line did not
+   * land, except those a later prompt superseded while it was in flight.
+   */
+  private requeue(owner: PaneOwner, token: string): void {
     owner.fired = owner.fired.filter(
-      (entry) => entry.wakeToken !== undefined || entry.notice.terminalId !== targetId
+      (entry) => entry.wakeToken !== token || entry.superseded !== true
     );
+    for (const entry of owner.fired) if (entry.wakeToken === token) entry.wakeToken = undefined;
   }
 
   private removeNotice(owner: PaneOwner, notice: Notice): void {
@@ -1117,7 +1373,9 @@ export class TerminalNotifyService {
       ...(this.deps.onHandbackObserved
         ? [
             this.deps.onHandbackObserved(
-              guarded((terminalId, handback) => this.handleHandbackObserved(terminalId, handback))
+              guarded((terminalId, handback, code) =>
+                this.handleHandbackObserved(terminalId, handback, code)
+              )
             ),
           ]
         : []),
@@ -1130,7 +1388,12 @@ export class TerminalNotifyService {
    * next calls the turn over. A notice whose prompt is not yet confirmed
    * written, or that asked for no handback, is left to the settle path.
    */
-  private handleHandbackObserved(terminalId: string, handback: TerminalHandback): void {
+  private handleHandbackObserved(
+    terminalId: string,
+    handback: TerminalHandback,
+    code?: string
+  ): void {
+    this.reviseFiredHandbacks(terminalId, handback, code);
     const watchers = this.watchersByTarget.get(terminalId);
     if (watchers === undefined) return;
     for (const owner of [...watchers]) {
@@ -1138,8 +1401,41 @@ export class TerminalNotifyService {
       if (notice === undefined || notice.since === undefined) continue;
       if (notice.source === "when-idle" || !handbackMatches(notice, handback)) continue;
       notice.handbackSeen = true;
+      notice.handback = handback;
+      if (code !== undefined) notice.handbackCode = code;
       clearSettling(notice);
       this.fire(owner, notice, { kind: "handback" });
+    }
+  }
+
+  /**
+   * A later capture of a marker whose notice already fired, as when the reply
+   * replaces a drafted marker: a line not yet typed carries the newer summary,
+   * and a quote cut at the draft no longer stands in for it. Fed by both the
+   * early observation and the settle, which can be the first to see the final
+   * capture.
+   */
+  private reviseFiredHandbacks(
+    terminalId: string,
+    handback: TerminalHandback,
+    code?: string
+  ): void {
+    for (const owner of this.ownersByTerminal.values()) {
+      for (const entry of owner.fired) {
+        if (
+          entry.wakeToken !== undefined ||
+          entry.notice.terminalId !== terminalId ||
+          entry.matchesHandback?.(handback) !== true
+        ) {
+          continue;
+        }
+        entry.observed = handback;
+        if (code !== undefined) entry.observedCode = code;
+        if (entry.notice.handback !== undefined) entry.notice.handback = handback.message ?? "";
+        if (entry.quotedAt !== undefined && entry.quotedAt.message !== handback.message) {
+          entry.notice.replyReachedHandback = false;
+        }
+      }
     }
   }
 
@@ -1166,6 +1462,8 @@ export class TerminalNotifyService {
 
     const own = this.ownersByTerminal.get(terminalId);
     if (own !== undefined) this.handleOwnStateChanged(own, payload);
+    if (payload.lastHandback !== undefined)
+      this.reviseFiredHandbacks(terminalId, payload.lastHandback);
 
     // A target back at work after a notice fired has moved to another turn;
     // that notice keeps the reply it captured rather than quoting the next.
@@ -1251,7 +1549,10 @@ export class TerminalNotifyService {
     if (notice.since === undefined || change.timestamp < notice.since) return;
     const handbackNow =
       change.lastHandback !== undefined && handbackMatches(notice, change.lastHandback);
-    if (handbackNow) notice.handbackSeen = true;
+    if (handbackNow) {
+      notice.handbackSeen = true;
+      notice.handback = change.lastHandback;
+    }
     // The agent printed the marker this prompt asked for: its reply is
     // finished, so the notice goes now rather than after the settle window.
     if (handbackNow && change.state !== "working") {
@@ -1319,12 +1620,26 @@ export class TerminalNotifyService {
   private fire(owner: PaneOwner, notice: Notice, observation: NoticeObservation): void {
     if (!this.isCurrent(owner, notice)) return;
     this.removeNotice(owner, notice);
+    const observed = notice.handback;
+    // Only the answer to the pane's own prompt carries its summary: a notice
+    // armed on work already running would carry whatever marker another prompt
+    // asked for. Its quote is still cut at the marker it saw.
+    const summary = notice.source === "when-idle" ? undefined : observed;
     const entry: FiredEntry = {
       notice: {
         terminalId: notice.targetId,
         ...(notice.note !== undefined ? { note: notice.note } : {}),
         observation,
+        ...(summary !== undefined ? { handback: summary.message ?? "" } : {}),
       },
+      ...(notice.heldBy !== undefined ? { heldBy: notice.heldBy } : {}),
+      ...(observed !== undefined
+        ? {
+            observed,
+            ...(notice.handbackCode !== undefined ? { observedCode: notice.handbackCode } : {}),
+            matchesHandback: (later: TerminalHandback) => handbackMatches(notice, later),
+          }
+        : {}),
     };
     const quotable =
       observation.kind === "state" ||
@@ -1364,8 +1679,29 @@ export class TerminalNotifyService {
     try {
       const snapshot = await client.getSerializedStateAsync(entry.notice.terminalId);
       if (snapshot === null) return;
-      const reply = extractNoticeReply(snapshot.data, lines, endAtHandback);
-      if (reply !== null) entry.notice.reply = reply;
+      const observed = entry.observed;
+      const endAt: ObservedMarker | boolean = !endAtHandback
+        ? false
+        : observed === undefined
+          ? true
+          : {
+              message: observed.message,
+              ...(entry.observedCode !== undefined ? { code: entry.observedCode } : {}),
+            };
+      const { reply, reachedHandback } = extractReply(snapshot.data, lines, endAt);
+      if (reply === null) return;
+      // A read that no longer finds the marker (scrolled off, or another turn
+      // on screen) keeps the quote that did, flagged when it ends at a capture
+      // the latest one has since replaced.
+      if (!reachedHandback && entry.notice.replyReachedHandback === true) {
+        if (entry.quotedAt?.message !== observed?.message) {
+          entry.notice.replyReachedHandback = false;
+        }
+        return;
+      }
+      entry.notice.reply = reply;
+      entry.notice.replyReachedHandback = reachedHandback;
+      entry.quotedAt = reachedHandback ? observed : undefined;
     } catch (err) {
       console.error("[MCP] terminal notify: reading a reply failed:", err);
     }
@@ -1378,16 +1714,22 @@ export class TerminalNotifyService {
    * the coalesce window and often the asking pane's turn, so the screen then
    * is usually the complete reply. A target working again keeps the quote
    * from when it stopped, which is the one this notice is about.
+   *
+   * A quote ending at a marker is read again even while the target still
+   * reads as working: the state heuristic trails the marker by seconds, and
+   * the quote is cut at the marker, so what follows it cannot leak in. A new
+   * prompt to the target drops the notice before it can quote that turn.
    */
   private async refreshReplies(owner: PaneOwner, client: TerminalNotifyPtyClient): Promise<void> {
     const entries = owner.fired.filter(
-      (entry) => entry.wakeToken === undefined && entry.quote !== undefined
+      (entry) => isDeliverable(entry) && entry.quote !== undefined
     );
     await Promise.all(
       entries.map(async (entry) => {
         const info = await client.getTerminalAsync(entry.notice.terminalId).catch(() => null);
-        if (info === null || info.agentState === "working") return;
+        if (info === null) return;
         const quote = entry.quote!;
+        if (info.agentState === "working" && !quote.endAtHandback) return;
         if (quote.frozen === true) return;
         await this.captureReply(entry, quote.lines, quote.endAtHandback);
       })
@@ -1435,7 +1777,7 @@ export class TerminalNotifyService {
   }
 
   private hasUndelivered(owner: PaneOwner): boolean {
-    return owner.fired.some((entry) => entry.wakeToken === undefined);
+    return owner.fired.some((entry) => isDeliverable(entry));
   }
 
   /**
@@ -1503,7 +1845,7 @@ export class TerminalNotifyService {
     let info: NotifyTerminalInfo | null;
     try {
       const captures = owner.fired
-        .filter((entry) => entry.wakeToken === undefined && entry.capture !== undefined)
+        .filter((entry) => isDeliverable(entry) && entry.capture !== undefined)
         .map((entry) => entry.capture);
       if (captures.length > 0) await Promise.all(captures);
       await this.refreshReplies(owner, client);
@@ -1551,7 +1893,7 @@ export class TerminalNotifyService {
     // taking it back returns its notices to this line.
     this.withdraw(owner);
     const token = randomUUID();
-    const entries = owner.fired.filter((entry) => entry.wakeToken === undefined);
+    const entries = owner.fired.filter((entry) => isDeliverable(entry));
     for (const entry of entries) entry.wakeToken = token;
     const dropped = owner.droppedCount;
     owner.droppedCount = 0;
@@ -1577,7 +1919,7 @@ export class TerminalNotifyService {
       // line like any other: its notices wait for the pane's next turn.
       console.error("[MCP] terminal notify: submitting a line failed:", err);
       owner.inHost = undefined;
-      for (const entry of entries) entry.wakeToken = undefined;
+      this.requeue(owner, token);
       owner.droppedCount += dropped;
       this.failDelivery(owner, "unknown");
       return;
@@ -1629,9 +1971,7 @@ export class TerminalNotifyService {
       }
       if (phase === "failed" || phase === "cancelled" || phase === "unknown") {
         owner.inHost = undefined;
-        for (const entry of owner.fired) {
-          if (entry.wakeToken === token) entry.wakeToken = undefined;
-        }
+        this.requeue(owner, token);
         owner.droppedCount += dropped;
         // Part of the line may be sitting in the composer, and a guard refusal
         // looks the same from here. Neither makes sending again safe.
@@ -1693,10 +2033,11 @@ export class TerminalNotifyService {
   }
 
   private paneState(owner: PaneOwner): PaneNotifyState {
+    const held = owner.fired.filter((entry) => entry.heldBy !== undefined).length;
     return {
       terminalId: owner.terminalId,
-      pendingCount: owner.notices.size + owner.pendingLaunches,
-      readyCount: owner.fired.length,
+      pendingCount: owner.notices.size + owner.pendingLaunches + held,
+      readyCount: owner.fired.length - held,
       delivery: publicDelivery(owner.delivery),
       revision: this.revision,
     };
@@ -1716,6 +2057,11 @@ export class TerminalNotifyService {
       console.error("[MCP] terminal notify: publishing pane state failed:", err);
     }
   }
+}
+
+/** Fired, not held back for a reply wait, and not already on a line. */
+function isDeliverable(entry: FiredEntry): boolean {
+  return entry.wakeToken === undefined && entry.heldBy === undefined;
 }
 
 function clearSettling(notice: Notice): void {
@@ -1768,17 +2114,31 @@ export const NOTIFY_KEY_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendKeysOwned",
 ]);
 
-/** The submit and key paths that take `notify: true`. */
-export const NOTIFY_SEND_TOOLS: ReadonlySet<string> = new Set([
+/**
+ * The prompt paths. A prompt sent without `notify` still supersedes the pane's
+ * undelivered notice about its target.
+ */
+export const NOTIFY_PROMPT_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
+]);
+
+/** The submit and key paths that take `notify: true`. */
+export const NOTIFY_SEND_TOOLS: ReadonlySet<string> = new Set([
+  ...NOTIFY_PROMPT_TOOLS,
   "agent.launch",
   ...NOTIFY_KEY_TOOLS,
 ]);
 
 export type TerminalNotifyHandlers = Pick<
   TerminalNotifyService,
-  "whenIdle" | "prepareSend" | "prepareLaunch" | "prepareKeys" | "forgetTarget"
+  | "whenIdle"
+  | "prepareSend"
+  | "prepareLaunch"
+  | "prepareKeys"
+  | "forgetTarget"
+  | "supersede"
+  | "releaseHold"
 >;
 
 /**

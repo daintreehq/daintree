@@ -108,6 +108,17 @@ describe("HandbackTracker", () => {
     expect(codes(tracker)).toEqual(["code03"]);
   });
 
+  it("reports a capture once per code, and again only when it changes", () => {
+    const tracker = new HandbackTracker(noScreen);
+    tracker.registerDelivered("aaaaaa");
+
+    expect(tracker.noteReported("aaaaaa", "draft")).toBe(true);
+    expect(tracker.noteReported("aaaaaa", "draft")).toBe(false);
+    expect(tracker.noteReported("aaaaaa", "final")).toBe(true);
+    expect(tracker.noteReported("aaaaaa", null)).toBe(true);
+    expect(tracker.noteReported("aaaaaa", null)).toBe(false);
+  });
+
   it("reads the rendered screen through the reader it was given", () => {
     const tracker = new HandbackTracker((rows) => {
       expect(rows).toBeGreaterThanOrEqual(200);
