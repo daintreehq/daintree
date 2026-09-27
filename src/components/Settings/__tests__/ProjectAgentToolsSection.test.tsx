@@ -129,6 +129,19 @@ function rowFor(name: string): HTMLElement {
   return row;
 }
 
+/** The text of every element a control's `aria-describedby` names; each must resolve. */
+function describedText(control: HTMLElement): string {
+  const ids = (control.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+  expect(ids.length).toBeGreaterThan(0);
+  return ids
+    .map((id) => {
+      const el = document.getElementById(id);
+      expect(el).not.toBeNull();
+      return el!.textContent ?? "";
+    })
+    .join(" ");
+}
+
 describe("ProjectAgentToolsSection", () => {
   it("renders one row per plugin with its current level", async () => {
     agentMcpApi.listProjectPlugins.mockResolvedValue(
@@ -230,12 +243,49 @@ describe("ProjectAgentToolsSection", () => {
     );
     expect(within(rowFor("Notes")).queryByTestId("project-agent-tool-shared-warning")).toBe(null);
 
-    const describedBy = groupFor("Ledger").getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy!)?.textContent).toContain("Shared by every project");
-    expect(
-      document.getElementById(groupFor("Notes").getAttribute("aria-describedby")!)?.textContent
-    ).not.toContain("Shared by every project");
+    expect(describedText(groupFor("Ledger"))).toContain("Shared by every project");
+    const ordinary = describedText(groupFor("Notes"));
+    expect(ordinary).toContain("Team notes");
+    expect(ordinary).not.toContain("Shared by every project");
+  });
+
+  it("keeps the shared warning on access still saved for a plugin that is gone", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(
+      snapshot([
+        plugin({
+          sharedAcrossProjects: true,
+          access: "read-only",
+          source: "project",
+          available: false,
+        }),
+        plugin({
+          pluginInstanceId: "acme.db",
+          pluginDisplayName: "Warehouse",
+          pluginTools: undefined,
+          sharedAcrossProjects: true,
+          access: "off",
+          source: "project",
+          allProjectsAccess: "read-only",
+          available: false,
+        }),
+        plugin({
+          pluginInstanceId: "acme.old",
+          pluginDisplayName: "Archive",
+          sharedAcrossProjects: true,
+          available: false,
+        }),
+      ])
+    );
+    render(<ProjectAgentToolsSection />);
+
+    await screen.findByTestId("project-agent-tools");
+    expect(describedText(groupFor("Ledger"))).toContain("Shared by every project");
+    // Off here, but the default still gives every other project the database tools.
+    expect(describedText(groupFor("Warehouse"))).toContain("Shared by every project");
+    // Nothing on record and nothing new can be allowed, so there is nothing to warn about.
+    expect(optionLabels("Archive")).toEqual(["Off"]);
+    expect(within(rowFor("Archive")).queryByTestId("project-agent-tool-shared-warning")).toBe(null);
+    expect(screen.getAllByTestId("project-agent-tool-shared-warning")).toHaveLength(2);
   });
 
   it("keeps the warning while an answer from before access levels holds the database tools back", async () => {
