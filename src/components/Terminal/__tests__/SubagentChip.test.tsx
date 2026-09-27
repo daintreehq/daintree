@@ -395,4 +395,30 @@ describe("SubagentChip", () => {
     expect(await screen.findByText("Kant")).toBeTruthy();
     expect(screen.queryByText(/Couldn't refresh/)).toBeNull();
   });
+
+  it("keeps focus and announces progress when the refresh notice's Retry is used", async () => {
+    listSubagents.mockResolvedValueOnce(ok([subagent()]));
+    render(<SubagentChip terminalId="t1" />);
+    const refresh = await screen.findByRole("button", { name: "Refresh subagents" });
+    listSubagents.mockResolvedValueOnce({ status: "unavailable", reason: "timeout" });
+    fireEvent.click(refresh);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+
+    let answer: (value: unknown) => void = () => {};
+    listSubagents.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    retry.focus();
+    fireEvent.click(retry, { detail: 0 });
+
+    const status = () =>
+      screen
+        .getAllByRole("status")
+        .map((node) => node.textContent ?? "")
+        .join(" ");
+    await waitFor(() => expect(status()).toMatch(/Refreshing subagents/));
+    expect(document.activeElement).toBe(refresh);
+
+    answer(ok([subagent()]));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
+    expect(document.activeElement).toBe(refresh);
+  });
 });

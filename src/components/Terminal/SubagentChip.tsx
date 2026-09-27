@@ -273,6 +273,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   // status node speaks for a refresh the user asked for, not a background one
   // that happened while they were elsewhere.
   const [refreshRequested, setRefreshRequested] = useState(false);
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
   const { result, isLoading, refresh, refreshError } = useSubagents(terminalId, {
     provider: active,
     agentState,
@@ -291,17 +292,26 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   const summary = `${count} ${label} subagent${count === 1 ? "" : "s"}`;
   const waitingNote = waiting > 0 ? `${waiting} waiting on you` : null;
   const refreshErrorMessage = refreshError ? subagentUnavailableMessage(refreshError, label) : null;
-  const announcement = refreshErrorMessage
-    ? `Couldn't refresh: ${refreshErrorMessage}`
-    : refreshRequested
-      ? isLoading
-        ? "Refreshing subagents"
-        : "Subagents updated"
-      : "";
+  // A retry in flight outranks the failure it is retrying; the visible notice
+  // stays up until the new answer lands.
+  const announcement =
+    refreshRequested && isLoading
+      ? "Refreshing subagents"
+      : refreshErrorMessage
+        ? `Couldn't refresh: ${refreshErrorMessage}`
+        : refreshRequested
+          ? "Subagents updated"
+          : "";
   const requestRefresh = () => {
     if (isLoading) return;
     setRefreshRequested(true);
     refresh();
+  };
+  // The notice's Retry goes away with the notice, so focus moves to the refresh
+  // button it stands in for; ringed only when the press came from the keyboard.
+  const retryRefresh = (event: MouseEvent) => {
+    refreshButtonRef.current?.focus({ preventScroll: true, focusVisible: event.detail === 0 });
+    requestRefresh();
   };
 
   return (
@@ -344,6 +354,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
             {label} subagents
           </span>
           <button
+            ref={refreshButtonRef}
             type="button"
             onClick={requestRefresh}
             // Not `disabled`: that would drop keyboard focus to the page the
@@ -370,7 +381,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
             </p>
             <button
               type="button"
-              onClick={requestRefresh}
+              onClick={retryRefresh}
               className={cn(
                 "shrink-0 rounded-sm text-2xs text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors",
                 CHIP_FOCUS_CLASS
