@@ -214,6 +214,9 @@ describe("terminal.closeAll from an agent (#12881)", () => {
     expect(elevatedDangerRationale("terminal.closeAll", undefined)).toBe(
       CLOSE_ALL_DISPATCH_DANGER_RATIONALE
     );
+    expect(elevatedDangerRationale("terminal.closeAll", { recipeId: "r1" })).toBe(
+      CLOSE_ALL_DISPATCH_DANGER_RATIONALE
+    );
     expect(elevatedDangerRationale("worktree.createWithRecipe", { recipeId: "r1" })).toBe(
       RECIPE_DISPATCH_DANGER_RATIONALE
     );
