@@ -8,6 +8,7 @@ const ipcMainMock = vi.hoisted(() => ({
 const crashServiceMock = vi.hoisted(() => ({
   restoreBackup: vi.fn(() => false),
   getDeselectedProjectPanels: vi.fn((): Record<string, string[]> => ({})),
+  hasProjectPanelLayouts: vi.fn(() => false),
   setPanelFilter: vi.fn(),
   resetToFresh: vi.fn(),
   clearPendingCrash: vi.fn(),
@@ -76,6 +77,7 @@ describe("registerCrashRecoveryHandlers", () => {
     vi.clearAllMocks();
     crashServiceMock.restoreBackup.mockReturnValue(false);
     crashServiceMock.getDeselectedProjectPanels.mockReturnValue({});
+    crashServiceMock.hasProjectPanelLayouts.mockReturnValue(false);
     projectStoreMock.enqueueProjectStateUpdate.mockImplementation(async () => {});
     crashServiceMock.setPanelFilter.mockClear();
     crashServiceMock.resetToFresh.mockClear();
@@ -243,6 +245,115 @@ describe("registerCrashRecoveryHandlers", () => {
         ).rejects.toThrow("Crash recovery restore failed");
         expect(crashServiceMock.restoreBackup).not.toHaveBeenCalled();
         expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("rollback and filter hand-off (#12884)", () => {
+      function stateFor(projectId: string, ids: string[]) {
+        return { projectId, sidebarWidth: 350, terminals: ids.map((id) => ({ id })) };
+      }
+
+      function trackWrites(failFor?: string) {
+        const disk = new Map<string, unknown>([
+          ["projA", stateFor("projA", ["a1", "a2"])],
+          ["projB", stateFor("projB", ["b1", "b2"])],
+        ]);
+        projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+          async (projectId: string, updater: StateUpdater) => {
+            const next = updater(disk.get(projectId));
+            if (next === null) return;
+            if (projectId === failFor && next !== undefined) {
+              const current = disk.get(projectId) as { terminals: unknown[] };
+              if ((next as { terminals: unknown[] }).terminals.length < current.terminals.length) {
+                throw new Error("EACCES");
+              }
+            }
+            disk.set(projectId, next);
+          }
+        );
+        return disk;
+      }
+
+      it("restores already-narrowed projects when a later project write fails", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({
+          projA: ["a2"],
+          projB: ["b2"],
+        });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        const disk = trackWrites("projB");
+        registerCrashRecoveryHandlers();
+
+        await expect(
+          Promise.resolve().then(() =>
+            getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+              kind: "restore",
+              panelIds: ["a1", "b1"],
+            })
+          )
+        ).rejects.toThrow("Crash recovery restore failed");
+
+        expect(disk.get("projA")).toEqual(stateFor("projA", ["a1", "a2"]));
+        expect(disk.get("projB")).toEqual(stateFor("projB", ["b1", "b2"]));
+        expect(crashServiceMock.restoreBackup).not.toHaveBeenCalled();
+      });
+
+      it("restores narrowed projects when restoreBackup then fails", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["a2"] });
+        crashServiceMock.restoreBackup.mockReturnValue(false);
+        const disk = trackWrites();
+        registerCrashRecoveryHandlers();
+
+        await expect(
+          Promise.resolve().then(() =>
+            getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+              kind: "restore",
+              panelIds: ["a1"],
+            })
+          )
+        ).rejects.toThrow("Crash recovery restore failed");
+
+        expect(disk.get("projA")).toEqual(stateFor("projA", ["a1", "a2"]));
+      });
+
+      it("skips a malformed tab group instead of failing the restore", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["a2"] });
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        let written: { tabGroups?: unknown[] } | undefined;
+        projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+          async (_projectId: string, updater: StateUpdater) => {
+            written = updater({
+              ...stateFor("projA", ["a1", "a2", "a3"]),
+              tabGroups: [
+                { id: "bad", location: "grid", activeTabId: "a1", panelIds: null },
+                { id: "g", location: "grid", activeTabId: "a1", panelIds: ["a1", "a2", "a3"] },
+              ],
+            }) as typeof written;
+          }
+        );
+        registerCrashRecoveryHandlers();
+
+        await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+          kind: "restore",
+          panelIds: ["a1", "a3"],
+        });
+
+        expect(written?.tabGroups).toEqual([
+          { id: "g", location: "grid", activeTabId: "a1", panelIds: ["a1", "a3"] },
+        ]);
+      });
+
+      it("hands the legacy hydration filter over only for a legacy panel list", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        crashServiceMock.hasProjectPanelLayouts.mockReturnValue(true);
+        registerCrashRecoveryHandlers();
+
+        await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+          kind: "restore",
+          panelIds: ["a1"],
+        });
+
+        expect(crashServiceMock.setPanelFilter).not.toHaveBeenCalled();
+        expect(crashServiceMock.clearPendingCrash).toHaveBeenCalled();
       });
     });
 

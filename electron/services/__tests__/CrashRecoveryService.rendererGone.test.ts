@@ -346,6 +346,46 @@ describe("CrashRecoveryService renderer deaths and per-project layouts (#12884)"
       expect(readCrashFile(crashFiles("crash-")[0]!).panelCount).toBe(1);
     });
 
+    it.each([
+      ["null terminals as an empty layout", { terminals: null }, [PROJECT_A, PROJECT_B]],
+      ["a non-array terminals field as unreadable", { terminals: "nope" }, [PROJECT_A]],
+      [
+        "a newer schema version as unreadable",
+        { _schemaVersion: 99, terminals: [{ id: "x" }] },
+        [PROJECT_A],
+      ],
+    ])("treats %s", (_label, state, captured) => {
+      writeProjectState(PROJECT_A, [{ id: "t1", kind: "terminal" }]);
+      fs.mkdirSync(path.join(userData, "projects", PROJECT_B), { recursive: true });
+      fs.writeFileSync(
+        path.join(userData, "projects", PROJECT_B, "state.json"),
+        JSON.stringify(state)
+      );
+      const svc = makeService();
+      svc.setLiveWorkspaceIdsProvider(() => [PROJECT_A, PROJECT_B, "../escape"]);
+
+      svc.takeBackup();
+
+      const backup = JSON.parse(
+        fs.readFileSync(path.join(userData, "backups", "session-state.json"), "utf-8")
+      );
+      expect(Object.keys(backup.projectLayouts)).toEqual(captured);
+    });
+
+    it("counts project layouts in a fresh on-disk backup without a crash", () => {
+      writeProjectState(PROJECT_A, [
+        { id: "t1", kind: "terminal" },
+        { id: "t2", kind: "terminal" },
+      ]);
+      const svc = makeService();
+      svc.setLiveWorkspaceIdsProvider(() => [PROJECT_A]);
+      svc.initialize();
+      svc.takeBackup();
+
+      expect(svc.getBackupPanelCount(true)).toBe(2);
+      expect(svc.hasProjectPanelLayouts()).toBe(true);
+    });
+
     it("survives a provider that throws", () => {
       const svc = makeService();
       svc.setLiveWorkspaceIdsProvider(() => {

@@ -26,6 +26,7 @@ import {
 import { WATCHDOG_KILL_FLAG_NAME } from "../watchdog-host-core.js";
 import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention.js";
 import { stateFilePath } from "./projectStorePaths.js";
+import { PROJECT_STATE_SCHEMA_VERSION } from "./ProjectStateManager.js";
 
 const MAX_CRASH_LOGS = 10;
 const CRASH_LOG_PREFIX = "crash-";
@@ -566,6 +567,21 @@ export class CrashRecoveryService {
       console.error("[CrashRecovery] Failed to resolve deselected panels:", err);
     }
     return deselected;
+  }
+
+  /**
+   * Whether the recoverable panels come from per-project layouts rather than
+   * the legacy global list. Hydration's crash panel filter overrides a
+   * workspace's own state with the global list, which is only right when that
+   * list is what the user chose from.
+   */
+  hasProjectPanelLayouts(): boolean {
+    try {
+      const layouts = this.resolveRestoreSnapshot()?.projectLayouts;
+      return isPlainObject(layouts) && Object.keys(layouts).length > 0;
+    } catch {
+      return false;
+    }
   }
 
   restoreBackup(panelIds?: string[]): boolean {
@@ -1478,6 +1494,14 @@ export class CrashRecoveryService {
       if (!filePath) return null;
       const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
       if (!isPlainObject(parsed)) return null;
+      // A newer build's layout is one hydration will refuse to read, so it
+      // must not be counted or offered for restore either.
+      if (
+        typeof parsed._schemaVersion === "number" &&
+        parsed._schemaVersion > PROJECT_STATE_SCHEMA_VERSION
+      ) {
+        return null;
+      }
       if (parsed.terminals == null) return [];
       if (!Array.isArray(parsed.terminals)) return null;
       return parsed.terminals.filter(
