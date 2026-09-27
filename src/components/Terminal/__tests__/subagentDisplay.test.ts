@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSubagent, AgentSubagentStatus } from "@shared/types/ipc/agentSubagents";
 import {
+  subagentAttentionRank,
   subagentStatusLabel,
   subagentStatusTone,
   subagentSubtitle,
@@ -52,6 +53,12 @@ describe("subagentSubtitle", () => {
   it("does not repeat whatever the title already shows", () => {
     expect(subagentSubtitle(subagent({ preview: "Review the diff" }))).toBeNull();
     expect(subagentSubtitle(subagent({ role: "reviewer" }))).toBeNull();
+  });
+
+  it("does not repeat a task the title had to shorten", () => {
+    const preview = "Summarise the open questions in docs/architecture/terminal-lifecycle.md";
+    expect(subagentTitle(subagent({ preview }))).not.toBe(preview);
+    expect(subagentSubtitle(subagent({ preview }))).toBeNull();
   });
 
   it("shows the task under a labelled child", () => {
@@ -110,14 +117,50 @@ describe("subagentStatusLabel", () => {
   });
 });
 
+const EVERY_STATUS: AgentSubagentStatus[] = [
+  { type: "working" },
+  { type: "idle" },
+  { type: "completed" },
+  { type: "error" },
+  { type: "blocked", reason: "approval" },
+  { type: "blocked", reason: "input" },
+  { type: "unknown", reason: "not-loaded" },
+  { type: "unknown", reason: "stale" },
+  { type: "unknown", reason: "unrecognized" },
+];
+
+const needsUser = (status: AgentSubagentStatus) =>
+  status.type === "blocked" || status.type === "error";
+
 describe("subagentStatusTone", () => {
-  it("separates an error from a live child and from everything quiet", () => {
-    expect(subagentStatusTone({ type: "error" })).toBe("error");
-    expect(subagentStatusTone({ type: "working" })).toBe("active");
-    expect(subagentStatusTone({ type: "blocked", reason: "approval" })).toBe("active");
-    expect(subagentStatusTone({ type: "idle" })).toBe("muted");
-    expect(subagentStatusTone({ type: "completed" })).toBe("muted");
-    expect(subagentStatusTone({ type: "unknown", reason: "stale" })).toBe("muted");
+  it("never gives a child that needs the user the tone of one that does not", () => {
+    const quiet = new Set(EVERY_STATUS.filter((s) => !needsUser(s)).map(subagentStatusTone));
+    for (const status of EVERY_STATUS.filter(needsUser)) {
+      expect(quiet.has(subagentStatusTone(status))).toBe(false);
+    }
+  });
+
+  it("tells a child waiting on the user apart from one that failed", () => {
+    expect(subagentStatusTone({ type: "blocked", reason: "approval" })).not.toBe(
+      subagentStatusTone({ type: "error" })
+    );
+  });
+});
+
+describe("subagentAttentionRank", () => {
+  it("ranks every child that needs the user ahead of every child that does not", () => {
+    const worstQuiet = Math.min(
+      ...EVERY_STATUS.filter((s) => !needsUser(s)).map(subagentAttentionRank)
+    );
+    for (const status of EVERY_STATUS.filter(needsUser)) {
+      expect(subagentAttentionRank(status)).toBeLessThan(worstQuiet);
+    }
+  });
+
+  it("puts a child waiting on the user ahead of one that failed", () => {
+    expect(subagentAttentionRank({ type: "blocked", reason: "input" })).toBeLessThan(
+      subagentAttentionRank({ type: "error" })
+    );
   });
 });
 

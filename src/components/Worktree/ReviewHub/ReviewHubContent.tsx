@@ -1934,8 +1934,11 @@ export function ReviewHubContent({
 
             {diffMode === "working-tree" && (
               <button
-                onClick={() => void refresh()}
-                disabled={loading}
+                onClick={() => {
+                  if (!loading) void refresh();
+                }}
+                // Not `disabled`: pressing it would drop keyboard focus to the page.
+                aria-disabled={loading}
                 className={cn(
                   "p-1.5 rounded transition-colors",
                   "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",

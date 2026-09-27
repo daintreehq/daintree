@@ -18,6 +18,7 @@ import { useConsoleCaptureStore, ZERO_COUNTS } from "@/store/consoleCaptureStore
 import { usePanelStore } from "@/store/panelStore";
 import { ConsolePanel } from "./ConsolePanel";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 
 export type ConsoleDrawerTab = "output" | "console" | "diagnostics";
 
@@ -322,14 +323,11 @@ export function ConsoleDrawer({
                     type="button"
                     onClick={onRestartDevServer}
                     disabled={restartDisabled}
-                    className={cn(
-                      "p-1.5 rounded-r-none hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors",
-                      isRestarting && "animate-spin"
-                    )}
+                    className="p-1.5 rounded-r-none hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                     aria-label={restartTooltip}
                     aria-busy={isRestarting}
                   >
-                    <RotateCw className="h-3.5 w-3.5" />
+                    <SpinningIcon icon={RotateCw} active={isRestarting} className="h-3.5 w-3.5" />
                   </button>
                 </span>
               </TooltipTrigger>

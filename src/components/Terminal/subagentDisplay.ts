@@ -37,10 +37,24 @@ export function subagentStatusLabel(status: AgentSubagentStatus): string {
   }
 }
 
-export function subagentStatusTone(status: AgentSubagentStatus): "error" | "active" | "muted" {
+/**
+ * Colour is spent only on the two states that ask something of the user: a
+ * child waiting on them takes the app's waiting hue, a failed one the error
+ * hue. Everything else — running, idle, finished, unknown — is information and
+ * stays neutral, so the one row that needs attention is the one that stands
+ * out. The words carry the state either way; the tone only ranks it.
+ */
+export function subagentStatusTone(status: AgentSubagentStatus): "error" | "waiting" | "muted" {
   if (status.type === "error") return "error";
-  if (status.type === "working" || status.type === "blocked") return "active";
+  if (status.type === "blocked") return "waiting";
   return "muted";
+}
+
+/** Lower sorts first: waiting on the user, then failed, then everything else. */
+export function subagentAttentionRank(status: AgentSubagentStatus): number {
+  if (status.type === "blocked") return 0;
+  if (status.type === "error") return 1;
+  return 2;
 }
 
 function firstLine(value: string | null): string {
@@ -72,7 +86,10 @@ export function subagentSubtitle(subagent: AgentSubagent): string | null {
   const parts: string[] = [];
   const task = firstLine(subagent.preview);
   const role = firstLine(subagent.role);
-  if (task && task !== title) parts.push(task.slice(0, 120));
+  // A title that fell back to the task is the task, however it was cut, so the
+  // subtitle must not start by saying it again.
+  const titleIsTask = !firstLine(subagent.label) && !role;
+  if (task && !titleIsTask) parts.push(task.slice(0, 120));
   if (role && role !== title) parts.push(role);
   if (subagent.model) parts.push(subagent.model);
   // Depth only earns a slot once it says something: every child is at least one
