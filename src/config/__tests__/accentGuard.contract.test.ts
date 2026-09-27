@@ -134,9 +134,6 @@ const DURABLE_ALLOWLIST = new Set([
   // another put two accents in the same focus region. The accent is the focus
   // anchor alone, and both files came off this list.
 
-  // Current rebase step indicator in the conflict UI (single primary anchor per active focus region)
-  "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
-
   // Worktree overview list: the active-descendant cursor row. The list is a
   // single tab stop whose arrow keys move `aria-activedescendant`, so the
   // cursor is NOT DOM focus and cannot be written as a `focus-visible:` variant

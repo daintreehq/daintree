@@ -507,14 +507,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Per-file diff insertion count",
     },
   ],
-  "src/components/Worktree/ReviewHub/ConflictPanel.tsx": [
-    {
-      category: "verification",
-      signature: "text-status-success/60",
-      expectedOccurrences: 1,
-      rationale: "One mark per conflict that has to be resolved before continuing",
-    },
-  ],
   "src/components/Worktree/ReviewHub/FileSection.tsx": [
     {
       category: "domain",

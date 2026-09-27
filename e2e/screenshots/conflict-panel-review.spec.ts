@@ -419,6 +419,14 @@ test("conflict panel review — merge, rebase, resolved, confirm, themes", async
           .locator(`${PANEL} [aria-label="Mark ${MERGE_FILES.store} as resolved"]`)
           .first()
           .click();
+        // The file still carries its markers, so the panel asks first — that
+        // confirmation is a state worth seeing in its own right.
+        const markerDialog = page.locator('[role="alertdialog"]:has-text("still has")');
+        await expectState(page, '[role="alertdialog"]:has-text("still has")', {
+          label: "marker confirm",
+        });
+        await snap(page, "15-confirm-markers-remain");
+        await markerDialog.getByRole("button", { name: "Mark resolved" }).click();
         await expectState(page, `${PANEL} [aria-label="Mark ${MERGE_FILES.store} as resolved"]`, {
           hidden: true,
           label: "one file resolved",
@@ -460,7 +468,13 @@ test("conflict panel review — merge, rebase, resolved, confirm, themes", async
         await page.keyboard.press("Escape");
         await settle(page, 400);
         await page
-          .locator(`${PANEL} [aria-label="Take ours for ${MERGE_FILES.store}"]`)
+          .locator(`${PANEL} [aria-label="More actions for ${MERGE_FILES.store}"]`)
+          .first()
+          .click();
+        await expectState(page, '[role="menu"]', { label: "row menu" });
+        await snap(page, "32-row-menu-open");
+        await page
+          .getByRole("menuitem", { name: /^Take ours/ })
           .first()
           .click();
         await expectState(page, ':text("Take ours for")', { label: "take-ours confirm" });

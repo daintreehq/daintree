@@ -10,19 +10,16 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { REVIEW_HUB_DISABLED_CTA } from "./reviewHubUtils";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
 
-// Fading a chromatic CTA to 50% produces a dusty slab of the accent that still
-// dominates the dialog, and drops the label to ~2.1:1 in every light theme.
-// Neutral disabled surface + muted ink instead. Shared by both primary CTAs so
-// the panel shows one disabled treatment regardless of whether the worktree
-// has a remote.
+// Shared by both primary CTAs so the panel shows one disabled treatment
+// regardless of whether the worktree has a remote.
 const DISABLED_CTA_CLASSES = cn(
-  "aria-disabled:bg-surface-inset aria-disabled:text-text-muted",
-  "aria-disabled:shadow-none aria-disabled:cursor-not-allowed",
+  REVIEW_HUB_DISABLED_CTA,
   // Forced colours repaint every button ButtonText-on-ButtonFace, which made an
   // unavailable primary indistinguishable from a live one.
   "forced-colors:aria-disabled:text-[GrayText] forced-colors:aria-disabled:outline-[GrayText]"
