@@ -8,6 +8,7 @@ import {
   buildInputBarTheme,
   chipEntranceTheme,
   createContentAttributes,
+  createComboboxAttributes,
   createPlaceholder,
   createSlashChipField,
   createSlashTooltip,
@@ -57,6 +58,7 @@ interface UseEditorFactoryParams {
     selectionChipTooltipCompartmentRef: React.RefObject<Compartment>;
     autoSizeCompartmentRef: React.RefObject<Compartment>;
     keymapCompartmentRef: React.RefObject<Compartment>;
+    comboboxCompartmentRef: React.RefObject<Compartment>;
   };
   contextUpdateRef: React.RefObject<(update: import("@codemirror/view").ViewUpdate) => void>;
   keymapHandlersRef: React.RefObject<{
@@ -118,6 +120,7 @@ export function useEditorFactory({
       selectionChipTooltipCompartmentRef,
       autoSizeCompartmentRef,
       keymapCompartmentRef,
+      comboboxCompartmentRef,
     } = compartments;
 
     const state = EditorState.create({
@@ -130,6 +133,7 @@ export function useEditorFactory({
         EditorView.lineWrapping,
         createCursorBlink(),
         createContentAttributes(),
+        comboboxCompartmentRef.current.of(createComboboxAttributes(null)),
         autoSizeCompartmentRef.current.of(createAutoSize()),
         placeholderCompartmentRef.current.of(createPlaceholder(placeholder)),
         editableCompartmentRef.current.of(EditorView.editable.of(!disabled)),

@@ -4,6 +4,7 @@ import {
   useEffect,
   useImperativeHandle,
   useMemo,
+  useId,
   useRef,
   useState,
 } from "react";
@@ -19,7 +20,7 @@ import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
+import { AutocompleteMenu, autocompleteOptionId, type AutocompleteItem } from "./AutocompleteMenu";
 import {
   getDaintreeAtClaim,
   fileSearchQuery,
@@ -73,7 +74,11 @@ import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
 import { useEditorFactory } from "./hooks/useEditorFactory";
-import { minimalDocChange, readImageChipPaths } from "./inputEditorExtensions";
+import {
+  createComboboxAttributes,
+  minimalDocChange,
+  readImageChipPaths,
+} from "./inputEditorExtensions";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -262,6 +267,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const pickerRef = useRef<HTMLButtonElement | null>(null);
     const trailingGroupRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
+    const listboxId = useId();
     const rootRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
     const focusGenerationRef = useRef(0);
@@ -922,6 +928,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isAutocompleteOpen,
     });
 
+    const isListboxExpanded = isAutocompleteOpen && autocompleteItems.length > 0;
+    const activeOptionId =
+      isListboxExpanded && selectedIndex < autocompleteItems.length
+        ? autocompleteOptionId(listboxId, selectedIndex)
+        : null;
+    useEffect(() => {
+      editorViewRef.current?.dispatch({
+        effects: compartments.comboboxCompartmentRef.current.reconfigure(
+          createComboboxAttributes({ listboxId, expanded: isListboxExpanded, activeOptionId })
+        ),
+      });
+    }, [compartments.comboboxCompartmentRef, listboxId, isListboxExpanded, activeOptionId]);
+
     // Sync external value changes to editor doc
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1031,6 +1050,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               staleKeys={staleItemKeys}
               onSelect={handleAutocompleteSelect}
               style={{ left: `${menuLeftPx}px` }}
+              listboxId={listboxId}
               title={
                 triggerChar === "/"
                   ? "Commands"
@@ -1043,11 +1063,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         : atClaim === "diff"
                           ? "Diffs"
                           : "Files"
-              }
-              keyHint={
-                autocompleteItems[selectedIndex]?.enterAction === "execute"
-                  ? "↵ run · ⇥ complete"
-                  : "↵ insert"
               }
               ariaLabel={
                 triggerChar === "/"

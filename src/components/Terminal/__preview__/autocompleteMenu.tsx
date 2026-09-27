@@ -105,11 +105,6 @@ function Pane() {
           onSelect={noop}
           style={{ left: "12px" }}
           title={copy.title}
-          keyHint={
-            menuCase.items[menuCase.selectedIndex]?.enterAction === "execute"
-              ? "↵ run · ⇥ complete"
-              : "↵ insert"
-          }
           ariaLabel={copy.ariaLabel}
           emptyMessage={copy.emptyMessage}
         />

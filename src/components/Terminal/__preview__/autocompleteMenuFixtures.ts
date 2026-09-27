@@ -154,6 +154,7 @@ function fileItem(path: string): AutocompleteItem {
     label: base,
     insertText: `@${path}`,
     description: dir || undefined,
+    descriptionKind: "path",
     enterAction: "insert",
     insert: "literal",
   };
@@ -173,21 +174,24 @@ const FILES: AutocompleteItem[] = [
 const DIFFS: AutocompleteItem[] = [
   {
     key: "diff",
-    label: "Working tree diff (@diff)",
+    label: "@diff",
+    description: "Working tree diff",
     insertText: "@diff",
     enterAction: "insert",
     insert: { insert: "resolve", resolverId: "diff" },
   },
   {
     key: "diff:staged",
-    label: "Staged diff (@diff:staged)",
+    label: "@diff:staged",
+    description: "Staged diff",
     insertText: "@diff:staged",
     enterAction: "insert",
     insert: { insert: "resolve", resolverId: "diff" },
   },
   {
     key: "diff:head",
-    label: "HEAD diff (@diff:head)",
+    label: "@diff:head",
+    description: "HEAD diff",
     insertText: "@diff:head",
     enterAction: "insert",
     insert: { insert: "resolve", resolverId: "diff" },

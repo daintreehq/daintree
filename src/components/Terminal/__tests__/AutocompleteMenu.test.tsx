@@ -13,7 +13,7 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-import { AutocompleteMenu, type AutocompleteItem } from "../AutocompleteMenu";
+import { AutocompleteMenu, autocompleteOptionId, type AutocompleteItem } from "../AutocompleteMenu";
 
 const noop = () => {};
 
@@ -62,8 +62,7 @@ describe("AutocompleteMenu", () => {
       />
     );
 
-    expect(screen.queryByRole("status")).toBeNull();
-    expect(screen.getByText("Searching…")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Searching…");
   });
 
   it("renders listbox with options when items are present", () => {
@@ -84,24 +83,132 @@ describe("AutocompleteMenu", () => {
 
     expect(screen.getByRole("listbox")).toBeTruthy();
     expect(screen.getAllByRole("option")).toHaveLength(2);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 
-  it("renders a header with title and key hint when provided", () => {
+  it("offers only the keys that will act on the selected row", () => {
+    const run: AutocompleteItem = {
+      key: "run",
+      label: "/clear",
+      insertText: "/clear",
+      enterAction: "execute",
+    };
+    const insert: AutocompleteItem = {
+      key: "ins",
+      label: "/review",
+      insertText: "/review",
+      enterAction: "insert",
+    };
+    const hintText = (props: Partial<React.ComponentProps<typeof AutocompleteMenu>>) => {
+      const { container, unmount } = render(
+        <AutocompleteMenu
+          isOpen={true}
+          items={[run, insert]}
+          selectedIndex={0}
+          onSelect={noop}
+          title="Commands"
+          emptyMessage="No matches"
+          {...props}
+        />
+      );
+      const keys = Array.from(container.querySelectorAll("kbd")).map((k) => k.textContent);
+      const header = container.querySelector("kbd")?.closest("[aria-hidden]")?.textContent ?? "";
+      unmount();
+      return { keys, header };
+    };
+
+    // A row Enter runs also completes on Tab, so both keys are named.
+    expect(hintText({ selectedIndex: 0 }).header).toMatch(/run.*complete/);
+    // A row Enter inserts names only the one action.
+    const inserting = hintText({ selectedIndex: 1 });
+    expect(inserting.header).toMatch(/insert/);
+    expect(inserting.header).not.toMatch(/run/);
+    // No promise while the keymap would refuse the row, or there is no row.
+    expect(hintText({ staleKeys: new Set(["run"]) }).keys).toEqual([]);
+    expect(hintText({ items: [], isLoading: true }).keys).toEqual([]);
+    expect(hintText({ items: [] }).keys).toEqual([]);
+  });
+
+  it("gives each option a unique id the editor can name as its active descendant", () => {
+    const items: AutocompleteItem[] = [
+      { key: "a", label: "alpha", insertText: "alpha" },
+      { key: "b", label: "beta", insertText: "beta" },
+      { key: "c", label: "gamma", insertText: "gamma" },
+    ];
     render(
       <AutocompleteMenu
         isOpen={true}
-        items={[{ key: "a", label: "alpha", insertText: "alpha" }]}
-        selectedIndex={0}
+        items={items}
+        selectedIndex={1}
+        listboxId="menu-1"
         onSelect={noop}
-        title="Commands"
-        keyHint="↵ run · ⇥ complete"
         emptyMessage="No matches"
       />
     );
 
-    expect(screen.getByText("Commands")).toBeTruthy();
-    expect(screen.getByText("↵ run · ⇥ complete")).toBeTruthy();
+    const listbox = screen.getByRole("listbox");
+    expect(listbox.id).toBe("menu-1");
+    const options = screen.getAllByRole("option");
+    expect(new Set(options.map((o) => o.id)).size).toBe(options.length);
+    const selected = options.find((o) => o.getAttribute("aria-selected") === "true")!;
+    expect(document.getElementById(autocompleteOptionId("menu-1", 1))).toBe(selected);
+    // Reached through the editor's active descendant, never by tabbing.
+    for (const option of options) expect(option.tabIndex).toBe(-1);
+  });
+
+  it("keeps one status region mounted across loading, results and no matches", () => {
+    const items: AutocompleteItem[] = [{ key: "a", label: "alpha", insertText: "alpha" }];
+    const { rerender } = render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={[]}
+        selectedIndex={0}
+        isLoading={true}
+        onSelect={noop}
+        emptyMessage="No files match"
+      />
+    );
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Searching…");
+
+    rerender(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={noop}
+        emptyMessage="No files match"
+      />
+    );
+    expect(screen.getByRole("status")).toBe(status);
+    expect(status.textContent).toBe("");
+
+    rerender(
+      <AutocompleteMenu
+        isOpen={true}
+        items={[]}
+        selectedIndex={0}
+        onSelect={noop}
+        emptyMessage="No files match"
+      />
+    );
+    expect(screen.getByRole("status")).toBe(status);
+    expect(status.textContent).toBe("No files match");
+  });
+
+  it("leaves truncation to layout, so the whole description is in the row", () => {
+    const description =
+      "Clear conversation history but keep a summary in context. Optional: /compact [instructions]";
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={[{ key: "c", label: "/compact", insertText: "/compact", description }]}
+        selectedIndex={0}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+    expect(screen.getByRole("option").textContent).toContain(description);
   });
 
   it("marks the listbox busy while any row is stale or results are loading", () => {
@@ -237,6 +344,38 @@ describe("AutocompleteMenu", () => {
     expect(within(option).getByText("Plugin Creator")).toBeTruthy();
     // The raw insert token must never surface in the row — the label is shown, not the token.
     expect(option.textContent).not.toContain("$plugin-creator");
+  });
+
+  it("scrolls to the selection on the first open, not only when it moves", () => {
+    const scrollSpy = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      const items: AutocompleteItem[] = [
+        { key: "a", label: "alpha", insertText: "alpha" },
+        { key: "b", label: "beta", insertText: "beta" },
+        { key: "c", label: "gamma", insertText: "gamma" },
+      ];
+      render(
+        <AutocompleteMenu
+          isOpen={true}
+          items={items}
+          selectedIndex={2}
+          onSelect={noop}
+          emptyMessage="No matches"
+        />
+      );
+      const selected = screen
+        .getAllByRole("option")
+        .find((o) => o.getAttribute("aria-selected") === "true");
+      expect(scrollSpy.mock.contexts).toContain(selected);
+    } finally {
+      if (original === undefined) {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      } else {
+        Element.prototype.scrollIntoView = original;
+      }
+    }
   });
 
   it("scrolls the keyboard-selected option into view as selection moves", () => {

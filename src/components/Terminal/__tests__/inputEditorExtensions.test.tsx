@@ -45,6 +45,7 @@ import {
   addImageChip,
   readImageChipPaths,
   minimalDocChange,
+  createComboboxAttributes,
 } from "../inputEditorExtensions";
 import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
 import type { SlashCommand } from "@shared/types";
@@ -2479,5 +2480,33 @@ describe("@file chip widget rendering", () => {
     expect(chipEl?.classList.contains("cm-chip-pending-delete")).toBe(true);
 
     view.destroy();
+  });
+});
+
+describe("createComboboxAttributes", () => {
+  const attrsFor = (attrs: Parameters<typeof createComboboxAttributes>[0]) => {
+    const state = EditorState.create({ extensions: [createComboboxAttributes(attrs)] });
+    return Object.assign({}, ...state.facet(EditorView.contentAttributes)) as Record<
+      string,
+      string
+    >;
+  };
+
+  it("points at the list and its active row only while the list is showing", () => {
+    const open = attrsFor({ listboxId: "lb", expanded: true, activeOptionId: "lb-option-2" });
+    expect(open.role).toBe("combobox");
+    expect(open["aria-expanded"]).toBe("true");
+    expect(open["aria-controls"]).toBe("lb");
+    expect(open["aria-activedescendant"]).toBe("lb-option-2");
+
+    const closed = attrsFor({ listboxId: "lb", expanded: false, activeOptionId: "lb-option-2" });
+    expect(closed.role).toBe("combobox");
+    expect(closed["aria-expanded"]).toBe("false");
+    expect(closed["aria-controls"]).toBeUndefined();
+    expect(closed["aria-activedescendant"]).toBeUndefined();
+  });
+
+  it("adds nothing before the composer has a list to point at", () => {
+    expect(attrsFor(null).role).toBeUndefined();
   });
 });

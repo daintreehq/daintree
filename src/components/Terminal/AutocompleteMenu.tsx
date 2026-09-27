@@ -1,8 +1,9 @@
 import { forwardRef, useEffect, useRef } from "react";
 import type { CompletionKind } from "@shared/types";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import {
   getUiPaletteTransitionDuration,
@@ -11,13 +12,11 @@ import {
   UI_ENTER_EASING,
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
-import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
-
-function getDescriptionSnippet(description: string, maxLength = 60): string {
-  const cleaned = description.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= maxLength) return cleaned;
-  return `${cleaned.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-}
+import {
+  PALETTE_ROW_CLASS,
+  PALETTE_ROW_FOCUS_CLASS,
+  PALETTE_SECTION_LABEL_CLASS,
+} from "@/components/ui/paletteRowStyles";
 
 /**
  * Visible badge text per category. `command` is intentionally absent — plain
@@ -53,12 +52,46 @@ export interface AutocompleteItem {
   /** Canonical token inserted on selection (e.g. `/diff`, `$plugin-creator`). */
   insertText: string;
   description?: string;
+  /**
+   * `path` when the description is a directory. A path keeps its deepest
+   * segments when it has to give way — the end of a path is what tells two
+   * same-named files apart — where prose keeps its beginning.
+   */
+  descriptionKind?: "text" | "path";
   /** Semantic category; drives the neutral badge. Undefined for file/context items. */
   category?: CompletionKind;
   /** Enter behavior; defaults to `insert` when absent. */
   enterAction?: AutocompleteEnterAction;
   /** Send-time behavior; defaults to `literal` when absent. */
   insert?: AutocompleteInsert;
+}
+
+/** The DOM id of the option at `index`, for the editor's `aria-activedescendant`. */
+export function autocompleteOptionId(listboxId: string, index: number): string {
+  return `${listboxId}-option-${index}`;
+}
+
+interface KeyHint {
+  key: string;
+  label: string;
+}
+
+/**
+ * What the keys will do to the selected row, derived here rather than handed
+ * in as a string so the hint cannot promise an action the keymap won't take.
+ * Nothing is offered while there is no row to act on, or while the selected
+ * row is stale — `useEditorKeymap` refuses a stale row, so "insert" there would
+ * be a false promise.
+ */
+function getKeyHints(item: AutocompleteItem | undefined, isStale: boolean): KeyHint[] {
+  if (!item || isStale) return [];
+  if (item.enterAction === "execute") {
+    return [
+      { key: "↵", label: "run" },
+      { key: "⇥", label: "complete" },
+    ];
+  }
+  return [{ key: "↵", label: "insert" }];
 }
 
 export interface AutocompleteMenuProps {
@@ -72,9 +105,12 @@ export interface AutocompleteMenuProps {
   staleKeys?: ReadonlySet<string>;
   onSelect: (item: AutocompleteItem) => void;
   style?: React.CSSProperties;
+  /**
+   * The listbox's DOM id. The composer's editor is the combobox and names this
+   * list in `aria-controls`, and its options through `autocompleteOptionId`.
+   */
+  listboxId?: string;
   title?: string;
-  /** Compact keyboard hint rendered opposite the title, e.g. "↵ run · ⇥ complete". */
-  keyHint?: string;
   ariaLabel?: string;
   emptyMessage: string;
 }
@@ -89,8 +125,8 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       staleKeys,
       onSelect,
       style,
+      listboxId,
       title,
-      keyHint,
       ariaLabel,
       emptyMessage,
     },
@@ -105,19 +141,28 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       animationDuration: getUiPaletteTransitionDuration("exit"),
     });
 
+    // `shouldRender` is a dependency because presence mounts the menu a commit
+    // after `isOpen` flips: without it the first pass finds no list, and a menu
+    // that opens with its selection below the fold never scrolls to it.
     useEffect(() => {
-      if (!isOpen) return;
+      if (!isOpen || !shouldRender) return;
       const selected = listRef.current?.querySelector('[aria-selected="true"]');
       selected?.scrollIntoView?.({ block: "nearest" });
-    }, [isOpen, selectedIndex, items]);
+    }, [isOpen, shouldRender, selectedIndex, items]);
 
     if (!shouldRender) return null;
 
     const isEmpty = !isLoading && items.length === 0;
+    const hasStaleRows = staleKeys !== undefined && staleKeys.size > 0;
+    const selectedItem = items[selectedIndex];
+    const isSelectedStale = selectedItem ? (staleKeys?.has(selectedItem.key) ?? false) : false;
+    const keyHints = getKeyHints(selectedItem, isSelectedStale);
+    const statusText = isLoading && items.length === 0 ? "Searching…" : isEmpty ? emptyMessage : "";
 
     return (
       <div
         ref={ref}
+        data-autocomplete-menu=""
         className={cn(
           "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-tint/10 bg-surface shadow-[var(--theme-shadow-floating)]",
           "z-50 origin-bottom",
@@ -134,103 +179,108 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             : `${UI_PALETTE_EXIT_DURATION}ms`,
           transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
         }}
-        role={isEmpty ? undefined : "listbox"}
-        aria-label={ariaLabel ?? title ?? "Autocomplete"}
-        aria-busy={isLoading || (staleKeys !== undefined && staleKeys.size > 0) || undefined}
       >
-        {(title || keyHint) && (
-          <div className="flex items-center justify-between gap-2 border-b border-tint/5 px-2 py-1.5">
-            <span className="text-3xs font-semibold uppercase tracking-wider text-text-secondary">
-              {title}
-            </span>
-            {keyHint && (
-              <span aria-hidden="true" className="shrink-0 text-3xs text-text-placeholder">
-                {keyHint}
+        {title && (
+          <div className="flex h-7 items-center justify-between gap-2 border-b border-tint/5 px-2">
+            <span className={PALETTE_SECTION_LABEL_CLASS}>{title}</span>
+            {keyHints.length > 0 ? (
+              <span
+                aria-hidden="true"
+                className="flex shrink-0 items-center gap-2.5 text-3xs text-text-secondary"
+              >
+                {keyHints.map((hint) => (
+                  <span key={hint.key} className="inline-flex items-center gap-1">
+                    <kbd className={KBD_COMPACT_CLASS}>{hint.key}</kbd>
+                    {hint.label}
+                  </span>
+                ))}
               </span>
+            ) : (
+              hasStaleRows && (
+                <span aria-hidden="true" className="shrink-0 text-3xs text-text-secondary">
+                  Updating…
+                </span>
+              )
             )}
           </div>
         )}
-        <ScrollShadow className="max-h-64" scrollClassName="p-1">
-          {isLoading && items.length === 0 && (
-            <div className="px-2 py-2 text-xs font-mono text-text-secondary">Searching…</div>
-          )}
+        {/* Compact fade, and scroll padding to match: a selection scrolled to the
+            edge would otherwise land under the fade and read as disabled. */}
+        <ScrollShadow compact className="max-h-64" scrollClassName="p-1 scroll-py-4">
+          {/* Mounted for the menu's whole life, so a change of text is announced —
+              a live region inserted already holding its message often is not. */}
+          <div
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            className={cn(statusText && "px-2 py-1.5 text-xs text-text-secondary")}
+          >
+            {statusText}
+          </div>
 
-          {isEmpty && (
-            <div
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              className="px-2 py-2 text-xs font-mono text-text-secondary"
-            >
-              {emptyMessage}
-            </div>
-          )}
-
-          <div ref={listRef}>
+          <div
+            ref={listRef}
+            id={listboxId}
+            role={isEmpty ? undefined : "listbox"}
+            aria-label={isEmpty ? undefined : (ariaLabel ?? title ?? "Autocomplete")}
+            aria-busy={isLoading || hasStaleRows || undefined}
+          >
             {items.map((item, idx) => {
-              const descriptionSnippet = item.description
-                ? getDescriptionSnippet(item.description)
-                : undefined;
               const badge = item.category ? CATEGORY_LABEL[item.category] : undefined;
+              const isSelected = idx === selectedIndex;
               const isRowStale = staleKeys?.has(item.key) ?? false;
-              const tooltipText = [
-                item.label,
-                badge ? `(${badge})` : "",
-                item.description ? `— ${item.description}` : "",
-              ]
-                .filter(Boolean)
-                .join(" ");
+              const isPath = item.descriptionKind === "path";
 
               return (
-                <Tooltip key={item.key}>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={idx === selectedIndex}
-                      aria-disabled={isRowStale || undefined}
+                <button
+                  key={item.key}
+                  id={listboxId ? autocompleteOptionId(listboxId, idx) : undefined}
+                  type="button"
+                  role="option"
+                  // Focus stays in the editor; the rows are reached through
+                  // `aria-activedescendant`, never the Tab sequence.
+                  tabIndex={-1}
+                  aria-selected={isSelected}
+                  aria-disabled={isRowStale || undefined}
+                  className={cn(
+                    PALETTE_ROW_CLASS,
+                    PALETTE_ROW_FOCUS_CLASS,
+                    "flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left",
+                    "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
+                    isRowStale && "opacity-50"
+                  )}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (isRowStale) return;
+                    onSelect(item);
+                  }}
+                >
+                  {/* The token is what the row is; it gives way last. */}
+                  <span className="max-w-[calc(100%-5rem)] shrink-0 truncate font-mono text-xs leading-4">
+                    {item.label}
+                  </span>
+                  {badge && (
+                    <>
+                      <Badge aria-hidden="true" size="xs" tone="outline" className="leading-3">
+                        {badge}
+                      </Badge>
+                      <span className="sr-only">Category: {badge}</span>
+                    </>
+                  )}
+                  {item.description && (
+                    <span
                       className={cn(
-                        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-[color,background-color,opacity] duration-150 ease-out",
-                        PALETTE_ROW_FOCUS_CLASS,
-                        idx === selectedIndex
-                          ? "bg-overlay-soft text-text-primary"
-                          : "text-text-secondary hover:bg-tint/[0.05] hover:text-text-primary",
-                        isRowStale && "opacity-50"
+                        "min-w-0 truncate text-3xs leading-4",
+                        isSelected ? "text-text-primary" : "text-text-secondary",
+                        // Clip from the start so the deepest directories survive.
+                        // The inner isolate keeps a path's slashes in LTR order.
+                        isPath && "[direction:rtl] text-left"
                       )}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        if (isRowStale) return;
-                        onSelect(item);
-                      }}
                     >
-                      <span className="min-w-0 flex-none max-w-full truncate font-mono text-xs leading-4">
-                        {item.label}
-                      </span>
-                      {badge && (
-                        <>
-                          <span
-                            aria-hidden="true"
-                            className="shrink-0 rounded-sm border border-tint/10 bg-overlay-subtle px-1 text-4xs font-medium uppercase leading-4 tracking-wide text-text-secondary"
-                          >
-                            {badge}
-                          </span>
-                          <span className="sr-only">Category: {badge}</span>
-                        </>
-                      )}
-                      {descriptionSnippet && (
-                        <span
-                          className={cn(
-                            "min-w-0 truncate text-3xs leading-4",
-                            idx === selectedIndex ? "text-text-primary" : "text-text-placeholder"
-                          )}
-                        >
-                          {descriptionSnippet}
-                        </span>
-                      )}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{tooltipText}</TooltipContent>
-                </Tooltip>
+                      {isPath ? <bdi>{item.description}</bdi> : item.description}
+                    </span>
+                  )}
+                </button>
               );
             })}
           </div>

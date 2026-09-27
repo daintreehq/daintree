@@ -136,13 +136,16 @@ async function capture(page: Page, caseName: string, theme: string): Promise<str
   await expect(shell, `${caseName}: preview did not mount`).toBeAttached();
   await expect(page.locator(".cm-content"), `${caseName}: composer has no editor`).toHaveCount(1);
 
-  const menu = page.locator(`[aria-label="${TRIGGER_COPY[spec.trigger].ariaLabel}"]`);
+  const menu = page.locator("[data-autocomplete-menu]");
   await expect(menu, `${caseName}: menu did not render`).toBeVisible();
   await expect.poll(() => menu.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
 
   const options = menu.getByRole("option");
   await expect(options, `${caseName}: wrong row count`).toHaveCount(spec.items.length);
   if (spec.items.length > 0) {
+    await expect(
+      menu.getByRole("listbox", { name: TRIGGER_COPY[spec.trigger].ariaLabel })
+    ).toBeVisible();
     await expect(options.nth(spec.selectedIndex)).toHaveAttribute("aria-selected", "true");
   }
   if (spec.isLoading) {
@@ -155,8 +158,14 @@ async function capture(page: Page, caseName: string, theme: string): Promise<str
     await expect(options.first()).toHaveAttribute("aria-disabled", "true");
   }
   if (spec.hoverIndex !== undefined) {
-    await options.nth(spec.hoverIndex).hover();
-    await expect(page.getByRole("tooltip"), `${caseName}: hover raised no tooltip`).toBeVisible();
+    const hovered = options.nth(spec.hoverIndex);
+    await hovered.hover();
+    await expect
+      .poll(() => hovered.evaluate((el) => el.matches(":hover")), `${caseName}: row not hovered`)
+      .toBe(true);
+    // Pointer rest must not raise anything over the neighbouring rows.
+    await page.waitForTimeout(400);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
   }
 
   await page.evaluate(() => document.fonts.ready);
