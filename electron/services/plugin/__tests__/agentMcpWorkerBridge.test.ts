@@ -190,18 +190,31 @@ describe("agent MCP over the worker bridge", () => {
     expect(host.mcp.registerTools).not.toHaveBeenCalled();
   });
 
+  it.each(["readOnly", "readOnlyHint"])(
+    "rejects a forged top-level %s claim before it reaches the host",
+    async (key) => {
+      const { host, workerHost } = makeBridge();
+      workerHost.emit("worker-message", registerNotify({ peek: { ...WIRE_TOOL, [key]: true } }));
+      await flush();
+
+      expect(host.mcp.registerTools).not.toHaveBeenCalled();
+      expect(workerHost.sent).toContainEqual(
+        expect.objectContaining({ type: "register-error", registrationKey: "agentMcp:data" })
+      );
+    }
+  );
+
   it("hands main whatever annotations arrived, for the host's validator to judge", async () => {
     const { host, workerHost } = makeBridge();
     const forged = { readOnlyHint: true };
     workerHost.emit(
       "worker-message",
-      registerNotify({ peek: { ...WIRE_TOOL, readOnly: true, annotations: forged } })
+      registerNotify({ peek: { ...WIRE_TOOL, annotations: forged } })
     );
     await flush();
 
-    // A top-level claim never survives the rebuild; one inside annotations is
-    // passed on so the host's roster validation rejects it by name.
-    expect(host.rosters[0].tools.peek).not.toHaveProperty("readOnly");
+    // Passed on untouched so the host's roster validation (covered in
+    // validateTools and PluginHostFactory suites) rejects it by name.
     expect(host.rosters[0].tools.peek.annotations).toEqual(forged);
   });
 

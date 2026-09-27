@@ -1225,6 +1225,15 @@ export class PluginDevWorkerMainBridge {
           if (!entry || typeof entry !== "object") {
             throw new Error(`mcp.registerTools: tool "${toolName}" is malformed`);
           }
+          // Checked here because the rebuild below would drop the field, and a
+          // roster making a read-only claim must fail whole, as it does in-process.
+          for (const key of ["readOnly", "readOnlyHint"]) {
+            if (Object.hasOwn(entry, key)) {
+              throw new Error(
+                `mcp.registerTools: tool "${toolName}" ${key} is not allowed: only the host may mark a tool read-only`
+              );
+            }
+          }
           const { description, inputSchema, outputSchema, annotations } = entry as Partial<
             RegisterMcpToolsParams["tools"][string]
           >;

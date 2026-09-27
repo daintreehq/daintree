@@ -78,7 +78,11 @@ const ANNOTATION_KEYS = ["destructiveHint", "idempotentHint", "openWorldHint"] a
  */
 const READ_ONLY_KEYS = ["readOnly", "readOnlyHint"] as const;
 
-function rejectReadOnlyClaim(toolName: string, where: string, value: Record<string, unknown>): void {
+function rejectReadOnlyClaim(
+  toolName: string,
+  where: string,
+  value: Record<string, unknown>
+): void {
   for (const key of READ_ONLY_KEYS) {
     if (Object.hasOwn(value, key)) {
       throw new Error(
