@@ -342,6 +342,7 @@ vi.mock("electron", () => ({
   // The update-state pull is registered eagerly here (not from its deferred
   // task), so init touches ipcMain directly.
   ipcMain: { handle: vi.fn() },
+  powerMonitor: { on: vi.fn(), off: vi.fn() },
 }));
 
 import { initGlobalServices, __test__ } from "../globalServicesInit.js";
@@ -349,9 +350,12 @@ import {
   getGlobalServicesInitialized,
   setGlobalServicesInitialized,
   setPtyClientRef,
+  getStopEventLoopLagMonitor,
+  setStopEventLoopLagMonitor,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
-import { app, ipcMain } from "electron";
+import { app, ipcMain, powerMonitor } from "electron";
+import { startEventLoopLagMonitor } from "../../utils/performance.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
@@ -844,6 +848,36 @@ describe("initGlobalServices task ordering", () => {
     run!();
 
     expect(registerCommandsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("feeds raw powerMonitor suspend/resume into the event-loop lag monitor (#12887)", async () => {
+    const previousStop = getStopEventLoopLagMonitor();
+    setStopEventLoopLagMonitor(null);
+    vi.mocked(startEventLoopLagMonitor).mockClear();
+
+    try {
+      const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
+      registeredTaskRuns.get("event-loop-lag-monitor")!();
+
+      expect(startEventLoopLagMonitor).toHaveBeenCalledTimes(1);
+      const powerEvents = vi.mocked(startEventLoopLagMonitor).mock.calls[0][2]!;
+      const onSuspend = vi.fn();
+      const onResume = vi.fn();
+
+      const offSuspend = powerEvents.onSuspend(onSuspend);
+      const offResume = powerEvents.onResume(onResume);
+      expect(powerMonitor.on).toHaveBeenCalledWith("suspend", onSuspend);
+      expect(powerMonitor.on).toHaveBeenCalledWith("resume", onResume);
+
+      offSuspend();
+      offResume();
+      expect(powerMonitor.off).toHaveBeenCalledWith("suspend", onSuspend);
+      expect(powerMonitor.off).toHaveBeenCalledWith("resume", onResume);
+    } finally {
+      getStopEventLoopLagMonitor()?.();
+      setStopEventLoopLagMonitor(previousStop);
+    }
   });
 
   it("wires a lazy ProjectViewManager provider into HibernationService (#10668)", async () => {
