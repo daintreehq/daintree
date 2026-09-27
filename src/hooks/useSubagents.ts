@@ -70,8 +70,13 @@ interface CachedLookup {
 }
 
 const lookupCache = new Map<string, CachedLookup>();
-/** Terminal keys with a request in flight, shared across hook instances. */
-const inFlightKeys = new Set<string>();
+/**
+ * Requests in flight, shared across hook instances. The promise rather than a
+ * flag, so an instance that mounts while another's lookup is running — a
+ * remount mid-request, a second pane on the same terminal — gets that answer
+ * too instead of waiting for a settle that may never come.
+ */
+const inFlight = new Map<string, Promise<AgentSubagentsResult>>();
 
 /** Hard bound on the cache — a long session cycles through many terminals. */
 const MAX_CACHED_TERMINALS = 64;
@@ -154,20 +159,6 @@ export function useSubagents(
   const fetchSubagents = useCallback(
     (force: boolean) => {
       if (!provider || !isElectronAvailable()) return;
-      // Module-scoped, so two panes remounting the same terminal at once issue
-      // one lookup rather than one each.
-      if (inFlightKeys.has(key)) return;
-      const now = Date.now();
-      const cached = lookupCache.get(key);
-      if (!force && cached && now - cached.at < SUBAGENT_REFRESH_THROTTLE_MS) {
-        // Still fresh: adopt it so a remount inside the window shows the same
-        // list it had before, without spawning anything.
-        setEntry({ key, result: cached.result, refreshError: cached.refreshError });
-        return;
-      }
-      const adapter = SUBAGENT_PROVIDERS[provider];
-      inFlightKeys.add(key);
-      setIsLoading(true);
       const settle = (next: AgentSubagentsResult) => {
         // Answers the key it was asked under. Without this an in-flight
         // lookup that outlives an agent switch overwrites the new agent's
@@ -185,6 +176,28 @@ export function useSubagents(
           return { key, result: next };
         });
       };
+      const follow = (request: Promise<AgentSubagentsResult>) => {
+        setIsLoading(true);
+        void request.then(settle).finally(() => {
+          if (mountedRef.current) setIsLoading(false);
+        });
+      };
+      // Module-scoped, so two panes remounting the same terminal at once issue
+      // one lookup rather than one each — and both hear its answer.
+      const pending = inFlight.get(key);
+      if (pending) {
+        follow(pending);
+        return;
+      }
+      const now = Date.now();
+      const cached = lookupCache.get(key);
+      if (!force && cached && now - cached.at < SUBAGENT_REFRESH_THROTTLE_MS) {
+        // Still fresh: adopt it so a remount inside the window shows the same
+        // list it had before, without spawning anything.
+        setEntry({ key, result: cached.result, refreshError: cached.refreshError });
+        return;
+      }
+      const adapter = SUBAGENT_PROVIDERS[provider];
       // A transient failure still stamps the throttle, or a pane that keeps
       // settling would retry on every settle, but it keeps the last good list
       // as what a remount rehydrates to.
@@ -197,25 +210,26 @@ export function useSubagents(
         if (keepPrevious) rememberLookup(key, previous, Date.now(), next.reason);
         else rememberLookup(key, next, Date.now());
       };
-      void adapter
+      const request = adapter
         .list({ terminalId })
-        .then((next) => {
-          remember(next);
-          settle(next);
-        })
-        .catch((error: unknown) => {
-          logWarn(`[useSubagents] list failed: ${formatErrorMessage(error, "unknown error")}`);
-          const failed: AgentSubagentsResult = {
-            status: "unavailable",
-            reason: adapter.fallbackReason,
-          };
-          remember(failed);
-          settle(failed);
-        })
-        .finally(() => {
-          inFlightKeys.delete(key);
-          if (mountedRef.current) setIsLoading(false);
-        });
+        .then(
+          (next) => {
+            remember(next);
+            return next;
+          },
+          (error: unknown) => {
+            logWarn(`[useSubagents] list failed: ${formatErrorMessage(error, "unknown error")}`);
+            const failed: AgentSubagentsResult = {
+              status: "unavailable",
+              reason: adapter.fallbackReason,
+            };
+            remember(failed);
+            return failed;
+          }
+        )
+        .finally(() => inFlight.delete(key));
+      inFlight.set(key, request);
+      follow(request);
     },
     [provider, key, terminalId]
   );
@@ -248,5 +262,5 @@ export function useSubagents(
 /** Test-only: the lookup cache is module state and outlives a render tree. */
 export function __resetSubagentThrottle(): void {
   lookupCache.clear();
-  inFlightKeys.clear();
+  inFlight.clear();
 }

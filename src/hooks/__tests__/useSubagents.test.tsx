@@ -74,6 +74,22 @@ describe("useSubagents", () => {
     await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(1));
   });
 
+  it("hands a lookup's answer to a pane that remounted while it was running", async () => {
+    let answer: (value: AgentSubagentsResult) => void = () => {};
+    listSubagents.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const first = renderHook(() => useSubagents("t1", { provider: "codex" }));
+    await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    const second = renderHook(() => useSubagents("t1", { provider: "codex" }));
+    expect(second.result.current.isLoading).toBe(true);
+    await act(async () => answer(ok("child-1")));
+
+    expect(second.result.current.result).toEqual(ok("child-1"));
+    expect(second.result.current.isLoading).toBe(false);
+    expect(listSubagents).toHaveBeenCalledTimes(1);
+  });
+
   it("rehydrates a remount from the cached answer instead of asking again", async () => {
     listSubagents.mockResolvedValue(ok("child-1"));
     const first = renderHook(() => useSubagents("t1", { provider: "codex" }));
