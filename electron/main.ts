@@ -371,6 +371,22 @@ if (!gotTheLock) {
   // collapses to one write.
   app.on("browser-window-focus", () => scheduleOpenWindowsSave());
 
+  // Crash metadata and recovery summaries read each live workspace's persisted
+  // layout. Views alone miss projects whose agents outlived an evicted view.
+  getCrashRecoveryService().setLiveWorkspaceIdsProvider(() => {
+    const ids = new Set<string>(getPtyClient()?.getLiveWorkspaceIds() ?? []);
+    for (const ctx of windowRegistry.all()) {
+      try {
+        for (const entry of ctx.services.projectViewManager?.getAllViews() ?? []) {
+          ids.add(entry.projectId);
+        }
+      } catch {
+        // A disposing manager can throw; its projects are skipped this read.
+      }
+    }
+    return ids;
+  });
+
   // Read last-active projectId synchronously from SQLite BEFORE creating any window.
   // This allows the initial WebContentsView to use the correct session partition,
   // giving crash isolation and V8 code cache benefits from the first render.

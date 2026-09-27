@@ -196,7 +196,7 @@ vi.mock("../../utils/openExternal.js", () => ({
 }));
 
 vi.mock("../../services/CrashRecoveryService.js", () => ({
-  getCrashRecoveryService: vi.fn(() => ({ recordCrash: vi.fn() })),
+  getCrashRecoveryService: vi.fn(() => ({ recordCrash: vi.fn(), recordRendererGone: vi.fn() })),
 }));
 
 vi.mock("../../ipc/errorHandlers.js", () => ({

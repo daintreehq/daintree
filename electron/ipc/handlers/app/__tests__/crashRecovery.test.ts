@@ -7,6 +7,7 @@ const ipcMainMock = vi.hoisted(() => ({
 
 const crashServiceMock = vi.hoisted(() => ({
   restoreBackup: vi.fn(() => false),
+  getDeselectedProjectPanels: vi.fn((): Record<string, string[]> => ({})),
   setPanelFilter: vi.fn(),
   resetToFresh: vi.fn(),
   clearPendingCrash: vi.fn(),
@@ -32,6 +33,15 @@ vi.mock("electron", () => ({
 
 vi.mock("../../../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: () => crashServiceMock,
+}));
+
+type StateUpdater = (existing: unknown) => unknown;
+const projectStoreMock = vi.hoisted(() => ({
+  enqueueProjectStateUpdate: vi.fn(async (_projectId: string, _updater: StateUpdater) => {}),
+}));
+
+vi.mock("../../../../services/ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
 }));
 
 vi.mock("../../../../services/CrashLoopGuardService.js", () => ({
@@ -65,6 +75,8 @@ describe("registerCrashRecoveryHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     crashServiceMock.restoreBackup.mockReturnValue(false);
+    crashServiceMock.getDeselectedProjectPanels.mockReturnValue({});
+    projectStoreMock.enqueueProjectStateUpdate.mockImplementation(async () => {});
     crashServiceMock.setPanelFilter.mockClear();
     crashServiceMock.resetToFresh.mockClear();
     crashLoopGuardMock.isSafeMode.mockReturnValue(false);
@@ -150,6 +162,86 @@ describe("registerCrashRecoveryHandlers", () => {
           Promise.resolve().then(() => handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] }))
         ).rejects.toThrow("Crash recovery restore failed");
 
+        expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("per-project panel selection (#12884)", () => {
+      it("removes deselected panels from each project's layout before restoring", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["t2", "t3"] });
+        const order: string[] = [];
+        let written: unknown;
+        projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+          async (_projectId: string, updater: StateUpdater) => {
+            order.push("remove");
+            written = updater({
+              projectId: "projA",
+              sidebarWidth: 350,
+              terminals: [{ id: "t1" }, { id: "t2" }, { id: "t3" }, { id: "t4" }],
+              tabGroups: [
+                { id: "g1", location: "grid", activeTabId: "t2", panelIds: ["t1", "t2", "t4"] },
+                { id: "g2", location: "grid", activeTabId: "t3", panelIds: ["t3", "t4"] },
+              ],
+              terminalSizes: { t1: { cols: 80, rows: 24 }, t2: { cols: 80, rows: 24 } },
+              draftInputs: { t3: "draft", t4: "keep" },
+            });
+          }
+        );
+        crashServiceMock.restoreBackup.mockImplementation(() => {
+          order.push("restore");
+          return true;
+        });
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await handler(FAKE_EVENT, { kind: "restore", panelIds: ["t1", "t4"] });
+
+        expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledWith(
+          "projA",
+          expect.any(Function)
+        );
+        expect(order).toEqual(["remove", "restore"]);
+        expect(written).toEqual({
+          projectId: "projA",
+          sidebarWidth: 350,
+          terminals: [{ id: "t1" }, { id: "t4" }],
+          tabGroups: [{ id: "g1", location: "grid", activeTabId: "t1", panelIds: ["t1", "t4"] }],
+          terminalSizes: { t1: { cols: 80, rows: 24 } },
+          draftInputs: { t4: "keep" },
+        });
+      });
+
+      it("skips the write when the project no longer holds the deselected panels", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["gone"] });
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        let result: unknown = "unset";
+        projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+          async (_projectId: string, updater: StateUpdater) => {
+            result = updater({ projectId: "projA", sidebarWidth: 350, terminals: [{ id: "t1" }] });
+          }
+        );
+        registerCrashRecoveryHandlers();
+
+        await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+          kind: "restore",
+          panelIds: ["t1"],
+        });
+
+        expect(result).toBeNull();
+      });
+
+      it("fails the restore and keeps it retryable when a layout write fails", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["t2"] });
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("EACCES"));
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await expect(
+          Promise.resolve().then(() => handler(FAKE_EVENT, { kind: "restore", panelIds: ["t1"] }))
+        ).rejects.toThrow("Crash recovery restore failed");
+        expect(crashServiceMock.restoreBackup).not.toHaveBeenCalled();
         expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
       });
     });
