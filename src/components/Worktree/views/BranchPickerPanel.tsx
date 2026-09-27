@@ -75,6 +75,7 @@ export function BranchPickerPanel({
       // and ignored this; re-measured in the harness, the wrapper reports the
       // trigger's own width (546px for both), so the declaration does hold.
       className="w-[var(--radix-popover-trigger-width)] p-0"
+      motion="drop"
       align="start"
       // The popover portals out of the dialog's subtree; without this its own
       // Escape would also dismiss the dialog behind it.
