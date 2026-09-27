@@ -5,7 +5,7 @@ The reference sample for a data plugin: a project plugin that declares a SQLite 
 ## How it fits together
 
 - `plugin.json` declares one database, `ledger`, under `contributes.databases`, and one endpoint, `data`, under `contributes.agentMcp`. `fs:project-write` is what a `"project"` database requires; `mcp:expose` is what the endpoint requires.
-- The database is `.daintree/data/acme.ledger/ledger.db` in the project's main checkout — the default location for a `"project"` database, so the declaration names no `path`. Every worktree of the project shares one ledger.
+- The database is `.daintree/data/acme.ledger/ledger.db` under the plugin's bound project root (`host.pluginInfo.projectRoot`, normally the main checkout) — the default location for a `"project"` database, so the declaration names no `path`. Every worktree of the project shares one ledger.
 - `dist/index.mjs` calls `host.mcp.registerTools("data", { … })` during `activate()` and opens the database with `host.db.open("ledger", { migrations, definitions })` on the first tool call. The host owns the route, the per-terminal credential, the project binding, enablement and revocation, and — for the file — the path, containment, first-use consent, connection policy and running the migrations.
 - [`AGENTS.md`](./AGENTS.md) is the data contract: where the file is, what each column holds, which rules the schema enforces and which it cannot, an example row, and what to leave alone. A project using this plugin points to it from its own root `AGENTS.md` or `CLAUDE.md`.
 
@@ -24,7 +24,7 @@ Nothing is ever updated or deleted through the tools. Amounts are integer cents,
 
 Agents write this database with the `sqlite3` CLI as well as through the tools, so a rule enforced only in the plugin's code binds only the plugin. The sample puts each rule as close to the data as it can go:
 
-- **The table** is `STRICT`, so a value of the wrong type — a REAL amount, text in an integer column — is refused outright.
+- **The table** is `STRICT`, so a value that cannot be stored as its column's type — `-18.99` for an amount, `'twelve'` in an integer column — is refused outright.
 - **Triggers**, in `definitions`, refuse what one row can prove wrong: a zero amount, a date not shaped `YYYY-MM-DD`, a category outside the grammar, split columns set inconsistently. Each `RAISE(ABORT, …)` message tells the agent what to write instead. A unique index keeps a category from appearing twice in one split.
 - **The tool** enforces what no row can: that a split's parts add up to its total. A row trigger sees the first part before its siblings exist, and a JSON schema cannot sum an array. `add_split_transaction` checks the balance, a real calendar date and matching signs before writing, refuses an unbalanced split with the exact difference, and writes the parts in one `db.transaction`, so a split is stored whole or not at all.
 - **An audit view**, `unbalanced_splits`, covers the rest: `AGENTS.md` tells an agent editing split rows by hand to check it comes back empty.
@@ -49,16 +49,16 @@ Each tool checks the abort signal before it starts, and again once the database 
 
 ## The trust ceiling
 
-`host.db` resolves the file inside the project, refuses a symlinked path or one inside `.git`, and asks for `fs:project-write` consent before creating anything — boundaries the host enforces, not promises the plugin makes. The queries themselves run in the plugin's own process. A plugin worker is still a full Node process with your account's privileges, so trusting a project's plugins means trusting everyone who can write to the repository.
+`host.db` resolves the file inside the project, refuses a symlinked file, a symlinked directory that leads out of the project, and a path inside `.git`, and asks for `fs:project-write` consent before creating anything — boundaries the host enforces, not promises the plugin makes. The queries themselves run in the plugin's own process. A plugin worker is still a full Node process with your account's privileges, so trusting a project's plugins means trusting everyone who can write to the repository.
 
 ## Committing the database
 
 Whether `ledger.db` is committed is the project's call. The declaration keeps the default rollback journal (`journalMode: "delete"`), and the host sets it again on every writable open, so an agent that switched the file to WAL cannot leave committed rows in a `-wal` sidecar that a commit of `ledger.db` alone would miss. To keep the database out of git, add `.daintree/data/acme.ledger/` to the project's `.gitignore`.
 
-Earlier versions of this sample kept the ledger at `.daintree/plugin-storage/acme.ledger/ledger.db`. Nothing moves it: the new location starts empty. To keep the old rows, copy that file to `.daintree/data/acme.ledger/ledger.db` before the first tool call — its schema version is the first migration, so the host upgrades it in place.
+Earlier versions of this sample kept the ledger at `.daintree/plugin-storage/acme.ledger/ledger.db`. Nothing moves it: the new location starts empty. To keep the old rows, copy it with SQLite's own backup before the first tool call — `sqlite3 .daintree/plugin-storage/acme.ledger/ledger.db ".backup .daintree/data/acme.ledger/ledger.db"` — rather than copying the file, which can miss rows still in a `-wal` sidecar. Its schema version is the first migration, so the host upgrades it in place.
 
 ## Limits
 
 At most 8 tools per endpoint, names matching `^[a-z][a-z0-9_]{0,31}$`, descriptions up to 400 bytes, schemas that are plain `{ "type": "object" }` objects up to 8 KiB, results up to 256 KiB of JSON, and 60 seconds per call. The host rejects a roster that breaks any of these whole.
 
-`engines.daintree` is `>=0.39.0`, the first release with `host.db` and `contributes.databases`; an older release rejects the manifest at the schema gate.
+`engines.daintree` is `>=0.39.0`, the first release with `host.db` and `contributes.databases`; a build without them rejects the manifest at the schema gate regardless of the range.

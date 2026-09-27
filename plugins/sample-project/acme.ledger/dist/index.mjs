@@ -65,21 +65,25 @@ const MIGRATIONS = [
 ];
 
 // Checked in SQL too, because agents write this file with the sqlite3 CLI and
-// never go through the tools. The STRICT table already refuses a value of the
-// wrong type, such as a REAL amount, before any trigger runs. A trigger's RAISE message is what the agent
-// reads, so each says what to do instead. Only what one row can prove lives
-// here: a split's balance spans rows, and a row trigger sees the first part of
-// a valid split before its siblings exist.
+// never go through the tools. The STRICT table already refuses a value it
+// cannot store as its column's type, such as -18.99 for an amount, before any
+// trigger runs. A trigger's RAISE message is what the agent reads, so each says
+// what to do instead. Only what one row can prove lives here: a split's balance
+// spans rows, and a row trigger sees the first part of a valid split before its
+// siblings exist. Byte lengths catch an embedded NUL, where GLOB and length()
+// stop reading. A calendar date is the tools' check; SQL checks the shape.
 const rowGuards = (event) => `
   DROP TRIGGER IF EXISTS transactions_guard_${event.toLowerCase()};
   CREATE TRIGGER transactions_guard_${event.toLowerCase()} BEFORE ${event} ON transactions BEGIN
     SELECT RAISE(ABORT, 'amount_cents must be a non-zero integer number of cents, negative for money out: write -1899, not -18.99 or 0')
       WHERE NEW.amount_cents = 0;
     SELECT RAISE(ABORT, 'date must be YYYY-MM-DD, for example 2026-04-17')
-      WHERE NEW.date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]';
+      WHERE NEW.date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+        OR length(CAST(NEW.date AS BLOB)) <> 10;
     SELECT RAISE(ABORT, 'category must be lower case: a letter, then letters, digits, spaces, _ or -, at most 32 characters, no surrounding spaces')
       WHERE NOT (NEW.category GLOB '[a-z]*' AND NEW.category NOT GLOB '*[^a-z0-9 _-]*'
-        AND NEW.category = trim(NEW.category) AND length(NEW.category) <= 32);
+        AND NEW.category = trim(NEW.category) AND length(CAST(NEW.category AS BLOB)) <= 32
+        AND length(CAST(NEW.category AS BLOB)) = length(NEW.category));
     SELECT RAISE(ABORT, 'split_group and split_total_cents are set together or not at all; record a split with the add_split_transaction tool')
       WHERE (NEW.split_group IS NULL) <> (NEW.split_total_cents IS NULL);
     SELECT RAISE(ABORT, 'split_total_cents must be a non-zero integer with the same sign as amount_cents, and split_group 1-64 characters')

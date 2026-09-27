@@ -9,6 +9,7 @@ import { activate } from "../dist/index.mjs";
 import { createMockHost } from "../../../../shared/testing/createMockHost.js";
 import { validateAgentMcpTools } from "../../../../electron/services/pluginAgentMcp/validateTools.js";
 import type {
+  PluginDatabase,
   PluginHostApi,
   PluginMcpCaller,
   PluginMcpToolDefinition,
@@ -19,6 +20,10 @@ const PLUGIN_ID = `project__${PROJECT_ID}__acme.ledger`;
 
 let projectRoot: string;
 let databaseDir: string;
+// Every handle the worker opened, so teardown can close them before removing
+// the directory — disposal closes asynchronously, and a failed test may never
+// dispose at all.
+const opened: Array<Promise<PluginDatabase>> = [];
 
 beforeEach(() => {
   projectRoot = mkdtempSync(join(tmpdir(), "acme-ledger-"));
@@ -27,7 +32,15 @@ beforeEach(() => {
   databaseDir = join(projectRoot, "databases");
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(
+    opened.splice(0).map((handle) =>
+      handle.then(
+        (db) => db.close(),
+        () => {}
+      )
+    )
+  );
   rmSync(projectRoot, { recursive: true, force: true });
 });
 
@@ -116,6 +129,12 @@ async function activated() {
     // worker opening an undeclared id fails here too.
     databases: { directory: databaseDir, declared: declaredDatabases },
   });
+  const open = host.db.open;
+  host.db.open = (...args) => {
+    const handle = open(...args);
+    opened.push(handle);
+    return handle;
+  };
   const dispose = (await activate(host as PluginHostApi)) as () => void;
   const roster = host.registeredMcpTools.find((r) => r.endpointId === "data");
   expect(roster, "no roster registered on endpoint data").toBeDefined();
@@ -333,6 +352,8 @@ describe("acme.ledger — tool calls round-trip through the project's database",
 
     const page = await call("list_transactions");
     expect(page.transactions).toHaveLength(1);
+    expect(page.transactions[0]).toMatchObject({ amount_cents: -1, memo_truncated: true });
+    expect(page.transactions[0].memo).toHaveLength(4096);
     expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeLessThan(256 * 1024);
     dispose();
   });
@@ -441,6 +462,57 @@ describe("acme.ledger — the tools check their own arguments too", () => {
         ],
       },
       /splits\[1\]: amount_cents must be a non-zero integer/,
+    ],
+    [
+      "add_split_transaction",
+      { date: "2026-09-01", total_cents: -100, splits: { category: "a", amount_cents: -100 } },
+      /splits must be a list of 2 to 20 parts/,
+    ],
+    [
+      "add_split_transaction",
+      {
+        date: "2026-09-01",
+        total_cents: -21,
+        splits: Array.from({ length: 21 }, (_, i) => ({ category: `c${i}`, amount_cents: -1 })),
+      },
+      /splits must be a list of 2 to 20 parts/,
+    ],
+    [
+      "add_split_transaction",
+      {
+        date: "2026-02-30",
+        total_cents: -2,
+        splits: [
+          { category: "a", amount_cents: -1 },
+          { category: "b", amount_cents: -1 },
+        ],
+      },
+      /date must be a calendar date/,
+    ],
+    [
+      "add_split_transaction",
+      {
+        date: "2026-09-01",
+        total_cents: -100_000_000_001,
+        splits: [
+          { category: "a", amount_cents: -1 },
+          { category: "b", amount_cents: -1 },
+        ],
+      },
+      /total_cents must be a non-zero integer no larger than/,
+    ],
+    [
+      "add_split_transaction",
+      {
+        date: "2026-09-01",
+        total_cents: -2,
+        tag: "x",
+        splits: [
+          { category: "a", amount_cents: -1 },
+          { category: "b", amount_cents: -1 },
+        ],
+      },
+      /unknown argument "tag"/,
     ],
   ] as const)("%s rejects %j", async (name, args, message) => {
     const { call, dispose } = await activated();
@@ -647,6 +719,24 @@ describe("acme.ledger — a split must balance", () => {
     dispose();
   });
 
+  it("writes nothing when cancelled while the database is opening", async () => {
+    const { host, call, dispose } = await activated();
+    const open = host.db.open;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    vi.spyOn(host.db, "open").mockImplementationOnce(async (...args) => {
+      await gate;
+      return open(...args);
+    });
+    const controller = new AbortController();
+    const pending = call("add_split_transaction", groceries, { signal: controller.signal });
+    controller.abort(new Error("Tool call was cancelled."));
+    release();
+    await expect(pending).rejects.toThrow("Tool call was cancelled.");
+    expect((await call("list_transactions")).transactions).toEqual([]);
+    dispose();
+  });
+
   it("advertises a schema the host enforces for the nested parts", async () => {
     const { roster, dispose } = await activated();
     const split = validateAgentMcpTools(roster.tools).find(
@@ -700,6 +790,27 @@ describe("acme.ledger — rules held in the schema, for agents writing with sqli
     ],
     ["UPDATE transactions SET amount_cents = 0", /non-zero integer number of cents/],
     ["UPDATE transactions SET category = 'Rent'", /category must be lower case/],
+    ["UPDATE transactions SET split_group = 'g'", /set together or not at all/],
+    [
+      "UPDATE transactions SET split_group = 'g', split_total_cents = 100",
+      /same sign as amount_cents/,
+    ],
+    [
+      "INSERT INTO transactions (date, amount_cents, category) VALUES ('2026-04-17', -1899, 'books' || char(0) || '!')",
+      /category must be lower case/,
+    ],
+    [
+      "INSERT INTO transactions (date, amount_cents, category) VALUES ('2026-04-17' || char(0) || 'x', -1899, 'books')",
+      /date must be YYYY-MM-DD/,
+    ],
+    [
+      `INSERT INTO transactions (date, amount_cents, category) VALUES ('2026-04-17', -1899, '${"a".repeat(33)}')`,
+      /category must be lower case/,
+    ],
+    [
+      "INSERT INTO transactions (date, amount_cents, category, split_group, split_total_cents) VALUES ('2026-04-17', -1, 'books', 'g', -2), ('2026-04-17', -1, 'books', 'g', -2)",
+      /UNIQUE constraint failed/,
+    ],
   ])("refuses %s", async (sql, message) => {
     const { call, dispose } = await activated();
     await call("add_transaction", { date: "2026-09-01", amount_cents: -100, category: "rent" });
@@ -709,6 +820,38 @@ describe("acme.ledger — rules held in the schema, for agents writing with sqli
     } finally {
       agent.close();
     }
+    dispose();
+  });
+
+  it("leaves a refused row out of the file", async () => {
+    const { call, dispose } = await activated();
+    await call("add_transaction", { date: "2026-09-01", amount_cents: -100, category: "rent" });
+    const agent = external();
+    try {
+      expect(() => agent.exec("UPDATE transactions SET amount_cents = 0")).toThrow();
+    } finally {
+      agent.close();
+    }
+    const page = await call("list_transactions");
+    expect(page.transactions.map((t) => t.amount_cents)).toEqual([-100]);
+    dispose();
+  });
+
+  it("accepts every category form the grammar allows", async () => {
+    const { call, dispose } = await activated();
+    await call("list_transactions");
+    const agent = external();
+    const insert = agent.prepare(
+      "INSERT INTO transactions (date, amount_cents, category) VALUES ('2026-04-17', -1, ?)"
+    );
+    for (const category of ["home-office_2", "eating out", "a".repeat(32)]) insert.run(category);
+    agent.close();
+    const summary = await call("summarize_by_category");
+    expect(summary.categories.map((c) => c.category)).toEqual([
+      "a".repeat(32),
+      "eating out",
+      "home-office_2",
+    ]);
     dispose();
   });
 
@@ -745,9 +888,20 @@ describe("acme.ledger — rules held in the schema, for agents writing with sqli
     );
     insert.run("2026-09-13", -6000, "fuel", "hand-made", -8000);
     insert.run("2026-09-13", -1000, "snacks", "hand-made", -8000);
-    const rows = agent.prepare("SELECT * FROM unbalanced_splits").all();
+    insert.run("2026-09-14", -500, "fuel", "lonely", -500);
+    insert.run("2026-09-15", -300, "fuel", "two-days", -500);
+    insert.run("2026-09-16", -200, "snacks", "two-days", -500);
+    insert.run("2026-09-17", -300, "fuel", "two-totals", -500);
+    insert.run("2026-09-17", -200, "snacks", "two-totals", -600);
+    const rows = agent.prepare("SELECT * FROM unbalanced_splits ORDER BY split_group").all();
     agent.close();
-    expect(rows).toEqual([
+    expect(rows.map((r) => r.split_group)).toEqual([
+      "hand-made",
+      "lonely",
+      "two-days",
+      "two-totals",
+    ]);
+    expect(rows.slice(0, 1)).toEqual([
       {
         split_group: "hand-made",
         parts: 2,
