@@ -1255,7 +1255,8 @@ export function useMcpBridge(): void {
               // render and never appended to. The list the approver reads is
               // the list their approval covers.
               const selectableTargets =
-                previewTarget?.kind === "terminalKillBatch" || previewTarget?.kind === "terminalClose"
+                previewTarget?.kind === "terminalKillBatch" ||
+                previewTarget?.kind === "terminalClose"
                   ? buildTerminalKillBatchTargets(previewTarget.terminalIds)
                   : undefined;
               let resolution: McpConfirmResolution;
