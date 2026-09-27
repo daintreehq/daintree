@@ -149,6 +149,25 @@ describe("plugin agent MCP consent IPC", () => {
     ]);
   });
 
+  it("names a stale database-endpoint answer the way the live row is named", async () => {
+    mocks.hasPlugin.mockReturnValue(false);
+    mocks.listEnabled.mockReturnValue([
+      { pluginInstanceId: "acme.ledger", endpointId: "@databases" },
+    ]);
+
+    const result = (await getHandler(LIST)(EVENT)) as {
+      endpoints: Array<{ name: string; enabled: boolean; available: boolean }>;
+    };
+
+    expect(result.endpoints).toEqual([
+      expect.objectContaining({
+        name: "Databases (read-only)",
+        enabled: true,
+        available: false,
+      }),
+    ]);
+  });
+
   it("names a plugin and endpoint by id when the manifest leaves the names blank", async () => {
     const blank = plugin({ agentMcp: [{ id: "data", name: " ", mode: "tools" }] });
     (blank.manifest as { displayName?: string }).displayName = "";

@@ -9,6 +9,11 @@ import {
 } from "../../services/pluginAgentMcp/projectEnablement.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
+import {
+  DATABASE_ENDPOINT_DESCRIPTION,
+  DATABASE_ENDPOINT_ID,
+  DATABASE_ENDPOINT_NAME,
+} from "../../services/pluginAgentMcp/types.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
   pluginManifestIdFromInstanceKey,
@@ -74,7 +79,10 @@ function orphanRow(
   endpointId: string
 ): ProjectAgentToolEndpoint {
   const manifest = plugins.find((p) => p.instanceId === pluginInstanceId)?.manifest;
-  const endpoint = manifest?.contributes.agentMcp?.find((e) => e.id === endpointId);
+  const endpoint =
+    endpointId === DATABASE_ENDPOINT_ID
+      ? { name: DATABASE_ENDPOINT_NAME, description: DATABASE_ENDPOINT_DESCRIPTION }
+      : manifest?.contributes.agentMcp?.find((e) => e.id === endpointId);
   return {
     pluginInstanceId,
     pluginDisplayName: displayName(

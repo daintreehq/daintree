@@ -163,6 +163,7 @@ import { checkPluginEngineRange, type PluginEngineMismatch } from "./plugin/plug
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
 import { agentMcpEndpointRegistry } from "./pluginAgentMcp/endpointRegistry.js";
+import { registerPluginDatabaseEndpoint } from "./pluginAgentMcp/databaseEndpoint.js";
 import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
 import {
   buildPluginPermissionExecArgv,
@@ -2099,6 +2100,22 @@ export class PluginService {
     // authority is resolvable the instant the plugin is addressable.
     const authority = this.mintPluginAuthority(pluginId, plugin.dir);
     this.plugins.set(pluginId, plugin);
+
+    // The host's read-only database endpoint, bound with the plugin rather than
+    // at activation: agents read the data without the plugin's code running.
+    // Unload drops it with the instance's other rosters.
+    if (manifest.contributes.databases.length > 0) {
+      registerPluginDatabaseEndpoint({
+        pluginInstanceId: pluginId,
+        manifestId: manifest.name,
+        declarations: manifest.contributes.databases,
+        boundProjectId: binding.projectId,
+        boundProjectRoot: binding.projectRoot,
+        dataDir: this.pluginDataDir(pluginId),
+        resolveProjectRoot: (projectId) => projectStore.getProjectById(projectId)?.path ?? null,
+        isCurrent: () => this.plugins.get(pluginId) === plugin,
+      });
+    }
 
     // Panel kinds are published only AFTER the map commit above, with no await
     // in between (#11728). `registerPanelKind` is what makes a panel

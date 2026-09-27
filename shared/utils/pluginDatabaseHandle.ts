@@ -41,6 +41,10 @@ interface SqliteStatement {
   }>;
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
+  /** Node 23.4+; feature-detected. */
+  iterate?(...params: unknown[]): IterableIterator<unknown> & { return?(): unknown };
+  /** Node 24.0+; feature-detected. */
+  setReturnArrays?(enabled: boolean): void;
   run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
   setReadBigInts?(enabled: boolean): void;
 }
@@ -450,6 +454,77 @@ export interface OpenPluginDatabaseOptions extends PluginDatabaseOpenOptions {
    * symlink refusal, audit); without it `backup` is unavailable.
    */
   prepareBackup?: (destPath: string) => Promise<string>;
+}
+
+/**
+ * Run one row-returning statement on a fresh readonly connection and hand each
+ * row to `onRow` as an array aligned with the returned column names, until the
+ * rows run out or `onRow` returns false. Rows are streamed rather than
+ * collected, so a caller with a budget never materialises more than it keeps.
+ *
+ * For agents reading a plugin's database: the same file-access refusals and
+ * single-statement rule as the handle, on a connection SQLite itself holds
+ * readonly, and a statement that returns no rows is refused before it runs.
+ * Integers come back as BigInt; the caller decides how to encode them.
+ */
+export function readPluginDatabaseRows(
+  location: PluginDatabaseLocation,
+  sql: string,
+  params: PluginDatabaseParams | undefined,
+  onRow: (row: unknown[]) => boolean
+): { columns: string[] } {
+  if (typeof sql !== "string" || sql.trim().length === 0) {
+    throw databaseError("VALIDATION", "sql must be a non-empty string");
+  }
+  assertNoFileAccess(sql, location.id);
+  const args = bindArgs(params);
+  const sqlite = loadSqlite();
+  const leaf = fs.lstatSync(location.path, { throwIfNoEntry: false });
+  if (leaf?.isSymbolicLink()) {
+    throw databaseError("TARGET_IS_SYMLINK", `database "${location.id}" file is a symlink`);
+  }
+  if (!leaf) {
+    throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
+  }
+  const connection = new sqlite.DatabaseSync(location.path, { readOnly: true });
+  try {
+    if (sqlite.constants && typeof connection.setAuthorizer === "function") {
+      connection.setAuthorizer(fileAccessAuthorizer(sqlite.constants));
+    }
+    connection.exec("PRAGMA busy_timeout = 5000");
+    const statement = connection.prepare(sql);
+    assertSingleStatement(sql, statement, location.id);
+    if (
+      typeof statement.columns !== "function" ||
+      typeof statement.iterate !== "function" ||
+      typeof statement.setReturnArrays !== "function"
+    ) {
+      throw databaseError(
+        "DB_UNSUPPORTED",
+        "reading rows needs a runtime whose node:sqlite has StatementSync.iterate and setReturnArrays"
+      );
+    }
+    const columns = statement.columns().map((c) => c.name);
+    if (columns.length === 0) {
+      throw databaseError(
+        "DB_NOT_A_QUERY",
+        `database "${location.id}": only statements that return rows can run here`
+      );
+    }
+    statement.setReadBigInts?.(true);
+    statement.setReturnArrays(true);
+    const rows = statement.iterate(...args);
+    try {
+      for (const row of rows) {
+        if (!onRow(row as unknown[])) break;
+      }
+    } finally {
+      rows.return?.();
+    }
+    return { columns };
+  } finally {
+    connection.close();
+  }
 }
 
 /**
