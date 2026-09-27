@@ -82,7 +82,10 @@ describe("database tool descriptors", () => {
   it("pass the same roster validation plugin tools do", () => {
     // Renamed, since the real names are reserved for the host.
     const roster = Object.fromEntries(
-      DATABASE_TOOL_DESCRIPTORS.map((d) => [`host_${d.name}`, { ...d, execute: () => null }])
+      DATABASE_TOOL_DESCRIPTORS.map(({ readOnly: _readOnly, ...d }) => [
+        `host_${d.name}`,
+        { ...d, execute: () => null },
+      ])
     );
     const tools = validateAgentMcpTools(roster);
     expect(tools.map((t) => t.name)).toEqual([
