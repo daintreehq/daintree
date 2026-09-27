@@ -19,8 +19,7 @@ import "@/index.css";
  *
  * The real component against the real theme tokens and `index.css`, inside a box
  * the size of a grid pane. Every prop `DevPreviewPane` would hand it comes from
- * the `?fixture=` state; the picker and the command field hold their own state
- * here so they behave as they do in the app.
+ * the `?fixture=` state; the command field holds its own state here so they behave as they do in the app.
  *
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
@@ -37,7 +36,6 @@ document.body.style.background = "var(--color-surface-grid, var(--color-surface-
 document.body.style.margin = "0";
 
 function Harness() {
-  const [pickerOpen, setPickerOpen] = useState(fixture.pickerOpen ?? false);
   const [commandInput, setCommandInput] = useState(fixture.commandInput ?? "");
   const candidates = fixture.candidates ?? [];
 
@@ -61,18 +59,19 @@ function Harness() {
           isUnconfigured={fixture.isUnconfigured ?? false}
           primaryCandidate={candidates[0]}
           isAutoDetecting={fixture.isAutoDetecting ?? false}
+          attemptingCommand={fixture.attemptingCommand ?? null}
           isSettingsLoading={false}
           handleAutoDetect={async () => true}
           autoDetectFailedCommand={fixture.autoDetectFailedCommand ?? null}
           candidates={candidates}
-          pickerOpen={pickerOpen}
-          setPickerOpen={setPickerOpen}
           handlePickCandidate={() => undefined}
           handleOpenSettings={() => undefined}
           commandInput={commandInput}
           setCommandInput={setCommandInput}
           handleSaveCommand={async () => undefined}
           commandInputError={getInvalidCommandMessage(commandInput)}
+          isSavingCommand={fixture.isSavingCommand ?? false}
+          saveCommandFailed={fixture.saveCommandFailed ?? false}
           devCommand={fixture.devCommand ?? ""}
           handleStartFromRestored={() => undefined}
           hasBeenVisible={fixture.hasBeenVisible ?? true}

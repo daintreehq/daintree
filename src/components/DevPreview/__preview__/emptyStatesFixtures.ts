@@ -12,9 +12,11 @@ export interface EmptyStateFixture {
   isUnconfigured?: boolean;
   candidates?: RunCommand[];
   isAutoDetecting?: boolean;
+  attemptingCommand?: string | null;
   autoDetectFailedCommand?: string | null;
-  pickerOpen?: boolean;
   commandInput?: string;
+  isSavingCommand?: boolean;
+  saveCommandFailed?: boolean;
   devCommand?: string;
   error?: DevServerError;
   hasBeenVisible?: boolean;
@@ -24,7 +26,7 @@ export interface EmptyStateFixture {
   width?: number;
   height?: number;
   /** What the harness does before shooting. */
-  drive?: "focus-primary" | "type-command";
+  drive?: "focus-primary" | "type-command" | "open-picker";
 }
 
 const RUNNERS: RunCommand[] = [
@@ -58,7 +60,7 @@ export const EMPTY_STATE_FIXTURES = {
     status: "stopped",
     isUnconfigured: true,
     candidates: RUNNERS,
-    pickerOpen: true,
+    drive: "open-picker",
   },
   "detected-narrow": {
     status: "stopped",
@@ -68,13 +70,21 @@ export const EMPTY_STATE_FIXTURES = {
   },
   "manual-empty": { status: "stopped", isUnconfigured: true },
   "manual-typed": { status: "stopped", isUnconfigured: true, drive: "type-command" },
-  "manual-invalid": {
+  "manual-saving": {
     status: "stopped",
     isUnconfigured: true,
-    commandInput: "npm run dev\nnpm run api",
+    commandInput: "npm run dev",
+    isSavingCommand: true,
+  },
+  "manual-save-failed": {
+    status: "stopped",
+    isUnconfigured: true,
+    commandInput: "npm run dev",
+    saveCommandFailed: true,
   },
   "restored-stopped": { status: "restored-stopped", devCommand: "pnpm dev --port 5174" },
-  waiting: { status: "stopped", devCommand: "npm run dev" },
+  stopped: { status: "stopped", devCommand: "npm run dev" },
+  waiting: { status: "running", devCommand: "npm run dev" },
   "error-port": {
     status: "error",
     devCommand: "npm run dev",

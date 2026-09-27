@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -5,12 +6,22 @@ import {
   Play,
   RotateCw,
   Settings,
+  SquareTerminal,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import { DevPreviewLoadingState } from "./DevPreviewLoadingState";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import type { DevServerError } from "@shared/utils/devServerErrors";
 import type { RunCommand } from "@shared/types";
@@ -21,6 +32,7 @@ interface DevPreviewEmptyStatesProps {
   isProxyUrlPending: boolean;
   phaseLabel?: "Compiling";
   error: DevServerError | null;
+  /** Starts the dev server; also the error state's Retry. */
   handleRetry: () => void;
   setDevPreviewConsoleOpen: (id: string, open: boolean) => void;
   id: string;
@@ -29,28 +41,95 @@ interface DevPreviewEmptyStatesProps {
   isUnconfigured: boolean;
   primaryCandidate: RunCommand | undefined;
   isAutoDetecting: boolean;
+  attemptingCommand: string | null;
   isSettingsLoading: boolean;
   handleAutoDetect: (candidateCommand?: string) => Promise<boolean>;
   autoDetectFailedCommand: string | null;
   candidates: RunCommand[];
-  pickerOpen: boolean;
-  setPickerOpen: (open: boolean) => void;
   handlePickCandidate: (candidate: { command: string }) => void;
   handleOpenSettings: () => void;
   commandInput: string;
   setCommandInput: (value: string) => void;
   handleSaveCommand: () => Promise<void>;
   commandInputError: string | null;
+  isSavingCommand: boolean;
+  saveCommandFailed: boolean;
   devCommand: string;
   handleStartFromRestored: () => void;
   hasBeenVisible: boolean;
   isEvicted: boolean;
 }
 
+const ERROR_TITLES: Record<DevServerError["type"], string> = {
+  "port-conflict": "Port conflict",
+  "missing-dependencies": "Missing dependencies",
+  permission: "Permission denied",
+  "compile-error": "Dev server error",
+  oom: "Dev server error",
+  "process-crash": "Dev server error",
+  unknown: "Dev server error",
+};
+
+/**
+ * The pane-filling frame every state shares. Scrolls rather than clips in a
+ * short pane, and keeps the title and description in one polite status region
+ * so a change of state is announced without the actions being read out again.
+ */
+function PaneState({
+  icon,
+  title,
+  description,
+  children,
+}: {
+  icon?: ReactNode;
+  title: string;
+  description?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="absolute inset-0 overflow-y-auto bg-surface-canvas">
+      <div className="flex min-h-full flex-col items-center justify-center gap-5 p-6">
+        <div role="status" aria-live="polite" className="w-full">
+          <EmptyState
+            variant="zero-data"
+            scale="canvas"
+            icon={icon}
+            title={title}
+            description={description}
+            className="p-0"
+          />
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** A command exactly as it will run, with an optional quieter label before it. */
+function CommandChip({ label, command }: { label?: string; command: string }) {
+  return (
+    <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel px-3 py-1.5">
+      {label && <span className="shrink-0 text-xs text-text-secondary">{label}</span>}
+      <code className="min-w-0 truncate font-mono text-xs text-text-primary" title={command}>
+        {command}
+      </code>
+    </div>
+  );
+}
+
+function SettingsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button onClick={onClick} variant="ghost" size="sm">
+      <Settings />
+      Open project settings
+    </Button>
+  );
+}
+
 /**
  * Renders the non-webview states of the dev-preview surface: the full-pane
- * loading spinner, dev-server error, unconfigured/restored-stopped/waiting
- * placeholders, and the not-yet-visible/evicted placeholders. Callers gate
+ * loading spinner, dev-server error, unconfigured/restored-stopped/stopped/
+ * waiting placeholders, and the not-yet-visible/evicted placeholders. Callers gate
  * rendering this instead of the live webview via the same condition used
  * internally here, so the branch order below must stay in sync with that gate.
  */
@@ -68,23 +147,29 @@ export function DevPreviewEmptyStates({
   isUnconfigured,
   primaryCandidate,
   isAutoDetecting,
+  attemptingCommand,
   isSettingsLoading,
   handleAutoDetect,
   autoDetectFailedCommand,
   candidates,
-  pickerOpen,
-  setPickerOpen,
   handlePickCandidate,
   handleOpenSettings,
   commandInput,
   setCommandInput,
   handleSaveCommand,
   commandInputError,
+  isSavingCommand,
+  saveCommandFailed,
   devCommand,
   handleStartFromRestored,
   hasBeenVisible,
   isEvicted,
 }: DevPreviewEmptyStatesProps) {
+  // A freshly mounted pane reports "stopped" until its first state read lands
+  // and the auto-start takes over, so the Start prompt waits out the Doherty
+  // gate rather than flashing up and vanishing.
+  const showStoppedPrompt = useDohertyGate(status === "stopped" && !isUnconfigured);
+
   if (isRestarting || status === "starting" || status === "installing" || isProxyUrlPending) {
     return (
       <DevPreviewLoadingState
@@ -102,228 +187,213 @@ export function DevPreviewEmptyStates({
   }
 
   if (status === "error" && error) {
+    // The terminal holds the output that explains these; for a port conflict
+    // the fix is the command's port, which lives in project settings.
+    const viewTerminal =
+      error.type === "missing-dependencies" ||
+      error.type === "permission" ||
+      error.type === "compile-error";
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
-        <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-        <h3 className="text-sm font-medium text-text-secondary mb-1">
-          {error.type === "port-conflict"
-            ? "Port conflict"
-            : error.type === "missing-dependencies"
-              ? "Missing dependencies"
-              : error.type === "permission"
-                ? "Permission denied"
-                : "Dev server error"}
-        </h3>
-        <p className="text-xs text-text-secondary text-center mb-3 max-w-md">{error.message}</p>
-        <div className="flex items-center gap-1">
-          <Button
-            onClick={handleRetry}
-            variant="ghost"
-            size="sm"
-            className="gap-1.5 px-2.5 py-1.5 group"
-          >
-            <RotateCw className="h-3.5 w-3.5" />
-            <span className="text-xs">
-              {error.type === "missing-dependencies" ? "Retry install" : "Retry"}
-            </span>
+      <PaneState
+        icon={<AlertTriangle className="text-status-warning" />}
+        title={ERROR_TITLES[error.type]}
+        description={error.message}
+      >
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button onClick={handleRetry} variant="subtle" size="sm">
+            <RotateCw />
+            {error.type === "missing-dependencies" ? "Retry install" : "Retry"}
           </Button>
-          {error.type === "missing-dependencies" || error.type === "permission" ? (
-            <Button
-              onClick={() => setDevPreviewConsoleOpen(id, true)}
-              variant="ghost"
-              size="sm"
-              className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              <span className="text-xs">View terminal</span>
+          {viewTerminal ? (
+            <Button onClick={() => setDevPreviewConsoleOpen(id, true)} variant="ghost" size="sm">
+              <SquareTerminal />
+              View terminal
             </Button>
+          ) : error.type === "port-conflict" ? (
+            <SettingsButton onClick={handleOpenSettings} />
           ) : currentUrl ? (
-            <Button
-              onClick={handleOpenExternal}
-              variant="ghost"
-              size="sm"
-              className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              <span className="text-xs">Open external</span>
+            <Button onClick={handleOpenExternal} variant="ghost" size="sm">
+              <ExternalLink />
+              Open in browser
             </Button>
           ) : null}
         </div>
-      </div>
+      </PaneState>
     );
   }
 
   if (!currentUrl || status !== "running") {
-    return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
-        {isUnconfigured ? (
-          <div className="flex flex-col items-center text-center max-w-md">
-            {primaryCandidate ? (
-              <>
-                <h3 className="text-sm font-medium text-text-secondary mb-1">
-                  Start the dev server
-                </h3>
-                <p className="text-xs text-text-secondary mb-4 leading-relaxed">
-                  We found a script in your package.json that looks like a dev server.
-                </p>
-                <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
-                  <span className="text-2xs text-daintree-text/40">Auto-detected</span>
-                  <code className="text-xs text-text-secondary font-mono">
-                    {primaryCandidate.command}
-                  </code>
-                </div>
-                <div className="flex flex-col items-center gap-2">
-                  <Button
-                    onClick={() => void handleAutoDetect(primaryCandidate.command)}
-                    disabled={isAutoDetecting || isSettingsLoading}
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 px-2.5 py-1.5 group text-accent-primary"
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    <span className="text-xs">
-                      {isAutoDetecting ? "Detecting..." : `Run \`${primaryCandidate.command}\``}
-                    </span>
-                  </Button>
-                  {autoDetectFailedCommand !== null && (
-                    <InlineStatusBanner
-                      icon={XCircle}
-                      severity="error"
-                      title="Couldn't start preview"
-                      description="The detected command couldn't be saved to project settings."
-                      className="w-full rounded text-left"
-                      action={{
-                        id: "dev-preview-auto-detect-retry",
-                        label: "Retry",
-                        icon: RotateCw,
-                        variant: "dangerFilled",
-                        onClick: () =>
-                          void handleAutoDetect(
-                            autoDetectFailedCommand || primaryCandidate.command
-                          ),
-                      }}
-                    />
-                  )}
-                  {candidates.length > 1 && (
-                    <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
-                      <PopoverTrigger asChild>
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary transition-colors"
-                        >
-                          Use a different script...
-                          <ChevronDown className="h-3 w-3" />
-                        </button>
-                      </PopoverTrigger>
-                      <PopoverContent align="center" sideOffset={4} className="w-72 p-1">
-                        <div className="flex flex-col max-h-64 overflow-y-auto">
-                          {candidates.map((c) => (
-                            <button
-                              key={c.id}
-                              type="button"
-                              onClick={() => {
-                                handlePickCandidate(c);
-                                setPickerOpen(false);
-                              }}
-                              className="flex items-center gap-2 px-2 py-1.5 rounded text-xs hover:bg-overlay-subtle transition-colors text-left"
-                            >
-                              <code className="text-text-secondary font-mono text-2xs flex-1 truncate">
-                                {c.command}
-                              </code>
-                              <span className="text-text-secondary shrink-0">{c.name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </PopoverContent>
-                    </Popover>
-                  )}
-                  <Button
-                    onClick={handleOpenSettings}
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
-                  >
-                    <Settings className="h-3.5 w-3.5" />
-                    <span className="text-xs">Open project settings</span>
-                  </Button>
-                </div>
-              </>
+    if (isUnconfigured && primaryCandidate) {
+      const shownCommand = attemptingCommand ?? primaryCandidate.command;
+      const failed = autoDetectFailedCommand !== null;
+      return (
+        <PaneState
+          title="Start the dev server"
+          description="This script in package.json looks like your dev server."
+        >
+          <div className="flex w-full max-w-sm flex-col items-center gap-3">
+            <CommandChip
+              label="Detected"
+              command={failed ? autoDetectFailedCommand || shownCommand : shownCommand}
+            />
+            {failed ? (
+              <InlineStatusBanner
+                icon={XCircle}
+                severity="error"
+                title="Couldn't save the command"
+                description="Project settings couldn't be updated, so the dev server didn't start."
+                className="w-full rounded-[var(--radius-md)] text-left"
+                action={{
+                  id: "dev-preview-auto-detect-retry",
+                  label: "Retry",
+                  icon: RotateCw,
+                  variant: "dangerFilled",
+                  onClick: () =>
+                    void handleAutoDetect(autoDetectFailedCommand || primaryCandidate.command),
+                }}
+              />
             ) : (
-              <>
-                <h3 className="text-sm font-medium text-text-secondary mb-1">Set a dev command</h3>
-                <p className="text-xs text-text-secondary mb-4 leading-relaxed">
-                  Configure a command to start a local development server.
-                </p>
-                <div className="flex flex-col items-center gap-2 w-full max-w-xs">
-                  <input
-                    type="text"
-                    value={commandInput}
-                    onChange={(e) => setCommandInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        void handleSaveCommand();
-                      }
-                    }}
-                    placeholder="npm run dev"
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-overlay-subtle border border-overlay/30 rounded text-text-secondary placeholder:text-text-placeholder focus:outline-hidden focus:border-overlay/50 transition-[border-color,box-shadow]"
-                  />
-                  <Button
-                    onClick={() => void handleSaveCommand()}
-                    disabled={!commandInput.trim() || commandInputError !== null}
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 px-2.5 py-1.5 group text-accent-primary"
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    <span className="text-xs">Run</span>
+              <Button
+                onClick={() => void handleAutoDetect(primaryCandidate.command)}
+                loading={isAutoDetecting}
+                disabled={isSettingsLoading}
+                variant="contrast"
+                aria-label={`Run ${shownCommand}`}
+              >
+                <Play />
+                Run
+              </Button>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-1">
+            {candidates.length > 1 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" disabled={isAutoDetecting}>
+                    Run another script…
+                    <ChevronDown />
                   </Button>
-                  {commandInput.trim() && commandInputError && (
-                    <p className="text-2xs text-status-warning">{commandInputError}</p>
-                  )}
-                </div>
-                <Button
-                  onClick={handleOpenSettings}
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary mt-3"
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                  <span className="text-xs">Open project settings</span>
-                </Button>
-              </>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="center" sideOffset={4} className="w-72 p-1">
+                  {candidates.map((c) => (
+                    <DropdownMenuItem key={c.id} onSelect={() => handlePickCandidate(c)}>
+                      <code className="min-w-0 flex-1 truncate font-mono text-xs">{c.command}</code>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
+            <SettingsButton onClick={handleOpenSettings} />
           </div>
-        ) : status === "restored-stopped" ? (
-          <div className="flex flex-col items-center text-center max-w-md">
-            <h3 className="text-sm font-medium text-text-secondary mb-1">Dev server was running</h3>
-            <p className="text-xs text-text-secondary mb-3 leading-relaxed">
-              Daintree closed while this dev server was active. It wasn't reattached — restart to
-              run it again.
-            </p>
-            {devCommand && (
-              <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
-                <code className="text-xs text-text-secondary font-mono">{devCommand}</code>
-              </div>
-            )}
+        </PaneState>
+      );
+    }
+
+    if (isUnconfigured) {
+      const showInputError = commandInput.trim() !== "" && commandInputError !== null;
+      return (
+        <PaneState
+          title="Set a dev command"
+          description="Enter the command that starts your local dev server."
+        >
+          <form
+            className="flex w-full max-w-xs flex-col gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleSaveCommand();
+            }}
+          >
+            <Field>
+              <FieldLabel>Dev command</FieldLabel>
+              <Input
+                value={commandInput}
+                onChange={(e) => setCommandInput(e.target.value)}
+                placeholder="npm run dev"
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono"
+              />
+              {showInputError && <FieldError>{commandInputError}</FieldError>}
+            </Field>
             <Button
-              onClick={handleStartFromRestored}
-              variant="ghost"
-              size="sm"
-              className="gap-1.5 px-2.5 py-1.5 group text-accent-primary"
+              type="submit"
+              variant="contrast"
+              className="self-center"
+              loading={isSavingCommand}
+              disabled={!commandInput.trim() || commandInputError !== null}
             >
-              <RotateCw className="h-3.5 w-3.5" />
-              <span className="text-xs">Restart dev server</span>
+              <Play />
+              Run
             </Button>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center text-center max-w-md">
-            <h3 className="text-sm font-medium text-text-secondary mb-1">Waiting for dev server</h3>
-            <p className="text-xs text-text-secondary mb-4 leading-relaxed">
-              The development server will appear here once it starts and a URL is detected.
-            </p>
-          </div>
-        )}
-      </div>
+            {saveCommandFailed && (
+              <InlineStatusBanner
+                icon={XCircle}
+                severity="error"
+                title="Couldn't save the command"
+                description="Project settings couldn't be updated, so the dev server didn't start."
+                className="w-full rounded-[var(--radius-md)] text-left"
+                action={{
+                  id: "dev-preview-save-command-retry",
+                  label: "Retry",
+                  icon: RotateCw,
+                  variant: "dangerFilled",
+                  onClick: () => void handleSaveCommand(),
+                }}
+              />
+            )}
+          </form>
+          <SettingsButton onClick={handleOpenSettings} />
+        </PaneState>
+      );
+    }
+
+    if (status === "restored-stopped") {
+      return (
+        <PaneState
+          title="Dev server was running"
+          description="Daintree closed while it was running, so it wasn't reattached."
+        >
+          {devCommand && <CommandChip command={devCommand} />}
+          <Button onClick={handleStartFromRestored} variant="contrast">
+            <RotateCw />
+            Restart dev server
+          </Button>
+        </PaneState>
+      );
+    }
+
+    if (status === "stopped") {
+      if (!showStoppedPrompt || !devCommand) {
+        return <div className="absolute inset-0 bg-surface-canvas" />;
+      }
+      return (
+        <PaneState
+          title="Dev server isn't running"
+          description="Start it to preview your site here."
+        >
+          <CommandChip command={devCommand} />
+          <Button onClick={handleRetry} variant="contrast">
+            <Play />
+            Start dev server
+          </Button>
+        </PaneState>
+      );
+    }
+
+    if (status === "stopping") {
+      return <PaneState title="Stopping dev server" />;
+    }
+
+    return (
+      <PaneState
+        title="Waiting for the dev server's address"
+        description="It's running, but hasn't printed a local URL yet."
+      >
+        <Button onClick={() => setDevPreviewConsoleOpen(id, true)} variant="ghost" size="sm">
+          <SquareTerminal />
+          View terminal
+        </Button>
+      </PaneState>
     );
   }
 

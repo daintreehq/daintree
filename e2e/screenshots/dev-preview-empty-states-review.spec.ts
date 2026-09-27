@@ -125,16 +125,23 @@ async function drive(page: Page, name: EmptyStateFixtureName): Promise<void> {
   const pane = page.locator(PANE);
   if (spec.drive === "focus-primary") {
     await page.keyboard.press("Tab");
-    const focused = await page.evaluate(() => document.activeElement?.textContent ?? "");
+    const focused = await page.evaluate(() => {
+      const el = document.activeElement;
+      return el?.getAttribute("aria-label") ?? el?.textContent ?? "";
+    });
     expect(focused).toMatch(/npm run dev/);
   } else if (spec.drive === "type-command") {
     const input = pane.locator("input").first();
     await input.focus();
     await page.keyboard.type("npm run dev");
     await expect(input).toHaveValue("npm run dev");
-  }
-  if (spec.pickerOpen) {
-    await expect(page.getByText("npm run storybook").first()).toBeVisible();
+  } else if (spec.drive === "open-picker") {
+    // By keyboard, as the menu-button contract is meant to be used: Tab to the
+    // trigger, Enter opens it with the first item focused.
+    const trigger = pane.getByRole("button", { name: /another script/i });
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menuitem").first()).toBeFocused();
   }
   await page.waitForTimeout(100);
 }
@@ -144,6 +151,10 @@ async function expectFixtureState(page: Page, name: EmptyStateFixtureName): Prom
   const pane = page.locator(PANE);
   const text = (await pane.innerText()).trim();
   if (text.length < 8) throw new Error(`${name}: pane rendered no copy ("${text}")`);
+  if (spec.status === "stopped" && !spec.isUnconfigured) {
+    // Gated behind the Doherty threshold; a blank pane here means the wait was too short.
+    await expect(pane.getByRole("button", { name: /start dev server/i })).toBeVisible();
+  }
   const expected = sentinel(spec);
   if (expected) await expect(pane.getByText(expected).first()).toBeVisible();
   if (spec.isUnconfigured && !spec.candidates?.length) {
