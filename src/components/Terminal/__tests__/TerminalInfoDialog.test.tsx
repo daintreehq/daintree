@@ -558,4 +558,59 @@ describe("TerminalInfoDialog", () => {
       expect(await copyPayload()).toContain('Args: ["-c","echo a b"]');
     });
   });
+
+  describe("data identity and freshness", () => {
+    // Host data belongs to the terminal it was read for. Retargeting the open dialog
+    // must never show the previous terminal's host values under the new title.
+    it("never shows one terminal's host data under another", async () => {
+      dispatchMock.mockResolvedValueOnce({
+        ok: true,
+        result: makePayload({ ptyForegroundProcess: "first-terminal-proc" }),
+      });
+      const view = render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="a" />);
+      expect(await screen.findByText("first-terminal-proc")).toBeTruthy();
+
+      dispatchMock.mockReturnValue(new Promise(() => {}));
+      view.rerender(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="b" />);
+      expect(screen.queryByText("first-terminal-proc")).toBeNull();
+    });
+
+    // A background read that comes back empty is a lost record, not a no-op: the
+    // last values must be flagged, never left looking current.
+    it("flags values as stale when a refresh finds no record", async () => {
+      const getInfo = vi.fn().mockResolvedValue(null);
+      vi.stubGlobal("electron", { terminal: { getInfo } });
+      try {
+        dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+        renderDialog();
+        await screen.findByText("vim");
+
+        const banner = await screen.findByTestId("terminal-info-error", {}, { timeout: 4000 });
+        expect(getInfo).toHaveBeenCalled();
+        expect(banner.textContent).toMatch(/last successful read/);
+        expect(await copyPayload()).toMatch(/NOTE: the terminal host stopped answering/);
+      } finally {
+        vi.unstubAllGlobals();
+        vi.stubGlobal(
+          "ResizeObserver",
+          class {
+            observe() {}
+            unobserve() {}
+            disconnect() {}
+          }
+        );
+      }
+    });
+
+    // A report copied mid-load says it was loading, not that the read failed.
+    it("reports a copy taken during loading as loading", async () => {
+      dispatchMock.mockReturnValue(new Promise(() => {}));
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+
+      const payload = await copyPayload();
+      expect(payload).toMatch(/still loading/);
+      expect(payload).not.toMatch(/could not be read/);
+    });
+  });
 });

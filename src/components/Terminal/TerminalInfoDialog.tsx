@@ -311,7 +311,17 @@ function DisclosureGroup({
 }
 
 export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfoDialogProps) {
-  const [info, setInfo] = useState<TerminalInfoPayload | null>(null);
+  // Keyed to the terminal it was read for. Retargeting the open dialog at another
+  // terminal otherwise rendered the new panel's title beside the old one's host data
+  // until the next read landed — or indefinitely, if that read failed.
+  const [read, setRead] = useState<{ terminalId: string; payload: TerminalInfoPayload } | null>(
+    null
+  );
+  const info = read?.terminalId === terminalId ? read.payload : null;
+  const setInfo = (payload: TerminalInfoPayload | null, forTerminal: string) =>
+    setRead(payload ? { terminalId: forTerminal, payload } : null);
+  // One background read at a time, so a slow reply can never land after a newer one.
+  const refreshInFlightRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncMode, setSyncMode] = useState<boolean | null>(null);
@@ -334,7 +344,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   useEffect(() => {
     readGenerationRef.current += 1;
     if (!isOpen) {
-      setInfo(null);
+      setRead(null);
       setError(null);
       setLoading(false);
       setSyncMode(null);
@@ -357,7 +367,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
           throw new Error(result.error.message);
         }
         if (isMounted) {
-          setInfo(result.result as TerminalInfoPayload);
+          setInfo(result.result as TerminalInfoPayload, terminalId);
         }
       } catch (err) {
         const message = formatErrorMessage(err, "Failed to load terminal info");
@@ -391,17 +401,28 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // user asked for and noise every two seconds after it.
   const refreshInfo = () => {
     const getInfo = window.electron?.terminal?.getInfo;
-    if (!getInfo) return;
+    if (!getInfo || refreshInFlightRef.current) return;
     const generation = readGenerationRef.current;
-    getInfo(terminalId)
+    const forTerminal = terminalId;
+    refreshInFlightRef.current = true;
+    getInfo(forTerminal)
       .then((next) => {
-        if (generation !== readGenerationRef.current || !next) return;
-        setInfo(next as TerminalInfoPayload);
+        if (generation !== readGenerationRef.current) return;
+        // An empty answer is the host no longer knowing the terminal. Ignoring it
+        // left the last values on screen, presented as current, with no warning.
+        if (!next) {
+          setError("The terminal host no longer has a record of this terminal");
+          return;
+        }
+        setInfo(next as TerminalInfoPayload, forTerminal);
         setError(null);
       })
       .catch((err: unknown) => {
         if (generation !== readGenerationRef.current) return;
         setError(formatErrorMessage(err, "Lost contact with the terminal host"));
+      })
+      .finally(() => {
+        refreshInFlightRef.current = false;
       });
   };
   useVisibilityAwareInterval(refreshInfo, INFO_REFRESH_MS, isOpen && info !== null);
@@ -547,6 +568,15 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
    * the only half there is.
    */
   const buildDiagnostics = useCallback((): string => {
+    // The report states its own provenance, in the same three cases the banner and
+    // the loading status distinguish on screen. A pasted report carries no banner.
+    const diagnosticsNote = info
+      ? error
+        ? `  NOTE: the terminal host stopped answering (${error}); process-level values below are from the last successful read.\n`
+        : ""
+      : error
+        ? `  NOTE: the live terminal record could not be read (${error}); the values below come from the panel store only.\n`
+        : "  NOTE: the live terminal record was still loading; the values below come from the panel store only.\n";
     const launchSection = showAgentLaunchSection
       ? `
 
@@ -579,7 +609,7 @@ Status:
   Runtime status: ${runtimeStatus ?? UNKNOWN}
   Foreground process: ${info?.ptyForegroundProcess ?? NONE}
   Exit code: ${exitCode != null ? exitCode : NONE}
-${info ? "" : `  NOTE: the live terminal record could not be read${error ? ` (${error})` : ""}; the values below come from the panel store only.\n`}
+${diagnosticsNote}
 Session:
   ID: ${info?.id ?? terminalId}
   Kind: ${info?.kind || panel?.kind || "terminal"}
@@ -608,7 +638,7 @@ Terminal internals:
   TTY device: ${info?.ptyTty ?? UNAVAILABLE}
 
 Runtime:
-  Runtime: ${info ? formatDuration(Date.now() - info.spawnedAt) : UNAVAILABLE}
+  ${hasExited ? "Started" : "Runtime"}: ${startedAt == null ? UNAVAILABLE : hasExited ? formatRelativeTime(startedAt) : formatDuration(Date.now() - startedAt)}
   Spawned at: ${info ? formatTimestamp(info.spawnedAt) : UNAVAILABLE}
   Restarts: ${info?.restartCount ?? UNAVAILABLE}
 
@@ -637,6 +667,7 @@ Performance:
     error,
     everDetectedAgent,
     exitCode,
+    hasExited,
     info,
     launchAgentId,
     liveness,
@@ -647,6 +678,7 @@ Performance:
     showAgentLaunchSection,
     showAgentLiveSection,
     spawnSource,
+    startedAt,
     startedByAssistant,
     startedViaMcp,
     terminalId,
