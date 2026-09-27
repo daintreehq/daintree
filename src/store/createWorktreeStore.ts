@@ -1916,7 +1916,7 @@ async function runIssueMutationAsync(
   } catch (err) {
     const message = formatErrorMessage(
       err,
-      type === "attach-issue" ? "Failed to attach issue" : "Failed to detach issue"
+      type === "attach-issue" ? "Failed to attach issue" : "Failed to unlink issue"
     );
     handleIssueFailure(get, set, entry, message);
   }
