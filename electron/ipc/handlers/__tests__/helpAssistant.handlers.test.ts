@@ -83,7 +83,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "core",
       bypassPermissions: false,
       auditRetention: 7,
-      modelId: null,
+      modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
@@ -108,7 +108,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "full",
       bypassPermissions: true,
       auditRetention: 30,
-      modelId: null,
+      modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
@@ -411,7 +411,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "core",
       bypassPermissions: false,
       auditRetention: 7,
-      modelId: null,
+      modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
@@ -610,141 +610,188 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toMatchObject({ customArgs: "--model sonnet" });
   });
 
-  it("persists a valid modelId", async () => {
+  function setModelIds(patch: unknown) {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+    return handler(null, { modelIds: patch });
+  }
 
-    await handler(null, { modelId: "claude-sonnet-4-6" });
+  it("persists a model for one agent as a whole-map write under a fixed path", async () => {
+    await setModelIds({ claude: "claude-sonnet-4-6" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
-      "helpAssistant.modelId",
-      "claude-sonnet-4-6"
-    );
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: "claude-sonnet-4-6",
+    });
   });
 
-  it("persists an empty modelId so the user can clear back to the CLI default", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+  it("merges a patch into the stored map without touching other agents", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "opus", gemini: "" } });
 
-    await handler(null, { modelId: "" });
+    await setModelIds({ codex: "gpt-6-astra" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "");
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: "opus",
+      gemini: "",
+      codex: "gpt-6-astra",
+    });
   });
 
-  it("persists a null modelId so the agent's recommended model applies again", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+  it("persists an empty model so the agent launches with the CLI default", async () => {
+    await setModelIds({ claude: "" });
 
-    await handler(null, { modelId: null });
-
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", null);
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: "",
+    });
   });
 
-  it("trims surrounding whitespace from modelId", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+  it("removes only that agent's entry for a null so its recommended model applies again", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "opus", codex: "gpt-6-sol" } });
 
-    await handler(null, { modelId: "  gpt-5.5  " });
+    await setModelIds({ claude: null });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "gpt-5.5");
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      codex: "gpt-6-sol",
+    });
   });
 
-  it("rejects a modelId with internal whitespace (not a single token)", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+  it("writes nothing when the patch changes nothing", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "opus" } });
 
-    await handler(null, { modelId: "claude sonnet" });
+    await setModelIds({ claude: "opus" });
+    await setModelIds({ codex: null });
+    await setModelIds({});
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("rejects a modelId with an internal tab rather than collapsing it", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+  it("keeps a dotted agent ID as a literal key", async () => {
+    await setModelIds({ "my.agent": "custom-model" });
 
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      "my.agent": "custom-model",
+    });
+  });
+
+  it("trims surrounding whitespace from a model", async () => {
+    await setModelIds({ codex: "  gpt-5.5  " });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      codex: "gpt-5.5",
+    });
+  });
+
+  it("rejects a model with internal whitespace (not a single token)", async () => {
+    await setModelIds({ claude: "claude sonnet" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a model with an internal tab rather than collapsing it", async () => {
     // A tab is a control char; stripping-before-checking would silently coerce
     // this to "claudesonnet". It must be rejected as a non-single-token value.
-    await handler(null, { modelId: "claude\tsonnet" });
+    await setModelIds({ claude: "claude\tsonnet" });
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("accepts a modelId exactly at the 200-char cap unchanged", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
+  it("accepts a model exactly at the 200-char cap unchanged", async () => {
     const exact = "m".repeat(200);
-    await handler(null, { modelId: exact });
+    await setModelIds({ claude: exact });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", exact);
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: exact,
+    });
   });
 
-  it("rejects a modelId that would inject a bare flag (leading dash)", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { modelId: "--dangerously-skip-permissions" });
+  it("rejects a model that would inject a bare flag (leading dash)", async () => {
+    await setModelIds({ claude: "--dangerously-skip-permissions" });
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("rejects a modelId containing shell metacharacters", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { modelId: "sonnet;rm -rf /" });
-    await handler(null, { modelId: "$(whoami)" });
+  it("rejects a model containing shell metacharacters", async () => {
+    await setModelIds({ claude: "sonnet;rm -rf /" });
+    await setModelIds({ claude: "$(whoami)" });
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("rejects a modelId that is not a string", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { modelId: 42 as unknown as string });
+  it("rejects a model that is not a string", async () => {
+    await setModelIds({ claude: 42 });
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("caps modelId length at 200 characters", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+  it("rejects unsafe agent keys and non-map patches", async () => {
+    await setModelIds({ "bad key": "opus", __proto__: "opus", "a/b": "opus" });
+    await setModelIds(JSON.parse('{"__proto__": "opus"}'));
+    await setModelIds(["opus"]);
+    await setModelIds("opus");
 
-    await handler(null, { modelId: "m".repeat(250) });
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("applies the valid entries of a patch and skips the invalid ones", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "opus" } });
+
+    await setModelIds({ claude: "$(whoami)", codex: "gpt-6-sol" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: "opus",
+      codex: "gpt-6-sol",
+    });
+  });
+
+  it("caps a model at 200 characters", async () => {
+    await setModelIds({ claude: "m".repeat(250) });
 
     const call = storeMock.set.mock.calls[0];
-    expect(call?.[0]).toBe("helpAssistant.modelId");
-    expect((call?.[1] as string).length).toBe(200);
+    expect(call?.[0]).toBe("helpAssistant.modelIds");
+    expect((call?.[1] as Record<string, string>).claude.length).toBe(200);
   });
 
-  it("loads a valid stored modelId from the store", async () => {
-    storeMock.get.mockReturnValue({ modelId: "claude-opus-4-8" });
+  it("ignores the legacy scalar modelId in a patch", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "opus" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("loads a stored per-agent map", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "claude-opus-4-8", codex: "" } });
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ modelId: "claude-opus-4-8" });
+    expect(result).toMatchObject({ modelIds: { claude: "claude-opus-4-8", codex: "" } });
   });
 
-  it("sanitizes a corrupted stored modelId back to the null default", async () => {
+  it("drops corrupted entries and unsafe keys from a stored map", async () => {
     storeMock.get.mockReturnValue({
-      modelId: "sonnet;rm -rf /" as unknown as string,
+      modelIds: {
+        claude: "sonnet;rm -rf /",
+        codex: "gpt-6-sol",
+        gemini: null,
+        "bad key": "opus",
+      } as unknown as Record<string, string>,
     });
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
-    const result = await handler(null);
-    expect(result).toMatchObject({ modelId: null });
+    const result = (await handler(null)) as HelpAssistantSettings;
+    expect(result.modelIds).toEqual({ codex: "gpt-6-sol" });
   });
 
-  it("keeps a stored empty modelId as the explicit CLI-default choice", async () => {
-    storeMock.get.mockReturnValue({ modelId: "" });
+  it("never exposes a leftover legacy scalar modelId", async () => {
+    storeMock.get.mockReturnValue({ modelId: "opus" } as unknown as HelpAssistantSettings);
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
-    const result = await handler(null);
-    expect(result).toMatchObject({ modelId: "" });
+    const result = (await handler(null)) as Record<string, unknown>;
+    expect(result.modelIds).toEqual({});
+    expect(result).not.toHaveProperty("modelId");
   });
 });
 

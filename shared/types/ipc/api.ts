@@ -2587,14 +2587,17 @@ export interface HelpAssistantSettings {
   /** How long to retain help-session audit logs. 7 = 7 days, 30 = 30 days, 0 = off. Defaults to 7. */
   auditRetention: HelpAssistantAuditRetention;
   /**
-   * Model the assistant launches with, injected as `--model <id>` ahead of
-   * {@link customArgs} so a `--model` in custom args still wins as the advanced
-   * override. `null` means the agent's recommended assistant model
-   * (`AgentConfig.assistantDefaultModel`); empty string means "use the CLI's
-   * default model" (no flag). Model IDs are agent-specific, so this is reset to
-   * `null` whenever the agent changes. Defaults to `null`.
+   * Model the assistant launches each agent with, keyed by agent ID and
+   * injected as `--model <id>` ahead of {@link customArgs} so a `--model` in
+   * custom args still wins as the advanced override. Model IDs are
+   * agent-specific, so an agent only ever reads its own entry. An absent entry
+   * means the agent's recommended assistant model
+   * (`AgentConfig.assistantDefaultModel`); an empty string means "use the
+   * CLI's default model" (no flag). Settings reads never contain `null`; in a
+   * `setSettings` patch, `null` removes that agent's entry and agents the
+   * patch doesn't name are left as they are. Defaults to `{}`.
    */
-  modelId: string | null;
+  modelIds: Record<string, string | null>;
   /** Whitespace-separated CLI flags appended at assistant launch (advanced override). Defaults to "". */
   customArgs: string;
   /**

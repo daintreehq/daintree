@@ -601,7 +601,7 @@ export interface AgentConfig {
   curatedModels?: boolean;
   /**
    * Model the Daintree assistant launches this agent with until the user picks
-   * one (a `null` `HelpAssistantSettings.modelId`). Unset means the CLI's own
+   * one (no entry in `HelpAssistantSettings.modelIds`). Unset means the CLI's own
    * default.
    */
   assistantDefaultModel?: string;
@@ -1184,6 +1184,19 @@ export function getAssistantWiredAgentIds(): string[] {
     }
   }
   return [...wired];
+}
+
+/**
+ * `agentId`'s own saved assistant model from a per-agent map, or `null` when
+ * it has none (its recommended model). Never falls back to another agent's
+ * entry — model IDs are agent-specific.
+ */
+export function getSavedAssistantModelId(
+  modelIds: Readonly<Record<string, string | null>> | undefined,
+  agentId: string
+): string | null {
+  if (!modelIds || !Object.prototype.hasOwnProperty.call(modelIds, agentId)) return null;
+  return modelIds[agentId] ?? null;
 }
 
 /**

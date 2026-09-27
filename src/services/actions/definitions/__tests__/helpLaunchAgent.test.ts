@@ -127,7 +127,7 @@ describe("help.launchAgent", () => {
             markTerminal: vi.fn().mockResolvedValue(undefined),
           },
           helpAssistant: {
-            getSettings: vi.fn().mockResolvedValue({ modelId: null, customArgs: "" }),
+            getSettings: vi.fn().mockResolvedValue({ modelIds: {}, customArgs: "" }),
           },
           agentCapabilities: {
             getResolvedModelList: vi.fn().mockResolvedValue(null),
@@ -202,7 +202,7 @@ describe("help.launchAgent", () => {
       "/mock/help"
     );
     (window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
-      modelId: null,
+      modelIds: {},
       customArgs: "--verbose",
     });
 
@@ -223,7 +223,7 @@ describe("help.launchAgent", () => {
       "/mock/help"
     );
     (window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
-      modelId: "",
+      modelIds: { claude: "" },
       customArgs: "",
     });
 
@@ -231,6 +231,27 @@ describe("help.launchAgent", () => {
 
     const payload = mockDispatch.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(payload).not.toHaveProperty("agentLaunchFlags");
+  });
+
+  it("never launches an agent with a model saved for a different agent", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    (window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+      modelIds: { claude: "opus" },
+      customArgs: "",
+    });
+
+    await action.run({ agentId: "codex" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentId: "codex",
+        agentLaunchFlags: ["--model", "gpt-6-luna"],
+      }),
+      { source: "user" }
+    );
   });
 
   it("uses the user's preferred default agent when available", async () => {

@@ -61,7 +61,7 @@ const {
     tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
-    modelId: "",
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
     idleHibernateMinutes: 30,
   }),
@@ -541,7 +541,7 @@ function resetState() {
     tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
-    modelId: "",
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
     idleHibernateMinutes: 30,
   });
@@ -1694,7 +1694,7 @@ describe("HelpPanel — resume preserves user-configured launch flags", () => {
       tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
-      modelId: "",
+      modelIds: { claude: "", codex: "", gemini: "" },
       customArgs: "--model claude-opus-4-5",
       idleHibernateMinutes: 30,
     });
@@ -1987,7 +1987,7 @@ describe("HelpPanel — idle hibernation timer", () => {
         tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
-        modelId: "",
+        modelIds: { claude: "", codex: "", gemini: "" },
         customArgs: "",
         idleHibernateMinutes: 0,
       });

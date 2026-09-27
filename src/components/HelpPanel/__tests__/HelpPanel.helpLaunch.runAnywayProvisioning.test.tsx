@@ -45,7 +45,7 @@ const {
     tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
-    modelId: "",
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
   }),
   mockGetAgentVersion: vi.fn().mockResolvedValue({
@@ -516,7 +516,7 @@ function resetState() {
     tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
-    modelId: "",
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
   });
   mockGetAgentVersion.mockReset();
@@ -862,7 +862,7 @@ describe("HelpPanel — handleRunAnyway", () => {
       tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
-      modelId: "",
+      modelIds: { claude: "", codex: "", gemini: "" },
       customArgs: "--model sonnet",
     });
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "restarted-term" } });

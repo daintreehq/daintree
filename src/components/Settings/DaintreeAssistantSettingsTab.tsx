@@ -31,7 +31,11 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
-import { resolveAssistantModelId, type AgentModelConfig } from "@shared/config/agentRegistry";
+import {
+  getSavedAssistantModelId,
+  resolveAssistantModelId,
+  type AgentModelConfig,
+} from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import type {
   HelpAssistantIdleHibernateMinutes,
@@ -55,7 +59,7 @@ const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
 
 const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
-  modelId: "agent",
+  modelIds: "agent",
   customArgs: "launch",
   debugLogging: "launch",
   docSearch: "behavior",
@@ -69,7 +73,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
-  "modelId",
+  "modelIds",
   "customArgs",
   "debugLogging",
   "docSearch",
@@ -99,8 +103,54 @@ function copySetting<K extends keyof HelpAssistantSettings>(
   target[key] = source[key];
 }
 
+type ModelIdMap = HelpAssistantSettings["modelIds"];
+
+// A `modelIds` patch names only the agents it changes; `null` removes that
+// agent's entry, mirroring how main merges it.
+function mergeModelIds(current: ModelIdMap, patch: ModelIdMap): ModelIdMap {
+  const next = { ...current };
+  for (const [agentId, modelId] of Object.entries(patch)) {
+    if (modelId === null) delete next[agentId];
+    else next[agentId] = modelId;
+  }
+  return next;
+}
+
+function applySettingsPatch(
+  current: HelpAssistantSettings,
+  patch: Partial<HelpAssistantSettings>
+): HelpAssistantSettings {
+  const next = { ...current, ...patch };
+  if (patch.modelIds) next.modelIds = mergeModelIds(current.modelIds, patch.modelIds);
+  return next;
+}
+
+// Puts the attempted keys back, unless a later change has already moved them.
+// Model entries are restored per agent so a failed save for one agent never
+// touches another agent's choice.
+function revertSettingsPatch(
+  current: HelpAssistantSettings,
+  previous: HelpAssistantSettings,
+  patch: Partial<HelpAssistantSettings>
+): HelpAssistantSettings {
+  const reverted: HelpAssistantSettings = { ...current };
+  for (const key of patchedKeys(patch)) {
+    if (key === "modelIds") continue;
+    if (current[key] === patch[key]) copySetting(reverted, previous, key);
+  }
+  if (patch.modelIds) {
+    const restore: ModelIdMap = {};
+    for (const [agentId, attempted] of Object.entries(patch.modelIds)) {
+      if (getSavedAssistantModelId(current.modelIds, agentId) !== attempted) continue;
+      restore[agentId] = getSavedAssistantModelId(previous.modelIds, agentId);
+    }
+    reverted.modelIds = mergeModelIds(current.modelIds, restore);
+  }
+  return reverted;
+}
+
 const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
-  modelId: "Model",
+  modelIds: "Model",
   customArgs: "Custom CLI args",
   debugLogging: "Debug logging",
   docSearch: "Search documentation",
@@ -125,7 +175,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   tier: "core",
   bypassPermissions: false,
   auditRetention: 7,
-  modelId: null,
+  modelIds: {},
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,
@@ -403,28 +453,36 @@ export function DaintreeAssistantSettingsTab() {
   // loaded / unavailable" (we render nothing); an empty array means "agent has
   // no models" (also nothing). The model picker only appears once a non-empty
   // catalog resolves for the selected agent.
-  const [resolvedModels, setResolvedModels] = useState<AgentModelConfig[] | null>(null);
+  // Tagged with the agent it was read for, so a switch never shows the previous
+  // agent's models (or their synthesized saved choice) for a render.
+  const [modelCatalog, setModelCatalog] = useState<{
+    agentId: string;
+    models: AgentModelConfig[];
+  } | null>(null);
+  const resolvedModels =
+    modelCatalog && modelCatalog.agentId === preferredAgentId ? modelCatalog.models : null;
   // A failed catalog read is not "this agent has no models": the row stays, with Retry.
   const [modelCatalogFailed, setModelCatalogFailed] = useState(false);
   const [modelCatalogAttempt, setModelCatalogAttempt] = useState(0);
 
   useEffect(() => {
     if (!preferredAgentId) {
-      setResolvedModels(null);
+      setModelCatalog(null);
       return;
     }
+    const agentId = preferredAgentId;
     let cancelled = false;
-    setResolvedModels(null);
+    setModelCatalog(null);
     setModelCatalogFailed(false);
     agentCapabilitiesClient
       .getResolvedModelList(preferredAgentId)
       .then((catalog) => {
         if (cancelled) return;
-        setResolvedModels(catalog?.models ?? []);
+        setModelCatalog({ agentId, models: catalog?.models ?? [] });
       })
       .catch((err) => {
         if (cancelled) return;
-        setResolvedModels([]);
+        setModelCatalog({ agentId, models: [] });
         setModelCatalogFailed(true);
         logError("Failed to load model catalog for assistant tab", err);
       });
@@ -436,7 +494,11 @@ export function DaintreeAssistantSettingsTab() {
   // Nothing saved means the agent's recommended model, shown as that model —
   // or as the CLI default when the installed CLI doesn't offer it, matching
   // what the launch path resolves.
-  const savedModelId = settings.modelId ?? null;
+  // Only the selected agent's own entry — another agent's model never shows as
+  // selected here.
+  const savedModelId = preferredAgentId
+    ? getSavedAssistantModelId(settings.modelIds, preferredAgentId)
+    : null;
   const catalogIds = useMemo(() => resolvedModels?.map((m) => m.id), [resolvedModels]);
   const effectiveModelId = preferredAgentId
     ? resolveAssistantModelId(preferredAgentId, savedModelId, catalogIds)
@@ -448,9 +510,9 @@ export function DaintreeAssistantSettingsTab() {
       { value: MODEL_DEFAULT_SENTINEL, label: "Default (CLI default)" },
       ...models.map((m) => ({ value: m.id, label: m.name })),
     ];
-    // A persisted model that's no longer in the catalog (custom CLI, renamed
-    // model), or the recommendation while the catalog read has failed, still
-    // needs a matching option or Radix shows a blank trigger.
+    // This agent's persisted model that isn't in its catalog (custom CLI,
+    // renamed model), or the recommendation while the catalog read has failed,
+    // still needs a matching option or Radix shows a blank trigger.
     if (effectiveModelId && !models.some((m) => m.id === effectiveModelId)) {
       options.push({ value: effectiveModelId, label: effectiveModelId });
     }
@@ -755,18 +817,12 @@ export function DaintreeAssistantSettingsTab() {
     async (patch: Partial<HelpAssistantSettings>) => {
       const previous = settings;
       const group = saveGroupOf(patch);
-      setSettings((current) => ({ ...current, ...patch }));
+      setSettings((current) => applySettingsPatch(current, patch));
       try {
         await window.electron.helpAssistant.setSettings(patch);
         setSaveFailure((current) => (current?.group === group ? null : current));
       } catch (err) {
-        setSettings((current) => {
-          const reverted: HelpAssistantSettings = { ...current };
-          for (const key of patchedKeys(patch)) {
-            if (current[key] === patch[key]) copySetting(reverted, previous, key);
-          }
-          return reverted;
-        });
+        setSettings((current) => revertSettingsPatch(current, previous, patch));
         setSaveFailure({ group, patch });
         logError("Failed to save Daintree Assistant settings", err);
       }
@@ -778,7 +834,7 @@ export function DaintreeAssistantSettingsTab() {
     saveFailure?.group === group ? (
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
-        message={`${SETTING_LABEL[patchedKeys(saveFailure.patch)[0] ?? "modelId"]} is back to its previous value.`}
+        message={`${SETTING_LABEL[patchedKeys(saveFailure.patch)[0] ?? "modelIds"]} is back to its previous value.`}
         onRetry={() => void persist(saveFailure.patch)}
       />
     ) : null;
@@ -833,21 +889,23 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ idleHibernateMinutes: parsed as HelpAssistantIdleHibernateMinutes });
   };
 
+  // Each agent keeps its own model entry, so switching only changes which one
+  // is read — switching back finds the earlier choice intact.
   const handleAgentChange = (value: string) => {
     setPreferredAgent(value || null);
-    // Model IDs are agent-specific — a Claude model passed to Gemini's --model
-    // would break the launch — so drop back to the new agent's recommended model.
-    if (savedModelId !== null) void persist({ modelId: null });
   };
 
   const handleModelChange = (value: string) => {
+    if (!preferredAgentId) return;
     const modelId = value === MODEL_DEFAULT_SENTINEL ? "" : value;
     // Picking the recommended model stores "no choice", so it keeps tracking
     // the recommendation and doesn't read as modified.
-    const recommended = preferredAgentId
-      ? resolveAssistantModelId(preferredAgentId, null, catalogIds)
-      : null;
-    void persist({ modelId: modelId !== "" && modelId === recommended ? null : modelId });
+    const recommended = resolveAssistantModelId(preferredAgentId, null, catalogIds);
+    void persist({
+      modelIds: {
+        [preferredAgentId]: modelId !== "" && modelId === recommended ? null : modelId,
+      },
+    });
   };
 
   const handleCustomArgsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1069,8 +1127,10 @@ export function DaintreeAssistantSettingsTab() {
               options={modelOptions}
               controlWidth="wide"
               disabled={settingsUnavailable}
-              isModified={savedModelId !== DEFAULT_SETTINGS.modelId}
-              onReset={() => void persist({ modelId: DEFAULT_SETTINGS.modelId })}
+              isModified={savedModelId !== null}
+              onReset={() => {
+                if (preferredAgentId) void persist({ modelIds: { [preferredAgentId]: null } });
+              }}
             />
           )}
         </SettingsGroup>

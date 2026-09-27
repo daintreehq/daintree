@@ -369,6 +369,13 @@ export interface StoreSchema {
      */
     skipPermissions?: boolean;
     auditRetention: 7 | 30 | 0;
+    /**
+     * The assistant's model per agent ID. An absent entry is that agent's
+     * recommended model; "" is the CLI default. Sanitized at read time in
+     * `helpAssistant.ts`; the legacy scalar `modelId` is moved here by
+     * migration 031.
+     */
+    modelIds?: Record<string, string>;
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;

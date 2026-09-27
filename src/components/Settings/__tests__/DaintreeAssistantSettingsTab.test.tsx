@@ -716,7 +716,7 @@ describe("DaintreeAssistantSettingsTab", () => {
           tier: "core" as const,
           bypassPermissions: false,
           auditRetention: 7,
-          modelId,
+          modelIds: modelId === null ? {} : { claude: modelId },
           customArgs: "",
         }),
       });
@@ -743,7 +743,7 @@ describe("DaintreeAssistantSettingsTab", () => {
           tier: "core" as const,
           bypassPermissions: false,
           auditRetention: 7,
-          modelId: null,
+          modelIds: {},
           customArgs: "",
         }),
       });
@@ -775,13 +775,148 @@ describe("DaintreeAssistantSettingsTab", () => {
 
       fireEvent.change(select, { target: { value: "__default__" } });
       await waitFor(() =>
-        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ modelId: "" })
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+          modelIds: { claude: "" },
+        })
       );
 
       fireEvent.change(select, { target: { value: "sonnet" } });
       await waitFor(() =>
-        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ modelId: null })
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+          modelIds: { claude: null },
+        })
       );
+    });
+
+    describe("per-agent model (#12872)", () => {
+      function mockCatalogs() {
+        window.electron.agentCapabilities.getResolvedModelList = vi
+          .fn()
+          .mockImplementation((agentId: string) =>
+            Promise.resolve(
+              agentId === "codex"
+                ? {
+                    agentId: "codex",
+                    models: [
+                      { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
+                      { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
+                    ],
+                    contextWindow: null,
+                    source: "merged",
+                  }
+                : {
+                    agentId: "claude",
+                    models: [
+                      { id: "opus", name: "Opus", shortLabel: "Opus" },
+                      { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
+                    ],
+                    contextWindow: 200_000,
+                    source: "merged",
+                  }
+            )
+          );
+      }
+
+      function renderWith(preferredAgentId: string, modelIds: Record<string, string>) {
+        mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+        helpPanelState.preferredAgentId = preferredAgentId;
+        helpPanelState.setPreferredAgent = vi.fn((id: string | null) => {
+          helpPanelState.preferredAgentId = id;
+        });
+        installApi({
+          getSettings: vi.fn().mockResolvedValue({
+            docSearch: true,
+            daintreeControl: true,
+            tier: "core" as const,
+            bypassPermissions: false,
+            auditRetention: 7,
+            modelIds,
+            customArgs: "",
+          }),
+        });
+        mockCatalogs();
+        const tree = () => (
+          <SettingsValidationProvider>
+            <DaintreeAssistantSettingsTab />
+          </SettingsValidationProvider>
+        );
+        const utils = render(tree());
+        return { ...utils, rerenderTree: () => utils.rerender(tree()) };
+      }
+
+      function optionValues(select: HTMLSelectElement) {
+        return Array.from(select.querySelectorAll("option")).map((o) => o.value);
+      }
+
+      it("never shows another agent's saved model as selected or as an option", async () => {
+        renderWith("codex", { claude: "opus" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+        expect(optionValues(select)).not.toContain("opus");
+      });
+
+      it("shows a custom model the catalog doesn't list for the agent it was set on", async () => {
+        renderWith("codex", { codex: "my-fork-model", claude: "opus" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("my-fork-model"));
+        expect(optionValues(select)).toContain("my-fork-model");
+        expect(optionValues(select)).not.toContain("opus");
+      });
+
+      it("keeps each agent's choice across a switch away and back", async () => {
+        const { rerenderTree } = renderWith("claude", { claude: "opus" });
+        let select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("opus"));
+
+        fireEvent.change(screen.getByRole("combobox", { name: "Agent" }), {
+          target: { value: "codex" },
+        });
+        rerenderTree();
+        select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+
+        fireEvent.change(screen.getByRole("combobox", { name: "Agent" }), {
+          target: { value: "claude" },
+        });
+        rerenderTree();
+        select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("opus"));
+
+        expect(window.electron.helpAssistant.setSettings).not.toHaveBeenCalled();
+      });
+
+      it("writes a model change to the selected agent's entry only", async () => {
+        renderWith("codex", { claude: "opus" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+
+        fireEvent.change(select, { target: { value: "gpt-6-astra" } });
+
+        await waitFor(() =>
+          expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+            modelIds: { codex: "gpt-6-astra" },
+          })
+        );
+        await waitFor(() => expect(select.value).toBe("gpt-6-astra"));
+      });
+
+      it("rolls a failed save back to that agent's previous choice", async () => {
+        renderWith("codex", { codex: "gpt-6-astra", claude: "opus" });
+        (window.electron.helpAssistant.setSettings as ReturnType<typeof vi.fn>).mockRejectedValue(
+          new Error("disk full")
+        );
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-astra"));
+
+        fireEvent.change(select, { target: { value: "__default__" } });
+
+        await waitFor(() =>
+          expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+            modelIds: { codex: "" },
+          })
+        );
+        await waitFor(() => expect(select.value).toBe("gpt-6-astra"));
+      });
     });
   });
 
@@ -1366,7 +1501,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         tier: "core" as const,
         bypassPermissions: true,
         auditRetention: 7,
-        modelId: "",
+        modelIds: {},
         customArgs: "",
         idleHibernateMinutes: 5,
         debugLogging: true,
