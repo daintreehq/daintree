@@ -10,9 +10,10 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, MessageCircle, Settings2, ShieldAlert, Sparkles, X } from "lucide-react";
+import { ExternalLink, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import {
@@ -1667,45 +1668,21 @@ export function HelpPanel({
         ) : (
           <div className="flex-1 flex flex-col">
             {droppedPreferredAgentId && (
-              <div
-                role="alert"
-                className={cn(
-                  "flex items-start gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
-                  "rounded-[var(--radius-md)]",
-                  "bg-status-warning/10 border border-status-warning/20",
-                  "text-xs text-text-primary"
-                )}
+              <InlineStatusBanner
+                severity="warning"
+                animated={false}
                 data-testid="help-dropped-agent-banner"
-              >
-                <ShieldAlert
-                  className="w-3.5 h-3.5 shrink-0 mt-0.5 text-status-warning"
-                  aria-hidden="true"
-                />
-                <div className="flex-1 select-text">
-                  <p className="font-medium text-text-primary">
-                    {getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no
-                    longer available
-                  </p>
-                  <p className="mt-0.5 text-text-secondary">
-                    The agent was removed or is no longer supported as an assistant backend
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleOpenSettings}
-                    className="mt-1 text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                  >
-                    Open assistant settings
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={clearDroppedPreferredAgent}
-                  aria-label="Dismiss agent unavailable notice"
-                  className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
+                title={`${getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no longer available`}
+                description="The agent was removed or is no longer supported as an assistant backend"
+                action={{
+                  id: "open-settings",
+                  label: "Open assistant settings",
+                  variant: "primary",
+                  onClick: handleOpenSettings,
+                }}
+                onClose={clearDroppedPreferredAgent}
+                closeAriaLabel="Dismiss agent unavailable notice"
+              />
             )}
             <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
               <p className="text-sm text-text-secondary max-w-[30ch]">

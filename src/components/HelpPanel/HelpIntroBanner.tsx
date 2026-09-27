@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 interface HelpIntroBannerProps {
   onDismiss: () => void;
@@ -17,14 +18,15 @@ export function HelpIntroBanner({ onDismiss }: HelpIntroBannerProps) {
         Tip: Press <kbd className="text-text-secondary">Shift+Enter</kbd> to add a newline without
         sending.
       </span>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon-xs"
         onClick={onDismiss}
         aria-label="Dismiss"
-        className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+        className="-my-1"
       >
-        <X className="w-3 h-3" />
-      </button>
+        <X aria-hidden="true" />
+      </Button>
     </div>
   );
 }
