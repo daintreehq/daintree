@@ -203,8 +203,10 @@ describe("help prompt outputs", () => {
       }
     );
 
-    it.each(ALL_GENERATED)("%s confirms before closing several terminals", (_name, body) => {
-      expect(body).toMatch(/Confirm with the user before closing several terminals/);
+    // #12881: the host asks the user about any other close; the prompt says
+    // which closes are the assistant's own to make.
+    it.each(ALL_GENERATED)("%s closes only what it was asked to or launched", (_name, body) => {
+      expect(body).toMatch(/Close only what the user asked to, or yours once reported\./);
     });
 
     // Procedures live in the runbooks the session loads; the prompt keeps the

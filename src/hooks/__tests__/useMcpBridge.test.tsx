@@ -76,6 +76,7 @@ vi.mock("@/components/Git/gitRemoteOperationPreview", async (importOriginal) => 
 
 import {
   useMcpBridge,
+  PROTECTED_CLOSE_RATIONALE,
   buildMcpConfirmPreview,
   buildTerminalKillBatchTargets,
   resolveMcpConfirmPreviewTarget,
@@ -146,6 +147,7 @@ describe("useMcpBridge", () => {
         sessionOrigin?: "help" | "assistant-pane" | "external";
         offerSessionApproval?: boolean;
         approvalOnly?: boolean;
+        approvalReason?: "above-tier" | "protected-close";
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -657,6 +659,65 @@ describe("useMcpBridge", () => {
         confirmationDecision: "rejected",
       })
     );
+  });
+
+  // #12881: the assistant closing panels it did not open is asked about as a
+  // checklist, and the rows left checked go back to main to close.
+  it("puts an assistant close to the user as a checklist and reports the rows kept", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.closeMany", title: "Close" }));
+    mocks.panelsById = {
+      p1: { id: "p1", title: "claude", detectedAgentId: "claude", agentState: "working" },
+      p2: { id: "p2", title: "zsh" },
+    };
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-close",
+      actionId: "terminal.closeMany",
+      args: { terminalIds: ["p1", "p2"] },
+      sessionOrigin: "help",
+      approvalOnly: true,
+      approvalReason: "protected-close",
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.approvalReason).toBe("protected-close");
+    expect(pending?.danger).toBe("confirm");
+    expect(pending?.dangerRationale).toBe(PROTECTED_CLOSE_RATIONALE);
+    expect(pending?.selectableTargets?.map((t) => t.id)).toEqual(["p1", "p2"]);
+    expect(pending?.selectionConfirmLabel?.verb).toBe("Close");
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", ["p2"]);
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-close",
+      result: { ok: true, result: { selectedTargetIds: ["p2"] } },
+      confirmationDecision: "approved",
+    });
+  });
+
+  it("keeps an above-tier close as a plain approval, without the close checklist", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.closeMany", title: "Close" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-above-close",
+      actionId: "terminal.closeMany",
+      args: { terminalIds: ["p1"] },
+      sessionOrigin: "external",
+      approvalOnly: true,
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.approvalReason).toBe("above-tier");
+    expect(pending?.selectableTargets).toBeUndefined();
+    expect(pending?.dangerRationale).toBeUndefined();
   });
 
   it("refuses an approval-only request for an action this view does not know", async () => {

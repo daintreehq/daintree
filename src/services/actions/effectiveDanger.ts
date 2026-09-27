@@ -76,7 +76,27 @@ export function resolveEffectiveActionDanger(
   ) {
     return "confirm";
   }
+  // `terminal.closeAll` from an agent (#12881). Declared safe because a person
+  // clearing their own worktree has the undo toast and no need for a dialog;
+  // an agent sweeping every panel — the user's shells and other agents' work
+  // included — is the case a confirmation exists for. Only Daintree's own
+  // assistant can reach it at all, so this is its gate.
+  if (actionId === CLOSE_ALL_ACTION_ID && source === "agent") return "confirm";
   return declaredDanger;
+}
+
+/** The one close that sweeps panels the caller never named. */
+export const CLOSE_ALL_ACTION_ID = "terminal.closeAll";
+
+/**
+ * Why a safe dispatch was elevated, for the host confirm dialog. Only read
+ * when the elevation actually fired. A close-all names its sweep whatever else
+ * its arguments carry, since that is the consequence being approved.
+ */
+export function elevatedDangerRationale(actionId: string, args: unknown): string {
+  if (actionId === CLOSE_ALL_ACTION_ID) return CLOSE_ALL_DISPATCH_DANGER_RATIONALE;
+  if (dispatchCarriesRecipeId(args)) return RECIPE_DISPATCH_DANGER_RATIONALE;
+  return terminalLaunchDangerRationale(args) ?? RECIPE_DISPATCH_DANGER_RATIONALE;
 }
 
 /**
@@ -100,6 +120,10 @@ export const RECIPE_DISPATCH_DANGER_RATIONALE =
 /** Counterpart for a dispatch that asks a new terminal to run a command. */
 export const TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE =
   "This call carries a command, so the new terminal runs it immediately rather than waiting for you to type. Agent-initiated shell execution is confirmation-gated wherever it happens.";
+
+/** Counterpart for an agent closing every panel in the worktree. */
+export const CLOSE_ALL_DISPATCH_DANGER_RATIONALE =
+  "This closes every panel in the active worktree, including your own shells and other agents' terminals, not just ones the assistant opened. Most go to the trash briefly; after that their processes are gone.";
 
 /** Counterpart for a dispatch that only chooses where the terminal opens. */
 export const TERMINAL_CWD_DISPATCH_DANGER_RATIONALE =

@@ -370,7 +370,25 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
     expect(await listedIds(service)).toEqual(["a"]);
   });
 
-  it("clears the active worktree when an agent closes all", async () => {
+  it("clears the active worktree once the user approves an agent's close-all", async () => {
+    seed([
+      { id: "a", kind: "terminal", location: "grid" },
+      { id: "b", kind: "terminal", location: "grid" },
+    ]);
+    const service = buildService();
+
+    const closed = await service.dispatch("terminal.closeAll", undefined, {
+      source: "agent",
+      confirmed: true,
+    });
+
+    expect(closed.ok && closed.result).toEqual({ closedIds: ["a", "b"] });
+    expect(await listedIds(service)).toEqual([]);
+  });
+
+  // #12881: an agent sweeping every panel is confirm-gated even though the
+  // action declares safe for a person's own close.
+  it("refuses an agent's unconfirmed close-all and closes nothing", async () => {
     seed([
       { id: "a", kind: "terminal", location: "grid" },
       { id: "b", kind: "terminal", location: "grid" },
@@ -379,8 +397,8 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
 
     const closed = await service.dispatch("terminal.closeAll", undefined, { source: "agent" });
 
-    expect(closed.ok && closed.result).toEqual({ closedIds: ["a", "b"] });
-    expect(await listedIds(service)).toEqual([]);
+    expect(!closed.ok && closed.error.code).toBe("CONFIRMATION_REQUIRED");
+    expect(await listedIds(service)).toEqual(["a", "b"]);
   });
 
   it("advertises an object outputSchema carrying closedIds for both close actions", () => {

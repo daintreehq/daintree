@@ -613,7 +613,10 @@ export function createRendererBridge(
     contextOverride?: ActionContext,
     callerInfo?: McpBearerIdentity,
     route?: BridgeRoute,
-    approval?: Pick<WorkspaceDispatchOptions, "offerSessionApproval" | "approvalOnly">
+    approval?: Pick<
+      WorkspaceDispatchOptions,
+      "offerSessionApproval" | "approvalOnly" | "approvalReason"
+    >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
       let webContents: Electron.WebContents;
@@ -691,6 +694,9 @@ export function createRendererBridge(
             // renderer only honours them.
             ...(approval?.offerSessionApproval ? { offerSessionApproval: true } : {}),
             ...(approval?.approvalOnly ? { approvalOnly: true } : {}),
+            ...(approval?.approvalOnly && approval.approvalReason
+              ? { approvalReason: approval.approvalReason }
+              : {}),
           });
         } catch (err) {
           clearTimeout(timer);
@@ -821,7 +827,8 @@ export function createRendererBridge(
     args: unknown,
     confirmed = false,
     contextOverride?: ActionContext,
-    sessionOrigin: McpSessionOrigin = "external"
+    sessionOrigin: McpSessionOrigin = "external",
+    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason">
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getPinnedWebContents(id),
@@ -831,7 +838,8 @@ export function createRendererBridge(
       sessionOrigin,
       contextOverride,
       undefined,
-      { kind: "pinned", webContentsId: id }
+      { kind: "pinned", webContentsId: id },
+      approval
     );
   }
 

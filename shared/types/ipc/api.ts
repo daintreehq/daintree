@@ -2127,6 +2127,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * dispatching it (#12692): an agent pane calling above its tier.
          */
         approvalOnly?: boolean;
+        /**
+         * Why an `approvalOnly` request asks (#12881). Absent reads as
+         * `above-tier`.
+         */
+        approvalReason?: import("./mcpServer.js").McpApprovalReason;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */

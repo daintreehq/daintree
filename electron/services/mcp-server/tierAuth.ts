@@ -487,6 +487,20 @@ export interface TargetPolicySessionSnapshot {
   nativeGrantedActionIds: ReadonlySet<string>;
 }
 
+/** Swept by an agent, every panel in the worktree: always confirmed (#12881). */
+const CLOSE_ALL_TOOL_ID = "terminal.closeAll";
+
+/**
+ * The assistant's unscoped closes, which ask the user when a named panel was
+ * not created by the session or its agent is mid-task (#12881). Only a
+ * renderer-owned origin reaches their unscoped form; every other session
+ * closes through `terminal.closeOwned`, which refuses instead of asking.
+ */
+const ASSISTANT_GUARDED_CLOSE_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.close",
+  "terminal.closeMany",
+]);
+
 /** The `recipeId` argument that elevates a safe dispatch to confirm (#11860). */
 const RECIPE_ID_ARG = "recipeId";
 
@@ -618,8 +632,12 @@ export function buildTargetPolicy(
   const paneConfirmWaived =
     (paneApproval && isGenericNativeGrantEligible(id) && perToolGranted) ||
     isPaneAutoConfirmed(snapshot.tier, id, paneApproval, snapshot.paneSkipConfirmations === true);
+  // An agent's `terminal.closeAll` is confirm-gated whatever it declares
+  // (#12881), and every caller here is an agent.
+  const effectiveDanger = id === CLOSE_ALL_TOOL_ID ? "confirm" : danger;
   const requiresConfirmation =
-    authorizedBy === "approval" || (danger === "confirm" && !nativeGranted && !paneConfirmWaived);
+    authorizedBy === "approval" ||
+    (effectiveDanger === "confirm" && !nativeGranted && !paneConfirmWaived);
 
   // Strict rather than `!== false`: a malformed `enabled` (absent, or the
   // string "false") would otherwise be reported as callable, which is the one
@@ -628,7 +646,9 @@ export function buildTargetPolicy(
   const callable = record.enabled;
   const annotations = buildAnnotations(record as ActionManifestEntry);
   const confirmationMayEscalate =
-    danger === "safe" && acceptsEscalatingArgs(id, record.inputSchema);
+    danger === "safe" &&
+    (acceptsEscalatingArgs(id, record.inputSchema) ||
+      (snapshot.rendererOwnedOrigin && ASSISTANT_GUARDED_CLOSE_TOOLS.has(id)));
 
   // The digest covers only what a caller's own code is built against. Live
   // session state is deliberately absent: `callable`, `effectiveTier`,

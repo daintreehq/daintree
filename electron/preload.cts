@@ -21,6 +21,7 @@ import type {
   McpGrantLifecyclePayload,
   McpBearerIdentity,
   McpSessionOrigin,
+  McpApprovalReason,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -3211,6 +3212,7 @@ function buildElectronApi(): ElectronAPI {
           sessionOrigin?: McpSessionOrigin;
           offerSessionApproval?: boolean;
           approvalOnly?: boolean;
+          approvalReason?: McpApprovalReason;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 
