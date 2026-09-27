@@ -40,6 +40,15 @@ interface CommandStore {
   loadCommands: (context?: CommandContext) => Promise<void>;
 }
 
+// Bumped whenever the builder a run belongs to goes away. A run that settles
+// after that still reports its result to whoever awaited it, but must not
+// write its pending or error state into a builder opened since.
+let runGeneration = 0;
+// The same for builder loads: a response for an opening that has since been
+// closed, or superseded by reopening the same command, is dropped. Keyed on the
+// opening, not the command id, which a reopen shares.
+let loadGeneration = 0;
+
 export const useCommandStore = create<CommandStore>()((set, get) => ({
   // Picker state
   isPickerOpen: false,
@@ -64,12 +73,12 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
       builderLoadError: null,
     });
 
+    const generation = ++loadGeneration;
     if (command.hasBuilder) {
       const commandId = command.id;
       try {
         const builder = await commandsClient.getBuilder(commandId);
-        const currentCommandId = get().activeCommandId;
-        if (currentCommandId === commandId) {
+        if (generation === loadGeneration) {
           if (builder) {
             set({ builderSteps: builder.steps, isLoadingBuilder: false });
           } else {
@@ -82,8 +91,7 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
       } catch (error) {
         const message = formatErrorMessage(error, "Failed to load builder");
         logError("Failed to fetch builder steps", error);
-        const currentCommandId = get().activeCommandId;
-        if (currentCommandId === commandId) {
+        if (generation === loadGeneration) {
           set({ builderLoadError: message, isLoadingBuilder: false });
         }
       }
@@ -91,22 +99,28 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
       set({ isLoadingBuilder: false });
     }
   },
-  closeBuilder: () =>
+  closeBuilder: () => {
+    runGeneration++;
+    loadGeneration++;
     set({
       activeCommand: null,
       activeCommandId: null,
       builderSteps: null,
       builderContext: null,
+      isExecuting: false,
       executionError: null,
       isLoadingBuilder: false,
       builderLoadError: null,
-    }),
+    });
+  },
 
   // Execution state
   isExecuting: false,
   executionError: null,
   executeCommand: async (commandId, context, args = {}) => {
     set({ isExecuting: true, executionError: null });
+    const generation = runGeneration;
+    const isCurrent = () => generation === runGeneration;
 
     try {
       const result = await commandsClient.execute({
@@ -115,14 +129,17 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
         args,
       });
 
-      if (!result.success && result.error) {
-        set({ executionError: result.error.message });
+      if (!result.success && isCurrent()) {
+        // A failure without error details still has to show as one.
+        set({
+          executionError: result.error?.message ?? result.message ?? "The command didn't finish.",
+        });
       }
 
       return result;
     } catch (error) {
       const message = formatErrorMessage(error, "Command execution failed");
-      set({ executionError: message });
+      if (isCurrent()) set({ executionError: message });
       return {
         success: false,
         error: {
@@ -131,7 +148,7 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
         },
       };
     } finally {
-      set({ isExecuting: false });
+      if (isCurrent()) set({ isExecuting: false });
     }
   },
 

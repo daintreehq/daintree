@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useCommandStore } from "@/store/commandStore";
@@ -6,8 +6,8 @@ import { CommandPicker } from "./CommandPicker";
 import { CommandBuilder } from "./CommandBuilder";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import type { CommandManifestEntry, CommandContext, CommandResult } from "@shared/types/commands";
 
 interface CommandPickerHostProps {
@@ -56,6 +56,11 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
   // a single dialog enter animation; the spinner dialog only mounts for
   // genuinely slow loads.
   const showBuilderLoading = useDohertyGate(isLoadingBuilder);
+  // A retry clears the store's load error the moment it starts, and the
+  // loading dialog is gated for 400ms, so without this the dialog holding the
+  // focused Retry would vanish into nothing. Hold the failure on screen, Retry
+  // busy, until the reload settles one way or the other.
+  const [retryingError, setRetryingError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isPickerOpen) {
@@ -97,6 +102,16 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
     closeBuilder();
   }, [closeBuilder]);
 
+  const handleBuilderRetry = useCallback(() => {
+    if (!activeCommand) return;
+    setRetryingError(builderLoadError);
+    void openBuilder(activeCommand, builderContext ?? context).finally(() =>
+      setRetryingError(null)
+    );
+  }, [activeCommand, builderContext, builderLoadError, context, openBuilder]);
+
+  const shownLoadError = builderLoadError ?? retryingError;
+
   return (
     <>
       <CommandPicker
@@ -107,35 +122,45 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
         onDismiss={closePicker}
       />
 
-      {activeCommand && showBuilderLoading && (
+      {activeCommand && showBuilderLoading && !retryingError && (
         <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
           <AppDialog.Header>
             <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
             <AppDialog.CloseButton />
           </AppDialog.Header>
           <AppDialog.Body>
-            <div className="flex flex-col items-center justify-center py-8 space-y-4">
-              <Spinner size="2xl" className="text-daintree-text/40" />
-              <p className="text-sm text-text-secondary">Loading command configuration…</p>
+            <div
+              className="flex flex-col items-center justify-center gap-3 py-8"
+              role="status"
+              aria-live="polite"
+            >
+              <Spinner size="lg" className="text-text-secondary" />
+              <p className="text-sm text-text-secondary">Loading command…</p>
             </div>
           </AppDialog.Body>
         </AppDialog>
       )}
 
-      {activeCommand && builderLoadError && (
+      {activeCommand && shownLoadError && (
         <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
           <AppDialog.Header>
             <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
             <AppDialog.CloseButton />
           </AppDialog.Header>
           <AppDialog.Body>
-            <div className="flex flex-col items-center justify-center py-8 space-y-4">
-              <AlertCircle className="h-12 w-12 text-status-error" />
-              <div className="text-center">
-                <h3 className="text-lg font-medium text-text-primary">Failed to Load Command</h3>
-                <p className="text-sm text-text-secondary mt-1">{builderLoadError}</p>
-              </div>
-            </div>
+            <InlineStatusBanner
+              severity="error"
+              title="Couldn't load this command"
+              description={shownLoadError}
+              action={{
+                id: "retry",
+                label: "Retry",
+                onClick: handleBuilderRetry,
+                loading: retryingError !== null,
+              }}
+              animated={false}
+              className="rounded-[var(--radius-md)]"
+            />
           </AppDialog.Body>
           <AppDialog.Footer>
             <Button variant="contrast" onClick={handleBuilderCancel}>

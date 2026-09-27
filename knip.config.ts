@@ -71,6 +71,7 @@ const baseConfig: KnipConfig = {
     // imported shims and fixtures.
     "src/components/Fleet/__preview__/preview.tsx",
     "src/components/Commands/__preview__/commandPicker.tsx",
+    "src/components/Commands/__preview__/commandBuilder.tsx",
     "src/components/DevPreview/__preview__/preview.tsx",
     "src/components/DevPreview/__preview__/blockedNavPreview.tsx",
     "src/components/DevPreview/__preview__/consolePreview.tsx",

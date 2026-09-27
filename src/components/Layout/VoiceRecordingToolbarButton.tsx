@@ -200,13 +200,13 @@ export function VoiceRecordingToolbarButton({
   const tooltipTitle = isArming
     ? targetLabel
       ? `Arming dictation: ${targetLabel}`
-      : "Arming dictation..."
+      : "Arming dictation…"
     : isConnecting
-      ? "Preparing dictation..."
+      ? "Preparing dictation…"
       : isReconnecting
-        ? "Reconnecting..."
+        ? "Reconnecting…"
         : isFinishing
-          ? "Finishing transcription..."
+          ? "Finishing transcription…"
           : isPaused
             ? contextLabel
               ? `Paused: ${contextLabel}`

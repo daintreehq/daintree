@@ -321,11 +321,11 @@ export function VoiceInputButton({
             : status === "error"
               ? formatVoiceErrorTooltip(lastError)
               : isFinishing
-                ? "Finishing transcription..."
+                ? "Finishing transcription…"
                 : isPaused
                   ? "Paused — click to resume"
                   : isReconnecting
-                    ? "Reconnecting... Click to stop"
+                    ? "Reconnecting… Click to stop"
                     : isListening
                       ? "Stop recording"
                       : "Start voice input"

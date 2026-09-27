@@ -499,7 +499,7 @@ export const SEL = {
     moreFilters: 'button[aria-label^="More filters"]',
     // Lives in the "Filters" popover, which portals outside the events panel —
     // locate it from the window, not the panel, after opening moreFilters.
-    traceInput: 'input[placeholder="Filter by trace ID..."]',
+    traceInput: 'input[placeholder="Filter by trace ID…"]',
     clearSearch: '[aria-label="Clear search"]',
     clearTraceId: '[aria-label="Clear trace ID filter"]',
   },

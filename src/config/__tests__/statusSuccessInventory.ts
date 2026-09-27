@@ -137,10 +137,16 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/Commands/CommandBuilder.tsx": [
     {
-      category: "transient",
+      category: "outcome",
+      signature: "bg-status-success/15",
+      expectedOccurrences: 1,
+      rationale: "Recorded result of the command the user just ran; leaves with the dialog",
+    },
+    {
+      category: "outcome",
       signature: "text-status-success",
       expectedOccurrences: 1,
-      rationale: "Command-executed screen; leaves with the dialog",
+      rationale: "Recorded result of the command the user just ran; leaves with the dialog",
     },
   ],
   "src/components/DevPreview/ConsolePanel.tsx": [
@@ -741,5 +747,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 86;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 90;
+export const EXPECTED_STATUS_SUCCESS_SITES = 87;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 91;
