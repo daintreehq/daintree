@@ -639,7 +639,7 @@ describe("HelpPanelBanners — the stack", () => {
     const roles = Array.from(container.querySelectorAll("[data-testid^='help-']")).map((el) =>
       el.getAttribute("role")
     );
-    expect(roles.length).toBe(6);
+    expect(roles.length).toBe(5);
     expect(roles.lastIndexOf("alert")).toBeLessThan(roles.indexOf("status"));
   });
 
@@ -666,5 +666,22 @@ describe("HelpPanelBanners — the stack", () => {
     const buttons = Array.from(container.querySelectorAll("button"));
     expect(buttons.length).toBeGreaterThan(6);
     for (const button of buttons) expect(button.hasAttribute("data-variant")).toBe(true);
+  });
+
+  it("holds the resume advisory back while anything is blocking, and shows it after", () => {
+    const blockers = [
+      { tierMismatch: everything().tierMismatch },
+      { launchError: everything().launchError },
+      { sessionRevoked: everything().sessionRevoked },
+    ];
+    for (const blocker of blockers) {
+      const { queryByTestId, rerender, unmount } = render(
+        <HelpPanelBanners {...baseProps()} showResumeBanner {...blocker} />
+      );
+      expect(queryByTestId("help-resume-banner")).toBeNull();
+      rerender(<HelpPanelBanners {...baseProps()} showResumeBanner />);
+      expect(queryByTestId("help-resume-banner")).not.toBeNull();
+      unmount();
+    }
   });
 });

@@ -265,6 +265,12 @@ export function HelpPanelBanners({
     },
   ];
 
+  // "Resumed your previous session" says nothing the user needs while
+  // something is blocking the agent, and at the panel's minimum width it is
+  // the row that pushes the terminal out of view. It waits, undismissed,
+  // until the blocker clears.
+  const isBlocked = !!sessionRevoked || !!launchError || !!tierMismatch;
+
   return (
     <>
       {sessionRevoked && (
@@ -375,7 +381,7 @@ export function HelpPanelBanners({
           closeAriaLabel="Dismiss approval notice"
         />
       )}
-      {showResumeBanner && (
+      {showResumeBanner && !isBlocked && (
         <InlineStatusBanner
           severity="neutral"
           layout="inline"
