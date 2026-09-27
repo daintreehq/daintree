@@ -12,6 +12,7 @@ import {
   type NotificationType,
   type NotificationPriority,
   type NotificationPlacement,
+  type Notification,
 } from "@/store/notificationStore";
 import {
   useNotificationHistoryStore,
@@ -50,6 +51,10 @@ export interface E2EToastInput {
   /** When true, the action's onClick resolves after `asyncDelayMs` (spinner path). */
   asyncAction?: boolean;
   asyncDelayMs?: number;
+  /** Coalesced-event count; values >= 2 render the toast's count badge. */
+  count?: number;
+  /** Origin context; any of these fields renders the toast's options menu. */
+  context?: Notification["context"];
 }
 
 export interface E2EHistoryInput {
@@ -71,6 +76,8 @@ export interface NotificationsE2EApi {
   readonly MAX_VISIBLE_TOASTS: number;
   readonly GRID_BAR_DWELL_FLOOR_MS: number;
   addToast: (input: E2EToastInput) => string;
+  /** Sets the "+N more" overflow pill's count without evicting real toasts. */
+  setEvictedToInboxCount: (count: number) => void;
   /** Directly overwrites `firstShownAt` on a grid-bar notification to drive dwell-floor expiry without a real wait. */
   backdateNotification: (id: string, firstShownAt: number) => void;
   resetToasts: () => void;
@@ -129,8 +136,12 @@ function buildApi(): NotificationsE2EApi {
           variant: a.variant,
           onClick: () => {},
         })),
+        count: input.count,
+        context: input.context,
       });
     },
+    setEvictedToInboxCount: (count) =>
+      useNotificationHistoryStore.setState({ evictedToInboxCount: count }),
     backdateNotification: (id, firstShownAt) => {
       useNotificationStore.setState((state) => ({
         notifications: state.notifications.map((n) => (n.id === id ? { ...n, firstShownAt } : n)),

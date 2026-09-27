@@ -25,6 +25,8 @@ export interface InjectToastOptions {
   successLabel?: string;
   asyncAction?: boolean;
   asyncDelayMs?: number;
+  count?: number;
+  context?: { projectId?: string; worktreeId?: string; panelId?: string; eventKind?: string };
 }
 
 export interface InjectHistoryOptions {
@@ -73,8 +75,24 @@ export async function injectToast(page: Page, opts: InjectToastOptions = {}): Pr
       successLabel: o.successLabel,
       asyncAction: o.asyncAction,
       asyncDelayMs: o.asyncDelayMs,
+      count: o.count,
+      context: o.context,
     });
   }, opts);
+}
+
+/** Sets the "+N more" overflow pill's count directly, without evicting real toasts. */
+export async function setEvictedToInboxCount(page: Page, count: number): Promise<void> {
+  await waitForNotificationsBackdoor(page);
+  await page.evaluate((count) => {
+    const a = (
+      window as unknown as {
+        __daintreeNotificationsE2E?: { setEvictedToInboxCount: (n: number) => void };
+      }
+    ).__daintreeNotificationsE2E;
+    if (!a) throw new Error("__daintreeNotificationsE2E backdoor not attached");
+    a.setEvictedToInboxCount(count);
+  }, count);
 }
 
 /** Injects a grid-bar notification (placement forced to "grid-bar"). */
