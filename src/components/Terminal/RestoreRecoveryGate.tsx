@@ -160,7 +160,7 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
           {awaitingDestination ? (
             <Button
               size="sm"
-              variant="outline"
+              variant="contrast"
               onClick={() => confirmDestination(panelId, originCwd)}
             >
               Keep original folder
@@ -184,7 +184,7 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
               {recovery.sessionId !== undefined && (
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="contrast"
                   disabled={isLaunching}
                   onClick={() => {
                     const sessionId = recovery.sessionId;

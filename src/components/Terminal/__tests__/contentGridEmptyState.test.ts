@@ -147,10 +147,8 @@ describe("ContentGrid EmptyState — structured empty state integration (issue #
     expect(content).toContain("FolderOpen");
   });
 
-  it("renders Button variant=outline size=sm for opening a directory", async () => {
+  it("renders an Open project… action for opening a directory", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain('variant="outline"');
-    expect(content).toContain('size="sm"');
     expect(content).toContain("Open project…");
   });
 

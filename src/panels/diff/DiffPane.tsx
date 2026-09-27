@@ -1291,7 +1291,7 @@ export function DiffPane({
                   data-testid="diff-pane-unavailable"
                   action={
                     <Button
-                      variant="subtle"
+                      variant="contrast"
                       size="sm"
                       onClick={() => void handleExternalAction("default-app")}
                     >
@@ -1339,7 +1339,7 @@ export function DiffPane({
                   data-testid="diff-pane-unavailable"
                   action={
                     <Button
-                      variant="subtle"
+                      variant="contrast"
                       size="sm"
                       onClick={() => void handleExternalAction("default-app")}
                     >

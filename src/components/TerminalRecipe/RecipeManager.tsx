@@ -548,7 +548,7 @@ export function RecipeManager({
               description="A recipe launches a set of terminals and agents together in one click."
               action={
                 <div className="flex flex-col items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
+                  <Button variant="contrast" size="sm" onClick={() => onCreateRecipe("project")}>
                     <Plus />
                     New project recipe
                   </Button>

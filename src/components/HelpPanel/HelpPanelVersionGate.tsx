@@ -159,7 +159,7 @@ export function HelpPanelVersionGate({
               user is waiting on it. The controller already ignores repeat presses. */}
           <Button
             size="sm"
-            variant="outline"
+            variant="contrast"
             className={cn("ml-auto", isCheckingVersion && "cursor-default")}
             aria-disabled={isCheckingVersion || undefined}
             onClick={() => {
