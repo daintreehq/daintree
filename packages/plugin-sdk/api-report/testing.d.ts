@@ -1680,6 +1680,23 @@ type PluginMcpJsonSchema = {
     type: "object";
 } & Record<string, unknown>;
 /**
+ * The MCP tool annotations a plugin may declare. They are hints for the agent
+ * client, advertised as written and never checked against what `execute` does;
+ * an omitted hint means the MCP default (destructive, non-idempotent,
+ * open-world). A plugin may only add caution: `destructiveHint` and
+ * `openWorldHint` accept `true` alone, and `readOnlyHint` is absent, because a
+ * claim that a tool is safe is one clients can act on by asking less, so only
+ * the host may make it. A roster declaring any such claim is rejected.
+ */
+interface PluginMcpToolAnnotations {
+    /** `true` to state the tool may delete or overwrite; `false` is rejected. */
+    destructiveHint?: boolean;
+    /** `true` when repeating a call with the same arguments has no further effect. */
+    idempotentHint?: boolean;
+    /** `true` to state the tool reaches beyond this project, such as the network; `false` is rejected. */
+    openWorldHint?: boolean;
+}
+/**
  * One tool on an `agentMcp` endpoint. Both schemas are compiled at
  * registration. `execute` receives the arguments the agent sent, already
  * checked against `inputSchema` and never coerced, defaulted or stripped; a
@@ -1693,6 +1710,8 @@ interface PluginMcpToolDefinition {
     description: string;
     inputSchema: PluginMcpJsonSchema;
     outputSchema?: PluginMcpJsonSchema;
+    /** MCP tool annotations advertised on `tools/list`. See {@link PluginMcpToolAnnotations}. */
+    annotations?: PluginMcpToolAnnotations;
     execute(args: Record<string, unknown>, caller: PluginMcpCaller, signal: AbortSignal): unknown | Promise<unknown>;
 }
 /** Host API for serving `contributes.agentMcp` endpoints. Requires `mcp:expose`. */

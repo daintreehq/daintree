@@ -11,7 +11,7 @@ import {
   type AgentMcpToolInvoker,
   type AgentMcpToolScope,
 } from "../types.js";
-import { compileAgentMcpTool } from "../validateTools.js";
+import { compileAgentMcpTool, validateAgentMcpTools } from "../validateTools.js";
 
 const INSTANCE = "acme.ledger";
 const ENDPOINT = "data";
@@ -237,6 +237,36 @@ describe("createPluginSessionServer", () => {
         outputSchema: STRUCTURED.outputSchema,
       },
     ]);
+  });
+
+  it("advertises the hints a plugin declared, keeping an explicit false", async () => {
+    const [annotated] = validateAgentMcpTools({
+      add_entry: {
+        description: "Adds an entry.",
+        inputSchema: { type: "object" },
+        annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
+        execute: () => null,
+      },
+    });
+    const { client } = await connect(vi.fn(), { tools: [annotated!, LOOKUP] });
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.annotations)).toEqual([
+      { destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      undefined,
+    ]);
+  });
+
+  it("advertises a host read-only tool with that claim alone", async () => {
+    const hostTool = compileAgentMcpTool({
+      name: "peek",
+      description: "Reads.",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      annotations: { destructiveHint: true },
+    });
+    const { client } = await connect(vi.fn(), { tools: [hostTool] });
+    const { tools } = await client.listTools();
+    expect(tools[0]!.annotations).toEqual({ readOnlyHint: true });
   });
 
   it("lists nothing when the plugin registered no roster", async () => {

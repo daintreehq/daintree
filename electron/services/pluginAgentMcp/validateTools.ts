@@ -4,6 +4,7 @@ import {
   AGENT_MCP_MAX_TOOLS_PER_ENDPOINT,
   AGENT_MCP_TOOL_NAME_PATTERN,
   type PluginMcpJsonSchema,
+  type PluginMcpToolAnnotations,
 } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { compileAgentMcpSchema, type AgentMcpSchemaCheck } from "./schemaValidation.js";
@@ -68,6 +69,69 @@ function snapshotSchema(toolName: string, field: string, schema: unknown): Plugi
   return deepFreeze(snapshot as PluginMcpJsonSchema);
 }
 
+const ANNOTATION_KEYS = ["destructiveHint", "idempotentHint", "openWorldHint"] as const;
+
+/**
+ * Hints a plugin may only set in the cautious direction. `false` on either is
+ * the plugin vouching that its tool is safe, which clients can read as grounds
+ * to ask less, so it is refused like a read-only claim. `idempotentHint` stays
+ * free: it describes retry behaviour, and no client gates approval on it.
+ */
+const CAUTION_ONLY_KEYS: readonly string[] = ["destructiveHint", "openWorldHint"];
+
+/**
+ * A read-only claim is the one hint that lets a client skip its approval
+ * prompt, so a plugin may not make it about its own tool. Rejected rather than
+ * dropped, so an author is never left believing the claim was advertised.
+ */
+const READ_ONLY_KEYS = ["readOnly", "readOnlyHint"] as const;
+
+function rejectReadOnlyClaim(
+  toolName: string,
+  where: string,
+  value: Record<string, unknown>
+): void {
+  for (const key of READ_ONLY_KEYS) {
+    if (Object.hasOwn(value, key)) {
+      throw new Error(
+        `tool "${toolName}" ${where}${key} is not allowed: only the host may mark a tool read-only`
+      );
+    }
+  }
+}
+
+/** Check a tool's declared annotations and take a frozen copy of the ones it set. */
+function snapshotAnnotations(
+  toolName: string,
+  annotations: unknown
+): Readonly<PluginMcpToolAnnotations> | undefined {
+  if (annotations === undefined) return undefined;
+  if (!isPlainObject(annotations)) {
+    throw new Error(`tool "${toolName}" annotations must be a plain object`);
+  }
+  rejectReadOnlyClaim(toolName, "annotations.", annotations);
+  const snapshot: { -readonly [K in keyof PluginMcpToolAnnotations]: boolean } = {};
+  for (const key of Object.keys(annotations)) {
+    if (!(ANNOTATION_KEYS as readonly string[]).includes(key)) {
+      throw new Error(
+        `tool "${toolName}" annotations.${key} is not supported; allowed: ${ANNOTATION_KEYS.join(", ")}`
+      );
+    }
+    const value = annotations[key];
+    if (value === undefined) continue;
+    if (typeof value !== "boolean") {
+      throw new Error(`tool "${toolName}" annotations.${key} must be a boolean`);
+    }
+    if (value === false && CAUTION_ONLY_KEYS.includes(key)) {
+      throw new Error(
+        `tool "${toolName}" annotations.${key} may only be true: only the host may mark a tool safer than the MCP default`
+      );
+    }
+    snapshot[key as (typeof ANNOTATION_KEYS)[number]] = value;
+  }
+  return Object.keys(snapshot).length > 0 ? Object.freeze(snapshot) : undefined;
+}
+
 function compileSchema(
   toolName: string,
   field: string,
@@ -93,9 +157,12 @@ function compileSchema(
  * than refusing the roster.
  */
 export function compileAgentMcpTool(descriptor: AgentMcpToolDescriptor): AgentMcpRegisteredTool {
-  const { name, description, inputSchema, outputSchema, readOnly } = descriptor;
+  const { name, description, inputSchema, outputSchema, readOnly, annotations } = descriptor;
   const checkInput = compileSchema(name, "inputSchema", inputSchema);
-  const flags = readOnly === true ? { readOnly } : {};
+  const flags = {
+    ...(readOnly === true ? { readOnly } : {}),
+    ...(annotations !== undefined ? { annotations } : {}),
+  };
   if (outputSchema === undefined) {
     return Object.freeze({ name, description, inputSchema, checkInput, ...flags });
   }
@@ -166,6 +233,8 @@ export function validateAgentMcpTools(tools: unknown): readonly AgentMcpRegister
         `tool "${name}" description is ${descriptionBytes} bytes; the limit is ${AGENT_MCP_MAX_DESCRIPTION_BYTES}`
       );
     }
+    rejectReadOnlyClaim(name, "", definition);
+    const annotations = snapshotAnnotations(name, definition.annotations);
     const inputSchema = snapshotSchema(name, "inputSchema", definition.inputSchema);
     const outputSchema =
       definition.outputSchema === undefined
@@ -176,6 +245,7 @@ export function validateAgentMcpTools(tools: unknown): readonly AgentMcpRegister
       description,
       inputSchema,
       ...(outputSchema !== undefined ? { outputSchema } : {}),
+      ...(annotations !== undefined ? { annotations } : {}),
     });
   }
   // Compiled only once every cheap check has passed, so a roster that is

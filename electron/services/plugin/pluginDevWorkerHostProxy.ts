@@ -866,6 +866,9 @@ export class PluginDevWorkerHostProxy {
               ...(descriptor.outputSchema !== undefined
                 ? { outputSchema: descriptor.outputSchema }
                 : {}),
+              ...(descriptor.annotations !== undefined
+                ? { annotations: { ...descriptor.annotations } }
+                : {}),
             };
           }
           this.mcpRosters.set(endpointId, roster);

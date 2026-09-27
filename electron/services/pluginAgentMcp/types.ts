@@ -1,5 +1,9 @@
 import type http from "node:http";
-import type { PluginMcpCaller, PluginMcpJsonSchema } from "../../../shared/types/plugin.js";
+import type {
+  PluginMcpCaller,
+  PluginMcpJsonSchema,
+  PluginMcpToolAnnotations,
+} from "../../../shared/types/plugin.js";
 import type { AgentMcpSchemaCheck } from "./schemaValidation.js";
 
 /** Path prefix of the plugin-only MCP surface on the host's loopback listener. */
@@ -48,6 +52,8 @@ export interface AgentMcpToolDescriptor {
    * plugin's own roster, where it would be the plugin vouching for itself.
    */
   readonly readOnly?: true;
+  /** The hints the plugin declared, snapshotted at registration. Never `readOnlyHint`. */
+  readonly annotations?: Readonly<PluginMcpToolAnnotations>;
 }
 
 /**

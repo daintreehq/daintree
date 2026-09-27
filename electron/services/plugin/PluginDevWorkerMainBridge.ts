@@ -1225,7 +1225,16 @@ export class PluginDevWorkerMainBridge {
           if (!entry || typeof entry !== "object") {
             throw new Error(`mcp.registerTools: tool "${toolName}" is malformed`);
           }
-          const { description, inputSchema, outputSchema } = entry as Partial<
+          // Checked here because the rebuild below would drop the field, and a
+          // roster making a read-only claim must fail whole, as it does in-process.
+          for (const key of ["readOnly", "readOnlyHint"]) {
+            if (Object.hasOwn(entry, key)) {
+              throw new Error(
+                `mcp.registerTools: tool "${toolName}" ${key} is not allowed: only the host may mark a tool read-only`
+              );
+            }
+          }
+          const { description, inputSchema, outputSchema, annotations } = entry as Partial<
             RegisterMcpToolsParams["tools"][string]
           >;
           // Descriptor fields are handed to the host as the worker sent them —
@@ -1234,6 +1243,7 @@ export class PluginDevWorkerMainBridge {
             description: description as string,
             inputSchema: inputSchema as PluginMcpToolDefinition["inputSchema"],
             ...(outputSchema !== undefined ? { outputSchema } : {}),
+            ...(annotations !== undefined ? { annotations } : {}),
             execute: (args, caller, signal) => {
               // Fenced to the generation that registered it. Retirement unbinds
               // the roster, but a caller that looked it up just before can still

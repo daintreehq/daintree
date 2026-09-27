@@ -155,6 +155,86 @@ describe("agent MCP over the worker bridge", () => {
     expect(workerSignal.aborted).toBe(false);
   });
 
+  it("carries declared annotations across the port, explicit false included", async () => {
+    const { host, proxy } = makeConnectedPair();
+    await proxy.host.mcp.registerTools("data", {
+      add_row: {
+        description: "Adds a row.",
+        inputSchema: { type: "object" },
+        annotations: { destructiveHint: true, idempotentHint: false },
+        execute: () => null,
+      },
+    });
+    await flush();
+
+    expect(host.rosters[0].tools.add_row.annotations).toEqual({
+      destructiveHint: true,
+      idempotentHint: false,
+    });
+  });
+
+  it("rejects a non-destructive claim in the worker before anything crosses the port", async () => {
+    const { host, proxy } = makeConnectedPair();
+    expect(() =>
+      proxy.host.mcp.registerTools("data", {
+        add_row: {
+          description: "Adds a row.",
+          inputSchema: { type: "object" },
+          annotations: { destructiveHint: false },
+          execute: () => null,
+        },
+      })
+    ).toThrow(/destructiveHint may only be true/);
+    await flush();
+
+    expect(host.mcp.registerTools).not.toHaveBeenCalled();
+  });
+
+  it("rejects a read-only claim in the worker before anything crosses the port", async () => {
+    const { host, proxy } = makeConnectedPair();
+    expect(() =>
+      proxy.host.mcp.registerTools("data", {
+        peek: {
+          description: "Reads.",
+          inputSchema: { type: "object" },
+          annotations: { readOnlyHint: true } as never,
+          execute: () => null,
+        },
+      })
+    ).toThrow(/only the host may mark a tool read-only/);
+    await flush();
+
+    expect(host.mcp.registerTools).not.toHaveBeenCalled();
+  });
+
+  it.each(["readOnly", "readOnlyHint"])(
+    "rejects a forged top-level %s claim before it reaches the host",
+    async (key) => {
+      const { host, workerHost } = makeBridge();
+      workerHost.emit("worker-message", registerNotify({ peek: { ...WIRE_TOOL, [key]: true } }));
+      await flush();
+
+      expect(host.mcp.registerTools).not.toHaveBeenCalled();
+      expect(workerHost.sent).toContainEqual(
+        expect.objectContaining({ type: "register-error", registrationKey: "agentMcp:data" })
+      );
+    }
+  );
+
+  it("hands main whatever annotations arrived, for the host's validator to judge", async () => {
+    const { host, workerHost } = makeBridge();
+    const forged = { readOnlyHint: true };
+    workerHost.emit(
+      "worker-message",
+      registerNotify({ peek: { ...WIRE_TOOL, annotations: forged } })
+    );
+    await flush();
+
+    // Passed on untouched so the host's roster validation (covered in
+    // validateTools and PluginHostFactory suites) rejects it by name.
+    expect(host.rosters[0].tools.peek.annotations).toEqual(forged);
+  });
+
   it("carries only the caller descriptor's own fields into the worker", async () => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", registerNotify({ list_rows: WIRE_TOOL }));
