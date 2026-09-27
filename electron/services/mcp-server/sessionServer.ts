@@ -105,6 +105,7 @@ import {
   type SessionSurfacePolicy,
   isTierPermitted,
   isApprovalRequestable,
+  isPaneAutoConfirmed,
   buildToolInputSchema,
   buildAnnotations,
   buildToolOutputSchema,
@@ -870,6 +871,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * exactly as `dispatchAction` does when the view cannot be reached.
    */
   requestApproval?: (actionId: string, args: unknown) => Promise<DispatchEnvelope>;
+  /**
+   * The pane's project "Skip confirmations" setting, captured at launch
+   * (#12876). Only read alongside {@link requestApproval}: a session that is
+   * not an agent pane never skips a confirmation on it.
+   */
+  paneSkipConfirmations?: boolean;
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -1151,6 +1158,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     workspaceBound: workspaceBinding !== undefined,
     // Only an agent pane is handed an approval route (#12692).
     paneApproval: requestApproval !== undefined,
+    paneSkipConfirmations: requestApproval !== undefined && deps.paneSkipConfirmations === true,
   };
 
   const server = new Server(
@@ -1458,6 +1466,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               // policy record carries it rather than re-deriving it.
               rendererOwnedOrigin,
               paneApproval: sessionSurface.paneApproval === true,
+              paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
               perToolGrantedActionIds,
               nativeGrantedActionIds,
             } satisfies TargetPolicySessionSnapshot,
@@ -2192,18 +2201,26 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // What pre-authorizes this dispatch's `danger: "confirm"` modal, if
     // anything. A native automation grant is an explicit user approval of the
     // tool's scope, so it authorizes the dispatch without surfacing a per-call
-    // modal — exactly as if the user had just approved it. For an agent pane a
-    // session approval the user gave from the dialog does the same (#12692),
-    // but never for a tool whose dialog is also where the user picks its
-    // targets. No tier pre-authorizes on its own. An above-tier approval,
-    // granted below, sets this too. The D3 typed-name gate is outside all of them: the bridge
+    // modal — exactly as if the user had just approved it. For an agent pane the
+    // project's "Skip confirmations" setting at `full` does the same (#12876),
+    // as does a session approval the user gave from the dialog (#12692) — but
+    // neither for a tool whose dialog is also where the user picks its targets.
+    // No tier pre-authorizes on its own. An above-tier approval, granted below,
+    // sets this too. The D3 typed-name gate is outside all of them: the bridge
     // re-derives it for any preconfirmed force delete (#12115).
     let dispatchAuthorization: McpDispatchAuthorization | undefined =
       nativeGrantId !== undefined
         ? "native-grant"
-        : paneApproval && grantIssuedAt !== undefined && isGenericNativeGrantEligible(actionId)
-          ? "session-grant"
-          : undefined;
+        : isPaneAutoConfirmed(
+              tier,
+              actionId,
+              paneApproval,
+              sessionSurface.paneSkipConfirmations === true
+            )
+          ? "project-setting"
+          : paneApproval && grantIssuedAt !== undefined && isGenericNativeGrantEligible(actionId)
+            ? "session-grant"
+            : undefined;
     let dispatchConfirmed = dispatchAuthorization !== undefined;
     // Tracks whether a live "tool-call-started" push fired for this dispatch so
     // the shared `finally` only emits the matching "settled" push for calls the

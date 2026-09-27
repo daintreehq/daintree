@@ -113,6 +113,11 @@ export interface PaneWorkspaceBinding {
   workspaceId: string;
   launchWebContentsId?: number;
   actionContext?: ActionContext;
+  /**
+   * The project's "Skip confirmations" setting as it stood at launch (#12876).
+   * A launch snapshot like the tier: newly launched agents pick up a change.
+   */
+  skipConfirmations?: boolean;
 }
 /**
  * Resolver consulted at MCP handshake for an ordinary agent pane bearer's

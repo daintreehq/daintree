@@ -405,6 +405,23 @@ describe("McpPaneConfigService", () => {
       expect(service.getTierForToken(token)).toBe("core");
     });
 
+    it("carries the launch-time skip-confirmations setting (#12876)", async () => {
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-agent-skip",
+        port: 45454,
+        tier: "full",
+      });
+
+      service.registerPaneWorkspaceBinding(token, { workspaceId: "p1", skipConfirmations: true });
+
+      expect(service.getPaneWorkspaceBindingForToken(token)).toEqual({
+        workspaceId: "p1",
+        skipConfirmations: true,
+      });
+      await service.revokePaneConfig("pane-agent-skip");
+      expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
+    });
+
     it("never surfaces through the assistant resolvers, which confer a renderer-owned origin", async () => {
       // The handshake stamps `assistant-pane` on anything those resolvers
       // match, and that origin unlocks surfaces an agent pane must never reach

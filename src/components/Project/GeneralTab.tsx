@@ -8,7 +8,11 @@ import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import type { ChoiceboxOption } from "@/components/Settings/SettingsChoicebox";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { useNumberDraft } from "@/components/Settings/useNumberDraft";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
@@ -39,7 +43,7 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
     value: "full",
     label: "Full",
     description:
-      "Core + recipes, workflows, project checks, forge and git reads, context tools and diagnostics. Deletes and teardowns ask you first.",
+      "Core + recipes, workflows, project checks, forge and git reads, context tools and diagnostics. Deletes and teardowns ask you first unless Skip confirmations is on.",
   },
 ];
 
@@ -87,6 +91,8 @@ interface GeneralTabProps {
   onTurbopackEnabledChange: (value: boolean) => void;
   daintreeMcpTier: DaintreeMcpTier;
   onDaintreeMcpTierChange: (value: DaintreeMcpTier) => void;
+  daintreeMcpSkipConfirmations: boolean;
+  onDaintreeMcpSkipConfirmationsChange: (value: boolean) => void;
   projectIconSvg: string | undefined;
   onProjectIconSvgChange: (value: string | undefined) => void;
   enableInRepoSettings: (projectId: string) => Promise<Project>;
@@ -111,6 +117,8 @@ export function GeneralTab({
   onTurbopackEnabledChange,
   daintreeMcpTier,
   onDaintreeMcpTierChange,
+  daintreeMcpSkipConfirmations,
+  onDaintreeMcpSkipConfirmationsChange,
   projectIconSvg,
   onProjectIconSvgChange,
   enableInRepoSettings,
@@ -713,6 +721,19 @@ export function GeneralTab({
               />
             ))}
           </fieldset>
+          <SettingsDependents
+            disabled={daintreeMcpTier !== "full"}
+            reason="Select Full to skip confirmations"
+          >
+            <SettingsSwitchCard
+              title="Skip confirmations"
+              subtitle="Agents run the deletes and teardowns Full allows without asking you. A force delete that would discard changes still asks you to type its name."
+              isEnabled={daintreeMcpSkipConfirmations}
+              onChange={() =>
+                onDaintreeMcpSkipConfirmationsChange(!daintreeMcpSkipConfirmations)
+              }
+            />
+          </SettingsDependents>
         </SettingsGroup>
         <SettingsGroup>
           <SettingsSwitchCard

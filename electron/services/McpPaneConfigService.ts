@@ -578,6 +578,7 @@ export class McpPaneConfigService {
         ? { launchWebContentsId: binding.launchWebContentsId }
         : {}),
       ...(binding.actionContext !== undefined ? { actionContext: binding.actionContext } : {}),
+      ...(binding.skipConfirmations === true ? { skipConfirmations: true } : {}),
     };
   }
 

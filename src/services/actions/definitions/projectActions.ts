@@ -693,6 +693,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       const current = await projectClient.getSettings(projectId);
       const sanitized: Record<string, unknown> = { ...settings };
       delete sanitized.daintreeMcpTier;
+      delete sanitized.daintreeMcpSkipConfirmations;
       delete sanitized.exposeDaintreeMcpToAgents;
       const updated = { ...current, ...sanitized } as ProjectSettings;
       await projectClient.saveSettings(projectId, updated);

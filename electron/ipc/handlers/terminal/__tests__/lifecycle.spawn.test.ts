@@ -2018,6 +2018,49 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     }
   );
 
+  it.each([
+    [{ daintreeMcpTier: "full", daintreeMcpSkipConfirmations: true }, true],
+    [{ daintreeMcpTier: "full" }, false],
+    // Only Full carries it: a dormant opt-in below Full must not reach the pane.
+    [{ daintreeMcpTier: "core", daintreeMcpSkipConfirmations: true }, false],
+  ])(
+    "binds the pane's skip-confirmations setting from %o at launch (#12876)",
+    async (settings, expected) => {
+      mockValidateToken.mockReturnValue(false);
+      mockIsRunning.mockReturnValue(true);
+      mockCurrentPort.mockReturnValue(45454);
+      mockPreparePaneConfig.mockResolvedValue({
+        configPath: "/tmp/pane-config.json",
+        args: ["--mcp-config", "/tmp/pane-config.json"],
+        env: {},
+        token: "pane-token",
+      });
+      mockGetProjectSettings.mockResolvedValue(settings);
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+
+      const handler = getSpawnHandler();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          id: "skip-confirm-pane",
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: "claude",
+          launchAgentId: "claude",
+        } as unknown as Parameters<typeof handler>[1]
+      );
+
+      const binding = mockRegisterPaneWorkspaceBinding.mock.calls.at(-1)?.[1] as
+        | Record<string, unknown>
+        | undefined;
+      expect(binding).toBeDefined();
+      expect(binding?.skipConfirmations === true).toBe(expected);
+    }
+  );
+
   it("continues without per-pane MCP injection when MCP cannot be made ready", async () => {
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(false);

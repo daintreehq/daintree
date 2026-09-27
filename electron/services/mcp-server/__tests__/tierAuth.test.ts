@@ -36,6 +36,7 @@ import {
   type TargetPolicySessionSnapshot,
   getReachableActionIds,
   isApprovalRequestable,
+  isPaneAutoConfirmed,
   PANE_APPROVAL_CEILING,
 } from "../tierAuth.js";
 import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
@@ -2778,5 +2779,68 @@ describe("agent-pane approval (#12692)", () => {
       authorizedBy: "grant",
       requiresConfirmation: false,
     });
+  });
+});
+
+// #12876: the pre-split `system` tier's auto-confirm survives as its own project
+// setting, honoured only for an agent pane at `full`.
+describe("pane skip-confirmations setting (#12876)", () => {
+  const snapshot = (
+    tier: "core" | "full",
+    overrides: Partial<TargetPolicySessionSnapshot> = {}
+  ): TargetPolicySessionSnapshot => ({
+    tier,
+    rendererOwnedOrigin: false,
+    paneApproval: true,
+    paneSkipConfirmations: true,
+    perToolGrantedActionIds: new Set(),
+    nativeGrantedActionIds: new Set(),
+    ...overrides,
+  });
+  const teardown = makeEntry({
+    id: "worktree.resource.teardown",
+    kind: "command",
+    danger: "confirm",
+  });
+
+  it("waives the ordinary confirmation for a Full pane that opted in", () => {
+    expect(isPaneAutoConfirmed("full", "worktree.resource.teardown", true, true)).toBe(true);
+    expect(buildTargetPolicy(teardown, snapshot("full"))).toMatchObject({
+      authorizedBy: "tier",
+      requiresConfirmation: false,
+    });
+  });
+
+  it("keeps the confirmation without the opt-in, below Full, or outside a pane", () => {
+    expect(isPaneAutoConfirmed("full", "worktree.resource.teardown", true, false)).toBe(false);
+    expect(isPaneAutoConfirmed("core", "worktree.deleteOwned", true, true)).toBe(false);
+    expect(isPaneAutoConfirmed("full", "worktree.resource.teardown", false, true)).toBe(false);
+    expect(isPaneAutoConfirmed("external", "worktree.resource.teardown", true, true)).toBe(false);
+    expect(
+      buildTargetPolicy(teardown, snapshot("full", { paneSkipConfirmations: false }))
+    ).toMatchObject({ requiresConfirmation: true });
+    expect(
+      buildTargetPolicy(teardown, snapshot("full", { paneApproval: false }))
+    ).toMatchObject({ requiresConfirmation: true });
+  });
+
+  it("never lets an above-tier call skip its approval", () => {
+    expect(isPaneAutoConfirmed("core", "worktree.resource.teardown", true, true)).toBe(false);
+    expect(buildTargetPolicy(teardown, snapshot("core"))).toMatchObject({
+      authorizedBy: "approval",
+      requiresConfirmation: true,
+    });
+  });
+
+  it("does not widen what a Full pane can reach", () => {
+    for (const id of ["git.push", "no.such.action", ...RENDERER_OWNED_ORIGIN_ONLY_TOOLS]) {
+      expect(isPaneAutoConfirmed("full", id, true, true), id).toBe(false);
+    }
+  });
+
+  it("never covers a target-picking tool", () => {
+    for (const id of Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES)) {
+      expect(isPaneAutoConfirmed("full", id, true, true), id).toBe(false);
+    }
   });
 });

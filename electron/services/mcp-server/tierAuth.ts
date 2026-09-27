@@ -172,6 +172,12 @@ export interface SessionSurfacePolicy {
    * session keeps the refusal semantics.
    */
   paneApproval?: boolean;
+  /**
+   * The pane's project "Skip confirmations" setting, captured at launch
+   * (#12876). Only meaningful beside {@link paneApproval} at the `full` tier —
+   * see {@link isPaneAutoConfirmed}. Read as `=== true`.
+   */
+  paneSkipConfirmations?: boolean;
 }
 
 /**
@@ -197,6 +203,30 @@ export function isApprovalRequestable(
   if (!paneApproval || tier === "external") return false;
   if (isTierPermitted(tier, actionId, false)) return false;
   return PANE_APPROVAL_CEILING.has(actionId);
+}
+
+/**
+ * Whether an agent pane's call runs past the ordinary confirmation because its
+ * project opted into skipping confirmations at the `full` tier (#12876). The
+ * tier alone never waives one. Limited to what the tier itself permits — an
+ * above-tier call still asks — and never covers a tool whose dialog is also
+ * where the user picks its targets. The D3 typed-name gate on a force delete
+ * that would discard changes sits outside this: the bridge re-derives it for
+ * every preconfirmed dispatch (#12115).
+ */
+export function isPaneAutoConfirmed(
+  tier: McpTier,
+  actionId: string,
+  paneApproval: boolean,
+  paneSkipConfirmations: boolean
+): boolean {
+  return (
+    paneApproval &&
+    paneSkipConfirmations &&
+    tier === "full" &&
+    isTierPermitted(tier, actionId, false) &&
+    isGenericNativeGrantEligible(actionId)
+  );
 }
 
 /**
@@ -446,6 +476,11 @@ export interface TargetPolicySessionSnapshot {
    * {@link SessionSurfacePolicy.paneApproval}. Optional and read as `=== true`.
    */
   paneApproval?: boolean;
+  /**
+   * The pane's launch-time "Skip confirmations" setting (#12876) — see
+   * {@link SessionSurfacePolicy.paneSkipConfirmations}. Read as `=== true`.
+   */
+  paneSkipConfirmations?: boolean;
   /** Live per-tool grants, from the non-evicting snapshot. */
   perToolGrantedActionIds: ReadonlySet<string>;
   /** Live native automation grants' `allowedTools`, unioned. */
@@ -577,9 +612,12 @@ export function buildTargetPolicy(
 
   // Mirrors `dispatchConfirmed` in `sessionServer`, for a pane: an above-tier
   // call always asks, and the ask IS the confirmation; under a session
-  // approval the ordinary dialog is skipped for every tool whose dialog is not
-  // also a target picker. No tier skips it on its own.
-  const paneConfirmWaived = paneApproval && isGenericNativeGrantEligible(id) && perToolGranted;
+  // approval, or the project's "Skip confirmations" setting at `full`, the
+  // ordinary dialog is skipped for every tool whose dialog is not also a target
+  // picker. No tier skips it on its own.
+  const paneConfirmWaived =
+    (paneApproval && isGenericNativeGrantEligible(id) && perToolGranted) ||
+    isPaneAutoConfirmed(snapshot.tier, id, paneApproval, snapshot.paneSkipConfirmations === true);
   const requiresConfirmation =
     authorizedBy === "approval" || (danger === "confirm" && !nativeGranted && !paneConfirmWaived);
 

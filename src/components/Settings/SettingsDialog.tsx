@@ -1186,6 +1186,8 @@ function ProjectFormTabContent({
           onTurbopackEnabledChange={projectForm.setTurbopackEnabled}
           daintreeMcpTier={projectForm.daintreeMcpTier}
           onDaintreeMcpTierChange={projectForm.setDaintreeMcpTier}
+          daintreeMcpSkipConfirmations={projectForm.daintreeMcpSkipConfirmations}
+          onDaintreeMcpSkipConfirmationsChange={projectForm.setDaintreeMcpSkipConfirmations}
           projectIconSvg={projectForm.projectIconSvg}
           onProjectIconSvgChange={projectForm.setProjectIconSvg}
           enableInRepoSettings={projectForm.enableInRepoSettings}

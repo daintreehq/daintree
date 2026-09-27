@@ -101,6 +101,72 @@ describe("decode", () => {
     expect(result.settings.daintreeMcpTier).toBe("full");
   });
 
+  it("carries a pre-split system tier's auto-confirm over as daintreeMcpSkipConfirmations", () => {
+    const result = decode({ runCommands: [], daintreeMcpTier: "system" });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.daintreeMcpTier).toBe("full");
+    expect(result.settings.daintreeMcpSkipConfirmations).toBe(true);
+  });
+
+  it.each(["off", "core", "full", "workbench", "action", undefined])(
+    "does not skip confirmations for a project stored at %s",
+    (stored) => {
+      const result = decode({ runCommands: [], daintreeMcpTier: stored });
+      if (!result.ok) throw new Error("expected ok");
+      expect(result.settings.daintreeMcpSkipConfirmations).toBeUndefined();
+    }
+  );
+
+  it("does not skip confirmations for the legacy exposeDaintreeMcpToAgents boolean", () => {
+    const result = decode({ runCommands: [], exposeDaintreeMcpToAgents: true });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.daintreeMcpSkipConfirmations).toBeUndefined();
+  });
+
+  it.each([false, "true", 1, null])(
+    "lets an explicit daintreeMcpSkipConfirmations (%s) win over a stored system tier, failing closed",
+    (value) => {
+      const result = decode({
+        runCommands: [],
+        daintreeMcpTier: "system",
+        daintreeMcpSkipConfirmations: value,
+      });
+      if (!result.ok) throw new Error("expected ok");
+      expect(result.settings.daintreeMcpSkipConfirmations).toBeUndefined();
+    }
+  );
+
+  it("keeps an explicit daintreeMcpSkipConfirmations: true at full", () => {
+    const result = decode({
+      runCommands: [],
+      daintreeMcpTier: "full",
+      daintreeMcpSkipConfirmations: true,
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.daintreeMcpSkipConfirmations).toBe(true);
+  });
+
+  it("keeps a system project's opt-in across a save that rewrites the tier as full", () => {
+    const first = decode({ runCommands: [], daintreeMcpTier: "system" });
+    if (!first.ok) throw new Error("expected ok");
+    const envelope = encodeEnvelope(first.settings);
+    expect(envelope.daintreeMcpTier).toBe("full");
+    expect(envelope.daintreeMcpSkipConfirmations).toBe(true);
+    const second = decode(JSON.parse(JSON.stringify(envelope)));
+    if (!second.ok) throw new Error("expected ok");
+    expect(second.settings.daintreeMcpSkipConfirmations).toBe(true);
+  });
+
+  it("stays off after a system project's opt-out is saved", () => {
+    const first = decode({ runCommands: [], daintreeMcpTier: "system" });
+    if (!first.ok) throw new Error("expected ok");
+    const envelope = encodeEnvelope({ ...first.settings, daintreeMcpSkipConfirmations: undefined });
+    const second = decode(JSON.parse(JSON.stringify(envelope)));
+    if (!second.ok) throw new Error("expected ok");
+    expect(second.settings.daintreeMcpTier).toBe("full");
+    expect(second.settings.daintreeMcpSkipConfirmations).toBeUndefined();
+  });
+
   it("rejects unknown daintreeMcpTier values", () => {
     const result = decode({ runCommands: [], daintreeMcpTier: "godmode" });
     if (!result.ok) throw new Error("expected ok");
@@ -345,6 +411,7 @@ describe("round-trip", () => {
       // Pre-split names included: they normalize on the first decode and must
       // then round-trip as their core/full equivalents.
       daintreeMcpTier: fc.constantFrom("off", "core", "full", "workbench", "action", "system"),
+      daintreeMcpSkipConfirmations: fc.boolean(),
     },
     { requiredKeys: ["runCommands"] }
   );
@@ -389,6 +456,17 @@ describe("ProjectSettingsSaveSchema", () => {
       exposeDaintreeMcpToAgents: true,
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts a boolean daintreeMcpSkipConfirmations and rejects anything else", () => {
+    expect(
+      ProjectSettingsSaveSchema.safeParse({ runCommands: [], daintreeMcpSkipConfirmations: true })
+        .success
+    ).toBe(true);
+    expect(
+      ProjectSettingsSaveSchema.safeParse({ runCommands: [], daintreeMcpSkipConfirmations: "yes" })
+        .success
+    ).toBe(false);
   });
 
   it.each(["off", "core", "full"])("accepts daintreeMcpTier %s", (tier) => {

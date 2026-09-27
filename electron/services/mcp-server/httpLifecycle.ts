@@ -2137,6 +2137,9 @@ export class HttpLifecycle {
       dispatchAction,
       revealOwnedRun,
       ...(requestApproval !== undefined ? { requestApproval } : {}),
+      ...(requestApproval !== undefined && paneBinding?.skipConfirmations === true
+        ? { paneSkipConfirmations: true }
+        : {}),
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
       handleSkillsSearch: this.deps.handleSkillsSearch,

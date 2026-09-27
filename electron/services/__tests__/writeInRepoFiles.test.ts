@@ -177,6 +177,7 @@ describe("writeInRepoSettings", () => {
     defaultWorktreeMode: "local",
     browserAllowedHosts: ["example.com"],
     daintreeMcpTier: "core",
+    daintreeMcpSkipConfirmations: true,
     exposeDaintreeMcpToAgents: true,
   };
 
