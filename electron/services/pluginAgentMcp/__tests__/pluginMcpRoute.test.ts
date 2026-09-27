@@ -151,10 +151,11 @@ function routeUrl(instance = INSTANCE): string {
 
 async function connect(
   token: string,
-  options: { url?: string; headers?: Record<string, string> } = {}
+  options: { url?: string; headers?: Record<string, string>; fetch?: typeof fetch } = {}
 ): Promise<{ client: Client; transport: StreamableHTTPClientTransport }> {
   const transport = new StreamableHTTPClientTransport(new URL(options.url ?? routeUrl()), {
     requestInit: { headers: { Authorization: `Bearer ${token}`, ...options.headers } },
+    ...(options.fetch ? { fetch: options.fetch } : {}),
   });
   const client = new Client({ name: "test-client", version: "1.0.0" });
   await client.connect(transport);
@@ -512,13 +513,23 @@ describe("PluginMcpRoute", () => {
 
   it("tells a kept credential's sessions to list again once the reload settles", async () => {
     const { token } = issue();
-    const { client } = await connect(token);
+    // The client opens the standalone GET stream notifications travel on only
+    // after `initialized` is accepted, without awaiting it, and the server drops
+    // a notification sent before that stream is attached. The server registers
+    // the stream before it answers the GET, so an OK response means it is there.
+    const standaloneStream = deferred<void>();
+    const { client } = await connect(token, {
+      fetch: async (input, init) => {
+        const response = await fetch(input, init);
+        if (init?.method === "GET" && response.ok) standaloneStream.resolve();
+        return response;
+      },
+    });
     let notified = 0;
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       notified += 1;
     });
-    // Establish the standalone stream notifications travel on.
-    await client.listTools();
+    await standaloneStream.promise;
 
     pluginMcpGrantRegistry.holdPlugin(INSTANCE, "surface-1");
     pluginMcpGrantRegistry.releasePlugin(INSTANCE, "surface-1");
