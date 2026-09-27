@@ -2,7 +2,7 @@ import * as React from "react";
 import type * as SelectPrimitiveType from "@radix-ui/react-select";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import { OVERLAY_DROP_MOTION_CLASS, OVERLAY_MOTION_CLASS } from "./overlayMotion";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { menuRowPointerMove } from "./menu-row-hover-focus";
@@ -263,7 +263,10 @@ const SelectContent = React.forwardRef<
             // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
             "app-no-drag",
             "relative z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
-            OVERLAY_MOTION_CLASS,
+            // A popper list hangs off its trigger at the trigger's width, so it
+            // drops rather than zooming from a corner; item-aligned sits over the
+            // trigger and keeps the shared overlay motion.
+            position === "popper" ? OVERLAY_DROP_MOTION_CLASS : OVERLAY_MOTION_CLASS,
             position === "popper" &&
               "min-w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)]",
             className

@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { PopoverContent } from "../popover";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "../select";
 import { primeRadix } from "../radix-loader";
 import {
   OVERLAY_DROP_MOTION_CLASS,
@@ -274,5 +275,26 @@ describe("lists that drop from a trigger their own width", () => {
     };
     walk(SRC_ROOT);
     expect(offenders, 'pass motion="drop" to a PopoverContent sized to its trigger').toEqual([]);
+  });
+
+  it.each([
+    ["popper", true],
+    ["item-aligned", false],
+  ] as const)("is what a %s select uses: %s", (position, drops) => {
+    // A popper list hangs below its trigger at least as wide as it — the same
+    // geometry as a trigger-width popover. Item-aligned sits over the trigger.
+    render(
+      <Select open value="a">
+        <SelectTrigger>trigger</SelectTrigger>
+        <SelectContent position={position}>
+          <SelectItem value="a">A</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+    const el = assertHTMLElement(document.querySelector('[role="listbox"]'), "SelectContent");
+    const content = assertHTMLElement(el.closest("[data-state]"), "SelectContent root");
+    const tokens = content.className.split(/\s+/);
+    expect(tokens.includes(OVERLAY_DROP_MOTION_CLASS)).toBe(drops);
+    expect(tokens.some((token) => /zoom-in/.test(token))).toBe(!drops);
   });
 });
