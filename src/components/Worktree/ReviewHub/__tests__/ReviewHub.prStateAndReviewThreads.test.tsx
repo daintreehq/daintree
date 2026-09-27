@@ -589,9 +589,10 @@ describe("ReviewHub", () => {
       const dot = container.querySelector(".status-mark");
       expect(dot).toBeTruthy();
       expect(dot?.className).toContain("bg-status-warning");
-      // …and the words beside it take a text colour, not the disc's background
-      // class, which would paint nothing on the label at all.
-      expect(label.className).toContain("text-status-warning");
+      // …and the words beside it stay on a neutral text token: status colours
+      // only promise the 3:1 non-text floor, so the colour rides on the mark.
+      expect(label.className).toContain("text-text-secondary");
+      expect(label.className).not.toMatch(/\bbg-status-/);
     });
 
     it("omits CI status when prCiStatus is undefined", async () => {

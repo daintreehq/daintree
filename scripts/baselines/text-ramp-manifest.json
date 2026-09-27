@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-27",
-  "total": 81,
-  "files": 36,
+  "total": 80,
+  "files": 35,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -1067,21 +1067,6 @@
       "decision": "keep",
       "category": "prior-ruling-40",
       "evidence": "#12003 ruled on this /40 site; no in-scope partner reopens it"
-    },
-    {
-      "file": "src/components/Worktree/ReviewHub/PrStatusChip.tsx",
-      "ordinal": 0,
-      "line": 103,
-      "start": 4385,
-      "end": 4406,
-      "token": "text-daintree-text/60",
-      "variants": "",
-      "step": 60,
-      "group": "src/components/Worktree/ReviewHub/PrStatusChip.tsx#4277",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
     },
     {
       "file": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",

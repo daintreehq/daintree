@@ -47,7 +47,15 @@ export interface PrCheckRow {
   detailsUrl?: string;
   /** Whether this check reported a terminal outcome a human has to act on. */
   isFailure: boolean;
+  /**
+   * Which section the row belongs to. `settled` is a clean terminal outcome
+   * (passed, skipped, neutral) — the rows a reader can take on trust once they
+   * know how many there are.
+   */
+  group: PrCheckGroup;
 }
+
+export type PrCheckGroup = "attention" | "open" | "settled";
 
 const QUEUED: CheckOutcomeVisual = {
   Icon: CircleDashed,
@@ -173,22 +181,38 @@ export function safeDetailsUrl(raw: string | undefined): string | undefined {
  * the list exists to answer "which check failed?", and scrolling to find out
  * would be the same round trip the browser hand-off already costs.
  */
-function rank(row: PrCheckRow, check: ForgeCheckRun): number {
-  if (row.isFailure) return 0;
-  if (check.status === "completed" && !check.conclusion) return 1;
+function rank(isFailure: boolean, check: ForgeCheckRun): number {
+  if (isFailure) return 0;
+  if (check.status === "completed" && !mappedConclusion(check)) return 1;
   if (check.status !== "completed") return 2;
   return 3;
 }
 
+function mappedConclusion(check: ForgeCheckRun): boolean {
+  return !!check.conclusion && check.conclusion in CONCLUSIONS;
+}
+
+/**
+ * "No verdict" is kept out of `settled` on purpose: it is a completed check
+ * that told us nothing, and folding it away with the passes would let it read
+ * as one.
+ */
+function groupFor(sortKey: number): PrCheckGroup {
+  if (sortKey === 0) return "attention";
+  if (sortKey === 3) return "settled";
+  return "open";
+}
+
 /**
  * Normalizes the provider's list for display: sanitized names, validated links,
- * attention-first ordering, required checks ahead of optional ones within a
+ * attention-first ordering (broken checks ahead of stopped ones), required checks ahead of optional ones within a
  * group, provider order preserved for ties. Duplicates are kept — matrix jobs
  * legitimately repeat a name, and collapsing them would hide a failing shard.
  */
 export function preparePrChecks(checks: readonly ForgeCheckRun[]): PrCheckRow[] {
   const rows = checks.map((check, index) => {
     const { visual, isFailure } = getCheckOutcomeVisual(check);
+    const sortKey = rank(isFailure, check);
     const row: PrCheckRow = {
       key: String(index),
       name: sanitizeCheckName(check.name),
@@ -196,12 +220,18 @@ export function preparePrChecks(checks: readonly ForgeCheckRun[]): PrCheckRow[] 
       required: check.required,
       detailsUrl: safeDetailsUrl(check.detailsUrl),
       isFailure,
+      group: groupFor(sortKey),
     };
-    return { row, sortKey: rank(row, check), index };
+    return { row, sortKey, index };
   });
 
   rows.sort((a, b) => {
     if (a.sortKey !== b.sortKey) return a.sortKey - b.sortKey;
+    // Within the attention group, what broke leads what was merely stopped,
+    // in the same order the summary counts them.
+    const aBroke = BROKE.has(a.row.outcome) ? 0 : 1;
+    const bBroke = BROKE.has(b.row.outcome) ? 0 : 1;
+    if (aBroke !== bBroke) return aBroke - bBroke;
     const aRequired = a.row.required === true ? 0 : 1;
     const bRequired = b.row.required === true ? 0 : 1;
     if (aRequired !== bRequired) return aRequired - bRequired;
@@ -209,6 +239,82 @@ export function preparePrChecks(checks: readonly ForgeCheckRun[]): PrCheckRow[] 
   });
 
   return rows.map((entry) => entry.row);
+}
+
+export interface PrChecksSummary {
+  /** What the reader needs first: how much is failing, else what is still open, else the verdict. */
+  headline: string;
+  /** Every other outcome, counted by its own label — a skip is never counted as a pass. */
+  detail: string | null;
+  /** Counts for the collapsed `settled` rows, phrased for the disclosure that reveals them. */
+  settledLabel: string | null;
+  settledCount: number;
+}
+
+const BROKE = new Set([CONCLUSIONS.failure.visual, CONCLUSIONS.timed_out.visual]);
+
+/** The order counts are read in: live work before quiet outcomes, passes before skips. */
+const DETAIL_ORDER = [
+  RUNNING.label,
+  QUEUED.label,
+  NO_VERDICT.label,
+  CONCLUSIONS.success.visual.label,
+  CONCLUSIONS.skipped.visual.label,
+  CONCLUSIONS.neutral.visual.label,
+];
+
+function countPhrase(label: string, count: number): string {
+  return `${count} ${label.toLowerCase()}`;
+}
+
+function tally(rows: readonly PrCheckRow[]): string[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(row.outcome.label, (counts.get(row.outcome.label) ?? 0) + 1);
+  return DETAIL_ORDER.filter((label) => counts.has(label)).map((label) =>
+    countPhrase(label, counts.get(label)!)
+  );
+}
+
+export function summarizePrChecks(rows: readonly PrCheckRow[]): PrChecksSummary {
+  const attention = rows.filter((row) => row.group === "attention");
+  const rest = rows.filter((row) => row.group !== "attention");
+  const settled = rows.filter((row) => row.group === "settled");
+  const inFlight = rows.filter((row) => row.outcome === RUNNING || row.outcome === QUEUED).length;
+
+  let headline: string;
+  let detailRows: readonly PrCheckRow[] = rest;
+  if (attention.length > 0) {
+    const required = attention.filter((row) => row.required === true).length;
+    // A cancellation or a check waiting on approval is attention-worthy
+    // without being a failure, so the two are counted apart.
+    const broke = attention.filter((row) => BROKE.has(row.outcome)).length;
+    const other = attention.length - broke;
+    const parts = [];
+    if (broke > 0) parts.push(`${broke} failing`);
+    if (other > 0) parts.push(`${other} ${broke > 0 ? "more " : ""}need attention`);
+    if (required > 0) parts.push(`${required} required`);
+    headline = parts.join(" · ");
+  } else if (inFlight > 0) {
+    headline = `${inFlight} in progress`;
+    detailRows = rest.filter((row) => row.outcome !== RUNNING && row.outcome !== QUEUED);
+  } else if (
+    settled.length === rows.length &&
+    settled.every((row) => row.outcome === CONCLUSIONS.success.visual)
+  ) {
+    headline = rows.length === 1 ? "The check passed" : `All ${rows.length} checks passed`;
+    detailRows = [];
+  } else {
+    headline = "No failing checks";
+  }
+
+  const detail = tally(detailRows);
+  const settledParts = tally(settled);
+  return {
+    headline,
+    detail: detail.length > 0 ? detail.join(" · ") : null,
+    settledLabel: settledParts.length > 0 ? settledParts.join(", ") : null,
+    settledCount: settled.length,
+  };
 }
 
 interface AgentTextArgs {
@@ -249,7 +355,7 @@ export function composePrChecksAgentText({
   };
 
   const text = [
-    `Investigate the failing CI checks on pull request #${prNumber}.`,
+    `Investigate the CI checks that need attention on pull request #${prNumber}.`,
     "",
     `Pull request: ${JSON.stringify(safeDetailsUrl(prUrl) ?? null)}`,
     `Worktree: ${JSON.stringify(worktreePath)}`,
