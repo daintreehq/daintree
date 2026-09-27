@@ -253,6 +253,12 @@ describe("host.mcp.registerTools", () => {
         /only the host may mark a tool read-only/,
       ],
       [
+        "for a plugin vouching its tool is closed-world",
+        "data",
+        { list: tool({ annotations: { openWorldHint: false } }) },
+        /openWorldHint may only be true/,
+      ],
+      [
         "for an oversized description",
         "data",
         { list: tool({ description: "x".repeat(AGENT_MCP_MAX_DESCRIPTION_BYTES + 1) }) },

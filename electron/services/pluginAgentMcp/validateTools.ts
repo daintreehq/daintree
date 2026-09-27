@@ -72,6 +72,14 @@ function snapshotSchema(toolName: string, field: string, schema: unknown): Plugi
 const ANNOTATION_KEYS = ["destructiveHint", "idempotentHint", "openWorldHint"] as const;
 
 /**
+ * Hints a plugin may only set in the cautious direction. `false` on either is
+ * the plugin vouching that its tool is safe, which clients can read as grounds
+ * to ask less, so it is refused like a read-only claim. `idempotentHint` stays
+ * free: it describes retry behaviour, and no client gates approval on it.
+ */
+const CAUTION_ONLY_KEYS: readonly string[] = ["destructiveHint", "openWorldHint"];
+
+/**
  * A read-only claim is the one hint that lets a client skip its approval
  * prompt, so a plugin may not make it about its own tool. Rejected rather than
  * dropped, so an author is never left believing the claim was advertised.
@@ -113,6 +121,11 @@ function snapshotAnnotations(
     if (value === undefined) continue;
     if (typeof value !== "boolean") {
       throw new Error(`tool "${toolName}" annotations.${key} must be a boolean`);
+    }
+    if (value === false && CAUTION_ONLY_KEYS.includes(key)) {
+      throw new Error(
+        `tool "${toolName}" annotations.${key} may only be true: only the host may mark a tool safer than the MCP default`
+      );
     }
     snapshot[key as (typeof ANNOTATION_KEYS)[number]] = value;
   }

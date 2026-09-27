@@ -50,21 +50,34 @@ describe("validateAgentMcpTools", () => {
     expect(() => validateAgentMcpTools({ drop_everything: tool(overrides) })).toThrow(message);
   });
 
-  it("keeps the declared hints, including explicit false, in a frozen detached copy", () => {
+  it.each([
+    [{ destructiveHint: false }, /annotations\.destructiveHint may only be true/],
+    [{ openWorldHint: false }, /annotations\.openWorldHint may only be true/],
+    [
+      { destructiveHint: false, openWorldHint: false },
+      /annotations\.destructiveHint may only be true/,
+    ],
+  ])("rejects a plugin vouching for its own tool's safety %j", (annotations, message) => {
+    expect(() => validateAgentMcpTools({ add_entry: tool({ annotations }) })).toThrow(message);
+  });
+
+  it("keeps the declared hints, idempotentHint either way, in a frozen detached copy", () => {
     const annotations: Record<string, unknown> = {
-      destructiveHint: false,
-      idempotentHint: true,
+      destructiveHint: true,
+      idempotentHint: false,
       openWorldHint: undefined,
     };
-    const [descriptor] = validateAgentMcpTools({
+    const [descriptor, idempotent] = validateAgentMcpTools({
       add_entry: tool({ annotations, outputSchema: { type: "object" } }),
+      put_entry: tool({ annotations: { idempotentHint: true } }),
     });
 
-    annotations.destructiveHint = true;
+    annotations.destructiveHint = false;
 
-    expect(descriptor!.annotations).toEqual({ destructiveHint: false, idempotentHint: true });
+    expect(descriptor!.annotations).toEqual({ destructiveHint: true, idempotentHint: false });
     expect(descriptor!.annotations).not.toHaveProperty("openWorldHint");
     expect(Object.isFrozen(descriptor!.annotations)).toBe(true);
+    expect(idempotent!.annotations).toEqual({ idempotentHint: true });
   });
 
   it("omits annotations when none, or only empty ones, are declared", () => {

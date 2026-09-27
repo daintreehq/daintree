@@ -200,14 +200,14 @@ describe("createPluginSessionServer", () => {
       add_entry: {
         description: "Adds an entry.",
         inputSchema: { type: "object" },
-        annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
+        annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
         execute: () => null,
       },
     });
     const { client } = await connect(vi.fn(), { tools: [annotated!, LOOKUP] });
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.annotations)).toEqual([
-      { destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      { destructiveHint: true, idempotentHint: false, openWorldHint: true },
       undefined,
     ]);
   });

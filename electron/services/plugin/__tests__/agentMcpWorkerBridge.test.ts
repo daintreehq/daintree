@@ -161,16 +161,33 @@ describe("agent MCP over the worker bridge", () => {
       add_row: {
         description: "Adds a row.",
         inputSchema: { type: "object" },
-        annotations: { destructiveHint: false, idempotentHint: true },
+        annotations: { destructiveHint: true, idempotentHint: false },
         execute: () => null,
       },
     });
     await flush();
 
     expect(host.rosters[0].tools.add_row.annotations).toEqual({
-      destructiveHint: false,
-      idempotentHint: true,
+      destructiveHint: true,
+      idempotentHint: false,
     });
+  });
+
+  it("rejects a non-destructive claim in the worker before anything crosses the port", async () => {
+    const { host, proxy } = makeConnectedPair();
+    expect(() =>
+      proxy.host.mcp.registerTools("data", {
+        add_row: {
+          description: "Adds a row.",
+          inputSchema: { type: "object" },
+          annotations: { destructiveHint: false },
+          execute: () => null,
+        },
+      })
+    ).toThrow(/destructiveHint may only be true/);
+    await flush();
+
+    expect(host.mcp.registerTools).not.toHaveBeenCalled();
   });
 
   it("rejects a read-only claim in the worker before anything crosses the port", async () => {

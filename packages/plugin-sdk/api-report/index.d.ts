@@ -2307,16 +2307,17 @@ type PluginMcpJsonSchema = {
  * The MCP tool annotations a plugin may declare. They are hints for the agent
  * client, advertised as written and never checked against what `execute` does;
  * an omitted hint means the MCP default (destructive, non-idempotent,
- * open-world). `readOnlyHint` is deliberately absent: some clients run a
- * read-only tool without asking, so only the host may make that claim, and a
- * roster declaring it is rejected.
+ * open-world). A plugin may only add caution: `destructiveHint` and
+ * `openWorldHint` accept `true` alone, and `readOnlyHint` is absent, because a
+ * claim that a tool is safe is one clients can act on by asking less, so only
+ * the host may make it. A roster declaring any such claim is rejected.
  */
 interface PluginMcpToolAnnotations {
-    /** `false` when the tool only adds and never deletes or overwrites. */
+    /** `true` to state the tool may delete or overwrite; `false` is rejected. */
     destructiveHint?: boolean;
     /** `true` when repeating a call with the same arguments has no further effect. */
     idempotentHint?: boolean;
-    /** `false` when the tool touches only a closed set of things, such as this project's own data. */
+    /** `true` to state the tool reaches beyond this project, such as the network; `false` is rejected. */
     openWorldHint?: boolean;
 }
 /**
