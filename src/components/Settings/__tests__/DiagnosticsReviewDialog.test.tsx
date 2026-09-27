@@ -171,10 +171,40 @@ describe("DiagnosticsReviewDialog", () => {
     renderDialog(contactPayload);
     fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
     const region = screen.getByRole("region", { name: "Report preview" });
-    const bands = Array.from(region.querySelectorAll("span")).filter(
-      (el) => el.textContent === "[REDACTED]"
+    const bands = Array.from(region.querySelectorAll("[data-replacement]")).map(
+      (el) => el.textContent
     );
-    expect(bands).toHaveLength(2);
+    expect(bands).toEqual(["[REDACTED]", "[REDACTED]"]);
+  });
+
+  it("marks only what a rule replaced, not text that already read [REDACTED]", () => {
+    renderDialog({
+      ...contactPayload,
+      payload: { os: { note: "[REDACTED]", owner: "sam@acme.io" } },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
+    const region = screen.getByRole("region", { name: "Report preview" });
+    expect(region.querySelectorAll("[data-replacement]")).toHaveLength(1);
+  });
+
+  it("walks the replacements in order and wraps around", () => {
+    renderDialog(contactPayload);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
+    const next = screen.getByRole("button", { name: "Next replacement" });
+    const region = screen.getByRole("region", { name: "Report preview" });
+    const meta = document.getElementById(region.getAttribute("aria-describedby")!)!;
+    expect(meta.textContent).toContain("2 replaced");
+    fireEvent.click(next);
+    expect(meta.textContent).toContain("replacement 1 of 2");
+    fireEvent.click(next);
+    expect(meta.textContent).toContain("replacement 2 of 2");
+    fireEvent.click(next);
+    expect(meta.textContent).toContain("replacement 1 of 2");
+    // Any change to the report starts the walk again.
+    fireEvent.change(screen.getByRole("textbox", { name: "Find, rule 1" }), {
+      target: { value: "acme corp" },
+    });
+    expect(meta.textContent).toContain("3 replaced");
   });
 
   it("moves focus to the new rule's Find field when a rule is added", () => {

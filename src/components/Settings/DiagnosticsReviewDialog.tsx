@@ -1,4 +1,4 @@
-import { useState, useEffect, useId, useMemo, useRef } from "react";
+import { useState, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -11,8 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { HighlightedText } from "@/components/ui/HighlightedText";
-import { ArrowRight, ChevronRight, Plus, X } from "lucide-react";
+import { ArrowDown, ArrowRight, ChevronRight, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   SECTION_LABELS,
@@ -76,20 +75,39 @@ function formatMatches(count: number): string {
 }
 
 /**
- * Ranges of `text` that hold a replacement's output, for the preview to mark.
- * Found by searching for each replacement string, so text that already read
- * "[REDACTED]" before any rule ran is marked too — harmless, since it is
- * exactly as safe to share.
+ * The report text with every replacement drawn as a neutral band. `active` is
+ * the one "Next replacement" last moved to, outlined so it can be told apart
+ * from its neighbours in the same view.
  */
-function findReplacementRanges(text: string, replacements: string[]): [number, number][] {
-  const ranges: [number, number][] = [];
-  for (const token of new Set(replacements)) {
-    if (!token) continue;
-    for (let at = text.indexOf(token); at !== -1; at = text.indexOf(token, at + token.length)) {
-      ranges.push([at, at + token.length - 1]);
-    }
-  }
-  return ranges;
+function MarkedReport({
+  text,
+  ranges,
+  active,
+}: {
+  text: string;
+  ranges: [number, number][];
+  active: number | null;
+}) {
+  const parts: ReactNode[] = [];
+  let at = 0;
+  ranges.forEach(([start, end], i) => {
+    if (start > at) parts.push(text.slice(at, start));
+    parts.push(
+      <span
+        key={start}
+        data-replacement
+        className={cn(
+          "rounded-[var(--radius-xs)] bg-overlay-strong text-text-primary",
+          i === active && "outline outline-1 outline-text-secondary"
+        )}
+      >
+        {text.slice(start, end + 1)}
+      </span>
+    );
+    at = end + 1;
+  });
+  if (at < text.length) parts.push(text.slice(at));
+  return <>{parts}</>;
 }
 
 function isTimeWindowId(value: string, options: { id: TimeWindowId }[]): value is TimeWindowId {
@@ -164,6 +182,7 @@ export function DiagnosticsReviewDialog({
   const sectionsPanelId = useId();
   const previewHeadingId = useId();
   const previewMetaId = useId();
+  const previewRegionRef = useRef<HTMLDivElement>(null);
   const addRuleRef = useRef<HTMLButtonElement>(null);
   // Set by Add rule so the new row's Find field takes focus once it mounts,
   // instead of leaving the keyboard user on Add rule, above every older rule.
@@ -226,14 +245,19 @@ export function DiagnosticsReviewDialog({
   );
 
   const preview = useMemo(() => {
-    if (!reviewPayload)
-      return { text: "", matchCounts: new Map<PrebuiltRedactionId | number, number>() };
+    if (!reviewPayload) {
+      return {
+        text: "",
+        ranges: [] as [number, number][],
+        matchCounts: new Map<PrebuiltRedactionId | number, number>(),
+      };
+    }
     const startMs = computeTimeWindowStart(timeWindow, reviewPayload, openedAt);
     const filtered = filterLogEntriesByTime(
       filterSections(reviewPayload.payload, enabledSections),
       startMs
     );
-    const { output, counts } = applyReplacementsCounted(
+    const { output, counts, ranges } = applyReplacementsCounted(
       safeStringify(filtered, 2),
       effectiveReplacements
     );
@@ -241,19 +265,24 @@ export function DiagnosticsReviewDialog({
     ownedRules.forEach(({ owner }, i) => {
       matchCounts.set(owner, (matchCounts.get(owner) ?? 0) + (counts[i] ?? 0));
     });
-    return { text: output, matchCounts };
+    return { text: output, ranges, matchCounts };
   }, [reviewPayload, enabledSections, effectiveReplacements, ownedRules, timeWindow, openedAt]);
 
-  const highlightRanges = useMemo(
-    () =>
-      findReplacementRanges(
-        preview.text,
-        ownedRules
-          .filter(({ owner }) => (preview.matchCounts.get(owner) ?? 0) > 0)
-          .map(({ rule }) => rule.replace)
-      ),
-    [preview, ownedRules]
-  );
+  // Which replacement "Next replacement" last moved to, tied to the text it
+  // was found in so any edit to the report starts the walk again.
+  const [cursor, setCursor] = useState<{ text: string; index: number } | null>(null);
+  const activeReplacement = cursor?.text === preview.text ? cursor.index : null;
+
+  const showNextReplacement = () => {
+    const region = previewRegionRef.current;
+    if (!region || preview.ranges.length === 0) return;
+    const index = activeReplacement === null ? 0 : (activeReplacement + 1) % preview.ranges.length;
+    setCursor({ text: preview.text, index });
+    const mark = region.querySelectorAll<HTMLElement>("[data-replacement]")[index];
+    if (!mark) return;
+    const offset = mark.getBoundingClientRect().top - region.getBoundingClientRect().top;
+    region.scrollTop += offset - region.clientHeight / 3;
+  };
 
   const toggleSection = (key: string) => {
     setEnabledSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -314,7 +343,7 @@ export function DiagnosticsReviewDialog({
   const timeWindowOptions = getTimeWindowOptions(reviewPayload);
   const showRotationHint =
     timeWindow === "update" && updateBoundaryPredatesRetainedLogs(reviewPayload);
-  const totalReplaced = [...preview.matchCounts.values()].reduce((sum, n) => sum + n, 0);
+  const replacementCount = preview.ranges.length;
   const previewLines = preview.text.split("\n").length;
 
   return (
@@ -516,29 +545,45 @@ export function DiagnosticsReviewDialog({
         </fieldset>
 
         <div className="space-y-2">
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-center justify-between gap-3">
             <h3 id={previewHeadingId} className={GROUP_HEADING_CLASS}>
               Report preview
             </h3>
-            <p id={previewMetaId} className="text-xs text-text-secondary tabular-nums">
-              {previewLines.toLocaleString()} lines
-              {totalReplaced > 0 && ` · ${totalReplaced.toLocaleString()} replaced, highlighted`}
-            </p>
+            <div className="flex items-center gap-3">
+              <p
+                id={previewMetaId}
+                aria-live="polite"
+                className="text-xs text-text-secondary tabular-nums"
+              >
+                {previewLines.toLocaleString()} lines
+                {replacementCount > 0 &&
+                  (activeReplacement === null
+                    ? ` · ${replacementCount.toLocaleString()} replaced`
+                    : ` · replacement ${activeReplacement + 1} of ${replacementCount}`)}
+              </p>
+              {replacementCount > 0 && (
+                <Button variant="ghost" size="sm" onClick={showNextReplacement}>
+                  <ArrowDown aria-hidden="true" />
+                  Next replacement
+                </Button>
+              )}
+            </div>
           </div>
           <ScrollShadow
             compact
             className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas"
             scrollClassName="max-h-[min(28rem,40vh)] min-h-24 overscroll-contain p-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+            ref={previewRegionRef}
             tabIndex={0}
             role="region"
             aria-labelledby={previewHeadingId}
             aria-describedby={previewMetaId}
           >
             <pre className="text-xs leading-relaxed font-mono text-text-primary whitespace-pre-wrap break-all">
-              <HighlightedText
+              <MarkedReport
                 text={preview.text}
-                indices={highlightRanges}
-                bandClassName="bg-overlay-strong rounded-[var(--radius-xs)]"
+                ranges={preview.ranges}
+                active={activeReplacement}
               />
             </pre>
           </ScrollShadow>

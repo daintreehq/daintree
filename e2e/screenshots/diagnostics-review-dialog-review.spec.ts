@@ -210,7 +210,7 @@ async function fillRules(card: Locator) {
   await card.page().mouse.move(0, 0);
 }
 
-async function scrollBody(card: Locator, to: "bottom" | "preview" | "replacement") {
+async function scrollBody(card: Locator, to: "bottom" | "preview") {
   await card.evaluate((el, where) => {
     const region = el.querySelector<HTMLElement>('[role="region"]');
     const scrollers = Array.from(el.querySelectorAll<HTMLElement>("*")).filter(
@@ -226,12 +226,6 @@ async function scrollBody(card: Locator, to: "bottom" | "preview" | "replacement
         const top = region.getBoundingClientRect().top - body.getBoundingClientRect().top;
         body.scrollTop += top - 80;
       }
-    }
-    if (where === "replacement" && region) {
-      const mark = region.querySelector<HTMLElement>(".bg-overlay-strong");
-      if (!mark) throw new Error("no highlighted replacement in the preview");
-      const offset = mark.getBoundingClientRect().top - region.getBoundingClientRect().top;
-      region.scrollTop += offset - 60;
     }
   }, to);
   await card.page().waitForTimeout(150);
@@ -294,7 +288,11 @@ const STATES: Array<{ name: string; fixture: string; step?: Step }> = [
     step: async (card) => {
       await fillRules(card);
       await expect(card.getByLabel("Report preview")).toContainText("[REDACTED]");
-      await scrollBody(card, "replacement");
+      await scrollBody(card, "preview");
+      await card.getByRole("button", { name: "Next replacement" }).click();
+      await card.getByRole("button", { name: "Next replacement" }).click();
+      await expect(card.getByText(/replacement 2 of/)).toBeVisible();
+      await card.page().mouse.move(0, 0);
     },
   },
   {
