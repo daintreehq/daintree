@@ -408,23 +408,26 @@ export function DiagnosticsReviewDialog({
             <div className="space-y-1.5">
               {PREBUILT_REDACTIONS.map((preset) => {
                 const active = prebuiltIds.has(preset.id);
+                // The count sits beside the label, not in it, so the checkbox's
+                // name stays the same as its count appears and changes.
+                const countId = `${ruleIdPrefix}-preset-${preset.id}`;
                 return (
-                  <label
-                    key={preset.id}
-                    className="flex items-center gap-2 text-sm text-text-primary cursor-pointer"
-                  >
-                    <Checkbox
-                      size="sm"
-                      checked={active}
-                      onCheckedChange={() => togglePrebuilt(preset.id)}
-                    />
-                    {preset.label}
+                  <div key={preset.id} className="flex items-center gap-2">
+                    <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
+                      <Checkbox
+                        size="sm"
+                        checked={active}
+                        onCheckedChange={() => togglePrebuilt(preset.id)}
+                        aria-describedby={active ? countId : undefined}
+                      />
+                      {preset.label}
+                    </label>
                     {active && (
-                      <span className="text-xs text-text-secondary tabular-nums">
+                      <span id={countId} className="text-xs text-text-secondary tabular-nums">
                         {formatMatches(preview.matchCounts.get(preset.id) ?? 0)}
                       </span>
                     )}
-                  </label>
+                  </div>
                 );
               })}
             </div>

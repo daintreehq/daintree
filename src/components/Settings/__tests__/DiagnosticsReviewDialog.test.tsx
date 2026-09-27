@@ -138,11 +138,13 @@ describe("DiagnosticsReviewDialog", () => {
 
   it("reports how many matches each active redaction made, including none", () => {
     renderDialog(contactPayload);
-    fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
-    const emailRow = screen
-      .getByRole("checkbox", { name: /Strip email addresses/ })
-      .closest("label")!;
-    expect(emailRow.textContent).toContain("2 matches");
+    const email = screen.getByRole("checkbox", { name: "Strip email addresses" });
+    fireEvent.click(email);
+    // The count describes the checkbox; it never becomes part of its name.
+    expect(screen.getByRole("checkbox", { name: "Strip email addresses" })).toBe(email);
+    expect(document.getElementById(email.getAttribute("aria-describedby")!)!.textContent).toBe(
+      "2 matches"
+    );
 
     const find = screen.getByRole("textbox", { name: "Find, rule 1" });
     fireEvent.change(find, { target: { value: "acme" } });
