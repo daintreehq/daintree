@@ -12,6 +12,8 @@ import type {
 import { Check, ChevronLeft, ChevronRight, AlertCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import {
   FIELD_FOCUS,
   FIELD_INPUT,
@@ -353,6 +355,7 @@ export function CommandBuilder({
   const [validationAttempt, setValidationAttempt] = useState(0);
   const formRef = useRef<HTMLFieldSetElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
   const lastFocusedStepRef = useRef(0);
 
   const currentStep = steps[currentStepIndex];
@@ -361,6 +364,10 @@ export function CommandBuilder({
   const hasMultipleSteps = steps.length > 1;
   const hasEmptySteps = steps.length === 0;
   const submitLabel = steps[steps.length - 1]?.submitLabel ?? DEFAULT_SUBMIT_LABEL;
+  // Past the still-working threshold the dialog stops holding the user: the
+  // run carries on without it, and saying so is better than a lock with no end.
+  const isSlowRun = useDeferredLoading(isExecuting, UI_STILL_WORKING_MS);
+  const canDismiss = !isExecuting || isSlowRun;
 
   useEffect(() => {
     setCurrentStepIndex(0);
@@ -386,9 +393,13 @@ export function CommandBuilder({
   useEffect(() => {
     if (lastFocusedStepRef.current === currentStepIndex) return;
     lastFocusedStepRef.current = currentStepIndex;
-    formRef.current
-      ?.querySelector<HTMLElement>("input, textarea, select, button:not([disabled])")
-      ?.focus();
+    // A step with no fields falls back to the forward action, which is where
+    // the keyboard goes next anyway.
+    const target =
+      formRef.current?.querySelector<HTMLElement>(
+        "input, textarea, select, button:not([disabled])"
+      ) ?? primaryRef.current;
+    target?.focus();
   }, [currentStepIndex]);
 
   useEffect(() => {
@@ -485,15 +496,20 @@ export function CommandBuilder({
   }, [formData, isExecuting, onExecute, steps, validateCurrentStep]);
 
   const handleClose = useCallback(() => {
-    if (executionResult?.success) {
-      onCancel();
-    } else if (!isExecuting) {
+    if (executionResult?.success || canDismiss) {
       onCancel();
     }
-  }, [executionResult, isExecuting, onCancel]);
+  }, [executionResult, canDismiss, onCancel]);
+
+  // Retry's button leaves with the banner the moment the run restarts; hand
+  // focus to the run action, which stays put through the pending state.
+  const handleRetry = useCallback(() => {
+    primaryRef.current?.focus();
+    void handleExecute();
+  }, [handleExecute]);
 
   return (
-    <AppDialog isOpen={true} onClose={handleClose} size="md" dismissible={!isExecuting}>
+    <AppDialog isOpen={true} onClose={handleClose} size="md" dismissible={canDismiss}>
       <AppDialog.Header>
         <AppDialog.Title>{command.label}</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -584,7 +600,7 @@ export function CommandBuilder({
                 severity="error"
                 title="Command failed"
                 description={executionError}
-                action={{ id: "retry", label: "Retry", onClick: () => void handleExecute() }}
+                action={{ id: "retry", label: "Retry", onClick: handleRetry }}
                 className="rounded-[var(--radius-md)]"
               />
             )}
@@ -596,8 +612,12 @@ export function CommandBuilder({
         hint={
           isExecuting ? (
             // Says what the dimmed action and the locked form are waiting on,
-            // and why the dialog won't close yet.
-            <span role="status">Running {command.label}…</span>
+            // and, once it's slow, that closing is safe.
+            <span role="status">
+              {isSlowRun
+                ? `Still running ${command.label}… Closing this won't stop it.`
+                : `Running ${command.label}…`}
+            </span>
           ) : undefined
         }
       >
@@ -610,10 +630,11 @@ export function CommandBuilder({
             <Button
               variant="ghost"
               onClick={onCancel}
-              disabled={isExecuting}
+              disabled={!canDismiss}
               className="text-text-secondary"
             >
-              Cancel
+              {/* Once a slow run can be left, this no longer cancels anything. */}
+              {isExecuting ? "Close" : "Cancel"}
             </Button>
             {!isFirstStep && (
               <Button
@@ -627,11 +648,16 @@ export function CommandBuilder({
               </Button>
             )}
             {isLastStep ? (
-              <Button variant="contrast" onClick={() => void handleExecute()} loading={isExecuting}>
+              <Button
+                ref={primaryRef}
+                variant="contrast"
+                onClick={() => void handleExecute()}
+                loading={isExecuting}
+              >
                 {submitLabel}
               </Button>
             ) : (
-              <Button variant="contrast" onClick={handleNext}>
+              <Button ref={primaryRef} variant="contrast" onClick={handleNext}>
                 Next
                 <ChevronRight className="h-4 w-4" aria-hidden="true" />
               </Button>

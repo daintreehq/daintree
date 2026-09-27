@@ -132,6 +132,14 @@ describe("commandStore adversarial", () => {
     expect(useCommandStore.getState().executionError).toBe("no access");
   });
 
+  it("executeCommand still records a failure that carries no error details", async () => {
+    commandsClientMock.execute.mockResolvedValue({ success: false });
+
+    await useCommandStore.getState().executeCommand("c1", {});
+
+    expect(useCommandStore.getState().executionError).toBeTruthy();
+  });
+
   it("loadCommands reentrancy guard blocks duplicate fetches while one is in flight", async () => {
     let resolveList: (v: unknown[]) => void = () => {};
     commandsClientMock.list.mockImplementation(

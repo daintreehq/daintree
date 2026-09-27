@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { CommandBuilder } from "../CommandBuilder";
 import type { BuilderStep, CommandManifestEntry } from "@shared/types/commands";
 
@@ -265,5 +265,52 @@ describe("CommandBuilder input contract", () => {
   it("says what it is running while the command is in flight", () => {
     renderBuilder({ isExecuting: true });
     expect(screen.getByRole("status").textContent).toBe("Running Test command…");
+  });
+});
+
+describe("CommandBuilder recovery", () => {
+  it("keeps focus on the run action when Retry restarts the command", async () => {
+    let finish: (r: { success: boolean }) => void = () => {};
+    const onExecute = vi.fn(() => new Promise<{ success: boolean }>((r) => (finish = r)));
+    renderBuilder({ executionError: "Cannot reach GitHub.", onExecute });
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Run" }));
+    finish({ success: false });
+    await vi.waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets a run that outlives the still-working threshold be left without cancelling it", () => {
+    vi.useFakeTimers();
+    try {
+      const onCancel = vi.fn();
+      renderBuilder({ isExecuting: true, onCancel });
+      const leave = screen.getByRole("button", { name: "Close" });
+      expect(leave.hasAttribute("disabled")).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(screen.getByRole("status").textContent).toContain("Closing this won't stop it");
+      expect(leave.hasAttribute("disabled")).toBe(false);
+      fireEvent.click(leave);
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("focuses the forward action when the next step has no fields", () => {
+    const fieldless: BuilderStep[] = [
+      { id: "a", title: "First", fields: [{ name: "x", label: "X", type: "text" }] },
+      { id: "b", title: "Confirm", fields: [], submitLabel: "Do it" },
+    ];
+    renderBuilder({ steps: fieldless });
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Do it" }));
   });
 });

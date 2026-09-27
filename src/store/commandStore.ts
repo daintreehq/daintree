@@ -115,8 +115,11 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
         args,
       });
 
-      if (!result.success && result.error) {
-        set({ executionError: result.error.message });
+      if (!result.success) {
+        // A failure without error details still has to show as one.
+        set({
+          executionError: result.error?.message ?? result.message ?? "The command didn't finish.",
+        });
       }
 
       return result;
