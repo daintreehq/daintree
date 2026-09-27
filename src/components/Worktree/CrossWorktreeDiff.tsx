@@ -114,7 +114,7 @@ function CrossWorktreeFileRow({
         aria-label={fileRowLabel(file)}
         data-file-path={file.path}
         className={cn(
-          "flex w-full items-center rounded-[var(--radius-sm)] px-1.5 py-1 text-left text-xs font-mono transition-colors duration-150 ease-out",
+          "flex w-full items-center rounded-[var(--radius-lg)] px-1.5 py-1 text-left text-xs font-mono transition-colors duration-150 ease-out",
           "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
           isSelected
             ? "bg-overlay-subtle forced-colors:outline forced-colors:outline-1 forced-colors:-outline-offset-1 forced-colors:outline-[Highlight]"

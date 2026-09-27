@@ -263,8 +263,8 @@ function FileStageRowComponent({
             generated && "opacity-60"
           )}
         >
-          {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
-          {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
+          {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
+          {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
         </div>
       )}
 

@@ -163,14 +163,16 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
+      anchor: "+{summary.insertions}",
       expectedOccurrences: 1,
       rationale: "Diff insertion count for the whole change set",
     },
     {
-      category: "verification",
-      signature: "text-status-success/80",
+      category: "domain",
+      signature: "text-status-success",
+      anchor: "+{file.insertions}",
       expectedOccurrences: 1,
-      rationale: "Per-file viewed mark; one mark per item in the review checklist",
+      rationale: "Per-file diff insertion count",
     },
     {
       category: "verification",
@@ -486,7 +488,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/components/Worktree/FileChangeList.tsx": [
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
@@ -494,7 +496,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/components/Worktree/ReviewHub/BaseBranchFileRow.tsx": [
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
@@ -518,7 +520,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/components/Worktree/ReviewHub/FileSection.tsx": [
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Section diff insertion count",
     },
@@ -554,7 +556,8 @@ export const STATUS_SUCCESS_INVENTORY = {
     },
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
+      anchor: "+{insertions}",
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
@@ -569,7 +572,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/components/Worktree/ReviewHub/ReviewHubContent.tsx": [
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Base-branch diff insertion count",
     },

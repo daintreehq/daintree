@@ -73,7 +73,7 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
       // falls through to that handler as it did before.
       data-row-menu={ctx.hasRowMenu ? "" : undefined}
       className={cn(
-        "group/diffrow flex items-center rounded px-1.5 py-1 text-xs font-mono transition-colors",
+        "group/diffrow flex items-center rounded-[var(--radius-lg)] px-1.5 py-1 text-xs font-mono transition-colors",
         isCurrent ? "bg-overlay-subtle" : "hover:bg-tint/5",
         // The row whose menu is open lifts a tier above the open
         // file's own subtle fill, so the two never read as one.
@@ -108,10 +108,10 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs">
           {(file.insertions ?? 0) > 0 && (
-            <span className="text-status-success/80">+{file.insertions}</span>
+            <span className="text-status-success">+{file.insertions}</span>
           )}
           {(file.deletions ?? 0) > 0 && (
-            <span className="text-status-error/80">-{file.deletions}</span>
+            <span className="text-status-error">-{file.deletions}</span>
           )}
         </span>
       </button>
@@ -345,7 +345,7 @@ export function DiffFileSidebar({
       className="flex min-h-0 w-60 shrink-0 select-none flex-col self-stretch border-r border-border-default bg-surface-sidebar"
       data-testid="diff-file-sidebar"
     >
-      <div className="shrink-0 border-b border-border-default px-3 py-2">
+      <div className="shrink-0 border-b border-border-default px-3.5 py-2">
         <div className="flex items-baseline justify-between gap-2 text-xs">
           <span className="font-medium text-text-primary">
             {files.length} {files.length === 1 ? "file" : "files"}
