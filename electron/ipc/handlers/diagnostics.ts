@@ -39,6 +39,8 @@ async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorMod
   return cachedDiagnosticsCollector;
 }
 import { getLogFilePath, getLogDirectory } from "../../utils/logger.js";
+import { readOldestRetainedLogMs } from "../../utils/logRetention.js";
+import { getVersionFirstRunBoundary } from "../../services/versionFirstRun.js";
 import { safeStringify } from "../../utils/safeStringify.js";
 import {
   filterSections,
@@ -474,7 +476,14 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     const { collectDiagnosticsWithKeys } = await getDiagnosticsCollector();
     const { payload, sectionKeys } = await collectDiagnosticsWithKeys(deps);
     const previewJson = safeStringify(payload, 2);
-    return { payload, sectionKeys, previewJson, appLaunchTimestamp: APP_LAUNCH_TIMESTAMP };
+    return {
+      payload,
+      sectionKeys,
+      previewJson,
+      appLaunchTimestamp: APP_LAUNCH_TIMESTAMP,
+      versionFirstRun: getVersionFirstRunBoundary(),
+      oldestRetainedLogMs: await readOldestRetainedLogMs(getLogDirectory(), getLogFilePath()),
+    };
   };
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW, handleCollectDiagnosticsForReview)

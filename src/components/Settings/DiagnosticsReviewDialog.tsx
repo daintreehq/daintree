@@ -17,14 +17,41 @@ import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 import { safeStringify } from "@/lib/safeStringify";
 import type { DiagnosticsReviewScope } from "@/store/diagnosticsReviewStore";
 
-type TimeWindowId = "5m" | "30m" | "launch" | "full";
+type TimeWindowId = "5m" | "30m" | "launch" | "update" | "full";
 
-const TIME_WINDOW_OPTIONS: { id: TimeWindowId; label: string }[] = [
+const LAUNCH_OPTIONS: { id: TimeWindowId; label: string }[] = [
   { id: "5m", label: "Last 5 minutes" },
   { id: "30m", label: "Last 30 minutes" },
   { id: "launch", label: "Since application launch" },
-  { id: "full", label: "Full log history" },
 ];
+
+const FULL_OPTION: { id: TimeWindowId; label: string } = { id: "full", label: "Full log history" };
+
+/**
+ * The update option only appears once a version change has been observed —
+ * without one there's no honest boundary to offer.
+ */
+function getTimeWindowOptions(
+  payload: DiagnosticsReviewPayload
+): { id: TimeWindowId; label: string }[] {
+  const boundary = payload.versionFirstRun;
+  if (!boundary) return [...LAUNCH_OPTIONS, FULL_OPTION];
+  return [
+    ...LAUNCH_OPTIONS,
+    { id: "update", label: `Since updating to ${boundary.version}` },
+    FULL_OPTION,
+  ];
+}
+
+/** True when rotation already dropped logs written after the version boundary. */
+function updateBoundaryPredatesRetainedLogs(payload: DiagnosticsReviewPayload): boolean {
+  const boundary = payload.versionFirstRun;
+  return (
+    boundary !== null &&
+    payload.oldestRetainedLogMs !== null &&
+    boundary.firstRunAtMs < payload.oldestRetainedLogMs
+  );
+}
 
 const DEFAULT_TIME_WINDOW: TimeWindowId = "30m";
 
@@ -34,8 +61,8 @@ const RULE_FIELD_CLASS =
 const DISCLOSURE_CLASS =
   "inline-flex items-center gap-1.5 text-sm font-medium text-text-primary rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
-function isTimeWindowId(value: string): value is TimeWindowId {
-  return TIME_WINDOW_OPTIONS.some((o) => o.id === value);
+function isTimeWindowId(value: string, options: { id: TimeWindowId }[]): value is TimeWindowId {
+  return options.some((o) => o.id === value);
 }
 
 /**
@@ -45,7 +72,7 @@ function isTimeWindowId(value: string): value is TimeWindowId {
  */
 function computeTimeWindowStart(
   id: TimeWindowId,
-  appLaunchTimestamp: number,
+  payload: DiagnosticsReviewPayload,
   now: number
 ): number | null {
   switch (id) {
@@ -54,7 +81,12 @@ function computeTimeWindowStart(
     case "30m":
       return now - 30 * 60 * 1000;
     case "launch":
-      return appLaunchTimestamp;
+      return payload.appLaunchTimestamp;
+    case "update":
+      // Once rotation has cut into the version's logs, everything retained is
+      // the best available answer — the same report as full history.
+      if (!payload.versionFirstRun || updateBoundaryPredatesRetainedLogs(payload)) return null;
+      return payload.versionFirstRun.firstRunAtMs;
     case "full":
       return null;
   }
@@ -95,6 +127,7 @@ export function DiagnosticsReviewDialog({
   const [showPreview, setShowPreview] = useState(false);
   const [showSections, setShowSections] = useState(false);
   const timeWindowId = useId();
+  const timeWindowHintId = useId();
   const sectionsPanelId = useId();
   const previewPanelId = useId();
   const addRuleRef = useRef<HTMLButtonElement>(null);
@@ -143,7 +176,7 @@ export function DiagnosticsReviewDialog({
 
   const previewJson = useMemo(() => {
     if (!reviewPayload) return "";
-    const startMs = computeTimeWindowStart(timeWindow, reviewPayload.appLaunchTimestamp, openedAt);
+    const startMs = computeTimeWindowStart(timeWindow, reviewPayload, openedAt);
     const filtered = filterLogEntriesByTime(
       filterSections(reviewPayload.payload, enabledSections),
       startMs
@@ -184,7 +217,7 @@ export function DiagnosticsReviewDialog({
 
   const handleSave = () => {
     if (!reviewPayload) return;
-    const startMs = computeTimeWindowStart(timeWindow, reviewPayload.appLaunchTimestamp, openedAt);
+    const startMs = computeTimeWindowStart(timeWindow, reviewPayload, openedAt);
     onSave(enabledSections, effectiveReplacements, startMs);
   };
 
@@ -206,6 +239,9 @@ export function DiagnosticsReviewDialog({
 
   const enabledCount = reviewPayload.sectionKeys.filter((k) => enabledSections[k]).length;
   const totalSections = reviewPayload.sectionKeys.length;
+  const timeWindowOptions = getTimeWindowOptions(reviewPayload);
+  const showRotationHint =
+    timeWindow === "update" && updateBoundaryPredatesRetainedLogs(reviewPayload);
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="lg" data-testid="diagnostics-review-dialog">
@@ -228,16 +264,24 @@ export function DiagnosticsReviewDialog({
             id={timeWindowId}
             value={timeWindow}
             onChange={(e) => {
-              if (isTimeWindowId(e.target.value)) setTimeWindow(e.target.value);
+              if (isTimeWindowId(e.target.value, timeWindowOptions)) {
+                setTimeWindow(e.target.value);
+              }
             }}
-            className="h-8 w-60 px-2 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+            aria-describedby={showRotationHint ? timeWindowHintId : undefined}
+            className="h-8 w-72 px-2 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           >
-            {TIME_WINDOW_OPTIONS.map((opt) => (
+            {timeWindowOptions.map((opt) => (
               <option key={opt.id} value={opt.id}>
                 {opt.label}
               </option>
             ))}
           </select>
+          {showRotationHint && (
+            <p id={timeWindowHintId} className="text-xs text-text-secondary">
+              Older logs from this version have rotated out, so this includes every log still kept.
+            </p>
+          )}
         </div>
 
         <fieldset className="space-y-2">

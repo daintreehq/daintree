@@ -134,6 +134,22 @@ vi.mock("../../../utils/logger.js", () => ({
   getLogDirectory: () => "/logs",
 }));
 
+const getVersionFirstRunBoundaryMock = vi.hoisted(() =>
+  vi.fn<() => { version: string; firstRunAtMs: number } | null>(() => null)
+);
+vi.mock("../../../services/versionFirstRun.js", () => ({
+  getVersionFirstRunBoundary: getVersionFirstRunBoundaryMock,
+}));
+
+const readOldestRetainedLogMsMock = vi.hoisted(() =>
+  vi.fn<(logDir: string, activeLogFile: string) => Promise<number | null>>(() =>
+    Promise.resolve(null)
+  )
+);
+vi.mock("../../../utils/logRetention.js", () => ({
+  readOldestRetainedLogMs: readOldestRetainedLogMsMock,
+}));
+
 vi.mock("archiver", () => ({
   ZipArchive: archiverMock,
 }));
@@ -203,6 +219,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 }));
 
 import { registerDiagnosticsHandlers } from "../diagnostics.js";
+import type { DiagnosticsReviewPayload } from "../../../../shared/types/ipc/system.js";
 import { resetAppMetricsSnapshotForTesting } from "../../../utils/appMetricsSnapshot.js";
 
 function getHandlerFn(channelName: string): (...args: unknown[]) => unknown {
@@ -599,6 +616,27 @@ describe("registerDiagnosticsHandlers", () => {
       expect(result.appLaunchTimestamp).toBeGreaterThan(0);
       expect(result.appLaunchTimestamp).toBeLessThanOrEqual(Date.now());
       expect(result.sectionKeys).toEqual(["metadata"]);
+    });
+
+    it("carries the version boundary and oldest retained log time", async () => {
+      getVersionFirstRunBoundaryMock.mockReturnValueOnce({ version: "0.39.0", firstRunAtMs: 1234 });
+      readOldestRetainedLogMsMock.mockResolvedValueOnce(999);
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:collect-diagnostics-for-review");
+      const result = (await handler()) as DiagnosticsReviewPayload;
+
+      expect(result.versionFirstRun).toEqual({ version: "0.39.0", firstRunAtMs: 1234 });
+      expect(result.oldestRetainedLogMs).toBe(999);
+      expect(readOldestRetainedLogMsMock).toHaveBeenCalledWith("/logs", "/logs/daintree.log");
+    });
+
+    it("reports an unknown boundary as null", async () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:collect-diagnostics-for-review");
+      const result = (await handler()) as DiagnosticsReviewPayload;
+
+      expect(result.versionFirstRun).toBe(null);
+      expect(result.oldestRetainedLogMs).toBe(null);
     });
   });
 

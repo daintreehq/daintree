@@ -320,6 +320,23 @@ export interface DiagnosticsReviewPayload {
    * renderer can compute an absolute cutoff without a separate IPC round-trip.
    */
   appLaunchTimestamp: number;
+  /**
+   * When the running version first launched, whatever route installed it.
+   * Null until a version change has been observed on this profile. Backs the
+   * "Since updating to …" time-window option.
+   */
+  versionFirstRun: VersionFirstRunBoundary | null;
+  /**
+   * Epoch (ms) of the first line in the oldest retained log file, or null when
+   * unknown. Lets the renderer tell when rotation has already dropped logs
+   * from after the version boundary.
+   */
+  oldestRetainedLogMs: number | null;
+}
+
+export interface VersionFirstRunBoundary {
+  version: string;
+  firstRunAtMs: number;
 }
 
 /** User selections sent to the save-bundle IPC. */

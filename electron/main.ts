@@ -112,6 +112,7 @@ import {
   kickOffEarlyPathRefresh,
 } from "./setup/environment.js";
 import { store } from "./store.js";
+import { recordVersionFirstRun } from "./services/versionFirstRun.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToVisibleRenderers } from "./ipc/utils.js";
 import {
@@ -304,6 +305,12 @@ if (!gotTheLock) {
   // logging filters correctly from the very first log line. Utility processes
   // receive the same map after their first `ready` event.
   setLogLevelOverrides(store.get("logLevelOverrides") ?? {});
+
+  try {
+    recordVersionFirstRun();
+  } catch (error) {
+    console.warn("[MAIN] Failed to record version first-run boundary:", error);
+  }
 
   // Visible-only: log batches are high-frequency and replayable (LOGS_GET_ALL),
   // so cached/frozen project views skip them instead of queueing every flush.
