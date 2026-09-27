@@ -578,7 +578,8 @@ test("review hub commit panel review — every state of the commit composer", as
     const startPush = async (opts: { all?: boolean } = {}): Promise<void> => {
       if (!opts.all) await stageSome();
       await typeMessage(SHORT_MESSAGE);
-      await injectDelay(app, CH.push, 25_000);
+      // Long enough for the pushing step to sit through the 15s quiet notice.
+      await injectDelay(app, CH.push, 45_000);
       await primary().click();
       const confirm = page.getByRole("button", { name: /^Push to / }).first();
       await confirm.waitFor({ state: "visible", timeout: T_MEDIUM });
@@ -592,7 +593,7 @@ test("review hub commit panel review — every state of the commit composer", as
     const waitPushDone = async (): Promise<void> => {
       await page
         .locator(`${CONTENT} :text("Pushing to")`)
-        .waitFor({ state: "hidden", timeout: 40_000 })
+        .waitFor({ state: "hidden", timeout: 60_000 })
         .catch(() => {});
     };
 
@@ -620,6 +621,12 @@ test("review hub commit panel review — every state of the commit composer", as
         await settle(page, 400);
         await snapPanel(page, "17-pushing-progress-late");
         await snapWindow(page, "18-pushing-window");
+        // No further events: the composer should say so after 15s.
+        await expectState(page, `${CONTENT} :text("no new progress")`, {
+          label: "quiet push",
+          timeout: 20_000,
+        });
+        await snapPanel(page, "29-pushing-quiet");
         await waitPushDone();
       },
       rest
