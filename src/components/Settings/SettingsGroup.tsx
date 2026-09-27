@@ -245,14 +245,17 @@ export function SettingsRow({
 
   const text = (
     <div className="min-w-0 flex-1">
-      <div className="flex items-center gap-1.5 flex-wrap">
+      {/* The whole line dims, chips included: a full-contrast chip beside a disabled
+          label read as the one live thing on the row. The reset is never shown while
+          disabled, so nothing interactive dims with it. */}
+      <div className={cn("flex items-center gap-1.5 flex-wrap", disabled && "opacity-50")}>
         <span
           id={labelId}
           // The hook a search result lands by when its section has no DOM id.
           data-settings-row-label=""
           // min-w-0 so a label that truncates (an icon + name) shrinks inside its
           // column instead of painting under the controls on the rail.
-          className={cn("min-w-0 text-sm font-medium text-text-primary", disabled && "opacity-50")}
+          className="min-w-0 text-sm font-medium text-text-primary"
         >
           {label}
         </span>

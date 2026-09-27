@@ -400,3 +400,37 @@ describe("Dependents explain themselves to assistive tech", () => {
     expect(container).toBeTruthy();
   });
 });
+
+describe("SettingsRow disabled chips", () => {
+  /** The nearest ancestor (or self) that dims its content. */
+  function dimmer(el: Element): Element | null {
+    return el.closest(".opacity-50");
+  }
+
+  it("dims a disabled row's chips with its label, and neither while enabled", () => {
+    const { rerender } = render(
+      <SettingsGroup>
+        <SettingsRow
+          label="Run here"
+          accessory={<span data-testid="chip">Off</span>}
+          disabled
+          disabledReason="The folder is off"
+        />
+      </SettingsGroup>
+    );
+    const label = screen.getByText("Run here");
+    const chip = screen.getByTestId("chip");
+    expect(dimmer(label)).not.toBeNull();
+    expect(dimmer(chip)).toBe(dimmer(label));
+    // The reason is what the row is for while disabled, so it stays at full contrast.
+    expect(dimmer(screen.getByText("The folder is off"))).toBeNull();
+
+    rerender(
+      <SettingsGroup>
+        <SettingsRow label="Run here" accessory={<span data-testid="chip">Off</span>} />
+      </SettingsGroup>
+    );
+    expect(dimmer(screen.getByText("Run here"))).toBeNull();
+    expect(dimmer(screen.getByTestId("chip"))).toBeNull();
+  });
+});
