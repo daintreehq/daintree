@@ -268,20 +268,23 @@ export function DiagnosticsReviewDialog({
     return { text: output, ranges, matchCounts };
   }, [reviewPayload, enabledSections, effectiveReplacements, ownedRules, timeWindow, openedAt]);
 
-  // Which replacement "Next replacement" last moved to, tied to the text it
-  // was found in so any edit to the report starts the walk again.
-  const [cursor, setCursor] = useState<{ text: string; index: number } | null>(null);
-  const activeReplacement = cursor?.text === preview.text ? cursor.index : null;
+  // Which replacement "Next replacement" last moved to, tied to the ranges it
+  // walked so any edit to the report starts the walk again — even one that
+  // leaves the text identical but moves or renumbers the marks.
+  const [cursor, setCursor] = useState<{ ranges: [number, number][]; index: number } | null>(null);
+  const activeReplacement = cursor?.ranges === preview.ranges ? cursor.index : null;
 
   const showNextReplacement = () => {
     const region = previewRegionRef.current;
     if (!region || preview.ranges.length === 0) return;
     const index = activeReplacement === null ? 0 : (activeReplacement + 1) % preview.ranges.length;
-    setCursor({ text: preview.text, index });
+    setCursor({ ranges: preview.ranges, index });
     const mark = region.querySelectorAll<HTMLElement>("[data-replacement]")[index];
     if (!mark) return;
     const offset = mark.getBoundingClientRect().top - region.getBoundingClientRect().top;
     region.scrollTop += offset - region.clientHeight / 3;
+    // The preview may itself sit partly below the body's fold.
+    mark.scrollIntoView({ block: "nearest" });
   };
 
   const toggleSection = (key: string) => {
@@ -519,28 +522,27 @@ export function DiagnosticsReviewDialog({
                 </Button>
               )}
             </div>
-            {showSections && (
-              <div
-                id={sectionsPanelId}
-                role="group"
-                aria-labelledby={sectionsToggleId}
-                className="grid grid-cols-2 gap-x-4 gap-y-1.5 pl-5"
-              >
-                {reviewPayload.sectionKeys.map((key) => (
-                  <label
-                    key={key}
-                    className="flex items-center gap-2 text-sm text-text-primary cursor-pointer"
-                  >
-                    <Checkbox
-                      size="sm"
-                      checked={!!enabledSections[key]}
-                      onCheckedChange={() => toggleSection(key)}
-                    />
-                    {SECTION_LABELS[key] ?? key}
-                  </label>
-                ))}
-              </div>
-            )}
+            <div
+              id={sectionsPanelId}
+              hidden={!showSections}
+              role="group"
+              aria-labelledby={sectionsToggleId}
+              className="grid grid-cols-2 gap-x-4 gap-y-1.5 pl-5"
+            >
+              {reviewPayload.sectionKeys.map((key) => (
+                <label
+                  key={key}
+                  className="flex items-center gap-2 text-sm text-text-primary cursor-pointer"
+                >
+                  <Checkbox
+                    size="sm"
+                    checked={!!enabledSections[key]}
+                    onCheckedChange={() => toggleSection(key)}
+                  />
+                  {SECTION_LABELS[key] ?? key}
+                </label>
+              ))}
+            </div>
           </div>
         </fieldset>
 

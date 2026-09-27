@@ -207,6 +207,42 @@ describe("DiagnosticsReviewDialog", () => {
     expect(meta.textContent).toContain("3 replaced");
   });
 
+  it("restarts the walk when an edit moves the marks without changing the text", () => {
+    renderDialog(contactPayload);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Replace with, rule 1" }), {
+      target: { value: "acme corp" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Next replacement" }));
+    const region = screen.getByRole("region", { name: "Report preview" });
+    const meta = document.getElementById(region.getAttribute("aria-describedby")!)!;
+    expect(meta.textContent).toContain("replacement 1 of 2");
+    // Replacing "acme corp" with itself leaves the text as it was and adds a mark.
+    fireEvent.change(screen.getByRole("textbox", { name: "Find, rule 1" }), {
+      target: { value: "acme corp" },
+    });
+    expect(meta.textContent).toContain("3 replaced");
+  });
+
+  it("brings the chosen replacement into the dialog's own view too", () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderDialog(contactPayload);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Strip email addresses/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Next replacement" }));
+    const region = screen.getByRole("region", { name: "Report preview" });
+    expect(scroll.mock.contexts).toContain(region.querySelectorAll("[data-replacement]")[0]);
+    scroll.mockRestore();
+  });
+
+  it("keeps the Sections panel the disclosure controls in the tree while collapsed", () => {
+    renderDialog();
+    const toggle = screen.getByRole("button", { name: /^Sections/ });
+    const panel = document.getElementById(toggle.getAttribute("aria-controls")!);
+    expect(panel?.hidden).toBe(true);
+    fireEvent.click(toggle);
+    expect(panel?.hidden).toBe(false);
+  });
+
   it("moves focus to the new rule's Find field when a rule is added", () => {
     renderDialog();
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
