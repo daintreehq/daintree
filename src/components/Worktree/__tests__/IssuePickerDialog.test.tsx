@@ -189,6 +189,19 @@ describe("IssuePickerDialog error recovery", () => {
     expect(screen.queryByText("Couldn't load issues", VISIBLE)).toBeNull();
     expect(liveStatus(container)).toBe("1 open issue");
   });
+
+  it("returns focus to the search when a focused Retry recovers", async () => {
+    listIssuesMock.mockRejectedValueOnce(new Error("boom"));
+    listIssuesMock.mockResolvedValue({ items: [makeIssue(7, "Recovered issue")] });
+    renderDialog();
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+
+    await waitFor(() => screen.getByText("Recovered issue", VISIBLE));
+    expect(document.activeElement).toBe(input());
+  });
 });
 
 describe("IssuePickerDialog keyboard contract", () => {
@@ -319,6 +332,18 @@ describe("IssuePickerDialog linked issue", () => {
     expect(screen.getByTestId("footer").textContent).toContain("Cancel");
     expect(screen.queryByRole("button", { name: /unlink/i })).toBeNull();
     expect(screen.getByRole("heading").textContent).toBe("Attach issue");
+  });
+
+  it("offers the Enter hint only when there is an issue Enter can link", async () => {
+    listIssuesMock.mockResolvedValueOnce({ items: [] });
+    listIssuesMock.mockResolvedValue({ items: [makeIssue(1, "One")] });
+    renderDialog();
+    await waitFor(() => screen.getByText("No open issues", VISIBLE));
+    expect(screen.getByTestId("footer").textContent).not.toContain("to link");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all issues" }));
+    await waitFor(() => screen.getByText("One", VISIBLE));
+    expect(screen.getByTestId("footer").textContent).toContain("to link");
   });
 });
 

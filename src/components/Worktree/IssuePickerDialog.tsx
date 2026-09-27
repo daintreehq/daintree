@@ -258,6 +258,15 @@ export function IssuePickerDialog({
     onClose();
   }, [onDetach, onClose]);
 
+  // Recovery unmounts Retry. If it still held focus then, hand focus back to
+  // the search rather than dropping it on the document.
+  const retryHasFocusRef = useRef(false);
+  useEffect(() => {
+    if (error || !retryHasFocusRef.current) return;
+    retryHasFocusRef.current = false;
+    inputRef.current?.focus();
+  }, [error]);
+
   const clearSearch = () => {
     setSearch("");
     inputRef.current?.focus();
@@ -311,7 +320,20 @@ export function IssuePickerDialog({
       >
         <p className="text-sm font-medium text-text-primary">Couldn't load issues</p>
         <p className="text-xs text-text-secondary max-w-sm break-words">{error}</p>
-        <Button variant="outline" size="xs" className="mt-3" onClick={retry}>
+        <Button
+          variant="outline"
+          size="xs"
+          className="mt-3"
+          onClick={retry}
+          onFocus={() => {
+            retryHasFocusRef.current = true;
+          }}
+          // A blur with somewhere to go is the user moving on; one without is
+          // the button being removed, which is the case the handoff exists for.
+          onBlur={(event) => {
+            if (event.relatedTarget) retryHasFocusRef.current = false;
+          }}
+        >
           Retry
         </Button>
       </div>
@@ -433,7 +455,8 @@ export function IssuePickerDialog({
 
       <AppDialog.Footer
         hint={
-          isLinked ? undefined : (
+          // Only where Enter can actually link something.
+          isLinked || !hasResults ? undefined : (
             <>
               <Kbd>↵</Kbd>
               <span>to link</span>
