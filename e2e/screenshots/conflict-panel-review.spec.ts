@@ -475,7 +475,7 @@ test("conflict panel review — merge, rebase, resolved, confirm, themes", async
         await expectState(page, '[role="menu"]', { label: "row menu" });
         await snap(page, "32-row-menu-open");
         await page
-          .getByRole("menuitem", { name: /^Take ours/ })
+          .getByRole("menuitem", { name: /\(ours\)$/ })
           .first()
           .click();
         await expectState(page, ':text("current branch version of")', {
