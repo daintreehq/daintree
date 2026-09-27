@@ -2711,7 +2711,8 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      borders competing with the band headings that actually organise it.
      `Canvas` keeps the reservation and gives back the invisibility; the selected
      row's own outline below is unaffected, and is what marks the row. */
-  .palette-row {
+  .palette-row,
+  .palette-row[aria-disabled="true"] {
     border-color: Canvas;
   }
 
