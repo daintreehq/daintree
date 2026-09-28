@@ -232,7 +232,7 @@ export function EnvironmentPopover({
       <PopoverContent
         side="top"
         align="start"
-        className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-text-secondary"
+        className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         aria-label={`${environmentName} environment`}
         ref={contentRef}
         onOpenAutoFocus={(event) => {

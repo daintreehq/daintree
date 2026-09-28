@@ -152,7 +152,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                             focusHandoff.markHandoff();
                             setIsOpen(false);
                           }}
-                          className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-hidden hover:bg-tint/5 focus:bg-tint/5"
+                          className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left hover:bg-tint/5 focus-visible:bg-tint/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                         >
                           <div className="flex items-center gap-2 min-w-0 flex-1">
                             <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">

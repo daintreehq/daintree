@@ -397,7 +397,7 @@ export function GitHubListItem({
                   }}
                   className={cn(
                     "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left",
-                    "cursor-pointer rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+                    "cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     !isSelectionActive && "hover:underline"
                   )}
                 >
@@ -501,7 +501,7 @@ export function GitHubListItem({
                       "rounded text-text-secondary",
                       "hover:bg-overlay-medium hover:text-text-primary",
                       "transition-[background-color,color] duration-150 ease-out",
-                      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                     )}
                     aria-label={`Actions for #${item.number}`}
                   >
@@ -597,7 +597,7 @@ export function GitHubListItem({
                   className={cn(
                     "shrink-0 inline-flex items-center tabular-nums rounded cursor-pointer",
                     "hover:text-text-primary transition-colors duration-150 ease-out",
-                    "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
                     copied && "text-text-primary"
                   )}
                   aria-label={`Copy number ${item.number}`}
@@ -753,7 +753,7 @@ export function GitHubListItem({
                       className={cn(
                         "shrink-0 inline-flex items-center gap-0.5 tabular-nums rounded cursor-pointer",
                         "hover:text-text-primary transition-colors duration-150 ease-out",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                       )}
                       aria-label={
                         // The linked PR's own state and checks arrive with the

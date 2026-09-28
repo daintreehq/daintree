@@ -217,7 +217,7 @@ function FileStageRowComponent({
           aria-label={`View diff: ${file.path}`}
           className={cn(
             "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
           )}
         >
           <span

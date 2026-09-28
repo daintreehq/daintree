@@ -2295,7 +2295,7 @@ export function ReviewHubContent({
                         data-testid="review-hub-file-list-toggle"
                         className={cn(
                           "inline-flex items-center gap-1 text-2xs font-medium text-text-secondary hover:text-text-primary transition-colors",
-                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary rounded"
+                          "rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                         )}
                       >
                         <ChevronRight

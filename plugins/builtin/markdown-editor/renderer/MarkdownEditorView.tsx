@@ -479,7 +479,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
             void handleSaveAs();
           }}
           aria-label="New file path"
-          className="w-full rounded-md border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-xs text-text-primary focus:outline-hidden focus-visible:ring-1 focus-visible:ring-border-strong"
+          className="w-full rounded-md border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           data-testid="markdown-editor-save-as-path"
         />
       </ConfirmDialog>

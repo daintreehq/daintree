@@ -284,7 +284,7 @@ export function SegmentedRadioGroup<T extends string>({
               density === "compact" ? "px-2 py-1" : "px-2.5 py-1",
               fullWidth && "flex-1",
               "transition-colors duration-150 ease-out",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
               "disabled:cursor-not-allowed disabled:pointer-events-none",
               isActive ? "text-text-primary" : "text-text-secondary hover:text-text-primary",
               // Belt and braces: if the thumb could not be measured, the checked

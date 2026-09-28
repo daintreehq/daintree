@@ -21,7 +21,7 @@ export function RecipeRunnerEmpty({
     <button
       type="button"
       onClick={onCreate}
-      className="group flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+      className="group flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
     >
       <Plus
         className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"
@@ -48,7 +48,7 @@ export function RecipeRunnerEmpty({
                 data-testid="recipe-suggestion-pill"
                 onClick={() => onRunSuggestion(suggestion)}
                 disabled={disabled}
-                className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle"
+                className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle"
               >
                 <Play
                   className={cn(
