@@ -5,15 +5,17 @@ installPreviewShims();
 
 import { StrictMode, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { Bell, BellOff, Clock, Layers, Pencil, Pin, ShieldOff, X } from "lucide-react";
+import { Bell, Clock, Layers, Pencil, Pin, ShieldOff, X } from "lucide-react";
 import { Box, Cloud, Container, Database, Globe, Laptop, Server, Terminal } from "lucide-react";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { EventRecord } from "@shared/types/ipc/events";
+import type { LogFilterOptions } from "@shared/types/ipc/logs";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { PRESSED_TOGGLE } from "@/components/Diagnostics/toggleStyles";
+import { FilterChip } from "@/components/ui/FilterChip";
+import { BellDot } from "@/components/icons";
 import { LogsActions, TelemetryActions } from "@/components/Diagnostics/DiagnosticsActions";
 import { LogFilters } from "@/components/Logs/LogFilters";
 import { EventFilters } from "@/components/EventInspector/EventFilters";
@@ -52,15 +54,17 @@ useEventStore.setState({ filters: { worktreeId: "wt-feature-login" } });
 
 const NOW = Date.now() - 60_000;
 
-const EVENTS: EventRecord[] = [
-  ["agent", "agent:state-changed"],
-  ["agent", "agent:completed"],
-  ["system", "sys:worktree:update"],
-  ["server", "server:started"],
-  ["file", "file:changed"],
-  ["file", "file:changed"],
-  ["ui", "ui:notify"],
-].map(([category, type], i) => ({
+const EVENTS: EventRecord[] = (
+  [
+    ["agent", "agent:state-changed"],
+    ["agent", "agent:completed"],
+    ["system", "sys:worktree:update"],
+    ["server", "server:started"],
+    ["file", "file:changed"],
+    ["file", "file:changed"],
+    ["ui", "ui:notify"],
+  ] as const
+).map(([category, type], i) => ({
   id: `ev-${i}`,
   timestamp: NOW - i * 4_000,
   type,
@@ -122,9 +126,8 @@ function AuditToggles() {
         <Button
           variant="outline"
           size="sm"
-          aria-pressed={groupByTurn}
+          pressed={groupByTurn}
           onClick={() => setGroupByTurn((v) => !v)}
-          className={cn(groupByTurn && "bg-overlay-selected text-text-primary")}
         >
           <Layers aria-hidden="true" />
           Group by turn
@@ -134,19 +137,13 @@ function AuditToggles() {
         <Button
           variant="outline"
           size="sm"
-          aria-pressed={ignoreLastHour}
+          pressed={ignoreLastHour}
           onClick={() => setIgnoreLastHour((v) => !v)}
-          className={cn(ignoreLastHour && "bg-overlay-selected text-text-primary")}
         >
           <Clock aria-hidden="true" />
           Ignore last hour
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          aria-pressed={true}
-          className="bg-overlay-selected text-text-primary"
-        >
+        <Button variant="outline" size="sm" pressed={true}>
           <Clock aria-hidden="true" />
           Ignore last hour
         </Button>
@@ -160,8 +157,8 @@ function LightboxToggle({ pressed }: { pressed: boolean }) {
     <Button
       variant="ghost"
       size="xs"
-      aria-pressed={pressed}
-      className="shrink-0 aria-pressed:bg-overlay-active aria-pressed:text-text-primary aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+      pressed={pressed}
+      className="shrink-0 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
     >
       Actual size
     </Button>
@@ -176,13 +173,8 @@ function RecipePin({ name, isDefault }: { name: string; isDefault: boolean }) {
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-pressed={isDefault}
-          aria-label={
-            isDefault
-              ? `Unset ${name} as default worktree recipe`
-              : `Set ${name} as default worktree recipe`
-          }
-          className={cn(isDefault && "bg-overlay-selected text-text-primary")}
+          pressed={isDefault}
+          aria-label={`Pin ${name} as the default worktree recipe`}
         >
           <Pin className={isDefault ? "fill-current" : undefined} />
         </Button>
@@ -207,9 +199,8 @@ function EnvironmentIcons() {
             type="button"
             variant="ghost"
             size="icon"
-            aria-pressed={isSelected}
+            pressed={isSelected}
             aria-label={`Icon ${i}`}
-            className={cn(isSelected && "bg-overlay-active text-text-primary")}
           >
             <IconComp />
           </Button>
@@ -225,12 +216,7 @@ function ArtifactCodeOnly({ codeOnly }: { codeOnly: boolean }) {
       <Button variant="subtle" size="sm" className="rounded-r-none">
         Copy all
       </Button>
-      <Button
-        variant="subtle"
-        size="sm"
-        aria-pressed={codeOnly}
-        className={cn("rounded-l-none", codeOnly && "bg-overlay-strong text-text-primary")}
-      >
+      <Button variant="subtle" size="sm" pressed={codeOnly} className="rounded-l-none">
         Code only
       </Button>
     </div>
@@ -248,12 +234,11 @@ function WatchRow({ isWatched }: { isWatched: boolean }) {
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label={isWatched ? "Stop watching" : "Watch for completion"}
-          aria-pressed={isWatched}
+          aria-label="Watch for completion"
+          pressed={isWatched}
           data-testid="bg-watch-button"
-          className={cn(isWatched && "text-status-info")}
         >
-          {isWatched ? <BellOff aria-hidden="true" /> : <Bell aria-hidden="true" />}
+          {isWatched ? <BellDot aria-hidden="true" /> : <Bell aria-hidden="true" />}
         </Button>
         <Button variant="ghost" size="icon-sm" aria-label="Close">
           <X />
@@ -272,8 +257,8 @@ function ReEntryPin({ isPinned }: { isPinned: boolean }) {
           variant="ghost"
           size="icon-xs"
           aria-label="Pin summary"
-          aria-pressed={isPinned}
-          className={cn("[&_svg]:size-3.5", isPinned && "text-text-primary")}
+          pressed={isPinned}
+          className="[&_svg]:size-3.5"
         >
           <Pin aria-hidden="true" className={cn(isPinned && "fill-current")} />
         </Button>
@@ -285,77 +270,9 @@ function ReEntryPin({ isPinned }: { isPinned: boolean }) {
   );
 }
 
-/* ── Filter chips, spelled as their sites spell them ───────────────────────── */
-
-function WorktreeChip({
-  label,
-  isActive,
-  count,
-}: {
-  label: string;
-  isActive: boolean;
-  count?: number;
-}) {
-  const isUnavailable = count === 0 && !isActive;
-  return (
-    <button
-      type="button"
-      aria-pressed={isActive}
-      data-filter-chip="true"
-      className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-2xs transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary",
-        isActive
-          ? "border-text-secondary bg-filter-selected-bg-strong font-medium text-text-primary"
-          : isUnavailable
-            ? "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
-            : "border-text-secondary bg-overlay-soft text-text-secondary hover:bg-overlay-medium hover:text-text-primary"
-      )}
-    >
-      {count === undefined ? label : `${label} (${count})`}
-    </button>
-  );
-}
-
-function InboxChip({ label, selected }: { label: string; selected: boolean }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      data-filter-chip="true"
-      className={cn(
-        "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
-        selected
-          ? "bg-filter-selected-bg-strong text-text-primary font-medium"
-          : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]"
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
-function PluginChip({ label, active }: { label: string; active: boolean }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      className={cn(
-        "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-        active
-          ? "bg-overlay-medium border-text-secondary text-text-primary forced-colors:border-[Highlight]"
-          : "bg-overlay-subtle border-border-default/50 text-text-secondary hover:text-text-primary hover:border-border-default"
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
 function Gallery() {
-  const [logFilters, setLogFilters] = useState({
-    levels: ["info", "error"] as ("debug" | "info" | "warn" | "error")[],
+  const [logFilters, setLogFilters] = useState<LogFilterOptions>({
+    levels: ["info", "error"],
     sources: ["WorkspaceService"],
   });
   const [eventFilters, setEventFilters] = useState<{
@@ -406,9 +323,7 @@ function Gallery() {
         <div className="rounded-[var(--radius-md)] border border-divider bg-surface-panel">
           <LogFilters
             filters={logFilters}
-            onFiltersChange={(next) =>
-              setLogFilters((prev) => ({ ...prev, ...(next as typeof prev) }))
-            }
+            onFiltersChange={(next) => setLogFilters((prev) => ({ ...prev, ...next }))}
             onClear={() => setLogFilters({ levels: [], sources: [] })}
             availableSources={["WorkspaceService", "PtyHost", "McpServer"]}
             levelCounts={{ debug: 0, info: 214, warn: 12, error: 3 }}
@@ -435,31 +350,48 @@ function Gallery() {
           caption="Worktree filter popover — selected, available, unavailable"
           surface="surface-overlay"
         >
-          <WorktreeChip label="Dirty" isActive={true} count={3} />
-          <WorktreeChip label="Clean" isActive={false} count={5} />
-          <WorktreeChip label="Stale" isActive={false} count={0} />
-          <WorktreeChip label="Ahead" isActive={false} count={2} />
+          <FilterChip selected={true} count={3}>
+            Dirty
+          </FilterChip>
+          <FilterChip selected={false} count={5}>
+            Clean
+          </FilterChip>
+          <FilterChip selected={false} count={0}>
+            Stale
+          </FilterChip>
+          <FilterChip selected={false} count={2}>
+            Ahead
+          </FilterChip>
         </Frame>
         <Frame caption="Notification center — inbox filters" surface="surface-overlay">
-          <InboxChip label="All" selected={false} />
-          <InboxChip label="Unread" selected={true} />
-          <InboxChip label="Archived" selected={false} />
+          <FilterChip selected={false}>All</FilterChip>
+          <FilterChip selected={true}>Unread</FilterChip>
+          <FilterChip selected={false}>Archived</FilterChip>
         </Frame>
         <Frame caption="Plugin manager — filter chips" surface="bg-surface-panel">
-          <PluginChip label="Agents" active={true} />
-          <PluginChip label="Forge" active={false} />
-          <PluginChip label="Editors" active={false} />
-          <PluginChip label="Disabled" active={false} />
+          <FilterChip selected={true}>Agents</FilterChip>
+          <FilterChip selected={false}>Forge</FilterChip>
+          <FilterChip selected={false}>Editors</FilterChip>
+          <FilterChip selected={false}>Disabled</FilterChip>
         </Frame>
         <Frame
-          caption="Diagnostics shared toggle recipe (PRESSED_TOGGLE)"
+          caption="Button pressed treatment, every variant a toggle uses"
           surface="bg-surface-panel"
         >
-          <Button variant="subtle" size="xs" aria-pressed={true} className={PRESSED_TOGGLE}>
-            Pressed
+          <Button variant="subtle" size="xs" pressed={true}>
+            Subtle on
           </Button>
-          <Button variant="subtle" size="xs" aria-pressed={false}>
-            Not pressed
+          <Button variant="subtle" size="xs" pressed={false}>
+            Subtle off
+          </Button>
+          <Button variant="outline" size="xs" pressed={true}>
+            Outline on
+          </Button>
+          <Button variant="ghost" size="xs" pressed={true}>
+            Ghost on
+          </Button>
+          <Button variant="ghost" size="xs" pressed={false}>
+            Ghost off
           </Button>
         </Frame>
       </Specimen>

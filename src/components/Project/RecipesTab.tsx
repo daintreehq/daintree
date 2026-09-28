@@ -296,20 +296,14 @@ export function RecipesTab({
                                 onClick={() =>
                                   onDefaultWorktreeRecipeIdChange(isDefault ? undefined : recipe.id)
                                 }
-                                aria-pressed={isDefault}
-                                aria-label={
-                                  isDefault
-                                    ? `Unset ${recipe.name} as default worktree recipe`
-                                    : `Set ${recipe.name} as default worktree recipe`
-                                }
-                                className={cn(isDefault && "bg-overlay-selected text-text-primary")}
+                                pressed={isDefault}
+                                // A toggle's name stays put; `pressed` announces the state.
+                                aria-label={`Pin ${recipe.name} as the default worktree recipe`}
                               >
                                 <Pin className={isDefault ? "fill-current" : undefined} />
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent side="bottom">
-                              {isDefault ? "Unset default recipe" : "Set as default recipe"}
-                            </TooltipContent>
+                            <TooltipContent side="bottom">Pin as default recipe</TooltipContent>
                           </Tooltip>
                         )}
                         <div className="flex items-center gap-1">

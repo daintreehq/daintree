@@ -1028,11 +1028,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                         size="sm"
                         onClick={() => setCodeOnly((v) => !v)}
                         disabled={isBulkActionRunning || codeArtifactCount === 0}
-                        aria-pressed={codeOnly}
-                        className={cn(
-                          "rounded-l-none",
-                          codeOnly && "bg-overlay-strong text-text-primary"
-                        )}
+                        pressed={codeOnly}
+                        className="rounded-l-none"
                       >
                         Code only
                       </Button>

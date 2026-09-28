@@ -80,6 +80,21 @@ const buttonVariants = cva(
   }
 );
 
+/**
+ * The one pressed look for a toggle button (`pressed` below), whatever its
+ * variant: a `text-secondary` edge, which clears WCAG 1.4.11's 3:1 in both
+ * polarities where the border ramp's strongest step measured 1.5-1.7:1, over
+ * the filter chips' selected fill, with primary ink. It is the filter chip's
+ * selected treatment on a button's shape, so "on" reads the same on a chip and
+ * on a toggle. A fill step alone, the old per-site treatment, was barely
+ * different from rest on the dark themes. Keyed on `aria-pressed` so the state
+ * the screen reader hears is the state that is drawn; the variants use rings,
+ * not borders, so the edge costs no layout. Forced colours strips both the fill
+ * and the ring — `data-toggle` is the hook `index.css` redraws it from.
+ */
+const PRESSED_CLASS =
+  "aria-pressed:bg-filter-selected-bg-strong aria-pressed:text-text-primary aria-pressed:ring-1 aria-pressed:ring-text-secondary";
+
 type ButtonSize = NonNullable<VariantProps<typeof buttonVariants>["size"]>;
 
 // Spinner size per button size — kept in lockstep with the CVA `[&_svg]:size-*`
@@ -118,6 +133,12 @@ export interface ButtonProps
    * attribute, so focus is preserved.
    */
   loading?: boolean;
+  /**
+   * Makes the button a toggle: sets `aria-pressed` and draws the shared pressed
+   * treatment while it is true. Leave it undefined for an ordinary button, and
+   * keep the label constant — the pressed state is what changes, not the name.
+   */
+  pressed?: boolean;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -129,6 +150,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       asChild = false,
       type,
       loading = false,
+      pressed,
       onClick,
       disabled,
       children,
@@ -169,6 +191,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         className={cn(
           buttonVariants({ variant, size: resolvedSize }),
           loading && "pointer-events-none",
+          pressed !== undefined && PRESSED_CLASS,
           className,
           // Busy outranks unavailable: a caller's own disabled dimming (the
           // `disabled:`/`aria-disabled:` 50%) would fade the spinner it overlays.
@@ -179,6 +202,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         // <body> mid-operation. `loading` already vetoes activation.
         disabled={loading ? undefined : disabled}
         onClick={handleClick}
+        aria-pressed={pressed}
+        data-toggle={pressed !== undefined || undefined}
         {...props}
         // Component-owned loading state — placed after the prop spread so a
         // consumer can't silently desync the announced ARIA state.

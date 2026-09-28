@@ -166,6 +166,23 @@ test("pressed toggles and filter chips — every family, every state", async ({ 
     }
   });
 
+  // Increased contrast with keyboard focus on a pressed toggle and a selected
+  // chip: the mode's own outline rules must not replace the focus ring.
+  await withPage(context, `contrast focus ${first}`, async (page) => {
+    await openGallery(page, first, { contrast: "more" });
+    for (const probe of PROBES) {
+      const specimen = page.locator(`[data-shot="${probe.specimen}"]`);
+      const target = specimen.getByRole("button", { name: probe.name, pressed: true }).first();
+      await page.keyboard.press("Tab");
+      await target.focus();
+      await page.waitForTimeout(250);
+      const file = `${probe.slug}--contrast-focus--${first}.png`;
+      await snap(specimen, file);
+      expected.push(file);
+      await target.blur();
+    }
+  });
+
   for (const [state, media] of [
     ["forced", { forcedColors: "active" }],
     ["contrast", { contrast: "more" }],

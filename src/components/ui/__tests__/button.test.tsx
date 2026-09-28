@@ -8,6 +8,7 @@ import { BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
 import type { AppColorScheme } from "@shared/theme/types";
 
 import { Button, buttonVariants } from "../button";
+import { FilterChip } from "../FilterChip";
 
 describe("buttonVariants", () => {
   it("uses specific transition instead of transition-all", () => {
@@ -220,6 +221,82 @@ describe("Button loading state", () => {
   });
 });
 
+function renderToggle(props: Parameters<typeof Button>[0], pressed: boolean | undefined) {
+  const { container } = render(
+    <Button {...props} pressed={pressed}>
+      Toggle
+    </Button>
+  );
+  return container.querySelector("button")!;
+}
+
+/** The token a pressed toggle fills with, read off the rendered classes. */
+function pressedFill(button: HTMLElement): string {
+  const match = /(?:^|\s)aria-pressed:bg-([a-z-]+)(?:\s|$)/.exec(button.className);
+  expect(match, "a pressed toggle has no fill").toBeTruthy();
+  return match![1] ?? "";
+}
+
+describe("Button pressed toggle", () => {
+  it("announces its state on aria-pressed and marks itself for the high-contrast rules", () => {
+    for (const pressed of [true, false]) {
+      const button = renderToggle({}, pressed);
+      expect(button.getAttribute("aria-pressed")).toBe(String(pressed));
+      expect(button.getAttribute("data-toggle")).toBe("true");
+    }
+  });
+
+  it("leaves an ordinary button with no toggle semantics and no pressed paint", () => {
+    const button = renderToggle({}, undefined);
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
+    expect(button.hasAttribute("data-toggle")).toBe(false);
+    expect(button.className).not.toMatch(/(?:^|\s)aria-pressed:/);
+  });
+
+  // One pressed look whatever the variant: a fill step alone was what made the
+  // old toggles unreadable, so the state needs an edge as well as a fill, and
+  // both have to be the same on every variant a toggle is built from.
+  it("draws the same edge and fill on every variant a toggle uses", () => {
+    const pressedPaint = (variant: "ghost" | "outline" | "subtle") =>
+      renderToggle({ variant }, true)
+        .className.split(/\s+/)
+        .filter((t) => t.startsWith("aria-pressed:"))
+        .sort();
+    const ghost = pressedPaint("ghost");
+    expect(ghost.some((t) => /^aria-pressed:ring-\d/.test(t))).toBe(true);
+    expect(ghost.some((t) => /^aria-pressed:ring-(?!\d)/.test(t))).toBe(true);
+    expect(ghost.some((t) => t.startsWith("aria-pressed:bg-"))).toBe(true);
+    expect(pressedPaint("outline")).toEqual(ghost);
+    expect(pressedPaint("subtle")).toEqual(ghost);
+  });
+
+  // The selected filter chip and the pressed toggle are the same state on two
+  // shapes, so they share the fill: "on" must not read differently on a chip.
+  it("fills with the selected filter chip's fill", () => {
+    const { container } = render(<FilterChip selected>Chip</FilterChip>);
+    const chipFill = /(?:^|\s)bg-(filter-[a-z-]+)(?:\s|$)/.exec(
+      container.querySelector("button")!.className
+    )?.[1];
+    expect(chipFill).toBeTruthy();
+    expect(pressedFill(renderToggle({}, true))).toBe(chipFill);
+  });
+
+  // Forced colours strips both the fill and the ring, so the pressed toggle
+  // needs a system-colour border from the forced-colors block, keyed on the
+  // hook Button writes.
+  it("keeps a forced-colors border for a pressed toggle", () => {
+    const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+    const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
+    const rule = /([^{}]*)\{\s*border:\s*2px solid ButtonText;/g;
+    const selectors = [...forced.matchAll(rule)].map((m) => m[1]!);
+    expect(
+      selectors.some(
+        (s) => s.includes('[data-toggle="true"]') && s.includes('[aria-pressed="true"]')
+      )
+    ).toBe(true);
+  });
+});
+
 describe("ghost hover fill", () => {
   const hoverToken = () => {
     const match = /(?:^|\s)hover:bg-([a-z-]+)(?:\s|$)/.exec(buttonVariants({ variant: "ghost" }));
@@ -241,15 +318,17 @@ describe("ghost hover fill", () => {
     expect(getOverlayContrastWarnings(scheme("rgba(0, 0, 0, 0.01)"))).toHaveLength(1);
     expect(getOverlayContrastWarnings(scheme("rgba(0, 0, 0, 0.3)"))).toHaveLength(0);
   });
-  // Ghost Buttons double as pressed toggles (aria-pressed) that mark the
-  // pressed state with `overlay-active`. That fill has to stay heavier than
-  // the ghost hover in every theme, or hovering an unpressed toggle reads as
-  // pressing it.
+  // Ghost Buttons double as pressed toggles. The pressed fill has to stay
+  // heavier than the ghost hover in every theme, or hovering an unpressed
+  // toggle reads as pressing it.
   it("stays lighter than a pressed ghost toggle in every built-in theme", () => {
     const alpha = (value: string) => Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(value)?.[1] ?? NaN);
+    const pressedToken = pressedFill(renderToggle({ variant: "ghost" }, true));
     for (const theme of BUILT_IN_APP_SCHEMES) {
       const hover = alpha(theme.tokens[hoverToken() as keyof typeof theme.tokens]);
-      const pressed = alpha(theme.tokens["overlay-active"]);
+      const pressed = alpha(
+        Object.entries(theme.tokens).find(([name]) => name === pressedToken)?.[1] ?? ""
+      );
       expect(pressed, theme.id).toBeGreaterThan(hover);
     }
   });

@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SearchField } from "@/components/ui/SearchField";
-import { PRESSED_TOGGLE } from "@/components/Diagnostics/toggleStyles";
+import { FilterChip } from "@/components/ui/FilterChip";
 import type { LogLevel, LogFilterOptions } from "@/types";
 
 interface LogFiltersProps {
@@ -123,20 +123,15 @@ export function LogFilters({
           const isActive = filters.levels?.includes(level) ?? false;
           const count = levelCounts?.[level] ?? 0;
           return (
-            <Button
+            <FilterChip
               key={level}
-              variant="subtle"
-              size="xs"
+              selected={isActive}
+              count={count}
               onClick={() => handleLevelToggle(level)}
-              data-filter-chip="true"
-              className={cn("gap-1.5", isActive && PRESSED_TOGGLE)}
-              aria-pressed={isActive}
-              aria-label={`${label}${count > 0 ? ` (${count})` : ""}`}
             >
               <span aria-hidden="true" className={cn("h-1.5 w-1.5 rounded-full", dot)} />
               {label}
-              {count > 0 && <span className="tabular-nums text-text-secondary">{count}</span>}
-            </Button>
+            </FilterChip>
           );
         })}
       </div>
@@ -147,7 +142,8 @@ export function LogFilters({
             <Button
               variant="subtle"
               size="xs"
-              className={cn(activeSourceCount > 0 && PRESSED_TOGGLE)}
+              // Opens a menu, so it is not a toggle and never looks pressed: the
+              // count in the label is what says sources are narrowing the list.
             >
               Sources{activeSourceCount > 0 ? ` (${activeSourceCount})` : ""}
               <ChevronDown />

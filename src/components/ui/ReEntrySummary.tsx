@@ -157,10 +157,10 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
               variant="ghost"
               size="icon-xs"
               onClick={() => setIsPinned((p) => !p)}
-              // A toggle's name stays put; aria-pressed announces the state.
+              // A toggle's name stays put; `pressed` announces the state.
               aria-label="Pin summary"
-              aria-pressed={isPinned}
-              className={cn("[&_svg]:size-3.5", isPinned && "text-text-primary")}
+              pressed={isPinned}
+              className="[&_svg]:size-3.5"
             >
               <Pin aria-hidden="true" className={cn(isPinned && "fill-current")} />
             </Button>
