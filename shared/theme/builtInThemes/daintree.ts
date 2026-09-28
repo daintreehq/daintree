@@ -10,98 +10,93 @@ export const theme: BuiltInThemeSource = {
   palette: {
     type: "dark",
     surfaces: {
-      // Neutral-earthy charcoal by design: biome green lives in accent, focus
-      // light, and data lanes only — never the field.
+      // The understorey in shade: a moss-black field at OKLCH H ~122, sampled
+      // off the hero's own darks (#1D2015 is H 120) rather than invented.
       //
-      // Two properties are load-bearing and easy to undo by accident.
+      // The hue is also the theme's cohort address. The field used to be a
+      // smoked umber at H 48, which is Redwoods' hue (H 48-61), while Galápagos
+      // owns the green-teals (H 175-182). Moss sits between them and matches
+      // the art in the theme picker.
       //
-      // ONE HUE FAMILY. Every rung sits on the same warm axis. The ladder used
-      // to change family halfway up — grid and sidebar at OKLCH H 107, then
-      // canvas, panel and elevated at H 286, three stock Tailwind zincs — so
-      // the five planes were two different neutrals glued together.
+      // CAST ON THE SHELL, NOT ON THE WORK. C 0.011 in the grid and 0.010 in
+      // the sidebar, tapering to ~0.006 on the planes you read on. An olive
+      // cast carried at full strength across every rung is what makes a dark
+      // UI read as dirty; confined to the shell it reads as shade.
       //
-      // CAST ON THE SHELL, NOT ON THE WORK. A smoked umber (H ~48) at C 0.008
-      // in the grid, 0.005 in the sidebar, tapering to ~0.002 by canvas: the
-      // structural planes carry the character, the surfaces you actually read
-      // on stay neutral. Hue matters as much as amount. H 48 is ~115° from the
-      // accent's H 162.5, so the field moves AWAY from `#36CE94` and buys it
-      // 1.8-3.1% more chroma-plane separation. An olive field (H ~105) was
-      // tried first: it cost the accent 2.9-3.7% and turned the whole app
-      // olive, because the cast was not confined to the shell.
-      //
-      // The lightness ladder is 0.163 / 0.185 / 0.214 / 0.240 / 0.289 in OKLab
-      // L — steps .022 .029 .026 .048, ratio 2.19. canvas→panel used to be
-      // .017, under the engine's own .02 JND, so panel cards did not lift off
-      // the canvas at all and the ramp ratio ran to 3.37 against a limit of 3.
-      // Both audits are warn-only on dark, so that shipped green for a long
-      // time. Keep every adjacent step above .02.
-      grid: "#110d0b",
-      sidebar: "#151211",
-      canvas: "#1a1918",
-      panel: "#201f1f",
-      elevated: "#2b2b2a",
+      // Lightness ladder in OKLab L: .164 / .192 / .220 / .250 / .292 — steps
+      // .028 .028 .030 .042, every one above the engine's .02 JND. Both ramp
+      // audits are warn-only on dark, so keep them there by hand.
+      grid: "#0d0f0a",
+      sidebar: "#131510",
+      canvas: "#1a1b18",
+      panel: "#21221f",
+      elevated: "#2c2c29",
     },
+    // Lichen, not zinc. The ramp shares the field's hue family at C ~0.011-0.016
+    // so body copy stops reading cool against a warm-green field; stock zinc
+    // (H 286) was the one cold family in the theme.
     text: {
-      primary: "#e4e4e7",
-      secondary: "#a1a1aa",
-      muted: "#8a8a93",
-      inverse: "#1a1918",
+      primary: "#dfe0d8",
+      secondary: "#a5a89d",
+      muted: "#93968b",
+      inverse: "#1a1b18",
     },
-    border: "#292828",
+    border: "#2d2e2a",
     accent: "#36CE94",
-    accentSecondary: "#6B8D72",
+    accentSecondary: "#6B9571",
     status: {
-      success: "#6B8D72",
-      warning: "#C59A4E",
-      danger: "#C8746C",
+      success: "#6B9571",
+      // Weathered straw rather than stock amber: warning is an indicator and has
+      // to stay well below the waiting signal, which shares its hue.
+      warning: "#AD9561",
+      danger: "#D3786D",
       info: "#7B8C96",
     },
     activity: {
-      active: "#2EB37C",
-      // Idle carries the surface's own warm-neutral cast (H ~107, C 0.008), not
-      // a cool zinc. It is field chrome — it also derives the scrollbar thumb
-      // and the diff omit-gutter — so it belongs to the ladder's hue family,
-      // and biome green stays out of the field per the note on `surfaces`.
-      idle: "#585853",
-      working: "#2EB37C",
+      // Fern rather than the accent's own jade. A running process is live and
+      // keeps its green, but at C 0.085 it no longer rivals the brand accent or
+      // outshouts danger.
+      active: "#69A178",
+      // Field chrome — it also derives the scrollbar thumb and the diff
+      // omit-gutter — so it carries the ladder's moss cast.
+      idle: "#575954",
+      working: "#69A178",
       waiting: "#fbbf24",
     },
-    overlayTint: "#D4E8DD",
-    // Terminal background intentionally unset — inherits the canvas. Every
-    // legibility-bearing ANSI slot holds dL ≥ 0.18 on #1a1918 and base-vs-bright
-    // ΔE ≥ 0.03; `black` is exempt by design (it derives to the background and
-    // doubles as hidden text, so the validator skips it).
+    overlayTint: "#dfe0d8",
+    // Terminal background intentionally unset — it inherits the canvas.
+    //
+    // Fern, straw, bark-red, river blue, orchid and creek teal: every slot keeps
+    // its ANSI role but trades chroma (C 0.07-0.10) for a place in the palette.
+    // Saturated terminal colour on a near-black field is where a dark theme
+    // vibrates, and the terminal is most of the screen.
     terminal: {
-      // Selection is a fill, not a glyph: 1.41:1 on the terminal background puts
-      // it in the cohort's visible band (arashiyama 1.41, highlands 1.42) while
-      // foreground text over it still clears 9.8:1.
       selection: "#22392c",
-      red: "#e07a70",
-      green: "#2fbf85",
-      yellow: "#ECB23F",
-      blue: "#5fb3e8",
-      magenta: "#bf93ec",
-      cyan: "#4fc8d8",
-      brightRed: "#eb9a91",
-      brightGreen: "#5bd6a4",
-      brightYellow: "#ecc777",
-      brightBlue: "#93cdf0",
-      brightMagenta: "#d4b0f2",
-      brightCyan: "#86dde2",
-      brightWhite: "#fafafa",
+      red: "#d58679",
+      green: "#85b476",
+      yellow: "#d2b46a",
+      blue: "#75adcd",
+      magenta: "#bf94c0",
+      cyan: "#76bab0",
+      brightRed: "#e7a99e",
+      brightGreen: "#a8ce9b",
+      brightYellow: "#e5cf94",
+      brightBlue: "#9cc8e3",
+      brightMagenta: "#d7b3d8",
+      brightCyan: "#9fd4cc",
+      brightWhite: "#eeefe9",
     },
-    // All roles ≥ 4.5:1 on canvas except the soft-floor (3.0:1) comment/quote pair.
     syntax: {
-      comment: "#74807a",
-      punctuation: "#ccd6cf",
-      number: "#e2b369",
-      string: "#95c879",
-      operator: "#8acfd6",
-      keyword: "#c89ce8",
-      function: "#6fb7e8",
-      link: "#5fb8e4",
-      quote: "#a9b4ac",
-      chip: "#7fd4cf",
+      comment: "#868c7d",
+      punctuation: "#bcc0b2",
+      number: "#ceb170",
+      string: "#9fc185",
+      operator: "#91bfb8",
+      keyword: "#c1a0cb",
+      function: "#8bb4d0",
+      link: "#82b7cf",
+      quote: "#a3a69a",
+      chip: "#97c3af",
     },
     strategy: {
       shadowStyle: "atmospheric",
@@ -117,69 +112,55 @@ export const theme: BuiltInThemeSource = {
   },
   tokens: {
     "focus-ring": "rgba(54,206,148,0.55)",
-    "search-highlight-background": "rgba(54,206,148,0.20)",
+    // Every match at once is membership, not a focus anchor, so the wash is
+    // lichen-neutral like the palette's own match band. The one current match
+    // keeps the accent: xterm paints it from `search-highlight-text`, and the
+    // CodeMirror current match underlines with `search-selected-result-border`.
+    "search-highlight-background": "rgba(223,224,216,0.14)",
     "search-highlight-text": "#36CE94",
-    "search-match-badge-background": "rgba(54,206,148,0.20)",
-    "search-match-badge-text": "#36CE94",
     "search-selected-result-border": "rgba(54,206,148,0.30)",
-    "search-selected-result-icon": "#36CE94",
-    "surface-toolbar": "#151211",
-    // The resting edge of every text field. It is its own token, not the
-    // `border-strong` the inputs used to share with dividers and card edges: an
-    // input boundary is a UI component under WCAG 1.4.11 and owes 3:1 on its
-    // own, while the divider ladder is tuned for separation and reads as hard
-    // ruled lines anywhere near that weight.
-    //
-    // Solid rather than alpha: a white-alpha border composites to a different
-    // colour on every surface, so a value that clears the ratio inside a panel
-    // quietly fails on the elevated field fill. `border-strong`
-    // (white 14% → ~#484848 on the field) measured ~1.55:1, less than half.
-    //
-    // 3.11:1 on `surface-input` (#2b2b2a) and 3.61:1 on `surface-panel`
-    // (#201f1f) — the quietest rung that clears both with margin. Warm-neutral
-    // to stay on the ladder's hue family. `contrastRatio` from `shared/theme`
-    // reproduces both numbers.
-    "border-input": "#767674",
-    // The engine derives this token as `text-primary` at 35% alpha, which
-    // measured 2.7–2.8:1 on every daintree surface. That is below even this
-    // repo's own placeholder floor — `MATRIX_CONTRAST_PAIRS` treats placeholder
-    // as a 3:1 graphical-tier de-emphasis, not 4.5:1 text — and nothing caught
-    // it because that pair is `appliesTo: "light"`, so no dark theme is audited
-    // against it at all.
-    //
-    // Solid rather than alpha-derived: an alpha text colour bakes into
-    // `color-mix()` and its contrast cannot be recovered downstream.
-    //
-    // Landed at 3.6:1 on the worst surface (panel-elevated) up to 4.9:1 on the
-    // grid — the house's 3:1 tier with room to spare, not the 4.5:1 body-text
-    // floor. Clearing AA was tried first and is wrong here: at that level the
-    // token stops receding from `text-muted`, which inverts the role ramp and
-    // fails the ordering assertion in `scripts/theme-text-contrast.test.ts`.
-    // A placeholder has to stay the quietest rung, so the tier wins.
-    // `npm run theme:text-contrast -- --theme daintree` reproduces the numbers.
-    //
-    // Set here rather than on the shared derivation: that fallback feeds all
-    // fifteen themes and this pass only measured daintree.
-    "text-placeholder": "#808087",
-    // ANSI 90 is the conventional dim slot for hints, timestamps and secondary
-    // output — it is read as body text, so it owes AA. 4.55:1 on the terminal
-    // background, and still 3.0x quieter than the foreground's 13.85:1, so it
-    // reads de-emphasized rather than merely dark. Split out of `activity.idle`
-    // (which it used to inherit at 2.27:1) because a quiet idle dot and legible
-    // dim text are different jobs.
-    "terminal-bright-black": "#82827c",
-    // Forge metadata, re-cut off GitHub's brand hexes and into this palette.
-    // The engine defaults (#3fb950 / #a371f7 / #f85149 / #8b949e) put a fourth
-    // green and a neon red into resting toolbar chrome. All four now land in a
-    // 5.7-6.2:1 band on `surface-panel`: above the muted-text floor, below
-    // `text-secondary` (6.57:1), so a forge chip is never louder than the prose
-    // it annotates — and far below the waiting signal at 10.09:1.
+    // Toolbar, sidebar and dock are one shell plane; keep them in lockstep.
+    "surface-toolbar": "#131510",
+    // The resting edge of every text field. An input boundary is a UI component
+    // under WCAG 1.4.11 and owes 3:1 on its own; the divider ladder is tuned for
+    // separation and would read as hard ruled lines at that weight. Solid, not
+    // white-alpha, because an alpha border composites differently on every
+    // surface. 3.22:1 on `surface-input` (#2c2c29), 3.67:1 on `surface-panel`.
+    "border-input": "#787a71",
+    // A placeholder is the quietest rung of the ramp, so this house tiers it at
+    // 3:1 rather than AA (`scripts/theme-text-contrast.test.ts` orders the ramp).
+    // 3.58:1 on the elevated field up to 4.92:1 on the grid. Solid rather than
+    // alpha-derived: an alpha text colour bakes into `color-mix()`.
+    "text-placeholder": "#7f8278",
+    // ANSI 90, the dim slot for hints and timestamps, is read as body text and
+    // owes AA: 4.88:1 on the terminal background, still 2.7x quieter than the
+    // foreground's 13.01:1. Split from `activity.idle`, which is a quiet dot.
+    "terminal-bright-black": "#878981",
+    // Forge metadata re-cut off GitHub's brand hexes into this palette. All four
+    // sit at 5.4-5.8:1 on `surface-panel`, below `text-secondary` (6.62:1), so a
+    // forge chip is never louder than the prose it annotates.
     "pr-open": "#5FA47F",
     "pr-merged": "#AE8ED6",
     "pr-closed": "#D0827A",
     "pr-draft": "#9A9A94",
-    // Green-black shadow/scrim ink; keep C ≤ ~0.02 or the fog reads as a
-    // colored glow instead of air.
+    // The engine's categories run at C 0.11-0.14, close to the working and brand
+    // greens. Organisational metadata should not compete with agent state, so
+    // they keep their hues at roughly half the chroma. Orange sits at L 0.70 to
+    // stay clear of `status-success` under protanopia.
+    "category-blue": "oklch(0.68 0.075 250)",
+    "category-purple": "oklch(0.68 0.075 310)",
+    "category-cyan": "oklch(0.70 0.065 215)",
+    "category-green": "oklch(0.68 0.070 145)",
+    "category-amber": "oklch(0.71 0.080 75)",
+    "category-orange": "oklch(0.70 0.085 45)",
+    "category-teal": "oklch(0.68 0.065 185)",
+    "category-indigo": "oklch(0.67 0.085 275)",
+    "category-rose": "oklch(0.68 0.080 5)",
+    "category-pink": "oklch(0.70 0.075 340)",
+    "category-violet": "oklch(0.68 0.075 295)",
+    "category-slate": "oklch(0.67 0.030 240)",
+    // Green-black shadow and scrim ink; keep C ≤ ~0.02 or the fog reads as a
+    // coloured glow instead of air.
     "shadow-color": "rgba(6,11,8,0.55)",
     "shadow-ambient": "0 4px 16px rgba(5,10,7,0.18)",
     "shadow-floating": "0 14px 40px rgba(5,10,7,0.30)",
@@ -191,32 +172,32 @@ export const theme: BuiltInThemeSource = {
     "grain-opacity": "0.03",
   },
   extensions: {
-    "pulse-before-bg": "#181616",
-    "pulse-card-bg": "#201f1f",
+    "pulse-before-bg": "#161814",
+    "pulse-card-bg": "#21221f",
     "pulse-card-shadow": "0 1px 3px rgba(5,10,7,0.40)",
     "pulse-control-hover-bg": "rgba(255,255,255,0.05)",
-    "pulse-empty-bg": "#252424",
-    // Glow-worm heat ramp: opaque stops, level 4 = accent (a data lane, outside
-    // the accent budget); level 1 must stay ≥ JND above the empty cell.
+    "pulse-empty-bg": "#252622",
+    // Heat ramp: opaque stops, level 4 = accent (a data lane, outside the
+    // accent budget); level 1 must stay ≥ JND above the empty cell.
     "pulse-heat-color": "#36CE94",
     "pulse-heat-1": "#23402f",
     "pulse-heat-2": "#2b6243",
     "pulse-heat-3": "#319966",
     "pulse-heat-4": "#36CE94",
-    "pulse-range-bg": "#1a1918",
-    "pulse-ring-offset": "#201f1f",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #2b2b2a 25%, #313130 50%, #2b2b2a 75%)",
-    "dock-bg": "#151211",
-    "settings-dialog-bg": "#201f1f",
-    "settings-card-bg": "#252424",
-    "settings-list-item-bg": "#252424",
-    // rgb(19,19,18) = the sidebar surface; keep in lockstep with surfaces.sidebar.
-    "dialog-header-bg": "rgba(21,18,17,0.60)",
-    "settings-search-bg": "#1A1918",
-    "settings-search-muted": "#a1a1aa",
-    "settings-sidebar-bg": "rgba(21,18,17,0.50)",
-    // Composited settings-sidebar-bg over the shell.
-    "settings-sidebar-scroll-fade": "#1b1918",
+    "pulse-range-bg": "#1a1b18",
+    "pulse-ring-offset": "#21221f",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #2c2c29 25%, #31322f 50%, #2c2c29 75%)",
+    "dock-bg": "#131510",
+    "settings-dialog-bg": "#21221f",
+    "settings-card-bg": "#252622",
+    "settings-list-item-bg": "#252622",
+    // rgb(19,21,16) is the sidebar surface; keep in lockstep with surfaces.sidebar.
+    "dialog-header-bg": "rgba(19,21,16,0.60)",
+    "settings-search-bg": "#1a1b18",
+    "settings-search-muted": "#a5a89d",
+    "settings-sidebar-bg": "rgba(19,21,16,0.50)",
+    // settings-sidebar-bg composited over settings-dialog-bg.
+    "settings-sidebar-scroll-fade": "#1a1c18",
     "sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
     "sidebar-active-bg": "rgba(255,255,255,0.065)",
     "sidebar-hover-bg": "rgba(255,255,255,0.048)",
@@ -227,18 +208,18 @@ export const theme: BuiltInThemeSource = {
     "toolbar-control-armed-bg": "rgba(255,255,255,0.14)",
     "toolbar-control-armed-shadow": "inset 0 0 0 1px rgba(255,255,255,0.12)",
     "toolbar-control-hover-bg": "rgba(255,255,255,0.10)",
-    "toolbar-divider": "rgba(41,40,40,0.5)",
+    "toolbar-divider": "rgba(45,46,42,0.5)",
     // Neutral white top-light, deliberately very subtle — don't re-tint it green.
     "toolbar-project-bg":
       "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0) 70%), rgba(255,255,255,0.03)",
-    "toolbar-project-border": "rgba(41,40,40,0.5)",
+    "toolbar-project-border": "rgba(45,46,42,0.5)",
     "toolbar-project-chip-bg": "rgba(255,255,255,0.05)",
-    "toolbar-project-chip-border": "rgba(41,40,40,0.6)",
-    "toolbar-project-meta-fg": "#a1a1aa",
+    "toolbar-project-chip-border": "rgba(45,46,42,0.6)",
+    "toolbar-project-meta-fg": "#a5a89d",
     "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.06)",
     "toolbar-stats-bg": "rgba(255,255,255,0.05)",
-    "toolbar-stats-border": "rgba(41,40,40,0.5)",
-    "toolbar-stats-divider": "rgba(41,40,40,0.5)",
+    "toolbar-stats-border": "rgba(45,46,42,0.5)",
+    "toolbar-stats-divider": "rgba(45,46,42,0.5)",
     "toolbar-stats-hover-bg": "rgba(255,255,255,0.10)",
   },
 };
