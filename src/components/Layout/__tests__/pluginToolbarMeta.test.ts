@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import { buildPluginToolbarMeta } from "../pluginToolbarMeta";
-import { DEFAULT_PLUGIN_BUTTON_ICON, PLUGIN_ICON_COMPONENTS } from "@/components/icons/pluginIconRegistry";
+import {
+  DEFAULT_PLUGIN_BUTTON_ICON,
+  PLUGIN_ICON_COMPONENTS,
+} from "@/components/icons/pluginIconRegistry";
 
 function config(overrides: Partial<ToolbarButtonConfig> = {}): ToolbarButtonConfig {
   return {
