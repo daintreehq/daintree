@@ -208,6 +208,11 @@ async function snapMidTransition(
     { sel: rowSel(filePath), at: MID_TRANSITION_MS }
   );
   transitionLog[file] = running;
+  // Chip, dir, base and churn fade together; fewer, or mismatched timings, is a snap.
+  const fades = running.filter((r) => r.property === "opacity");
+  if (fades.length < 4 || new Set(fades.map((r) => r.duration)).size !== 1) {
+    throw new Error(`${file}: expected 4 matched opacity fades, got ${JSON.stringify(fades)}`);
+  }
   await snapRow(page, file, filePath);
   await setFreeze(page, true);
   await settle(page, 100);
@@ -284,15 +289,6 @@ test("review hub file row review — viewed dim and stage control", async () => 
 
       await page.locator(SEL.reviewHub.stageButton(UNSTAGED_PATH)).first().hover();
       await settle(page, 700);
-      transitionLog[shot("12-stage-button-hover")] = await page
-        .locator(SEL.reviewHub.stageButton(UNSTAGED_PATH))
-        .first()
-        .evaluate((el) => ({
-          hovered: el.matches(":hover"),
-          color: getComputedStyle(el).color,
-          background: getComputedStyle(el).backgroundColor,
-          glyph: getComputedStyle(el.querySelector("svg")!).color,
-        }));
       await snapRow(page, shot("12-stage-button-hover"), UNSTAGED_PATH);
 
       await page.locator(SEL.reviewHub.unstageButton(STAGED_PATH)).first().hover();

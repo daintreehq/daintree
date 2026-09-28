@@ -162,7 +162,8 @@ function FileStageRowComponent({
   }, []);
 
   // A viewed file recedes by its content only: the row's controls and focus
-  // rings stay at full strength, since they are still live.
+  // rings stay at full strength, since they are still live. Every element that
+  // carries the dim also transitions opacity, so the row recedes as one piece.
   const viewedDim = viewed && "opacity-60";
 
   const row = (
@@ -228,7 +229,7 @@ function FileStageRowComponent({
             aria-hidden="true"
             className={cn(
               "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-              "text-3xs font-medium leading-4 h-4 min-w-[16px]",
+              "text-3xs font-medium leading-4 h-4 min-w-[16px] transition-opacity duration-150 ease-out",
               config.bg,
               config.text,
               viewedDim
@@ -240,7 +241,7 @@ function FileStageRowComponent({
             <PathTail
               data-testid="file-stage-row-dir"
               className={cn(
-                "shrink font-mono text-2xs transition-colors",
+                "shrink font-mono text-2xs transition-[color,opacity] duration-150 ease-out",
                 viewedDim,
                 generated
                   ? "text-text-placeholder"
@@ -253,11 +254,9 @@ function FileStageRowComponent({
           <span
             data-testid="file-stage-row-base"
             className={cn(
-              "shrink truncate font-medium font-mono text-2xs transition-colors",
+              "shrink truncate font-medium font-mono text-2xs transition-[color,opacity] duration-150 ease-out",
               viewedDim,
-              generated
-                ? "text-daintree-text/40"
-                : "text-text-primary group-hover/stagerow:text-text-primary"
+              generated ? "text-daintree-text/40" : "text-text-primary"
             )}
           >
             {base}
@@ -269,7 +268,7 @@ function FileStageRowComponent({
         <div
           data-testid="file-stage-row-churn"
           className={cn(
-            "ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums",
+            "ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums transition-opacity duration-150 ease-out",
             (generated || viewed) && "opacity-60"
           )}
         >
@@ -313,15 +312,12 @@ function FileStageRowComponent({
             onClick={handleToggle}
             className={cn(
               "w-5 h-5 flex items-center justify-center rounded shrink-0 ml-2 transition-colors",
+              "text-text-secondary hover:text-text-primary focus-visible:text-text-primary",
               "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             )}
             aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
           >
-            {isStaged ? (
-              <Minus className="w-3 h-3 text-text-secondary" />
-            ) : (
-              <Plus className="w-3 h-3 text-text-secondary" />
-            )}
+            {isStaged ? <Minus className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
           </button>
         </TooltipTrigger>
         <TooltipContent side="left">{isStaged ? "Unstage" : "Stage"}</TooltipContent>
