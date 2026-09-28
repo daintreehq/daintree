@@ -82,8 +82,8 @@ function project(
 }
 
 const PROJECTS: ProjectSwitcherProjectRow[] = [
-  // The window is in a scratch, so the scratch section carries the "you are
-  // here" check and no project is current.
+  // The window is in a scratch, so the scratch section carries the "Current"
+  // label and no project is current.
   project("daintree", "daintree", "🌳", "emerald", "running", {
     activeAgentCount: 2,
     processCount: 3,

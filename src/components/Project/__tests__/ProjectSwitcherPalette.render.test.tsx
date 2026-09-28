@@ -877,6 +877,50 @@ describe("ProjectSwitcherPalette current-project marker", () => {
     expect(screen.queryByRole("option", { name: /Other Project, current/ })).toBeNull();
   });
 
+  // The visible word follows the band: in browse the header already names the
+  // row, and only search, which drops the header, needs the row to say it.
+  it("draws the visible Current label only where no band header says it", () => {
+    const hasVisibleLabel = (row: HTMLElement) =>
+      Array.from(row.querySelectorAll('[aria-hidden="true"]')).some(
+        (el) => el.textContent === "Current"
+      );
+
+    const { unmount } = render(
+      <ProjectSwitcherPalette {...modalProps} results={currentAndOther} />
+    );
+    expect(hasVisibleLabel(screen.getByRole("option", { name: /Active Project/ }))).toBe(false);
+    unmount();
+
+    render(
+      <ProjectSwitcherPalette {...modalProps} query="proj" rankedSearch results={currentAndOther} />
+    );
+    expect(hasVisibleLabel(screen.getByRole("option", { name: /Active Project/ }))).toBe(true);
+    expect(hasVisibleLabel(screen.getByRole("option", { name: /Other Project/ }))).toBe(false);
+  });
+
+  // Band membership is frozen while the palette is open, so a project that
+  // became active mid-session can still sit under another header. With no
+  // "Current project" header over it, the row has to carry the word itself.
+  it("draws the label on an active row stranded outside the Current project band", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[
+          makeProject({ id: "moved", name: "Moved Here", isActive: true, section: "running" }),
+          makeProject({ id: "other", name: "Other Project", section: "other" }),
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Running" })).toBeTruthy();
+    const row = screen.getByRole("option", { name: /Moved Here/ });
+    expect(
+      Array.from(row.querySelectorAll('[aria-hidden="true"]')).some(
+        (el) => el.textContent === "Current"
+      )
+    ).toBe(true);
+  });
+
   // The two changes meet on this row: the project you are in is usually the one
   // with nothing running, so the marker has to survive the collapse that takes
   // its status line and dot away.

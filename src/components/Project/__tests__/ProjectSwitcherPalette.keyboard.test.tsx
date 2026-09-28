@@ -687,7 +687,7 @@ describe("ProjectSwitcherPalette pointer cursor", () => {
 });
 
 describe("ProjectSwitcherPalette current workspace mark", () => {
-  it("checks the workspace you are in, apart from the cursor fill", () => {
+  it("labels the workspace you are in, apart from the cursor fill", () => {
     render(
       <ProjectSwitcherPalette
         isOpen
@@ -709,9 +709,11 @@ describe("ProjectSwitcherPalette current workspace mark", () => {
 
     const here = document.getElementById("project-option-here")!;
     const there = document.getElementById("project-option-there")!;
-    expect(here.querySelector("svg.lucide-check")).not.toBeNull();
-    expect(there.querySelector("svg.lucide-check")).toBeNull();
-    // The cursor is on the other row; the check is not the cursor.
+    expect(here.textContent).toContain("Current");
+    expect(there.textContent).not.toContain("Current");
+    // A check read as "done" among agent status; the switcher says it in words.
+    expect(here.querySelector("svg.lucide-check")).toBeNull();
+    // The cursor is on the other row; the label is not the cursor.
     expect(there.getAttribute("aria-selected")).toBe("true");
     expect(here.getAttribute("aria-selected")).toBe("false");
   });
