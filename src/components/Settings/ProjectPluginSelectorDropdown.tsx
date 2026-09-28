@@ -80,12 +80,17 @@ export function ProjectPluginSelectorDropdown({
       placeholder="Filter plugins…"
       noMatches={(q) => <>No plugins match &ldquo;{q}&rdquo;</>}
       switchLabel="Switch plugin"
+      triggerLabel={`Switch plugin, current: ${selected ? selected.name : "This project"}`}
+      status={
+        selected ? (
+          <span data-testid="project-plugin-selector-status">{selected.status}</span>
+        ) : undefined
+      }
       current={
         selected ? (
           <>
             <Package size={18} className="shrink-0 text-text-secondary" aria-hidden="true" />
             <span className="min-w-0 truncate text-base font-semibold">{selected.name}</span>
-            <span className="shrink-0 text-xs text-text-secondary">{selected.status}</span>
           </>
         ) : (
           <>

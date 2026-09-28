@@ -142,6 +142,12 @@ const DURABLE_ALLOWLIST = new Set([
   // reserved for. Membership is a neutral fill plus a checked box, so the two
   // marks cannot be confused with each other (#11989).
   "src/components/Worktree/WorktreeOverviewRow.tsx",
+
+  // Settings subject picker: the page's subject drawn as the active tab on a
+  // subtab baseline. It replaced a subtab bar on these pages, and the subtab
+  // underline is one of the two accents the settings dialog reserves
+  // (.claude/rules/settings-pages.md). One underline per page, never more.
+  "src/components/Settings/SettingsSubjectPicker.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all

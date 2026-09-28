@@ -857,8 +857,9 @@ describe("ProjectPluginsTab failures and state honesty", () => {
       await select("Acme Dashboard");
 
       const toggle = await screen.findByTestId("project-plugin-mute-switch");
-      const trigger = screen.getByTestId("project-plugin-selector-trigger");
-      const running = trigger.textContent?.includes("Running") ?? false;
+      // The picker states the selected plugin's status beside its trigger.
+      const status = screen.getByTestId("project-plugin-selector-status");
+      const running = status.textContent?.includes("Running") ?? false;
       expect(toggle.getAttribute("aria-checked")).toBe(String(running));
     }
   );

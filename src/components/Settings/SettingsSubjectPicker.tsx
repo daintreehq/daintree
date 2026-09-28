@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -20,13 +20,26 @@ interface SettingsSubjectPickerProps<T extends { id: string }> {
   groupOf?: (entry: T) => string | undefined;
   activeId: string;
   onChange: (id: string) => void;
-  /** The trigger's content: identity mark, name and status for the page being shown. */
+  /** The trigger's content: identity mark and name for the page being shown. */
   current: ReactNode;
+  /**
+   * Facts about the page's subject ("Running", "Skips permission prompts"), shown
+   * beside the trigger rather than in it. Inside, they ran straight into the verb at
+   * the same size and tone and read as one phrase ("Running Switch plugin").
+   */
+  status?: ReactNode;
+  /** Controls that act on the page's subject ("View usage"), on the strip's right end. */
+  actions?: ReactNode;
   /**
    * The verb on the trigger's right segment ("Switch agent"). The name alone read
    * as a page heading, so nothing at rest said the page's subject could change.
    */
   switchLabel: string;
+  /**
+   * The trigger's accessible name, action first ("Switch agent, current: Codex").
+   * Left to its content it ran the name, every status word and the verb together.
+   */
+  triggerLabel: string;
   /** A row's content: identity mark, name and status. The current-page check is added here. */
   renderRow: (item: T) => ReactNode;
   listLabel: string;
@@ -65,7 +78,10 @@ export function SettingsSubjectPicker<T extends { id: string }>({
   activeId,
   onChange,
   current,
+  status,
+  actions,
   switchLabel,
+  triggerLabel,
   renderRow,
   listLabel,
   filterLabel,
@@ -76,6 +92,7 @@ export function SettingsSubjectPicker<T extends { id: string }>({
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(-1);
   const pointerOpenRef = useRef(false);
+  const statusId = useId();
 
   const q = query.trim().toLowerCase();
   const items: T[] = [overview, ...entries.filter((entry) => !q || matches(entry, q))];
@@ -153,46 +170,63 @@ export function SettingsSubjectPicker<T extends { id: string }>({
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-haspopup="listbox"
-          data-testid={`${idPrefix}-trigger`}
-          onPointerDown={() => {
-            pointerOpenRef.current = true;
-          }}
-          onKeyDown={() => {
-            pointerOpenRef.current = false;
-          }}
-          className={cn(
-            // A resting surface and edge, content-width: it has to read as a control
-            // before it is hovered (a bare name looked like the page's heading), but
-            // not as a full-width field holding one more setting.
-            "group/switcher inline-flex h-10 max-w-full min-w-0 items-stretch",
-            "rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle text-text-primary",
-            "transition-colors duration-150 ease-out",
-            "hover:border-border-strong hover:bg-overlay-soft",
-            "data-[state=open]:border-border-strong data-[state=open]:bg-overlay-soft",
-            "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-          )}
-        >
-          <span className="flex min-w-0 items-center gap-2 pl-3 pr-3">{current}</span>
-          {/* The verb, in its own segment, so "this changes what the page is about"
-              is said in words rather than left to a chevron. */}
-          <span
+      {/* The strip these pages had before the picker: a subtab bar's baseline, with the
+          page's subject sitting on it as the active tab. It says "this switches the
+          page" in the dialog's own tab language, and the underline is the subtab
+          accent the settings dialog already reserves for exactly this. */}
+      <div className="flex min-w-0 items-end gap-3 border-b border-border-default">
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-haspopup="listbox"
+            aria-label={triggerLabel}
+            aria-describedby={status ? statusId : undefined}
+            data-testid={`${idPrefix}-trigger`}
+            onPointerDown={() => {
+              pointerOpenRef.current = true;
+            }}
+            onKeyDown={() => {
+              pointerOpenRef.current = false;
+            }}
             className={cn(
-              "flex shrink-0 items-center gap-1.5 border-l border-border-default px-3",
-              "text-xs font-medium text-text-secondary",
+              "group/switcher -mb-px inline-flex min-w-0 max-w-full items-center gap-2 px-3 pt-1.5 pb-2.5",
+              "rounded-t-[var(--radius-md)] border-b-2 border-accent-primary text-text-primary",
               "transition-colors duration-150 ease-out",
-              "group-hover/switcher:text-text-primary group-data-[state=open]/switcher:text-text-primary"
+              "hover:bg-overlay-soft data-[state=open]:bg-overlay-soft",
+              // Same selection cue the subtab bar keeps under forced colours, where the
+              // accent underline becomes one more system-coloured line.
+              "forced-colors:outline forced-colors:outline-2 forced-colors:[outline-color:Highlight]",
+              "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             )}
           >
-            {switchLabel}
-            <ChevronsUpDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            {current}
+            {/* The verb, as a chip, so "you can change this" is said in words and in a
+                shape — a bare chevron after the name read as a heading. No divider: a
+                hairline inside one button is the split-button signature. */}
+            <span
+              className={cn(
+                "ml-1.5 inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-2 py-1",
+                // No hover of its own: the whole tab answers the pointer, so the chip
+                // never reads as a second button inside the first.
+                "bg-overlay-soft text-xs font-medium text-text-primary"
+              )}
+            >
+              {switchLabel}
+              <ChevronsUpDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            </span>
+          </button>
+        </PopoverTrigger>
+        {status && (
+          <span
+            id={statusId}
+            className="flex min-w-0 items-center gap-1.5 pb-3 text-xs text-text-secondary"
+          >
+            {status}
           </span>
-        </button>
-      </PopoverTrigger>
+        )}
+        {actions && <div className="ml-auto flex shrink-0 items-center gap-2 pb-2">{actions}</div>}
+      </div>
       <PopoverContent
         align="start"
         sideOffset={6}

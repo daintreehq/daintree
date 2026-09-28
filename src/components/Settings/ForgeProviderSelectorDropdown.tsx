@@ -61,6 +61,7 @@ export function ForgeProviderSelectorDropdown({
       placeholder="Filter providers…"
       noMatches={(q) => <>No providers match &ldquo;{q}&rdquo;</>}
       switchLabel="Switch provider"
+      triggerLabel={`Switch provider, current: ${selectedProvider ? selectedProvider.name : "General"}`}
       current={
         <>
           <SelectedIcon size={18} className="shrink-0 text-text-secondary" />

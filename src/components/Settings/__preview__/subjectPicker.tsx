@@ -179,21 +179,19 @@ function AgentsPage() {
   const agent = AGENT_OPTIONS.find((a) => a.id === active);
   return (
     <div className="space-y-8">
-      <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <AgentSelectorDropdown
-            agentOptions={AGENT_OPTIONS}
-            activeSubtab={active}
-            onSubtabChange={setActive}
-          />
-        </div>
-        {agent && (
-          <Button size="sm" variant="outline" className="shrink-0">
-            <ExternalLink aria-hidden="true" />
-            View usage
-          </Button>
-        )}
-      </div>
+      <AgentSelectorDropdown
+        agentOptions={AGENT_OPTIONS}
+        activeSubtab={active}
+        onSubtabChange={setActive}
+        actions={
+          agent && (
+            <Button size="sm" variant="outline" className="shrink-0">
+              <ExternalLink aria-hidden="true" />
+              View usage
+            </Button>
+          )
+        }
+      />
       <PageBody title={agent ? "Launch" : "Default agent"} />
     </div>
   );

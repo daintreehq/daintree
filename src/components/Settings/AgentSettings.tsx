@@ -425,40 +425,38 @@ export function AgentSettings({
       <p role="status" className="sr-only">
         {recheckStatus}
       </p>
-      <div ref={pickerRowRef} className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <AgentSelectorDropdown
-            agentOptions={agentOptions}
-            activeSubtab={
-              isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)
-            }
-            onSubtabChange={onSubtabChange}
-          />
-        </div>
-        {activeAgent?.usageUrl && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="shrink-0"
-            onClick={async () => {
-              const url = activeAgent.usageUrl?.trim();
-              if (!url) return;
-              try {
-                const result = await actionService.dispatch(
-                  "system.openExternal",
-                  { url },
-                  { source: "user" }
-                );
-                if (!result.ok) throw new Error(result.error.message);
-              } catch (error) {
-                logError("Failed to open usage URL", error);
-              }
-            }}
-          >
-            <ExternalLink aria-hidden="true" />
-            View usage
-          </Button>
-        )}
+      <div ref={pickerRowRef}>
+        <AgentSelectorDropdown
+          agentOptions={agentOptions}
+          activeSubtab={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
+          onSubtabChange={onSubtabChange}
+          actions={
+            activeAgent?.usageUrl && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                onClick={async () => {
+                  const url = activeAgent.usageUrl?.trim();
+                  if (!url) return;
+                  try {
+                    const result = await actionService.dispatch(
+                      "system.openExternal",
+                      { url },
+                      { source: "user" }
+                    );
+                    if (!result.ok) throw new Error(result.error.message);
+                  } catch (error) {
+                    logError("Failed to open usage URL", error);
+                  }
+                }}
+              >
+                <ExternalLink aria-hidden="true" />
+                View usage
+              </Button>
+            )
+          }
+        />
       </div>
 
       {activeAgentId && <AgentQuotaSection agentId={activeAgentId} />}
