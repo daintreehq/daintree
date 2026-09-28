@@ -229,6 +229,7 @@ export function GettingStartedChecklist({
             onClick={onDismiss}
             aria-label="Dismiss checklist"
             tooltip="Dismiss — reopen from Help → Getting Started"
+            tooltipClassName="z-[var(--z-toast-overlay)]"
           />
         </div>
 

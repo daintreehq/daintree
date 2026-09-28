@@ -13,6 +13,12 @@ export interface DismissButtonProps extends Omit<
   /** Tooltip text. Defaults to "Dismiss"; the accessible name carries the object. */
   tooltip?: React.ReactNode;
   tooltipSide?: React.ComponentProps<typeof TooltipContent>["side"];
+  /**
+   * Lifts the tooltip above a surface on a higher layer than the popover plane
+   * it portals to by default — a toast-layer card needs `z-[var(--z-toast-overlay)]`
+   * or its tooltip opens behind the card.
+   */
+  tooltipClassName?: string;
 }
 
 /**
@@ -25,7 +31,7 @@ export interface DismissButtonProps extends Omit<
  * primitive's, which is the point.
  */
 export const DismissButton = React.forwardRef<HTMLButtonElement, DismissButtonProps>(
-  ({ className, tooltip = "Dismiss", tooltipSide = "bottom", ...props }, ref) => (
+  ({ className, tooltip = "Dismiss", tooltipSide = "bottom", tooltipClassName, ...props }, ref) => (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
@@ -38,7 +44,9 @@ export const DismissButton = React.forwardRef<HTMLButtonElement, DismissButtonPr
           <X aria-hidden="true" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side={tooltipSide}>{tooltip}</TooltipContent>
+      <TooltipContent side={tooltipSide} className={tooltipClassName}>
+        {tooltip}
+      </TooltipContent>
     </Tooltip>
   )
 );

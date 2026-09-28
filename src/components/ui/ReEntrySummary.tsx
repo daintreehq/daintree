@@ -164,7 +164,11 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
             >
               <Pin aria-hidden="true" className={cn(isPinned && "fill-current")} />
             </Button>
-            <DismissButton onClick={state.dismiss} aria-label="Dismiss summary" />
+            <DismissButton
+              onClick={state.dismiss}
+              aria-label="Dismiss summary"
+              tooltipClassName="z-[var(--z-toast-overlay)]"
+            />
           </div>
         </div>
 

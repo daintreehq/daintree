@@ -867,7 +867,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             handleAddTab();
                           }}
                           onPointerDown={(e) => e.stopPropagation()}
-                          className="[&_svg]:size-3.5"
+                          className="shrink-0 [&_svg]:size-3.5"
                           aria-label="Duplicate panel as new tab"
                         >
                           <CopyPlus aria-hidden="true" />
@@ -885,7 +885,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               variant="ghost"
                               size="icon-xs"
                               onPointerDown={(e) => e.stopPropagation()}
-                              className="[&_svg]:size-3.5"
+                              className="shrink-0 [&_svg]:size-3.5"
                               aria-label={
                                 activeTabIsHidden
                                   ? `Show ${hiddenPanels.length} hidden tabs, including active`

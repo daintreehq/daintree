@@ -705,7 +705,11 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
             );
           })()}
 
-        <DismissButton onClick={handleDismiss} aria-label="Dismiss notification" />
+        <DismissButton
+          onClick={handleDismiss}
+          aria-label="Dismiss notification"
+          tooltipClassName="z-[var(--z-toast-overlay)]"
+        />
       </div>
     </div>
   );
