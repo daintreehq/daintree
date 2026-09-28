@@ -232,6 +232,25 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
   );
 }
 
+/** Veils the terminal while the PTY host is down; says so while it reconnects. */
+export function TerminalBackendOverlay({ recovering }: { recovering: boolean }) {
+  return (
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-strong backdrop-blur-sm"
+      aria-hidden={recovering ? undefined : "true"}
+      role={recovering ? "status" : undefined}
+      aria-live={recovering ? "polite" : undefined}
+    >
+      {recovering && (
+        <div className="flex flex-col items-center gap-3">
+          <Spinner size="2xl" className="text-status-warning" />
+          <span className="text-text-inverse font-medium">Reconnecting...</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TerminalStartupPlaceholder({
   agentId,
   onCancel,
@@ -1654,19 +1673,7 @@ function TerminalPaneComponent({
                 />
 
                 {(isBackendDisconnected || isBackendRecovering) && (
-                  <div
-                    className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-strong backdrop-blur-sm"
-                    aria-hidden={isBackendDisconnected ? "true" : undefined}
-                    role={isBackendRecovering ? "status" : undefined}
-                    aria-live={isBackendRecovering ? "polite" : undefined}
-                  >
-                    {isBackendRecovering && (
-                      <div className="flex flex-col items-center gap-3">
-                        <Spinner size="2xl" className="text-status-warning" />
-                        <span className="text-text-inverse font-medium">Reconnecting...</span>
-                      </div>
-                    )}
-                  </div>
+                  <TerminalBackendOverlay recovering={isBackendRecovering} />
                 )}
               </div>
 

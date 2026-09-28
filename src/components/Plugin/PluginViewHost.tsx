@@ -206,7 +206,7 @@ interface PluginViewLoadErrorProps {
   message: string;
 }
 
-function PluginViewLoadError({ pluginId, displayName, message }: PluginViewLoadErrorProps) {
+export function PluginViewLoadError({ pluginId, displayName, message }: PluginViewLoadErrorProps) {
   useEffect(() => {
     logWarn("[PluginViewHost] view configuration error", { pluginId, displayName, message });
   }, [pluginId, displayName, message]);

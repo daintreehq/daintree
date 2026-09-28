@@ -107,8 +107,12 @@ describe("Worktrees sidebar control zone — issue #11991", () => {
     expect(sidebar).toMatch(/group-focus-within\/header:visible/);
   });
 
-  it("honours reduced motion on the reconnecting spinner", () => {
-    const spinners = [...sidebar.matchAll(/className="[^"]*\banimate-spin\b[^"]*"/g)].map(
+  it("honours reduced motion on the reconnecting spinner", async () => {
+    const badge = await fs.readFile(
+      path.resolve(__dirname, "../WorktreesReconnectingBadge.tsx"),
+      "utf-8"
+    );
+    const spinners = [...badge.matchAll(/className="[^"]*\banimate-spin\b[^"]*"/g)].map(
       (m) => m[0]
     );
     expect(spinners.length).toBeGreaterThan(0);

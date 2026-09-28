@@ -35,7 +35,6 @@ import {
   useDohertyGate,
   useKeepMounted,
 } from "@/hooks";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import {
   WorktreeSidebarSearchBar,
   QuickStateFilterBar,
@@ -46,6 +45,7 @@ import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps"
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
+import { WorktreesReconnectingBadge } from "./WorktreesReconnectingBadge";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Button } from "@/components/ui/button";
 import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
@@ -1839,34 +1839,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             Worktrees
           </h2>
           {showReconnecting && (
-            <span
-              aria-hidden="true"
-              className="shrink-0"
-              data-reconnect-escalated={showReconnectingEscalated ? "true" : undefined}
-            >
-              {showReconnectingEscalated && reconnectingAt !== null ? (
-                <Tooltip autoDismiss={false}>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs">
-                      <span className="inline-flex shrink-0 animate-spin motion-reduce:animate-none">
-                        <RefreshCw className="w-3 h-3" aria-hidden="true" />
-                      </span>
-                      <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    Last updated {formatRelativeTime(reconnectingAt)}
-                  </TooltipContent>
-                </Tooltip>
-              ) : (
-                <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-text-secondary text-xs">
-                  <span className="inline-flex shrink-0 animate-spin motion-reduce:animate-none">
-                    <RefreshCw className="w-3 h-3" aria-hidden="true" />
-                  </span>
-                  <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
-                </span>
-              )}
-            </span>
+            <WorktreesReconnectingBadge
+              escalatedSince={showReconnectingEscalated ? reconnectingAt : null}
+            />
           )}
         </div>
         {/* gap-0.5, not gap-1: the four 24px buttons already carry their own
