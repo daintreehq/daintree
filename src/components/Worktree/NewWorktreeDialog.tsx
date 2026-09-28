@@ -1100,6 +1100,15 @@ export function NewWorktreeDialog({
   // The form as it stands, for another host to create: validated here, so the
   // same errors show on the same fields as a create on this host would.
   const getPlacementDraft = (): PlacementDraft | null => {
+    // Nothing another host can create yet that this one couldn't: the same
+    // gates as local Create (a PR branch that didn't resolve, checks in flight).
+    if (
+      isCheckingBranch ||
+      isGeneratingPath ||
+      (initialPR !== null && initialPR !== undefined && prBranchResolved === false)
+    ) {
+      return null;
+    }
     const result = validate({
       branchMode,
       baseBranch,
@@ -1112,8 +1121,13 @@ export function NewWorktreeDialog({
       return null;
     }
     clearErrors();
+    // The branch the host will create, as local Create names it: a pending
+    // auto-increment the user never blurred into the field is accepted here too.
+    const resolvedBranchName = isExistingMode ? null : consumeBranchResolution(branchInput);
     return {
-      newBranch: isExistingMode ? selectedExistingBranch! : result.fullBranchName!,
+      newBranch: isExistingMode
+        ? selectedExistingBranch!
+        : (resolvedBranchName ?? result.fullBranchName!),
       baseBranch: isExistingMode ? selectedExistingBranch! : baseBranch,
       fromRemote: isExistingMode ? false : fromRemote,
       useExistingBranch: isExistingMode,

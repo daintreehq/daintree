@@ -99,7 +99,7 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
         className={cn(
           PALETTE_ROW_CLASS,
           "flex w-full min-w-0 items-center gap-2 rounded-[var(--radius-md)] px-3 py-2 text-left text-sm",
-          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+          "text-text-secondary hover:text-text-primary"
         )}
       >
         {project.emoji && (

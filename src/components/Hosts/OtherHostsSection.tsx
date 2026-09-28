@@ -70,10 +70,13 @@ export function OtherHostsSection({
   options,
   activeIndex,
   onChosen,
+  onHoverIndex,
 }: {
   options: OtherHostProjectOption[];
   activeIndex: number | null;
   onChosen: () => void;
+  /** The pointer moves the switcher's cursor, as every other result row's does. */
+  onHoverIndex?: (index: number) => void;
 }) {
   if (options.length === 0) return null;
 
@@ -117,10 +120,13 @@ export function OtherHostsSection({
                     role="option"
                     aria-selected={index === activeIndex}
                     data-host-id={option.hostId}
+                    onPointerMove={
+                      onHoverIndex && index !== activeIndex ? () => onHoverIndex(index) : undefined
+                    }
                     className={cn(
                       PALETTE_ROW_CLASS,
                       "flex w-full min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-sm cursor-pointer",
-                      "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+                      "text-text-secondary hover:text-text-primary"
                     )}
                     aria-label={`${project.name} on ${option.hostName}`}
                     onClick={(event) => {

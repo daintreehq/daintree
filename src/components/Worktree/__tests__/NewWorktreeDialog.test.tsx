@@ -16,6 +16,18 @@ vi.stubGlobal(
 );
 
 const mockDispatch = vi.fn();
+/** The form's draft for another host, as the placement row would ask for it. */
+const placement = vi.hoisted(() => ({
+  getDraft: null as null | (() => unknown),
+}));
+
+vi.mock("@/components/Hosts/Overview/LazyHostOverviewParts", () => ({
+  LazyWorktreePlacementRow: (props: { getDraft: () => unknown }) => {
+    placement.getDraft = props.getDraft;
+    return null;
+  },
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: (...args: unknown[]) => mockDispatch(...args),
@@ -1745,6 +1757,20 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
       }),
       expect.anything()
     );
+  });
+
+  it("offers another host the auto-incremented branch, as local Create names it", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    expect(branchInput.value).toBe("feature/terrain");
+
+    let draft: unknown = null;
+    await act(async () => {
+      draft = placement.getDraft?.() ?? null;
+    });
+    expect(draft).toMatchObject({ newBranch: "feature/terrain-2", useExistingBranch: false });
   });
 
   it("creates the typed name when no conflict was detected", async () => {

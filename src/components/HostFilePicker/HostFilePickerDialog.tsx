@@ -9,6 +9,7 @@ import type {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/Spinner";
@@ -397,10 +398,17 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
 
       <AppDialog.Footer hint={hint}>
         <div className="flex shrink-0 items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => onResolve(null)}>
+          <Button variant="ghost" onClick={() => onResolve(null)}>
             Cancel
           </Button>
-          <Button variant="contrast" size="sm" onClick={confirm} disabled={!choice}>
+          <Button
+            variant="contrast"
+            onClick={() => {
+              if (choice) confirm();
+            }}
+            aria-disabled={!choice || undefined}
+            className={cn(!choice && ARIA_DISABLED_CLASSES)}
+          >
             {confirmLabel}
           </Button>
         </div>

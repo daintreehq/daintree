@@ -86,7 +86,7 @@ describe("HostAddProjectDialog", () => {
     });
     const onOpened = renderDialog();
     const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
-    expect(clone.disabled).toBe(true);
+    expect(clone.getAttribute("aria-disabled")).toBe("true");
     fireEvent.change(
       screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" }),
       {
@@ -96,7 +96,7 @@ describe("HostAddProjectDialog", () => {
     const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
     await waitFor(() => expect(folder.value).toBe("/home/greg/Projects/api"));
     expect(suggestCloneDestination).toHaveBeenCalledWith({ toHostId: "studio-01", url: URL });
-    await waitFor(() => expect(clone.disabled).toBe(false));
+    await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
     fireEvent.click(clone);
     await waitFor(() => expect(onOpened).toHaveBeenCalled());
     expect(execute.mock.calls[0]![0]).toMatchObject({
@@ -133,7 +133,7 @@ describe("HostAddProjectDialog", () => {
       mode: "directory",
     });
     const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
-    await waitFor(() => expect(clone.disabled).toBe(false));
+    await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
     expect(checkDestination).toHaveBeenCalledWith({
       toHostId: "studio-01",
       path: "/data/api",
@@ -151,8 +151,8 @@ describe("HostAddProjectDialog", () => {
     const urlField = screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" });
     fireEvent.change(urlField, { target: { value: URL } });
     const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
-    await waitFor(() => expect(clone.disabled).toBe(false));
+    await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
     fireEvent.change(urlField, { target: { value: "git@github.com:someone/else.git" } });
-    expect(clone.disabled).toBe(true);
+    expect(clone.getAttribute("aria-disabled")).toBe("true");
   });
 });

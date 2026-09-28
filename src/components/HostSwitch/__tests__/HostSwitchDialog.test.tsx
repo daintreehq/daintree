@@ -293,14 +293,14 @@ describe("HostSwitchDialog destination", () => {
     prepare.mockResolvedValue(preparation());
     render(<HostSwitchDialog request={request} onClose={() => {}} />);
     const button = await screen.findByRole("button", { name: "Clone and open" });
-    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBeNull();
     fireEvent.change(screen.getByLabelText("Folder on studio-01"), {
       target: { value: "/home/greg/elsewhere" },
     });
-    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(button);
     expect(execute).not.toHaveBeenCalled();
-    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBeNull());
   });
   it("won't clone on an earlier free answer once a recheck of the same folder fails", async () => {
     prepare.mockResolvedValue(preparation());
@@ -309,7 +309,7 @@ describe("HostSwitchDialog destination", () => {
     const button = await screen.findByRole("button", { name: "Clone and open" });
     // The mount-time recheck of the prepared folder is the one that fails.
     await screen.findByRole("alert");
-    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(button);
     expect(execute).not.toHaveBeenCalled();
   });
@@ -325,9 +325,9 @@ describe("HostSwitchDialog destination", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Couldn't check this folder on studio-01");
     expect(alert.textContent).toContain("Couldn't reach this host.");
-    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBeNull());
     expect(screen.queryByRole("alert")).toBeNull();
     expect(checkDestination).toHaveBeenLastCalledWith(
       expect.objectContaining({ path: "/home/greg/elsewhere" })
@@ -409,7 +409,7 @@ describe("HostSwitchDialog remote folder picker", () => {
       defaultPath: "/home/greg/Projects",
     });
     const cloneButton = screen.getByRole("button", { name: "Clone and open" });
-    await waitFor(() => expect((cloneButton as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(cloneButton.getAttribute("aria-disabled")).toBeNull());
     fireEvent.click(cloneButton);
     await waitFor(() => expect(execute).toHaveBeenCalled());
     expect(execute.mock.calls[0]![0]).toMatchObject({
