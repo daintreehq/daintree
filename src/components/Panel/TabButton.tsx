@@ -189,6 +189,10 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
   const handleInputKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       e.stopPropagation();
+      // Enter and Escape unmount the field; hand focus back to its tab so a
+      // keyboard rename ends where it started rather than on the body.
+      const tab = e.currentTarget.parentElement?.querySelector<HTMLElement>('[role="tab"]');
+      const returnFocus = () => requestAnimationFrame(() => tab?.focus());
       if (e.key === "Enter") {
         // Don't intercept Enter while an IME composition is being committed.
         if (e.nativeEvent.isComposing) return;
@@ -200,11 +204,13 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
         }
         didCommitOrCancelRef.current = true;
         setIsEditing(false);
+        returnFocus();
       } else if (e.key === "Escape") {
         e.preventDefault();
         setEditValue(title);
         didCommitOrCancelRef.current = true;
         setIsEditing(false);
+        returnFocus();
       }
     },
     [editValue, title, onRename]

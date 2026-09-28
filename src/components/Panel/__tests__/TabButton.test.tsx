@@ -642,6 +642,16 @@ describe("TabButton", () => {
   });
 
   describe("rename field", () => {
+    it.each(["Enter", "Escape"])("hands focus back to its tab on %s", async (key) => {
+      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
+      fireEvent.doubleClick(screen.getByText("Test Agent"));
+      const input = screen.getByTestId("motion-input");
+      fireEvent.change(input, { target: { value: "Renamed" } });
+      fireEvent.keyDown(input, { key });
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      expect(document.activeElement).toBe(screen.getByRole("tab"));
+    });
+
     it("sits beside the tab rather than inside it", () => {
       // A focusable input inside `role="tab"` is the nesting ARIA forbids.
       render(<TabButton {...defaultProps} onRename={vi.fn()} />);

@@ -70,6 +70,26 @@ export function revealTabInStrip(
   }
 }
 
+/**
+ * After a keyboard close that leaves a pane with a single tab — where the strip
+ * unmounts — focus the surviving pane's header if focus has fallen to the body.
+ * Waits two frames so the close and its unmount have committed; leaves focus
+ * alone when something else (a close-guard dialog) already holds it.
+ */
+export function focusPaneWhenStripCloses(panelId: string): void {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body) return;
+      for (const pane of document.querySelectorAll<HTMLElement>("[data-panel-id]")) {
+        if (pane.getAttribute("data-panel-id") !== panelId) continue;
+        pane.querySelector<HTMLElement>('[data-pane-chrome][tabindex="0"]')?.focus();
+        return;
+      }
+    })
+  );
+}
+
 export interface DocumentTabCloseProps {
   /** The tab's own title, for the control's label. */
   title: string;

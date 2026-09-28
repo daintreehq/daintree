@@ -53,7 +53,7 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
-import { revealTabInStrip } from "@/components/ui/document-tab";
+import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
@@ -927,7 +927,12 @@ function PanelHeaderComponent({
         if (!onTabClose) return;
         e.preventDefault();
         armKeyboardClose(focusedTabId);
+        // Two tabs becoming one takes the whole strip away — and in the grid the
+        // tab group with it — so there is no tab left to hand focus to. Land on
+        // the surviving pane's header instead of dropping focus to the body.
+        const survivor = tabs.length === 2 ? tabs.find((t) => t.id !== focusedTabId) : undefined;
         onTabClose(focusedTabId);
+        if (survivor) focusPaneWhenStripCloses(survivor.id);
         return;
       }
 
@@ -974,7 +979,8 @@ function PanelHeaderComponent({
               variant="ghost"
               size="icon-xs"
               onPointerDown={(e) => e.stopPropagation()}
-              className={cn(CONTROL_ICON, "relative shrink-0")}
+              // Inset like every control inside a document tab strip.
+              className={cn(CONTROL_ICON, "relative shrink-0 focus-visible:outline-offset-[-2px]")}
               aria-label={hiddenTabsLabel}
               aria-haspopup="menu"
               data-testid="panel-tabs-overflow"

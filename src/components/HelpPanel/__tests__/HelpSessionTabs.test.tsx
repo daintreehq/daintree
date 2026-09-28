@@ -612,6 +612,31 @@ describe("HelpSessionTabs", () => {
     expect(visible.every((b) => b.getAttribute("role") === "tab")).toBe(true);
   });
 
+  it("keeps keyboard focus on a lane whose agent reports a task title", () => {
+    // Gaining (or losing) a title must not remount the tab, or focus drops to the body.
+    const { container, rerender } = renderStrip();
+    tabs(container)[0]!.focus();
+    const props = {
+      activeSlot: 1,
+      onSelect: vi.fn(),
+      onClose: vi.fn(),
+      idBase: "strip",
+      panelId: "strip-body",
+    };
+    rerender(
+      <HelpSessionTabs
+        {...props}
+        tabs={[
+          { slot: 0, label: "fix auth tests", fullTitle: "fix auth tests", agentState: undefined },
+          TABS[1]!,
+        ]}
+      />
+    );
+    expect(document.activeElement).toBe(tabs(container)[0]!);
+    rerender(<HelpSessionTabs {...props} tabs={TABS} />);
+    expect(document.activeElement).toBe(tabs(container)[0]!);
+  });
+
   it("treats Backspace as Delete", () => {
     const onClose = vi.fn();
     const { container } = renderStrip({ onClose });

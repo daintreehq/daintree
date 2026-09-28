@@ -199,12 +199,14 @@ function SessionTabChip({
   );
 
   // The whole task title, since the visible one may be capped or truncated. Only for a
-  // task title: a `Session N` tooltip would repeat the tab word for word.
-  if (tab.fullTitle === undefined) return chip;
+  // task title: a `Session N` tooltip would repeat the tab word for word. The wrapper
+  // stays mounted either way and is simply held shut — swapping it in when a title
+  // arrives would remount the tab and drop keyboard focus on the floor.
+  const hasTitleTip = tab.fullTitle !== undefined;
   return (
-    <Tooltip autoDismiss={false}>
+    <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
       <TooltipTrigger asChild>{chip}</TooltipTrigger>
-      <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
+      {hasTitleTip && <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>}
     </Tooltip>
   );
 }
