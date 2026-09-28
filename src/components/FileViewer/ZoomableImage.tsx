@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
 import { transparencyCheckerboardUnderScale } from "./transparencyCheckerboard";
 import { cn } from "@/lib/utils";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+  PANE_TOOLBAR_TEXT_BUTTON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 import { Minus, Plus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
@@ -256,20 +261,22 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
             disabled={zoom <= MIN_ZOOM}
             onClick={() => setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP))}
           >
-            <Minus className="h-3.5 w-3.5" aria-hidden="true" />
+            <Minus className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
           </ZoomButton>
           <ZoomButton
             label="Zoom in"
             disabled={zoom >= MAX_ZOOM}
             onClick={() => setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP))}
           >
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            <Plus className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
           </ZoomButton>
           <button
             type="button"
-            onClick={resetView}
-            disabled={!isZoomed}
-            className="shrink-0 rounded-lg px-2 py-1 text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50"
+            onClick={() => {
+              if (isZoomed) resetView();
+            }}
+            aria-disabled={!isZoomed || undefined}
+            className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
           >
             Fit to screen
           </button>
@@ -296,9 +303,13 @@ function ZoomButton({
         <button
           type="button"
           aria-label={label}
-          disabled={disabled}
-          onClick={onClick}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50"
+          // aria-disabled, not disabled: an unavailable zoom step keeps its
+          // place in the toolbar's arrow-key order and its tooltip.
+          aria-disabled={disabled || undefined}
+          onClick={() => {
+            if (!disabled) onClick();
+          }}
+          className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
         >
           {children}
         </button>

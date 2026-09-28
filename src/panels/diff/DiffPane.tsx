@@ -14,7 +14,8 @@ import {
   Check,
   ExternalLink,
   FolderTree,
-  PanelLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   WrapText,
   XCircle,
@@ -60,7 +61,8 @@ import { useDiffNotesStore } from "@/store/diffNotesStore";
 import type { DiffNoteDeliveryResult } from "@/hooks/useDiffNoteDelivery";
 import { DiffNotesSendMenu, sendDiffNotes, type DiffNoteSendRequest } from "./DiffNotesSendMenu";
 import { PendingFileNotes } from "@/components/Worktree/DiffNoteWidgets";
-import { IconToggle } from "@/components/FileViewer/IconToggle";
+import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -528,6 +530,10 @@ export function DiffPane({
   // `[` / `]` step files and `v` marks the current file viewed — the same keys
   // the modal bound, scoped to this panel so a background one stays inert.
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // The footer is a toolbar like the header above the diff: one tab stop,
+  // arrow keys between its controls.
+  const footerRef = useRef<HTMLDivElement | null>(null);
+  const onFooterKeyDown = useToolbarRoving(footerRef);
   useEffect(() => {
     if (!isFocused) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1442,59 +1448,57 @@ export function DiffPane({
 
       {(isWorkspace || currentEntry !== undefined || hasPendingNotes || noteSend !== null) && (
         <div
+          ref={footerRef}
           data-testid="diff-pane-footer"
+          role="toolbar"
+          aria-label="File review controls"
+          onKeyDown={onFooterKeyDown}
           className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0"
         >
           <div className="flex items-center gap-1 min-w-0">
             {isWorkspace && (
-              <IconToggle
-                pressed={diffShowFileList}
-                label="Show file list"
-                onToggle={() => setDiffShowFileList(!diffShowFileList)}
+              // A sidebar toggle like the file browser's: disclosure state and
+              // the icon swap carry it, not the armed chip.
+              <FileViewerToolbar.IconButton
+                label="Toggle file list"
+                expanded={diffShowFileList}
+                sidebarToggle
+                onClick={() => setDiffShowFileList(!diffShowFileList)}
+                tooltipSide="top"
               >
-                <PanelLeft className={TOOLBAR_ICON_CLASS} />
-              </IconToggle>
+                {diffShowFileList ? (
+                  <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
+                ) : (
+                  <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
+                )}
+              </FileViewerToolbar.IconButton>
             )}
             {isWorkspace && (
               <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (hasPrevFile) navigateFile(-1);
-                      }}
-                      aria-disabled={!hasPrevFile || undefined}
-                      aria-label="Previous file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default aria-disabled:opacity-40 aria-disabled:pointer-events-none"
-                    >
-                      <ChevronLeft className={TOOLBAR_ICON_CLASS} />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Previous file ([)</TooltipContent>
-                </Tooltip>
+                <FileViewerToolbar.IconButton
+                  label="Previous file"
+                  tooltip="Previous file ([)"
+                  disabled={!hasPrevFile}
+                  onClick={() => navigateFile(-1)}
+                  tooltipSide="top"
+                >
+                  <ChevronLeft className={TOOLBAR_ICON_CLASS} />
+                </FileViewerToolbar.IconButton>
                 <span
                   data-testid="diff-file-position-indicator"
-                  className="text-xs text-muted-foreground tabular-nums"
+                  className="text-xs text-text-secondary tabular-nums"
                 >
                   {currentIndex + 1} of {changeSet?.length ?? 0}
                 </span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (hasNextFile) navigateFile(1);
-                      }}
-                      aria-disabled={!hasNextFile || undefined}
-                      aria-label="Next file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default aria-disabled:opacity-40 aria-disabled:pointer-events-none"
-                    >
-                      <ChevronRight className={TOOLBAR_ICON_CLASS} />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Next file (])</TooltipContent>
-                </Tooltip>
+                <FileViewerToolbar.IconButton
+                  label="Next file"
+                  tooltip="Next file (])"
+                  disabled={!hasNextFile}
+                  onClick={() => navigateFile(1)}
+                  tooltipSide="top"
+                >
+                  <ChevronRight className={TOOLBAR_ICON_CLASS} />
+                </FileViewerToolbar.IconButton>
               </>
             )}
           </div>
@@ -1513,14 +1517,16 @@ export function DiffPane({
             )}
           </div>
           {currentEntry && worktreePath && (
-            <IconToggle
-              pressed={isViewed}
-              label="Viewed"
-              onToggle={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
+            // The word is the name, so no tooltip repeats it.
+            <button
+              type="button"
+              aria-pressed={isViewed}
+              onClick={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
+              className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
             >
-              <Check className={TOOLBAR_ICON_CLASS} />
-              <span className="text-xs">Viewed</span>
-            </IconToggle>
+              <Check className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
+              Viewed
+            </button>
           )}
         </div>
       )}

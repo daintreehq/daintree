@@ -131,4 +131,44 @@ describe("PortalToolbar tab strip — one way in", () => {
       expect(tab.getAttribute("aria-roledescription")).toBeNull();
     }
   });
+
+  it("gives the control row one tab stop, with arrow keys between its buttons", () => {
+    renderToolbar("a");
+    const row = screen.getByRole("toolbar", { name: "Portal controls" });
+    const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>("button:not([disabled])"));
+    expect(buttons.length).toBeGreaterThan(1);
+    expect(buttons.filter((b) => b.tabIndex === 0)).toHaveLength(1);
+
+    const [first, second] = buttons;
+    first!.focus();
+    fireEvent.keyDown(first!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(second);
+  });
+
+  it("keeps unavailable controls in that order and inert when no page is open", () => {
+    const onGoBack = vi.fn();
+    render(
+      <TooltipProvider>
+        <PortalToolbar
+          tabs={[{ id: "c", url: null, title: "New Tab" }]}
+          activeTabId="c"
+          onTabClick={vi.fn()}
+          onTabClose={vi.fn()}
+          onNewTab={vi.fn()}
+          defaultNewTabUrl={null}
+          onClose={vi.fn()}
+          enabledLinks={[]}
+          onGoBack={onGoBack}
+        />
+      </TooltipProvider>
+    );
+    const back = screen.getByRole("button", { name: "Go back" });
+    expect(back.getAttribute("aria-disabled")).toBe("true");
+    expect(back.hasAttribute("disabled")).toBe(false);
+    back.focus();
+    fireEvent.keyDown(back, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Go forward" }));
+    fireEvent.click(back);
+    expect(onGoBack).not.toHaveBeenCalled();
+  });
 });

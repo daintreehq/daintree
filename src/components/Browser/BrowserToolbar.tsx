@@ -19,6 +19,11 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+  PANE_TOOLBAR_TEXT_BUTTON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
 import type { NormalizeResult } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
@@ -511,9 +516,8 @@ export function BrowserToolbar({
     }
   }, [url]);
 
-  const buttonClass =
-    "toolbar-icon-button shrink-0 p-1.5 rounded-[var(--radius-md)] disabled:opacity-30 disabled:cursor-not-allowed";
-  const actionClass = cn(buttonClass, "text-text-secondary aria-pressed:text-text-primary");
+  // The pane-toolbar icon button, shared with the portal and the file viewers.
+  const buttonClass = PANE_TOOLBAR_ICON_BUTTON_CLASS;
 
   // The stored preference survives the dev server stopping, but with no terminal
   // behind it there is no drawer to show, so the toggle must not read as pressed.
@@ -541,11 +545,11 @@ export function BrowserToolbar({
       type="button"
       onClick={onToggleConsole}
       disabled={!canToggleConsole}
-      className={cn(actionClass, "disabled:pointer-events-none")}
+      className={buttonClass}
       aria-label="Toggle console"
       aria-pressed={isConsoleShown}
     >
-      <SquareTerminal className="w-4 h-4" />
+      <SquareTerminal className={PANE_TOOLBAR_ICON_CLASS} />
     </button>
   );
   const openExternalButton = (
@@ -553,10 +557,10 @@ export function BrowserToolbar({
       type="button"
       onClick={onOpenExternal}
       disabled={!canOpenExternal}
-      className={cn(actionClass, "disabled:pointer-events-none")}
+      className={buttonClass}
       aria-label="Open in browser"
     >
-      <ExternalLink className="w-4 h-4" />
+      <ExternalLink className={PANE_TOOLBAR_ICON_CLASS} />
     </button>
   );
 
@@ -609,14 +613,14 @@ export function BrowserToolbar({
                   else onForward();
                 }}
                 disabled={!enabled}
-                className={cn(buttonClass, "disabled:pointer-events-none")}
+                className={buttonClass}
                 aria-label={tooltip}
                 data-testid={dir === "back" ? "browser-back" : "browser-forward"}
               >
                 {dir === "back" ? (
-                  <ArrowLeft className="w-4 h-4" />
+                  <ArrowLeft className={PANE_TOOLBAR_ICON_CLASS} />
                 ) : (
-                  <ArrowRight className="w-4 h-4" />
+                  <ArrowRight className={PANE_TOOLBAR_ICON_CLASS} />
                 )}
               </button>
             </span>
@@ -634,10 +638,10 @@ export function BrowserToolbar({
         type="button"
         onClick={() => handleZoomStep("out")}
         disabled={!canZoomOut}
-        className={cn(buttonClass, "p-1")}
+        className={buttonClass}
         aria-label="Zoom out"
       >
-        <ZoomOut className="w-4 h-4" />
+        <ZoomOut className={PANE_TOOLBAR_ICON_CLASS} />
       </button>
       <span className="min-w-12 px-1 text-center text-xs font-medium tabular-nums text-text-primary">
         {currentZoomLabel}
@@ -646,16 +650,16 @@ export function BrowserToolbar({
         type="button"
         onClick={() => handleZoomStep("in")}
         disabled={!canZoomIn}
-        className={cn(buttonClass, "p-1")}
+        className={buttonClass}
         aria-label="Zoom in"
       >
-        <ZoomIn className="w-4 h-4" />
+        <ZoomIn className={PANE_TOOLBAR_ICON_CLASS} />
       </button>
       <button
         type="button"
         onClick={handleZoomReset}
         disabled={!isNonDefaultZoom}
-        className="toolbar-icon-button ml-1 px-2 py-1 rounded-[var(--radius-md)] text-xs font-medium text-text-primary disabled:opacity-40"
+        className={cn(PANE_TOOLBAR_TEXT_BUTTON_CLASS, "ml-1")}
         aria-label="Reset zoom"
       >
         Reset
@@ -695,7 +699,11 @@ export function BrowserToolbar({
                 aria-label={showStop ? "Stop loading" : "Reload"}
                 data-testid="browser-reload"
               >
-                {showStop ? <X className="w-4 h-4" /> : <RotateCw className="w-4 h-4" />}
+                {showStop ? (
+                  <X className={PANE_TOOLBAR_ICON_CLASS} />
+                ) : (
+                  <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
+                )}
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
@@ -857,7 +865,7 @@ export function BrowserToolbar({
                         type="button"
                         onClick={handleCopy}
                         disabled={!address}
-                        className="toolbar-icon-button flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary disabled:opacity-30 disabled:pointer-events-none"
+                        className="toolbar-icon-button flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary"
                         aria-label="Copy URL"
                       >
                         {copied ? (
@@ -984,11 +992,11 @@ export function BrowserToolbar({
                       onViewportPresetChange(lastViewportPresetRef.current);
                     }
                   }}
-                  className={actionClass}
+                  className={buttonClass}
                   aria-label="Device mode"
                   aria-pressed={!!viewportPreset}
                 >
-                  <Smartphone className="w-4 h-4" />
+                  <Smartphone className={PANE_TOOLBAR_ICON_CLASS} />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -1021,16 +1029,13 @@ export function BrowserToolbar({
                   type="button"
                   onClick={handleCaptureScreenshot}
                   disabled={!isWebviewReady}
-                  className={cn(
-                    actionClass,
-                    "disabled:hover:bg-transparent disabled:hover:shadow-none"
-                  )}
+                  className={buttonClass}
                   aria-label="Copy screenshot to clipboard"
                 >
                   {screenshotCopied ? (
-                    <Check className="w-4 h-4 text-status-success" />
+                    <Check className={cn(PANE_TOOLBAR_ICON_CLASS, "text-status-success")} />
                   ) : (
-                    <Camera className="w-4 h-4" />
+                    <Camera className={PANE_TOOLBAR_ICON_CLASS} />
                   )}
                 </button>
               </TooltipTrigger>
@@ -1057,14 +1062,14 @@ export function BrowserToolbar({
                     <button
                       ref={moreButtonRef}
                       type="button"
-                      className={actionClass}
+                      className={buttonClass}
                       aria-label="More page actions"
                       data-testid="browser-more-actions"
                     >
                       {copied && isCompact ? (
-                        <Check className="w-4 h-4 text-status-success" />
+                        <Check className={cn(PANE_TOOLBAR_ICON_CLASS, "text-status-success")} />
                       ) : (
-                        <Ellipsis className="w-4 h-4" />
+                        <Ellipsis className={PANE_TOOLBAR_ICON_CLASS} />
                       )}
                     </button>
                   </DropdownMenuTrigger>

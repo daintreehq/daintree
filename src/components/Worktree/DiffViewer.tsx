@@ -63,6 +63,8 @@ import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { actionService } from "@/services/ActionService";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DIFF_SOFT_COLLAPSE_BYTES,
   getFilePath,
@@ -617,13 +619,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           title="Couldn't load diff"
           action={
             onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className="px-3 py-1.5 text-xs font-medium rounded bg-border-default hover:bg-daintree-border/80 text-text-primary transition-colors"
-              >
+              <Button variant="outline" size="sm" onClick={onRetry}>
                 Retry
-              </button>
+              </Button>
             )
           }
           instant
@@ -732,24 +730,36 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) 
             </button>
           ) : (
             <>
-              <button
-                type="button"
-                title={`Show ${EXPAND_STEP} lines above this hunk`}
-                onClick={() =>
-                  onExpand(Math.max(hunk.oldStart - EXPAND_STEP, gapStart), hunk.oldStart)
-                }
-              >
-                <ChevronsUp className="w-3 h-3" />
-                Expand up
-              </button>
-              <button
-                type="button"
-                title={`Show ${EXPAND_STEP} lines below the previous hunk`}
-                onClick={() => onExpand(gapStart, Math.min(gapStart + EXPAND_STEP, hunk.oldStart))}
-              >
-                <ChevronsDown className="w-3 h-3" />
-                Expand down
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onExpand(Math.max(hunk.oldStart - EXPAND_STEP, gapStart), hunk.oldStart)
+                    }
+                  >
+                    <ChevronsUp className="w-3 h-3" />
+                    Expand up
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Show {EXPAND_STEP} lines above this hunk</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onExpand(gapStart, Math.min(gapStart + EXPAND_STEP, hunk.oldStart))
+                    }
+                  >
+                    <ChevronsDown className="w-3 h-3" />
+                    Expand down
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  Show {EXPAND_STEP} lines below the previous hunk
+                </TooltipContent>
+              </Tooltip>
               <button type="button" onClick={() => onExpand(gapStart, hunk.oldStart)}>
                 Expand all {hiddenCount}
               </button>
@@ -1428,16 +1438,22 @@ function FileDiff({
                 </button>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    title={`Show ${EXPAND_STEP} lines below the last hunk`}
-                    onClick={() =>
-                      handleExpandContext(trailingGapStart, trailingGapStart + EXPAND_STEP)
-                    }
-                  >
-                    <ChevronsDown className="w-3 h-3" />
-                    Expand down
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleExpandContext(trailingGapStart, trailingGapStart + EXPAND_STEP)
+                        }
+                      >
+                        <ChevronsDown className="w-3 h-3" />
+                        Expand down
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      Show {EXPAND_STEP} lines below the last hunk
+                    </TooltipContent>
+                  </Tooltip>
                   <button
                     type="button"
                     onClick={() => handleExpandContext(trailingGapStart, oldTotalLines + 1)}
@@ -1475,7 +1491,7 @@ function FileDiff({
         <button
           type="button"
           onClick={handleShowMoreHunks}
-          className="flex w-full items-center justify-center gap-2 px-3 py-2 text-xs text-text-muted hover:bg-tint/5 transition-colors"
+          className="flex w-full items-center justify-center gap-2 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <UnfoldVertical className="w-3 h-3" />
           Show {Math.min(hiddenHunkCount, SHOW_MORE_HUNKS_STEP)} more{" "}
@@ -1545,15 +1561,19 @@ function FileDiff({
               </span>
             )}
             {notesEnabled && (
-              <button
-                type="button"
-                onClick={() => setNoteDraft({ kind: "file" })}
-                title="Add file note"
-                aria-label="Add file note"
-                className="shrink-0 flex items-center px-1.5 py-0.5 rounded-[var(--radius-sm)] hover:bg-tint/5 hover:text-text-primary transition-colors"
-              >
-                <MessageSquarePlus className="w-3 h-3" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => setNoteDraft({ kind: "file" })}
+                    aria-label="Add file note"
+                  >
+                    <MessageSquarePlus />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Add file note</TooltipContent>
+              </Tooltip>
             )}
             {rawText && (
               <button
@@ -1566,14 +1586,17 @@ function FileDiff({
               </button>
             )}
             {absolutePath && (
-              <button
-                onClick={handleOpenInEditor}
-                title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
-                className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-text-primary transition-colors"
-              >
-                <ExternalLink className="w-3 h-3" />
-                Open
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="xs" onClick={handleOpenInEditor}>
+                    <ExternalLink />
+                    Open
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Open in editor{firstHunkLine ? ` at line ${firstHunkLine}` : ""}
+                </TooltipContent>
+              </Tooltip>
             )}
           </div>
         </div>
@@ -1599,7 +1622,7 @@ function FileDiff({
           onClick={handleToggleCollapse}
           aria-expanded={!isCollapsed}
           {...(!isCollapsed ? { "aria-controls": diffRegionId } : {})}
-          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-muted hover:bg-tint/5 transition-colors"
+          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <ChevronRight
             className={`h-3 w-3 shrink-0 transition-transform duration-150 ${isCollapsed ? "" : "rotate-90"}`}

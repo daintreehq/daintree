@@ -15,6 +15,11 @@ import {
   getEffectiveViewportSize,
   getViewportPreset,
 } from "@/panels/dev-preview/viewportPresets";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+  PANE_TOOLBAR_TEXT_BUTTON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 interface ViewportControlsProps {
   preset: ViewportPresetId;
@@ -97,7 +102,7 @@ export function ViewportControls({
               <button
                 type="button"
                 aria-label={`Device: ${active.label}`}
-                className="toolbar-icon-button flex h-6 min-w-0 items-center gap-1 px-1.5 rounded-[var(--radius-md)] text-xs font-medium text-text-primary"
+                className="toolbar-icon-button flex h-6.5 min-w-0 items-center gap-1 px-1.5 rounded-[var(--radius-md)] text-xs font-medium text-text-primary"
               >
                 <span className="truncate">{active.label}</span>
                 <ChevronDown className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
@@ -143,11 +148,11 @@ export function ViewportControls({
             <button
               type="button"
               onClick={onRotateToggle}
-              className="toolbar-icon-button shrink-0 p-1 rounded-[var(--radius-md)] text-text-secondary"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               aria-label="Landscape"
               aria-pressed={rotated}
             >
-              <RotateCwSquare className="w-4 h-4" aria-hidden="true" />
+              <RotateCwSquare className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -202,7 +207,7 @@ export function ViewportControls({
             <button
               type="button"
               onClick={onFitToggle}
-              className="toolbar-icon-button flex h-6 shrink-0 items-center px-2 rounded-[var(--radius-md)] text-xs font-medium text-text-secondary aria-pressed:text-text-primary"
+              className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
               aria-label="Fit to pane"
               aria-pressed={fit}
             >

@@ -170,6 +170,26 @@
   background: var(--toolbar-control-active-bg, var(--theme-overlay-raised));
 }
 
+/* One disabled treatment for every toolbar icon button, whether it is natively
+ * `disabled` or `aria-disabled` (a roving toolbar keeps unavailable controls
+ * focusable, per the APG toolbar pattern). 50% matches Button's `disabled`.
+ * aria-disabled keeps its pointer: the main toolbar's aria-disabled buttons
+ * stay clickable to explain what is missing.
+ * `data-loading` is Button's own aria-disabled, which dims through its spinner
+ * overlay instead. */
+.toolbar-icon-button:disabled,
+.toolbar-icon-button[aria-disabled="true"]:not([data-loading]) {
+  opacity: 0.5;
+}
+
+/* A control that cannot be pressed never paints the hover fill, though it keeps
+ * the pointer: its tooltip still says what it is (and why it is unavailable). */
+.toolbar-icon-button:disabled:hover,
+.toolbar-icon-button[aria-disabled="true"]:not([data-loading]):hover {
+  background: transparent;
+  box-shadow: none;
+}
+
 .toolbar-divider {
   background: var(--toolbar-divider, var(--theme-border-divider));
 }

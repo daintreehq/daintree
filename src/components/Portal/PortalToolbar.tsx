@@ -29,6 +29,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { usePortalStore } from "@/store/portalStore";
 import { PortalIcon } from "./PortalIcon";
 import { useAriaKeyshortcuts, useEffectiveCombo, useOverlayClaim } from "@/hooks";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   DropdownMenu,
@@ -44,6 +45,10 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 const noopTabAction = (_tabId: string) => {};
 
@@ -51,9 +56,9 @@ const OVERFLOW_FADE_PX = 24;
 
 const tabDomId = (tabId: string) => `portal-tab-${tabId}`;
 
-// Shared with the dev-preview browser toolbar so both browser chromes read as one family.
-const iconButtonClass =
-  "toolbar-icon-button shrink-0 p-1.5 rounded-[var(--radius-md)] text-text-secondary disabled:opacity-30 disabled:cursor-not-allowed";
+// The pane-toolbar icon button the dev-preview browser toolbar uses too, so both
+// browser chromes read as one family.
+const iconButtonClass = PANE_TOOLBAR_ICON_BUTTON_CLASS;
 
 function SortableTab({
   tab,
@@ -308,6 +313,12 @@ export function PortalToolbar({
   }, [getBrowserTabLabel]);
 
   const tablistRef = useRef<HTMLDivElement>(null);
+  // The control row is a toolbar like every pane toolbar: one tab stop, arrow
+  // keys between its buttons. The tab strip below keeps its own tablist.
+  // Unavailable buttons are aria-disabled, not disabled, so they keep their
+  // place in that arrow-key order.
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const onControlsKeyDown = useToolbarRoving(controlsRef);
   const [overflow, setOverflow] = useState({ before: false, after: false });
   const isOverflowing = overflow.before || overflow.after;
 
@@ -390,17 +401,25 @@ export function PortalToolbar({
 
   return (
     <div className="flex flex-col bg-surface-canvas border-b border-divider">
-      <div className="flex items-center gap-0.5 h-10 px-2">
+      <div
+        ref={controlsRef}
+        role="toolbar"
+        aria-label="Portal controls"
+        onKeyDown={onControlsKeyDown}
+        className="flex items-center gap-0.5 h-10 px-2"
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onGoBack}
-              disabled={!hasActiveUrl}
+              onClick={() => {
+                if (hasActiveUrl) onGoBack?.();
+              }}
+              aria-disabled={!hasActiveUrl || undefined}
               aria-label="Go back"
               className={iconButtonClass}
             >
-              <ArrowLeft className="w-4 h-4" />
+              <ArrowLeft className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Go back</TooltipContent>
@@ -409,12 +428,14 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onGoForward}
-              disabled={!hasActiveUrl}
+              onClick={() => {
+                if (hasActiveUrl) onGoForward?.();
+              }}
+              aria-disabled={!hasActiveUrl || undefined}
               aria-label="Go forward"
               className={iconButtonClass}
             >
-              <ArrowRight className="w-4 h-4" />
+              <ArrowRight className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Go forward</TooltipContent>
@@ -423,12 +444,14 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onReload}
-              disabled={!hasActiveUrl}
+              onClick={() => {
+                if (hasActiveUrl) onReload?.();
+              }}
+              aria-disabled={!hasActiveUrl || undefined}
               aria-label="Reload"
               className={iconButtonClass}
             >
-              <RotateCw className="w-4 h-4" />
+              <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Reload</TooltipContent>
@@ -437,12 +460,14 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onCopyUrl}
-              disabled={!activeTabId || !hasActiveUrl}
+              onClick={() => {
+                if (activeTabId && hasActiveUrl) onCopyUrl?.();
+              }}
+              aria-disabled={!activeTabId || !hasActiveUrl || undefined}
               aria-label="Copy URL"
               className={iconButtonClass}
             >
-              <Link2 className="w-4 h-4" />
+              <Link2 className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Copy URL</TooltipContent>
@@ -451,12 +476,14 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onOpenExternal}
-              disabled={!activeTabId || !hasActiveUrl}
+              onClick={() => {
+                if (activeTabId && hasActiveUrl) onOpenExternal?.();
+              }}
+              aria-disabled={!activeTabId || !hasActiveUrl || undefined}
               aria-label="Open in external browser"
               className={iconButtonClass}
             >
-              <ExternalLink className="w-4 h-4" />
+              <ExternalLink className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Open in external browser</TooltipContent>
@@ -473,7 +500,7 @@ export function PortalToolbar({
               aria-pressed={showDevDashboard}
               className={iconButtonClass}
             >
-              <Server className="w-4 h-4" />
+              <Server className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -489,7 +516,7 @@ export function PortalToolbar({
               aria-keyshortcuts={closePortalAriaShortcut}
               className={iconButtonClass}
             >
-              <X className="w-4 h-4" />
+              <X className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -642,7 +669,7 @@ export function PortalToolbar({
                 aria-keyshortcuts={newTabAriaShortcut}
                 aria-haspopup="menu"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className={PANE_TOOLBAR_ICON_CLASS} />
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">

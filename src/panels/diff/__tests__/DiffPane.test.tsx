@@ -276,7 +276,7 @@ describe("DiffPane — current-file resolution", () => {
     );
 
     // The viewed marker follows the resolved entry, not the first path match.
-    fireEvent.click(screen.getByLabelText("Viewed"));
+    fireEvent.click(screen.getByRole("button", { name: "Viewed" }));
     expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, "unstaged:a.ts");
   });
 
@@ -495,7 +495,7 @@ describe("DiffPane — workspace chrome", () => {
     seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
     renderPane();
 
-    fireEvent.click(screen.getByLabelText("Viewed"));
+    fireEvent.click(screen.getByRole("button", { name: "Viewed" }));
 
     expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[1]!.viewedKey);
   });

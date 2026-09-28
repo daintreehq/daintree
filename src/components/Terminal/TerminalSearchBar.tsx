@@ -7,6 +7,13 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { SEARCH_HIGHLIGHT_LIMIT } from "@/services/terminal/TerminalAddonManager";
 import { useTerminalSearchHistoryStore } from "@/store/terminalSearchHistoryStore";
 import { validateRegexTerm, buildSearchOptions, type SearchStatus } from "./terminalSearchUtils";
+import {
+  FIND_BAR_CLASS,
+  FIND_BAR_ICON_CLASS,
+  FindBarButton,
+  FindBarToggle,
+  findBarCountClass,
+} from "@/components/ui/FindBarControls";
 
 interface MatchResults {
   resultIndex: number;
@@ -176,7 +183,20 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      // Enter and the history arrows belong to the field, as in the browser's
+      // find bar; Enter on a focused option must press that option. Escape
+      // closes from anywhere in the bar.
+      // Keys that commit an IME composition belong to the composition, as in
+      // the browser's find bar.
+      if (e.nativeEvent.isComposing) return;
+      const inField = e.target === inputRef.current;
+      if (
+        inField &&
+        (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+        !e.altKey &&
+        !e.metaKey &&
+        !e.ctrlKey
+      ) {
         const history = useTerminalSearchHistoryStore.getState().searches;
         if (history.length === 0) return;
 
@@ -218,7 +238,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         return;
       }
 
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && inField) {
         e.preventDefault();
         e.stopPropagation();
         performSearch(searchTerm, e.shiftKey ? "prev" : "next");
@@ -313,6 +333,10 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
   const regexErrorId = useId();
 
+  // Nothing to step through with no query, no matches or a pattern that does
+  // not compile — the same rule the browser's find bar applies.
+  const canStep = Boolean(searchTerm) && searchStatus !== "none" && searchStatus !== "invalidRegex";
+
   const atHighlightLimit =
     searchStatus === "found" &&
     matchResults !== null &&
@@ -320,12 +344,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
   return (
     <div
-      className={cn(
-        "absolute top-2 right-2 z-20",
-        "flex items-center gap-1 px-2 py-1",
-        "bg-surface-sidebar border border-border-default rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]",
-        className
-      )}
+      className={cn("absolute top-2 right-2 z-20", FIND_BAR_CLASS, className)}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={handleKeyDown}
     >
@@ -361,62 +380,33 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         {regexError}
       </span>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={handleCaseSensitiveToggle}
-            className={cn(
-              "px-1.5 py-1 text-xs rounded-[var(--radius-sm)] border transition-colors",
-              caseSensitive
-                ? "border-text-secondary bg-border-default text-text-primary"
-                : "border-transparent text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
-            )}
-            aria-label="Toggle case sensitivity"
-            aria-pressed={caseSensitive}
-          >
-            Aa
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Case sensitive</TooltipContent>
-      </Tooltip>
+      <FindBarToggle
+        pressed={caseSensitive}
+        label="Toggle case sensitivity"
+        tooltip="Match case"
+        onToggle={handleCaseSensitiveToggle}
+      >
+        Aa
+      </FindBarToggle>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={handleRegexToggle}
-            className={cn(
-              "px-1.5 py-1 text-xs font-mono rounded-[var(--radius-sm)] border transition-colors",
-              regexEnabled
-                ? "border-text-secondary bg-border-default text-text-primary"
-                : "border-transparent text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
-            )}
-            aria-label="Toggle regex mode"
-            aria-pressed={regexEnabled}
-          >
-            .*
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Regex</TooltipContent>
-      </Tooltip>
+      <FindBarToggle
+        pressed={regexEnabled}
+        label="Toggle regex mode"
+        tooltip="Regex"
+        onToggle={handleRegexToggle}
+        className="font-mono"
+      >
+        .*
+      </FindBarToggle>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={handleWholeWordToggle}
-            className={cn(
-              "px-1.5 py-1 text-xs rounded-[var(--radius-sm)] border transition-colors",
-              wholeWord
-                ? "border-text-secondary bg-border-default text-text-primary"
-                : "border-transparent text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
-            )}
-            aria-label="Toggle whole word"
-            aria-pressed={wholeWord}
-          >
-            <span className="underline underline-offset-2 decoration-1">ab</span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Whole word</TooltipContent>
-      </Tooltip>
+      <FindBarToggle
+        pressed={wholeWord}
+        label="Toggle whole word"
+        tooltip="Whole word"
+        onToggle={handleWholeWordToggle}
+      >
+        <span className="underline underline-offset-2 decoration-1">ab</span>
+      </FindBarToggle>
 
       {statusText &&
         (atHighlightLimit ? (
@@ -429,8 +419,8 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
                   // status red: severity-coloured prose is a settled no here, the
                   // words already say what happened, and the invalid case marks
                   // the field's own border.
-                  "text-xs px-1.5 cursor-help underline decoration-dotted underline-offset-2",
-                  searchStatus === "found" ? "text-text-secondary" : "text-text-primary"
+                  findBarCountClass(searchStatus === "found"),
+                  "cursor-help underline decoration-dotted underline-offset-2"
                 )}
               >
                 {statusText}
@@ -441,13 +431,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             </TooltipContent>
           </Tooltip>
         ) : (
-          <span
-            data-terminal-search-status
-            className={cn(
-              "text-xs px-1.5",
-              searchStatus === "found" ? "text-text-secondary" : "text-text-primary"
-            )}
-          >
+          <span data-terminal-search-status className={findBarCountClass(searchStatus === "found")}>
             {statusText}
           </span>
         ))}
@@ -456,61 +440,29 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         {statusText}
       </span>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <button
-              onClick={() => performSearch(searchTerm, "prev")}
-              disabled={!searchTerm}
-              className={cn(
-                "p-1 rounded-[var(--radius-sm)] transition-colors",
-                "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium",
-                "disabled:opacity-40 disabled:pointer-events-none"
-              )}
-              aria-label="Previous match"
-            >
-              <ChevronUp className="w-3.5 h-3.5" />
-            </button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Previous match (Shift+Enter)</TooltipContent>
-      </Tooltip>
+      <FindBarButton
+        label="Previous match"
+        tooltip="Previous match (Shift+Enter)"
+        onClick={() => performSearch(searchTerm, "prev")}
+        disabled={!canStep}
+        keepFieldFocus
+      >
+        <ChevronUp className={FIND_BAR_ICON_CLASS} />
+      </FindBarButton>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <button
-              onClick={() => performSearch(searchTerm, "next")}
-              disabled={!searchTerm}
-              className={cn(
-                "p-1 rounded-[var(--radius-sm)] transition-colors",
-                "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium",
-                "disabled:opacity-40 disabled:pointer-events-none"
-              )}
-              aria-label="Next match"
-            >
-              <ChevronDown className="w-3.5 h-3.5" />
-            </button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Next match (Enter)</TooltipContent>
-      </Tooltip>
+      <FindBarButton
+        label="Next match"
+        tooltip="Next match (Enter)"
+        onClick={() => performSearch(searchTerm, "next")}
+        disabled={!canStep}
+        keepFieldFocus
+      >
+        <ChevronDown className={FIND_BAR_ICON_CLASS} />
+      </FindBarButton>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={handleClose}
-            className={cn(
-              "p-1 rounded-[var(--radius-sm)] transition-colors",
-              "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
-            )}
-            aria-label="Close search"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Close (Esc)</TooltipContent>
-      </Tooltip>
+      <FindBarButton label="Close search" tooltip="Close (Esc)" onClick={handleClose}>
+        <X className={FIND_BAR_ICON_CLASS} />
+      </FindBarButton>
     </div>
   );
 }

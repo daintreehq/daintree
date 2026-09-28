@@ -59,6 +59,11 @@ import {
   UNKNOWN_PROJECT_LABEL,
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+  PANE_TOOLBAR_TEXT_BUTTON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 // Three, not five. Even as compact previews, five pinned rows took three
 // quarters of a laptop-height list, so the first screen held one row of what
@@ -1147,9 +1152,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               <button
                 type="button"
                 onClick={handleMarkAllRead}
-                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-2xs text-text-secondary whitespace-nowrap"
+                className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
               >
-                <CheckCheck className="w-3 h-3" aria-hidden="true" />
+                <CheckCheck className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
                 Mark all read
               </button>
             )}
@@ -1165,9 +1170,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     <button
                       type="button"
                       aria-label="Pause notifications"
-                      className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
+                      className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                     >
-                      <Moon className="w-3 h-3" aria-hidden="true" />
+                      <Moon className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
                     </button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
@@ -1193,10 +1198,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
-                      className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
+                      className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                       aria-label="More notification actions"
                     >
-                      <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                      <Ellipsis className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
                     </button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>

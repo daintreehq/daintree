@@ -19,6 +19,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SegmentedToggle, type SegmentedToggleOption } from "@/components/ui/SegmentedToggle";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 let measureContext: CanvasRenderingContext2D | null = null;
 
@@ -145,18 +149,16 @@ function useFittedPath(fullText: string | undefined): {
 /**
  * One icon size for every control in this toolbar family, so every surface that
  * uses it (FilePane, DiffPane, the cross-worktree comparison dialog, and the
- * file browser's two header rows) cannot drift apart a pixel at a time.
- *
- * 14px rather than 16: at 16 the glyphs read heavier than the text beside them
- * and Refresh in particular dominated a row it only shares. With the button's
- * `p-1.5` this still leaves a 26px target, above the 24px WCAG 2.5.8 floor.
+ * file browser's two header rows) cannot drift apart a pixel at a time. It is
+ * the pane-toolbar glyph every other pane toolbar uses too — see
+ * `paneToolbarStyles.ts` for why 14px.
  *
  * Load-bearing beyond looks: the file browser's tree header hand-rolls its own
  * row to match `Root`'s height so the border under the two halves reads as one
  * continuous line (#11328). Sizing icons per call site is what would let that
  * line break, so the size lives here and callers spread it.
  */
-export const TOOLBAR_ICON_CLASS = "h-3.5 w-3.5";
+export const TOOLBAR_ICON_CLASS = PANE_TOOLBAR_ICON_CLASS;
 
 /**
  * The plain-file-viewing toolbar shared by the FilePane panel and the
@@ -312,7 +314,7 @@ function Path({
           )}
           <span
             ref={spanRef}
-            className="w-full min-w-0 overflow-hidden pl-7 pr-2 py-1 text-left text-xs rounded-lg bg-surface-canvas border border-overlay text-text-secondary truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-text-primary"
+            className="w-full min-w-0 overflow-hidden pl-7 pr-2 py-1 text-left font-mono text-xs rounded-[var(--radius-md)] bg-surface-canvas border border-overlay text-text-secondary truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-text-primary"
           >
             {display}
           </span>
@@ -342,6 +344,9 @@ function IconButton({
   expanded,
   controls,
   sidebarToggle,
+  disabled = false,
+  tooltip,
+  tooltipSide = "bottom",
   children,
   "data-testid": testId,
 }: {
@@ -364,31 +369,40 @@ function IconButton({
    * the state.
    */
   sidebarToggle?: boolean;
+  /**
+   * Unavailable for now (first file, no history). Rendered `aria-disabled`
+   * rather than `disabled` so the control keeps its place in the toolbar's
+   * arrow-key order, per the APG toolbar pattern; the click is swallowed here.
+   */
+  disabled?: boolean;
+  /** Tooltip text when it says more than the name — a shortcut, say. */
+  tooltip?: React.ReactNode;
+  /** A footer row opens its tooltips upward, away from the pane edge. */
+  tooltipSide?: "top" | "bottom";
   children: React.ReactNode;
   "data-testid"?: string;
 }) {
-  const active = pressed === true || expanded === true;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
           type="button"
-          onClick={onClick}
+          onClick={() => {
+            if (!disabled) onClick();
+          }}
           aria-label={label}
           aria-pressed={pressed}
           aria-expanded={expanded}
           aria-controls={controls}
+          aria-disabled={disabled || undefined}
           data-sidebar-toggle={sidebarToggle ? "" : undefined}
           data-testid={testId}
-          className={cn(
-            "toolbar-icon-button p-1.5 rounded-lg",
-            active ? "text-text-primary" : "text-text-secondary"
-          )}
+          className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
         >
           {children}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
+      <TooltipContent side={tooltipSide}>{tooltip ?? label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -535,7 +549,7 @@ function MoreActions({
               type="button"
               aria-label={label}
               data-testid={testId}
-              className="toolbar-icon-button shrink-0 p-1.5 rounded-lg text-text-secondary"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
             >
               {confirmed ? (
                 <Check
@@ -601,7 +615,7 @@ function ModeControl<T extends string>({
           aria-label={`View mode: ${current.ariaLabel ?? current.label}`}
           title={current.title}
           data-testid="file-browser-mode-menu"
-          className="toolbar-icon-button flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-text-primary"
+          className="toolbar-icon-button flex h-6.5 shrink-0 items-center gap-1 rounded-[var(--radius-md)] px-2 text-xs font-medium text-text-primary"
         >
           {current.label}
           <ChevronDown className="h-3 w-3 text-text-secondary" aria-hidden="true" />
