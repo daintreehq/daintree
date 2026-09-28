@@ -3,7 +3,6 @@ import { Callout } from "@/components/ui/Callout";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { JSX } from "react";
 import {
-  Check,
   BellOff,
   ChevronRight,
   Download,
@@ -244,6 +243,8 @@ interface ProjectListItemProps {
    * to it — source-level, because vitest cannot see the freeze.
    */
   nowMs: number;
+  /** False only under the "Current project" band header, which already says it. */
+  showCurrentLabel: boolean;
   onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -561,6 +562,21 @@ function ResumableAgentsLabel({ count }: { count: number }) {
   );
 }
 
+/**
+ * Where you are, in words. A trailing check read as "done" among rows that are
+ * all agent status, and the check is this app's mark for a chosen value in a
+ * picker — the switcher is navigation, so it says "Current" the way the branch
+ * and move-to-worktree pickers do. Hidden from readers because every row that
+ * draws it already carries the fact in its accessible name or selection state.
+ */
+function CurrentLabel() {
+  return (
+    <span aria-hidden="true" className="shrink-0 text-xs text-text-secondary">
+      Current
+    </span>
+  );
+}
+
 /** Matches the resolution of the wait ages on screen — they change by the minute. */
 const WAIT_AGE_TICK_MS = 60_000;
 
@@ -668,6 +684,7 @@ function ProjectListItem({
   project,
   isSelected,
   nowMs,
+  showCurrentLabel,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -815,11 +832,9 @@ function ProjectListItem({
          */}
         <RowStatusLine status={status} />
       </div>
-      {/* Where you are: the committed-value check every picker gives it, so the
-          current workspace reads the same in browse and in ranked search. */}
-      {project.isActive && (
-        <Check className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
-      )}
+      {/* Not under the "Current project" band header: it already names this
+          row, and a label beside it would say it twice. */}
+      {project.isActive && showCurrentLabel && <CurrentLabel />}
     </div>
   );
 
@@ -931,6 +946,7 @@ function ScratchListItem({
   scratch,
   isSelected,
   nowMs,
+  showCurrentLabel,
   onSelect,
   onHoverRow,
 }: {
@@ -938,6 +954,8 @@ function ScratchListItem({
   isSelected: boolean;
   /** The clock this row renders against, passed rather than read — see `ProjectListItemProps`. */
   nowMs: number;
+  /** See `ProjectListItemProps`. */
+  showCurrentLabel: boolean;
   onSelect: (row: ProjectSwitcherScratchRow) => void;
   onHoverRow?: (rowId: string) => void;
 }) {
@@ -988,9 +1006,7 @@ function ScratchListItem({
         </div>
         <RowStatusLine status={status} />
       </div>
-      {scratch.isActive && (
-        <Check className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
-      )}
+      {scratch.isActive && showCurrentLabel && <CurrentLabel />}
     </div>
   );
 }
@@ -1422,6 +1438,8 @@ function ProjectListContent({
 
   const setBandCollapsed = usePreferencesStore((state) => state.setProjectSwitcherBandCollapsed);
 
+  const hasBands = sections !== null && sections.length > 0;
+
   const renderItem = (row: ProjectSwitcherRow) => {
     const isSelected = row.id === selectedRowId;
     return (
@@ -1431,6 +1449,7 @@ function ProjectListContent({
             scratch={row}
             isSelected={isSelected}
             nowMs={nowMs}
+            showCurrentLabel={!hasBands}
             onSelect={onSelect}
             onHoverRow={onHoverRow}
           />
@@ -1439,6 +1458,10 @@ function ProjectListContent({
             project={row}
             isSelected={isSelected}
             nowMs={nowMs}
+            // Band membership is frozen while the palette is open, so a
+            // project that became active mid-session can sit under another
+            // header; only the "Current project" band makes the label redundant.
+            showCurrentLabel={!hasBands || row.section !== "current"}
             onSelect={onSelect}
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}
@@ -1878,9 +1901,9 @@ function ScratchSection({
                           // 1px sideways between browse and search.
                           "border border-transparent",
                           PALETTE_ROW_FOCUS_CLASS,
-                          // The scratch you're in is a committed value inside a
-                          // picker, so it takes a check, not a fill: a fill here
-                          // read as a second cursor beside the palette's own.
+                          // The scratch you're in takes a "Current" label, not a
+                          // fill: a fill here read as a second cursor beside the
+                          // palette's own.
                           // These rows sit outside the arrow-key domain, so hover
                           // is the lighter list step, the same on every row.
                           "hover:bg-overlay-subtle"
@@ -1935,12 +1958,9 @@ function ScratchSection({
                             </div>
                           )}
                         </div>
-                        {scratch.isActive && (
-                          <Check
-                            className="h-4 w-4 shrink-0 text-text-secondary"
-                            aria-hidden="true"
-                          />
-                        )}
+                        {/* The band here says "Scratch", not "current", so this
+                            list always needs the label. */}
+                        {scratch.isActive && <CurrentLabel />}
                       </button>
                     </ContextMenuTrigger>
                     {hasContextActions && (

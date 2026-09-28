@@ -1,4 +1,3 @@
-import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
@@ -42,7 +41,8 @@ function WorktreeListItem({
           "bg-surface-canvas"
         )}
         // The cursor is aria-selected; the worktree you are in is aria-current
-        // with a neutral check, as in the rest of the palette family.
+        // and says "Current" in words. A check is the mark for a chosen value,
+        // and switching worktrees is navigation, not a value pick.
         aria-selected={isSelected}
         aria-current={isActive ? "true" : undefined}
         role="option"
@@ -55,12 +55,7 @@ function WorktreeListItem({
             {worktree.branch && (
               <span className="font-mono text-text-secondary truncate">{worktree.branch}</span>
             )}
-            {isActive && (
-              <>
-                <Check className="w-4 h-4 shrink-0 text-text-primary" aria-hidden="true" />
-                <span className="sr-only">Current worktree</span>
-              </>
-            )}
+            {isActive && <span className="shrink-0">Current</span>}
           </div>
         </div>
         <div

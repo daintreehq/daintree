@@ -1,6 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Check } from "lucide-react";
 import { Sprout } from "@/components/icons";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
@@ -452,12 +451,7 @@ function MoveToWorktreeRow({
         </span>
         {detail && <span className="truncate font-mono text-xs text-text-secondary">{detail}</span>}
       </span>
-      {isCurrent && (
-        <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary">
-          <Check className="size-3.5" aria-hidden="true" />
-          Current
-        </span>
-      )}
+      {isCurrent && <span className="shrink-0 text-xs text-text-secondary">Current</span>}
     </div>
   );
 }
