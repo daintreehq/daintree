@@ -226,7 +226,9 @@ test("Checkbox, switch and settings reset — families, states and themes", asyn
         shot.minControls > 0
           ? booleanControls(target).first()
           : shot.fallback
-            ? target.getByRole(shot.fallback.role, { name: shot.fallback.name }).first()
+            ? booleanControls(target)
+                .or(target.getByRole(shot.fallback.role, { name: shot.fallback.name }))
+                .first()
             : null;
       if (control) {
         await expect(control, `${slug}: no control to probe`).toBeAttached();

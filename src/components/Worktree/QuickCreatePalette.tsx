@@ -13,6 +13,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const TYPE_BADGES: Record<string, string> = {
   terminal: "Terminal",
@@ -206,12 +207,10 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       afterList={
         showAssignToggle ? (
           <div className="px-3 py-2 border-t border-daintree-border/40">
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-text-secondary">
-              <input
-                type="checkbox"
+            <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
+              <Checkbox
                 checked={palette.assignToSelf}
-                onChange={(e) => palette.setAssignToSelf(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-border-default bg-surface-canvas checked:bg-accent-primary"
+                onCheckedChange={(checked) => palette.setAssignToSelf(checked === true)}
               />
               Assign issue to me
             </label>

@@ -1,7 +1,8 @@
 import { useId, useRef, useEffect } from "react";
 import type { ComponentPropsWithoutRef, KeyboardEvent, ReactNode } from "react";
-import { Check, RotateCcw } from "lucide-react";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SettingsResetButton } from "./SettingsResetButton";
 import { SettingsInlineError, settingsRowFrameClass, useSettingsGroup } from "./SettingsGroup";
 
 export interface ChoiceboxOption<T extends string = string> {
@@ -141,7 +142,7 @@ export function SettingsChoicebox<T extends string = string>({
     const groupDescribedBy =
       [describedBy, disabled ? group.reasonId : undefined].filter(Boolean).join(" ") || undefined;
     return (
-      <div className={cn("group relative", className)} {...props}>
+      <div className={cn("group relative", className)} data-settings-reset-scope="" {...props}>
         {isModified && (
           <span
             className="status-mark absolute left-0 top-2.5 bottom-2.5 w-0.5 rounded-full bg-state-modified"
@@ -162,19 +163,7 @@ export function SettingsChoicebox<T extends string = string>({
                 </p>
               )}
             </div>
-            {showReset && (
-              <button
-                type="button"
-                aria-label={resetName}
-                className={cn(
-                  "p-1 rounded-sm text-text-secondary hover:text-text-primary transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                )}
-                onClick={onReset}
-              >
-                <RotateCcw className="w-3 h-3" aria-hidden="true" />
-              </button>
-            )}
+            {showReset && <SettingsResetButton label={resetName} onReset={onReset} />}
           </div>
         )}
         <div
@@ -272,7 +261,11 @@ export function SettingsChoicebox<T extends string = string>({
   }
 
   return (
-    <div className={cn("group grid grid-cols-subgrid gap-2 col-span-full", className)} {...props}>
+    <div
+      className={cn("group grid grid-cols-subgrid gap-2 col-span-full", className)}
+      data-settings-reset-scope=""
+      {...props}
+    >
       {label && (
         <div className="flex items-center gap-2">
           <label id={labelId} htmlFor={id} className="text-sm text-text-secondary">
@@ -285,37 +278,16 @@ export function SettingsChoicebox<T extends string = string>({
             />
           )}
           {showReset && (
-            <button
-              type="button"
-              aria-label={resetAriaLabel ?? `Reset ${label} to default`}
-              className={cn(
-                "p-0.5 rounded-sm text-text-secondary hover:text-text-primary",
-                "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-                "transition-colors"
-              )}
-              onClick={onReset}
-            >
-              <RotateCcw className="w-3 h-3" />
-            </button>
+            <SettingsResetButton
+              label={resetAriaLabel ?? `Reset ${label} to default`}
+              onReset={onReset}
+            />
           )}
         </div>
       )}
       {!label && showReset && (
         <div className="flex items-center gap-2 justify-end">
-          <button
-            type="button"
-            aria-label="Reset to default"
-            className={cn(
-              "p-0.5 rounded-sm text-text-secondary hover:text-text-primary",
-              "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-              "transition-colors"
-            )}
-            onClick={onReset}
-          >
-            <RotateCcw className="w-3 h-3" />
-          </button>
+          <SettingsResetButton label={resetAriaLabel ?? "Reset to default"} onReset={onReset} />
         </div>
       )}
       <div

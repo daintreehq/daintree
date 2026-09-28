@@ -22,6 +22,7 @@ import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./CopyableCommand";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
 import type { CliAvailability } from "@shared/types";
@@ -460,11 +461,10 @@ export function AgentCliStep({
                   key={agentId}
                   className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30 cursor-pointer hover:bg-surface-canvas/60 transition-colors"
                 >
-                  <input
-                    type="checkbox"
-                    className="w-3.5 h-3.5 accent-status-error shrink-0"
+                  <Checkbox
+                    size="sm"
                     checked={isEnabled}
-                    onChange={() => {
+                    onCheckedChange={() => {
                       void updateAgent(agentId, {
                         dangerousMode: isEnabled ? "inherit" : "on",
                         dangerousEnabled: !isEnabled,

@@ -142,12 +142,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
-    {
-      category: "verification",
-      signature: "border-status-success/60 bg-status-success/20 text-status-success",
-      expectedOccurrences: 3,
-      rationale: "Per-file viewed toggle; one mark per item in the review checklist",
-    },
   ],
   "src/components/FileViewer/diffChangeSet.ts": [
     {
@@ -473,13 +467,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
-    {
-      category: "verification",
-      signature: "accent-status-success",
-      expectedOccurrences: 1,
-      rationale:
-        "One viewed mark per file in the review checklist; the row wash went neutral in #12002",
-    },
   ],
   "src/components/Worktree/ReviewHub/ReviewHubContent.tsx": [
     {
@@ -637,5 +624,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 73;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 77;
+export const EXPECTED_STATUS_SUCCESS_SITES = 71;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 73;

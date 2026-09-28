@@ -1,10 +1,10 @@
 import type { ComponentPropsWithoutRef, ReactNode, Ref } from "react";
-import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SETTINGS_CONTROL_WIDTH, SettingsRow, useSettingsGroup } from "./SettingsGroup";
+import { SettingsResetButton } from "./SettingsResetButton";
 
 interface SettingsInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id"> {
   label: string;
@@ -114,20 +114,11 @@ export function SettingsInput({
           aria-hidden="true"
         />
       )}
-      {showReset && (
-        <button
-          type="button"
-          aria-label={resetAriaLabel ?? `Reset ${label} to default`}
-          className={cn(
-            "p-0.5 rounded-sm text-text-secondary hover:text-text-primary",
-            "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-            "transition-colors"
-          )}
-          onClick={onReset}
-        >
-          <RotateCcw className="w-3 h-3" />
-        </button>
+      {showReset && onReset && (
+        <SettingsResetButton
+          label={resetAriaLabel ?? `Reset ${label} to default`}
+          onReset={onReset}
+        />
       )}
     </>
   );
@@ -136,6 +127,7 @@ export function SettingsInput({
     <Field
       id={rowId}
       className="group grid-cols-subgrid col-span-full"
+      data-settings-reset-scope=""
       invalid={isError}
       disabled={disabled}
     >

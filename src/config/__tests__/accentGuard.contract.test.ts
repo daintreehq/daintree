@@ -175,7 +175,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
-    "src/components/Worktree/QuickCreatePalette.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
   ],
 };

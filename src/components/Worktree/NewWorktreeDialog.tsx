@@ -5,7 +5,8 @@ import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
-import { FolderGit2, Check, AlertCircle, GitBranch } from "lucide-react";
+import { FolderGit2, AlertCircle, GitBranch } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -1205,33 +1206,14 @@ export function NewWorktreeDialog({
                       htmlFor="base-branch"
                       hint={
                         <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
-                          <span className="relative inline-flex shrink-0">
-                            <input
-                              id="from-remote"
-                              type="checkbox"
-                              checked={fromRemote}
-                              onChange={(e) => {
-                                baseBranchTouchedRef.current = true;
-                                setFromRemote(e.target.checked);
-                              }}
-                              className={cn(
-                                // A 16px box at the theme radius reads as a radio, not a checkbox.
-                                "h-4 w-4 appearance-none rounded-[4px] border",
-                                "transition-colors duration-150 ease-out",
-                                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                                fromRemote
-                                  ? "border-text-primary bg-text-primary"
-                                  : "border-border-strong bg-surface-input"
-                              )}
-                            />
-                            {fromRemote && (
-                              <Check
-                                className="pointer-events-none absolute inset-0 m-auto h-3 w-3 text-text-inverse"
-                                strokeWidth={3.5}
-                                aria-hidden="true"
-                              />
-                            )}
-                          </span>
+                          <Checkbox
+                            id="from-remote"
+                            checked={fromRemote}
+                            onCheckedChange={(checked) => {
+                              baseBranchTouchedRef.current = true;
+                              setFromRemote(checked === true);
+                            }}
+                          />
                           Create from remote branch
                         </label>
                       }

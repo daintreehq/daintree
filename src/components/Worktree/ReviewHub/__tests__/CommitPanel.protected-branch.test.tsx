@@ -220,9 +220,9 @@ describe("CommitPanel — push confirm", () => {
   it("confirming with the 'don't ask again' checkbox checked calls onSetSkipPushConfirm(true)", () => {
     const { onCommitAndPush, onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    const checkbox = screen.getByTestId("commit-panel-push-confirm-dont-ask") as HTMLInputElement;
+    const checkbox = screen.getByTestId("commit-panel-push-confirm-dont-ask");
     fireEvent.click(checkbox);
-    expect(checkbox.checked).toBe(true);
+    expect(checkbox.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
@@ -249,8 +249,8 @@ describe("CommitPanel — push confirm", () => {
     fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    const checkbox = screen.getByTestId("commit-panel-push-confirm-dont-ask") as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
+    const checkbox = screen.getByTestId("commit-panel-push-confirm-dont-ask");
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
   });
 
   it("normalizes mixed-case protected branch names ('Main', 'DEVELOP') for the warning copy", () => {

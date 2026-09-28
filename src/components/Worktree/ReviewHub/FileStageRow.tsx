@@ -5,6 +5,7 @@ import type { StagingFileEntry } from "@shared/types";
 import type { GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Minus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -149,8 +150,8 @@ function FileStageRowComponent({
   );
 
   const handleViewedChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      onViewedChange?.(e.target.checked);
+    (checked: boolean | "indeterminate") => {
+      onViewedChange?.(checked === true);
     },
     [onViewedChange]
   );
@@ -159,6 +160,10 @@ function FileStageRowComponent({
     // Don't bubble into the row's onClick (which opens the diff modal).
     e.stopPropagation();
   }, []);
+
+  // A viewed file recedes by its content only: the row's controls and focus
+  // rings stay at full strength, since they are still live.
+  const viewedDim = viewed && "opacity-60";
 
   const row = (
     <div
@@ -179,8 +184,7 @@ function FileStageRowComponent({
         // The row whose menu is open lifts to a neutral raised tier — a
         // distinct level from the selection's subtle fill, so it reads as
         // "the menu targets this row" rather than as a second selection.
-        "data-[state=open]:bg-overlay-raised",
-        viewed && "opacity-60"
+        "data-[state=open]:bg-overlay-raised"
       )}
       // Below the windowing threshold the staging lists still render every
       // changed file, and a big changeset (lockfiles, codegen) mounts thousands
@@ -226,7 +230,8 @@ function FileStageRowComponent({
               "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
               "text-3xs font-medium leading-4 h-4 min-w-[16px]",
               config.bg,
-              config.text
+              config.text,
+              viewedDim
             )}
           >
             {config.label}
@@ -236,6 +241,7 @@ function FileStageRowComponent({
               data-testid="file-stage-row-dir"
               className={cn(
                 "shrink font-mono text-2xs transition-colors",
+                viewedDim,
                 generated
                   ? "text-text-placeholder"
                   : "text-text-secondary group-hover/stagerow:text-text-primary"
@@ -248,6 +254,7 @@ function FileStageRowComponent({
             data-testid="file-stage-row-base"
             className={cn(
               "shrink truncate font-medium font-mono text-2xs transition-colors",
+              viewedDim,
               generated
                 ? "text-daintree-text/40"
                 : "text-text-primary group-hover/stagerow:text-text-primary"
@@ -263,7 +270,7 @@ function FileStageRowComponent({
           data-testid="file-stage-row-churn"
           className={cn(
             "ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums",
-            generated && "opacity-60"
+            (generated || viewed) && "opacity-60"
           )}
         >
           {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
@@ -282,17 +289,13 @@ function FileStageRowComponent({
                 viewed ? "text-text-secondary" : "text-text-placeholder hover:text-text-secondary"
               )}
             >
-              <input
-                type="checkbox"
+              <Checkbox
+                size="sm"
                 checked={viewed}
-                onChange={handleViewedChange}
-                aria-label={
-                  viewed ? `Mark ${file.path} as not viewed` : `Mark ${file.path} as viewed`
-                }
-                className={cn(
-                  "w-3 h-3 rounded cursor-pointer accent-status-success",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                )}
+                onCheckedChange={handleViewedChange}
+                // Constant, as a toggle's name must be: the checked state is
+                // announced by the checkbox itself.
+                aria-label={`Mark ${file.path} as viewed`}
               />
               <span>Viewed</span>
             </label>

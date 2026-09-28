@@ -4,6 +4,7 @@ import type { GitPushDestination } from "@shared/types/git";
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { KbdChord } from "@/components/ui/Kbd";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -711,13 +712,12 @@ export function CommitPanel({
           >
             {commitMessage}
           </pre>
-          <label className="flex items-center gap-2 text-xs text-text-secondary select-none">
-            <input
-              type="checkbox"
+          <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
+            <Checkbox
               data-testid="commit-panel-push-confirm-dont-ask"
               checked={dontAskChecked}
-              onChange={(e) => setDontAskChecked(e.target.checked)}
-              className="shrink-0"
+              onCheckedChange={(checked) => setDontAskChecked(checked === true)}
+              className="mt-0.5"
             />
             Don't ask again for this worktree
           </label>

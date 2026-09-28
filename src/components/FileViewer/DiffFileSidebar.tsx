@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
-import { Check, Folder } from "lucide-react";
+import { Folder } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
 import { basename, dirname, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -118,21 +119,22 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
       </button>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => ctx.toggleViewed(ctx.worktreePath, file.viewedKey)}
-            aria-pressed={viewed}
+          <Checkbox
+            size="sm"
+            checked={viewed}
+            onCheckedChange={() => ctx.toggleViewed(ctx.worktreePath, file.viewedKey)}
             aria-label={`Mark ${file.path} as viewed`}
             className={cn(
-              "ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors",
-              viewed
-                ? "border-status-success/60 bg-status-success/20 text-status-success"
-                : "border-border-default text-transparent opacity-0 hover:border-border-strong group-hover/diffrow:opacity-100 focus-visible:opacity-100"
+              // A 14px box with a 24px hit area (WCAG 2.5.8); the pseudo-element
+              // stays inside the row's own padding.
+              "ml-1.5 before:absolute before:-inset-[5px] before:content-['']",
+              // Unviewed boxes only show on the row that is being pointed at or
+              // tabbed through, so a long list is not a column of empty squares.
+              !viewed &&
+                "opacity-0 group-hover/diffrow:opacity-100 group-focus-within/diffrow:opacity-100 focus-visible:opacity-100"
             )}
             data-testid="diff-sidebar-viewed-toggle"
-          >
-            <Check className="h-3 w-3" />
-          </button>
+          />
         </TooltipTrigger>
         <TooltipContent side="right">Viewed</TooltipContent>
       </Tooltip>
