@@ -37,17 +37,10 @@ import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
-import {
-  FIELD_FOCUS,
-  FIELD_INPUT,
-  FIELD_SURFACE,
-  FormGrid,
-  FormRow,
-} from "@/components/Worktree/views";
+import { RecipeImportDialog } from "@/components/TerminalRecipe/RecipeImportDialog";
 import { getRecipeTerminalSummary } from "@/components/Terminal/utils/recipeUtils";
 import { nextDuplicateName } from "@/components/Terminal/RecipeRunner/recipeRunnerUtils";
 import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
-import { cn } from "@/lib/utils";
 import type { TerminalRecipe } from "@/types";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
@@ -94,7 +87,6 @@ export function RecipeManager({
   const saveToRepo = useRecipeStore((s) => s.saveToRepo);
   const exportRecipe = useRecipeStore((s) => s.exportRecipe);
   const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
-  const importRecipe = useRecipeStore((s) => s.importRecipe);
   const importRecipeFromFile = useRecipeStore((s) => s.importRecipeFromFile);
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
   const createRecipe = useRecipeStore((s) => s.createRecipe);
@@ -124,9 +116,6 @@ export function RecipeManager({
   const [recipeToDeleteAfterSave, setRecipeToDeleteAfterSave] = useState<string | null>(null);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
-  const [importScope, setImportScope] = useState<"global" | "project">("project");
-  const [importJson, setImportJson] = useState("");
-  const [importError, setImportError] = useState<string | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Kept mounted between opens; a filter left from last time would reopen the
@@ -232,22 +221,6 @@ export function RecipeManager({
     setRecipeToDeleteAfterSave(null);
   };
 
-  const handleImportRecipe = async () => {
-    setImportError(null);
-    const targetProjectId = importScope === "global" ? undefined : currentProject?.id;
-    if (importScope === "project" && !targetProjectId) {
-      setImportError("No project selected");
-      return;
-    }
-    try {
-      await importRecipe(targetProjectId, importJson);
-      setShowImportDialog(false);
-      setImportJson("");
-    } catch (err) {
-      setImportError(formatErrorMessage(err, "Failed to import recipe"));
-    }
-  };
-
   const resolveWorktreeName = (worktreeId: string) =>
     worktreeDisplayName(worktrees.get(worktreeId));
 
@@ -286,18 +259,18 @@ export function RecipeManager({
               {recipe.name}
             </span>
             {isPinned && (
-              <Badge>
+              <Badge size="xs">
                 <Pin aria-hidden />
                 Pinned
               </Badge>
             )}
             {fromPlugin && (
-              <Badge>
+              <Badge size="xs">
                 <Lock aria-hidden />
                 Read-only
               </Badge>
             )}
-            {isShadowed && <Badge>Overridden by team recipe</Badge>}
+            {isShadowed && <Badge size="xs">Overridden by team recipe</Badge>}
           </div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             {fromPlugin && (
@@ -680,78 +653,11 @@ export function RecipeManager({
         onClose={() => setRecipeToDeleteAfterSave(null)}
       />
 
-      <AppDialog
+      <RecipeImportDialog
         isOpen={showImportDialog}
-        onClose={() => {
-          setShowImportDialog(false);
-          setImportJson("");
-          setImportError(null);
-        }}
-        size="md"
-      >
-        <AppDialog.Header>
-          <AppDialog.Title>Import recipe</AppDialog.Title>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-
-        <AppDialog.Body>
-          <FormGrid>
-            <FormRow label="Import as" htmlFor="recipe-import-scope">
-              <select
-                id="recipe-import-scope"
-                value={importScope}
-                onChange={(e) => setImportScope(e.target.value as "global" | "project")}
-                className={cn(FIELD_INPUT, "pr-8")}
-              >
-                <option value="project">Project Recipe</option>
-                <option value="global">Global Recipe</option>
-              </select>
-            </FormRow>
-          </FormGrid>
-
-          {/* Off the rail deliberately: pasted recipe JSON needs the dialog's
-              full width more than it needs a label column. */}
-          <textarea
-            value={importJson}
-            onChange={(e) => setImportJson(e.target.value)}
-            data-testid="recipe-import-textarea"
-            aria-label="Recipe JSON"
-            aria-describedby={importError ? "recipe-import-error" : undefined}
-            placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className={cn(
-              FIELD_SURFACE,
-              FIELD_FOCUS,
-              "mt-3 w-full h-48 px-2.5 py-2 text-sm text-text-primary font-mono resize-none",
-              "placeholder:text-text-placeholder"
-            )}
-            spellCheck={false}
-          />
-          {importError && (
-            <div
-              id="recipe-import-error"
-              className="mt-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/10 p-3 text-sm text-status-error"
-            >
-              {importError}
-            </div>
-          )}
-        </AppDialog.Body>
-
-        <AppDialog.Footer>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setShowImportDialog(false);
-              setImportJson("");
-              setImportError(null);
-            }}
-          >
-            Cancel
-          </Button>
-          <Button variant="contrast" onClick={handleImportRecipe} disabled={!importJson.trim()}>
-            Import
-          </Button>
-        </AppDialog.Footer>
-      </AppDialog>
+        onClose={() => setShowImportDialog(false)}
+        projectId={currentProject?.id}
+      />
     </>
   );
 }
