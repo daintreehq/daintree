@@ -570,6 +570,8 @@ export function ThemeBrowser() {
           aria-autocomplete="list"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onClear={() => setQuery("")}
+          clearLabel="Clear filter"
           onKeyDown={handleSearchKeyDown}
           placeholder="Filter themes"
           aria-label="Filter themes"

@@ -575,13 +575,9 @@ function SettingsDialogInner({
   );
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // SearchField clears a query on Escape; an empty field gives up focus.
     if (e.key === "Escape") {
-      if (searchQuery) {
-        e.stopPropagation();
-        setSearchQuery("");
-      } else {
-        searchInputRef.current?.blur();
-      }
+      if (!searchQuery) searchInputRef.current?.blur();
     } else if (isSearching && searchResults.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();

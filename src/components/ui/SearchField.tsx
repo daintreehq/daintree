@@ -7,13 +7,17 @@ function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null): void {
   else if (ref) (ref as React.RefObject<T | null>).current = value;
 }
 
-export type SearchFieldSize = "compact" | "palette";
+export type SearchFieldSize = "dense" | "compact" | "palette";
 
 export interface SearchFieldProps extends Omit<
   React.ComponentPropsWithoutRef<"input">,
   "size" | "prefix"
 > {
-  /** `compact` for rails and nav columns (28px), `palette` for palette headers. */
+  /**
+   * `compact` for rails, nav columns and dropdown headers (28px), `dense` for
+   * filter strips and pane toolbars beside xs chips (24px), `palette` for
+   * palette and dialog headers (38px).
+   */
   size?: SearchFieldSize;
   inputRef?: React.Ref<HTMLInputElement>;
   /** Classes for the visible field, not the inner input. */
@@ -23,7 +27,10 @@ export interface SearchFieldProps extends Omit<
   fieldProps?: Omit<React.HTMLAttributes<HTMLDivElement>, "className" | "style" | "children">;
   /** Rendered between the magnifier and the text, inside the field (a mode chip). */
   prefix?: React.ReactNode;
-  /** Shows the clear button while the field has a value. */
+  /**
+   * Shows the clear button while the field has a value, and makes Escape clear
+   * a non-empty query before it reaches the surface around the field.
+   */
   onClear?: () => void;
   clearLabel?: string;
   /** Anything else trailing inside the field, after the clear button. */
@@ -89,6 +96,32 @@ export function SearchField({
 
   const hasValue = value !== undefined && value !== null && String(value).length > 0;
 
+  // Escape clears a query before it closes anything: the first press empties
+  // the field and is claimed here, the next one finds it empty and falls
+  // through to the surface. Runs after the caller's own handler and stands
+  // down if that handler claimed the key — a field whose Escape first closes
+  // its own popover, say — and while an IME is composing, where Escape
+  // cancels the composition rather than the query.
+  const { onKeyDown } = inputProps;
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    onKeyDown?.(event);
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      event.isPropagationStopped() ||
+      event.nativeEvent.isComposing ||
+      !onClear ||
+      !hasValue ||
+      inputProps.disabled ||
+      inputProps.readOnly
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    onClear();
+  };
+
   return (
     <div
       {...fieldProps}
@@ -107,6 +140,7 @@ export function SearchField({
         className={cn("search-field-input", className)}
         aria-invalid={invalid || undefined}
         {...inputProps}
+        onKeyDown={handleKeyDown}
       />
       {onClear && hasValue && (
         <button
@@ -125,4 +159,23 @@ export function SearchField({
       {trailing}
     </div>
   );
+}
+
+/**
+ * For a `SearchField` inside a Radix layer (a popover): the layer closes on
+ * Escape in a document capture listener, before the field ever sees the key,
+ * so the field's own clear-first Escape never gets a turn. Pass this from the
+ * layer's `onEscapeKeyDown` and a focused, non-empty query is cleared instead
+ * of the layer closing — the next Escape finds it empty and closes as usual.
+ */
+export function clearSearchBeforeDismiss(
+  event: KeyboardEvent,
+  input: HTMLInputElement | null,
+  onClear: () => void
+): void {
+  if (event.isComposing || !input || document.activeElement !== input || input.value === "") {
+    return;
+  }
+  event.preventDefault();
+  onClear();
 }

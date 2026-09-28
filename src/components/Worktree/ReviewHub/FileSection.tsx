@@ -386,18 +386,15 @@ export function FileSection({
           </span>
           <div className="flex items-center gap-1.5 min-w-0">
             <SearchField
-              size="compact"
-              // h-5 keeps the section header at its own height; the compact
-              // 28px would push the header taller than its label row.
-              fieldClassName={cn(
-                "h-5 gap-1 px-1.5 text-2xs [&_.search-field-icon]:size-3",
-                filterDropClass
-              )}
+              size="dense"
+              fieldClassName={filterDropClass}
               inputRef={inputRef}
               aria-label={filterLabel}
               placeholder="Filter…"
-              defaultValue={view.filterQuery}
+              value={view.filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
+              onClear={clearFilter}
+              clearLabel="Clear filter"
               className="w-[104px] grow-0 basis-auto"
             />
             <DropdownMenu>

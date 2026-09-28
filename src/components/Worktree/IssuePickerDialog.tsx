@@ -424,6 +424,10 @@ export function IssuePickerDialog({
           inputRef={inputRef}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onClear={() => setSearch("")}
+          // "Clear", not the family default: the no-match state below owns
+          // "Clear search", and two buttons with one name are indistinguishable.
+          clearLabel="Clear"
           onKeyDown={handleKeyDown}
           placeholder="Search issues by title or number..."
           aria-label="Search issues"

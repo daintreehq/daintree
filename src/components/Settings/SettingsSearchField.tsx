@@ -41,14 +41,10 @@ export function SettingsSearchField({
       // "Clear", not the family default: the empty state below the list owns
       // "Clear search", and two buttons with one name are indistinguishable.
       clearLabel="Clear"
+      // SearchField clears a query on Escape; an empty field gives up focus
+      // rather than closing Settings, so the first press only leaves the box.
       onKeyDown={(e) => {
-        if (e.key !== "Escape") return;
-        if (value !== "") {
-          e.stopPropagation();
-          onChange("");
-        } else {
-          inputRef.current?.blur();
-        }
+        if (e.key === "Escape" && value === "") inputRef.current?.blur();
       }}
       placeholder={placeholder}
       aria-label={label}

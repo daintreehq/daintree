@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import fs from "node:fs";
@@ -61,6 +62,66 @@ describe("SearchField", () => {
     const event = fireEvent.pointerDown(clear);
     // fireEvent returns false only when the handler called preventDefault.
     expect(event).toBe(true);
+  });
+});
+
+describe("SearchField Escape", () => {
+  function renderField(value: string, extra: Partial<ComponentProps<typeof SearchField>> = {}) {
+    const onClear = vi.fn();
+    const outer = vi.fn();
+    render(
+      <div onKeyDown={outer}>
+        <SearchField
+          aria-label="Search things"
+          value={value}
+          onChange={() => {}}
+          onClear={onClear}
+          {...extra}
+        />
+      </div>
+    );
+    return { onClear, outer, input: screen.getByRole("textbox") };
+  }
+
+  it("clears a query and keeps the key from reaching the surface", () => {
+    const { onClear, outer, input } = renderField("abc");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+  });
+
+  it("lets an empty field's Escape through to the surface", () => {
+    const { onClear, outer, input } = renderField("");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onClear).not.toHaveBeenCalled();
+    expect(outer).toHaveBeenCalledTimes(1);
+  });
+
+  it("stands down when the caller's own handler claimed Escape", () => {
+    const { onClear, input } = renderField("abc", {
+      onKeyDown: (e) => {
+        if (e.key === "Escape") e.stopPropagation();
+      },
+    });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
+  it("leaves Escape to an IME that is composing", () => {
+    const { onClear, input } = renderField("abc");
+    fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on Escape without a way to clear", () => {
+    const outer = vi.fn();
+    render(
+      <div onKeyDown={outer}>
+        <SearchField aria-label="Search things" value="abc" onChange={() => {}} />
+      </div>
+    );
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
+    expect(outer).toHaveBeenCalledTimes(1);
   });
 });
 

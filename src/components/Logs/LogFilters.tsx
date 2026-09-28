@@ -108,9 +108,8 @@ export function LogFilters({
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-divider px-3 py-1.5">
       <SearchField
-        size="compact"
-        // h-6 keeps the field level with the xs filter chips beside it.
-        fieldClassName="h-6 min-w-[150px] max-w-[260px] flex-1"
+        size="dense"
+        fieldClassName="min-w-[150px] max-w-[260px] flex-1"
         type="search"
         value={searchValue}
         onChange={(e) => setSearchValue(e.target.value)}
