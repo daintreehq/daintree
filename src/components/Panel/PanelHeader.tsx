@@ -136,6 +136,7 @@ import {
 import { isPtyPanel } from "@shared/types/panel";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
+import { scratchpadHasContent } from "@/lib/terminalScratchpad";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -414,15 +415,20 @@ function PanelHeaderComponent({
     return panel && isPtyPanel(panel) ? (panel.isInputLocked ?? false) : false;
   });
   const hasPty = panelKindHasPty(kind);
-  // A primitive, so the header re-renders on a visibility change and never on
-  // a keystroke into the notes.
+  // A primitive, so the header re-renders on a visibility or empty/non-empty
+  // change and never on a keystroke into the notes. "empty" is an open
+  // scratchpad with no notes yet, which earns no header toggle.
   const scratchpadState = usePanelStore((state) => {
     const panel = state.panelsById[id];
     if (!panel || !isPtyPanel(panel)) return "unavailable";
     if (!panel.scratchpad) return "hidden";
-    return panel.scratchpad.collapsed ? "collapsed" : "open";
+    if (panel.scratchpad.collapsed) return "collapsed";
+    return scratchpadHasContent(panel.scratchpad) ? "open" : "empty";
   });
   const showScratchpad = usePanelStore((state) => state.showScratchpad);
+  const collapseScratchpad = usePanelStore((state) => state.collapseScratchpad);
+  const scratchpadToggleLabel =
+    scratchpadState === "collapsed" ? "Show scratchpad" : "Hide scratchpad";
   const isHibernated = useIsHibernated(id);
 
   // Read from the subscribed snapshot, not the registry helpers: a plugin
@@ -1539,9 +1545,9 @@ function PanelHeaderComponent({
         data-testid="panel-header-controls"
         className="ml-1.5 flex shrink-0 items-center gap-1"
       >
-        {/* A collapsed Scratchpad's way back (#12835). Only a scratchpad with
-            notes collapses, so this never stands in for an empty one. */}
-        {scratchpadState === "collapsed" && (
+        {/* Marks a terminal that has notes and toggles them (#12835). Only a
+            scratchpad with notes collapses, so an empty one never shows it. */}
+        {(scratchpadState === "collapsed" || scratchpadState === "open") && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -1550,16 +1556,17 @@ function PanelHeaderComponent({
                 className={CONTROL_ICON}
                 onClick={(e) => {
                   e.stopPropagation();
-                  showScratchpad(id);
+                  if (scratchpadState === "collapsed") showScratchpad(id);
+                  else collapseScratchpad(id);
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                aria-label="Show scratchpad"
-                data-testid="panel-expand-scratchpad"
+                aria-label={scratchpadToggleLabel}
+                data-testid="panel-toggle-scratchpad"
               >
                 <NotebookPen aria-hidden="true" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Show scratchpad</TooltipContent>
+            <TooltipContent side="bottom">{scratchpadToggleLabel}</TooltipContent>
           </Tooltip>
         )}
 

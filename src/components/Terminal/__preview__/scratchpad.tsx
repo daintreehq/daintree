@@ -20,7 +20,7 @@ import "@/index.css";
 /**
  * Standalone visual-review harness for a terminal's Scratchpad column.
  *
- * Mounts the real `ContentPanel` (so the header, its scratchpad expand control
+ * Mounts the real `ContentPanel` (so the header, its scratchpad toggle
  * and the pane frame are the product's own) with the real `TerminalScratchpad`
  * beside a stand-in terminal body, in the same flex row `TerminalPane` draws.
  * The panel store is seeded with one PTY row carrying the fixture's scratchpad,

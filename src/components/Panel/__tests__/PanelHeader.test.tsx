@@ -507,12 +507,14 @@ describe("PanelHeader", () => {
 
     describe("scratchpad (#12835)", () => {
       const showScratchpad = vi.fn();
+      const collapseScratchpad = vi.fn();
 
       function storeTerminal(scratchpad?: unknown, kind = "terminal") {
         mockHasPty = kind === "terminal";
         mockStoreState = {
           ...mockStoreState,
           showScratchpad,
+          collapseScratchpad,
           panelsById: { "test-panel": { id: "test-panel", kind, cwd: "/p", scratchpad } },
         };
       }
@@ -524,28 +526,52 @@ describe("PanelHeader", () => {
         findMenuButton(screen.getByTestId("overflow-menu"), "Show scratchpad")!.click();
 
         expect(showScratchpad).toHaveBeenCalledWith("test-panel");
-        expect(screen.queryByTestId("panel-expand-scratchpad")).toBeNull();
+        expect(screen.queryByTestId("panel-toggle-scratchpad")).toBeNull();
       });
 
-      it("offers nothing while the scratchpad is already open", () => {
+      it("offers nothing while an empty scratchpad is open", () => {
         storeTerminal({ content: "", collapsed: false });
         render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
 
         expect(
           findMenuButton(screen.getByTestId("overflow-menu"), "Show scratchpad")
         ).toBeUndefined();
-        expect(screen.queryByTestId("panel-expand-scratchpad")).toBeNull();
+        expect(screen.queryByTestId("panel-toggle-scratchpad")).toBeNull();
       });
 
-      it("keeps an expand control in the header while collapsed", () => {
+      it("treats whitespace-only notes as empty", () => {
+        storeTerminal({ content: "  \n\t ", collapsed: false });
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        expect(screen.queryByTestId("panel-toggle-scratchpad")).toBeNull();
+      });
+
+      it("keeps a show toggle in the header while collapsed", () => {
         storeTerminal({ content: "notes", collapsed: true });
         render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
 
-        const expand = screen.getByTestId("panel-expand-scratchpad");
-        fireEvent.pointerDown(expand);
-        expand.click();
+        const toggle = screen.getByTestId("panel-toggle-scratchpad");
+        expect(toggle.getAttribute("aria-label")).toBe("Show scratchpad");
+        fireEvent.pointerDown(toggle);
+        toggle.click();
 
         expect(showScratchpad).toHaveBeenCalledWith("test-panel");
+        expect(collapseScratchpad).not.toHaveBeenCalled();
+      });
+
+      it("keeps a hide toggle in the header while open with notes", () => {
+        storeTerminal({ content: "notes", collapsed: false });
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        const toggle = screen.getByTestId("panel-toggle-scratchpad");
+        expect(toggle.getAttribute("aria-label")).toBe("Hide scratchpad");
+        toggle.click();
+
+        expect(collapseScratchpad).toHaveBeenCalledWith("test-panel");
+        expect(showScratchpad).not.toHaveBeenCalled();
+        expect(
+          findMenuButton(screen.getByTestId("overflow-menu"), "Show scratchpad")
+        ).toBeUndefined();
       });
 
       it("offers no scratchpad on a panel that is not a terminal", () => {

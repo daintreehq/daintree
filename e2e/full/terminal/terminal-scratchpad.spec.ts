@@ -115,7 +115,7 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     await capture(window, testInfo, panel, "03-scratchpad-resized");
   });
 
-  test("collapses to a header control and expands back as it was", async () => {
+  test("toggles from a header control and expands back as it was", async () => {
     const testInfo = test.info();
     const { window } = ctx;
     const scratchpad = panel.getByTestId("terminal-scratchpad");
@@ -123,19 +123,26 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     const editor = panel.getByTestId("terminal-scratchpad-editor");
     const notes = await editor.inputValue();
 
-    await panel.getByRole("button", { name: "Hide scratchpad" }).click();
+    const toggle = panel.getByTestId("panel-toggle-scratchpad");
+    await expect(toggle).toHaveAttribute("aria-label", "Hide scratchpad");
+
+    await panel.getByTestId("terminal-scratchpad-collapse").click();
     await expect(scratchpad).toHaveCount(0);
-    const expand = panel.getByTestId("panel-expand-scratchpad");
-    await expect(expand).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-label", "Show scratchpad");
 
     await capture(window, testInfo, panel, "04-scratchpad-collapsed");
 
-    await expand.click();
+    await toggle.click();
     await expect(scratchpad).toBeVisible();
     await expect(editor).toHaveValue(notes);
     await expect(editor).not.toBeFocused();
     expect(Math.abs((await scratchpad.boundingBox())!.width - width)).toBeLessThan(2);
-    await expect(expand).toHaveCount(0);
+    await expect(toggle).toHaveAttribute("aria-label", "Hide scratchpad");
+
+    await toggle.click();
+    await expect(scratchpad).toHaveCount(0);
+    await toggle.click();
+    await expect(scratchpad).toBeVisible();
   });
 
   test("leaves nothing behind when closed empty, and the menu brings it back", async () => {
@@ -144,10 +151,11 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     const editor = panel.getByTestId("terminal-scratchpad-editor");
 
     await editor.fill("");
-    await panel.getByRole("button", { name: "Hide scratchpad" }).click();
+    await expect(panel.getByTestId("panel-toggle-scratchpad")).toHaveCount(0);
+    await panel.getByTestId("terminal-scratchpad-collapse").click();
 
     await expect(panel.getByTestId("terminal-scratchpad")).toHaveCount(0);
-    await expect(panel.getByTestId("panel-expand-scratchpad")).toHaveCount(0);
+    await expect(panel.getByTestId("panel-toggle-scratchpad")).toHaveCount(0);
 
     await capture(window, testInfo, panel, "05-scratchpad-closed");
 

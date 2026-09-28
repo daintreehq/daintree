@@ -98,7 +98,7 @@ async function capture(page: Page, shot: Shot, theme: string): Promise<string> {
   const editor = page.getByTestId("terminal-scratchpad-editor");
   if (shot.fixture === "collapsed") {
     await expect(column).toHaveCount(0);
-    await expect(page.getByTestId("panel-expand-scratchpad")).toBeVisible();
+    await expect(page.getByTestId("panel-toggle-scratchpad")).toBeVisible();
   } else {
     await expect(column).toBeVisible();
     await expect(editor).toBeVisible();
