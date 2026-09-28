@@ -385,7 +385,15 @@ code.hljs {
     --checkbox-accent: var(--color-text-primary);
   }
 
+  /* The app's focus ring for anything that does not draw its own: a raw
+     control, a programmatically focused container, a third-party widget. Left
+     to Chromium it gets the UA's 1px blue auto ring, a hue no theme renders.
+     This sits in the base layer, so every component's `focus-visible:outline-*`
+     or `outline-hidden` utility still wins, and the forced-colors and
+     increased-contrast blocks further down still set the floor. */
   *:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
     transition:
       outline-color var(--focus-transition-duration) var(--focus-transition-easing),
       outline-offset var(--focus-transition-duration) var(--focus-transition-easing),
