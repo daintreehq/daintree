@@ -841,6 +841,42 @@ describe("registerDiagnosticsHandlers", () => {
       expect(appendedNames()).not.toContain("pty-host-shard1.log");
     });
 
+    it("drops undated records from a windowed bundle and malformed breadcrumbs always", async () => {
+      readdirMock.mockImplementation((dir: string) =>
+        Promise.resolve(
+          path.normalize(dir) === crashesDir ? ["crash-1-undated.json", "crash-2-odd.json"] : []
+        )
+      );
+      readFileMock.mockImplementation((p: string) =>
+        Promise.resolve(
+          path.basename(p) === "crash-1-undated.json"
+            ? JSON.stringify({ errorMessage: "no timestamp" })
+            : JSON.stringify({
+                timestamp: 9000,
+                recentActions: { args: { text: "secret prompt" } },
+              })
+        )
+      );
+
+      await saveBundle(true, 5000);
+      expect(appendedNames()).not.toContain("crashes/crash-1-undated.json");
+      expect(appendedContent("crashes/crash-2-odd.json")).not.toContain("secret prompt");
+
+      archiverMock().append.mockClear();
+      await saveBundle(true, null);
+      expect(appendedNames()).toContain("crashes/crash-1-undated.json");
+    });
+
+    it("still saves the bundle when the userData path is unavailable", async () => {
+      appMock.getPath.mockImplementationOnce(() => {
+        throw new Error("no userData");
+      });
+      await saveBundle(true, null);
+
+      expect(appendedNames()).toContain("pty-host.log");
+      expect(appendedNames().some((n) => n.startsWith("crashes/"))).toBe(false);
+    });
+
     it("leaves crash records and pty-host logs out when logs are excluded", async () => {
       await saveBundle(false, null);
 

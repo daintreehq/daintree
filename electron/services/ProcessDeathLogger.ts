@@ -1,7 +1,8 @@
 import { app, type Details, type RenderProcessGoneDetails, type WebContents } from "electron";
 import { createLogger } from "../utils/logger.js";
-import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
-import { describeProcessDeath, isSignalKill } from "./processDeathDescription.js";
+import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
+import { describeProcessDeath, isExternalKill } from "./processDeathDescription.js";
+import { getTerminationIntent } from "./processTerminationIntent.js";
 
 const logger = createLogger("main:ProcessDeath");
 
@@ -19,8 +20,13 @@ export interface ProcessDeath {
   reason: string;
   exitCode: number;
   webContentsId?: number;
+  /** Set when Daintree terminated the process itself. */
+  intent?: string | null;
   at: number;
 }
+
+const summarize = (d: ProcessDeath) =>
+  `${label(d)} ${describeProcessDeath(d.reason, d.exitCode, { intent: d.intent })}`;
 
 function label(death: ProcessDeath): string {
   if (death.kind === "renderer") {
@@ -39,6 +45,7 @@ function toContext(death: ProcessDeath): Record<string, unknown> {
     reason: death.reason,
     exitCode: death.exitCode,
     ...(death.webContentsId !== undefined ? { webContentsId: death.webContentsId } : {}),
+    ...(death.intent ? { initiatedBy: "daintree", intent: death.intent } : {}),
     at: new Date(death.at).toISOString(),
   };
 }
@@ -80,39 +87,38 @@ export class ProcessDeathLogger {
     if (deaths.length === 0) return;
     this.pending = [];
 
+    // Teardown and Daintree's own kills are expected; only the rest is a fault.
     const shuttingDown = this.isShuttingDown();
-    const log = shuttingDown
+    const expected = shuttingDown || deaths.every((d) => d.intent);
+    const log = expected
       ? (message: string, context: Record<string, unknown>) => logger.info(message, context)
       : (message: string, context: Record<string, unknown>) => logger.warn(message, context);
     const shutdownContext = shuttingDown ? { duringShutdown: true } : {};
 
     if (deaths.length === 1) {
       const [death] = deaths;
-      log(
-        `Child process gone: ${label(death)} ${describeProcessDeath(death.reason, death.exitCode)}`,
-        { ...toContext(death), ...shutdownContext }
-      );
+      log(`Child process gone: ${summarize(death)}`, { ...toContext(death), ...shutdownContext });
       return;
     }
 
     const spanMs = deaths[deaths.length - 1].at - deaths[0].at;
-    const signalKills = deaths.filter((d) => isSignalKill(d.reason)).length;
-    const summary = deaths
-      .map((d) => `${label(d)} ${describeProcessDeath(d.reason, d.exitCode)}`)
-      .join("; ");
+    const externalKills = deaths.filter((d) => isExternalKill(d.reason, d.intent)).length;
     const cause =
-      signalKills === deaths.length
+      externalKills === deaths.length
         ? " — all terminated by a signal from outside the process"
-        : signalKills > 0
-          ? ` — ${signalKills} terminated by a signal from outside the process`
+        : externalKills > 0
+          ? ` — ${externalKills} terminated by a signal from outside the process`
           : "";
-    log(`${deaths.length} child processes gone within ${spanMs}ms${cause}: ${summary}`, {
-      count: deaths.length,
-      spanMs,
-      signalKills,
-      firstAt: new Date(deaths[0].at).toISOString(),
-      ...shutdownContext,
-    });
+    log(
+      `${deaths.length} child processes gone within ${spanMs}ms${cause}: ${deaths.map(summarize).join("; ")}`,
+      {
+        count: deaths.length,
+        spanMs,
+        externalKills,
+        firstAt: new Date(deaths[0].at).toISOString(),
+        ...shutdownContext,
+      }
+    );
   }
 
   dispose(): void {
@@ -121,6 +127,7 @@ export class ProcessDeathLogger {
 }
 
 let instance: ProcessDeathLogger | null = null;
+let removeListeners: (() => void) | null = null;
 
 export function getProcessDeathLogger(): ProcessDeathLogger | null {
   return instance;
@@ -134,49 +141,65 @@ export function getProcessDeathLogger(): ProcessDeathLogger | null {
  */
 export function initializeProcessDeathLogger(): ProcessDeathLogger {
   if (instance) return instance;
-  const deathLogger = new ProcessDeathLogger(isCleaningUp);
+  // Any claimed shutdown — including the handoff to app.exit/quitAndInstall.
+  const deathLogger = new ProcessDeathLogger(() => getActiveShutdown() !== null);
   instance = deathLogger;
 
-  app.on("child-process-gone", (_event, details: Details) => {
+  const onChildGone = (_event: Electron.Event, details: Details) => {
     if (details.reason === "clean-exit") return;
+    const name = details.name ?? details.serviceName ?? details.type;
     deathLogger.record({
       kind: "utility",
       type: details.type,
-      name: details.name ?? details.serviceName ?? details.type,
+      name,
       reason: details.reason,
       exitCode: details.exitCode,
+      intent: getTerminationIntent({ serviceName: name }),
     });
-  });
+  };
 
-  app.on(
-    "render-process-gone",
-    (_event, webContents: WebContents, details: RenderProcessGoneDetails) => {
-      if (details.reason === "clean-exit") return;
-      let type = "unknown";
-      let webContentsId: number | undefined;
-      try {
-        type = webContents.getType();
-        webContentsId = webContents.id;
-      } catch {
-        // Destroyed webContents — keep the death, drop the identity.
-      }
-      deathLogger.record({
-        kind: "renderer",
-        type,
-        name: "renderer",
-        reason: details.reason,
-        exitCode: details.exitCode,
-        webContentsId,
-      });
+  const onRendererGone = (
+    _event: Electron.Event,
+    webContents: WebContents,
+    details: RenderProcessGoneDetails
+  ) => {
+    if (details.reason === "clean-exit") return;
+    let type = "unknown";
+    let webContentsId: number | undefined;
+    try {
+      type = webContents.getType();
+      webContentsId = webContents.id;
+    } catch {
+      // Destroyed webContents — keep the death, drop the identity.
     }
-  );
+    deathLogger.record({
+      kind: "renderer",
+      type,
+      name: "renderer",
+      reason: details.reason,
+      exitCode: details.exitCode,
+      webContentsId,
+      intent: webContentsId !== undefined ? getTerminationIntent({ webContentsId }) : null,
+    });
+  };
 
-  app.on("will-quit", () => deathLogger.flush());
+  const onWillQuit = () => deathLogger.flush();
+
+  app.on("child-process-gone", onChildGone);
+  app.on("render-process-gone", onRendererGone);
+  app.on("will-quit", onWillQuit);
+  removeListeners = () => {
+    app.off("child-process-gone", onChildGone);
+    app.off("render-process-gone", onRendererGone);
+    app.off("will-quit", onWillQuit);
+  };
 
   return deathLogger;
 }
 
 export function resetProcessDeathLoggerForTesting(): void {
+  removeListeners?.();
+  removeListeners = null;
   instance?.dispose();
   instance = null;
 }

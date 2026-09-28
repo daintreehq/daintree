@@ -12,6 +12,7 @@ const shared = vi.hoisted(() => {
     forkMock: vi.fn(),
     appMock,
     trackEventMock: vi.fn(),
+    loggerCalls: [] as Array<{ level: string; message: string; context?: unknown }>,
   };
 });
 
@@ -25,6 +26,17 @@ vi.mock("electron", () => ({
 
 vi.mock("../TelemetryService.js", () => ({
   trackEvent: shared.trackEventMock,
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: (message: string, context?: unknown) =>
+      shared.loggerCalls.push({ level: "info", message, context }),
+    warn: (message: string, context?: unknown) =>
+      shared.loggerCalls.push({ level: "warn", message, context }),
+    error: vi.fn(),
+  }),
 }));
 
 interface MockChild extends EventEmitter {
@@ -196,6 +208,29 @@ describe("MainProcessWatchdogClient", () => {
     vi.advanceTimersByTime(6_000);
 
     expect(shared.forkMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("logs an unexpected exit with the spawned pid, then the restart, to daintree.log", () => {
+    shared.loggerCalls.length = 0;
+    mockChild.pid = undefined;
+    new WatchdogClient({ mainPid: 4242 });
+    // Electron fills in `pid` only once the process has spawned.
+    mockChild.pid = 31337;
+    mockChild.emit("spawn");
+    mockChild.emit("exit", 1);
+
+    const exit = shared.loggerCalls.find((c) => c.message.includes("exited unexpectedly"));
+    expect(exit?.level).toBe("warn");
+    expect(exit?.context).toMatchObject({ pid: 31337, exitCode: 1 });
+    expect(shared.loggerCalls.some((c) => c.message.includes("Restarting watchdog in"))).toBe(true);
+  });
+
+  it("logs nothing for the exit of a disposed watchdog", () => {
+    shared.loggerCalls.length = 0;
+    const client = new WatchdogClient({ mainPid: 4242 });
+    client.dispose();
+    mockChild.emit("exit", 0);
+    expect(shared.loggerCalls.some((c) => c.message.includes("exited unexpectedly"))).toBe(false);
   });
 
   it("stops restarting after the sliding-window crash threshold (deadlock detection becomes inactive)", () => {

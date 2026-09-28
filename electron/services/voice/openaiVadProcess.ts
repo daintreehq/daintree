@@ -4,6 +4,7 @@ import { utilityProcess, type UtilityProcess } from "electron";
 import { logError, logInfo, logWarn } from "../../utils/logger.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import type { VadWorkerInbound, VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
+import { noteTerminationIntent } from "../processTerminationIntent.js";
 
 const P = "[VoiceTranscription:openai]";
 
@@ -205,6 +206,7 @@ export class OpenAIVadProcess {
     this.killDue = false;
     // Not `child.kill()`: Electron's UtilityProcess.kill() blocks main on
     // macOS until the child is gone (#11069). A raw SIGKILL does not.
+    noteTerminationIntent({ serviceName: VAD_SERVICE_NAME }, "stop");
     try {
       process.kill(pid, "SIGKILL");
     } catch (error) {

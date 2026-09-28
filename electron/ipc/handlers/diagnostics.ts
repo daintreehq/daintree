@@ -42,6 +42,7 @@ import { getLogFilePath, getLogDirectory } from "../../utils/logger.js";
 import { readOldestRetainedLogMs } from "../../utils/logRetention.js";
 import { getVersionFirstRunBoundary } from "../../services/versionFirstRun.js";
 import { safeStringify } from "../../utils/safeStringify.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import {
   filterSections,
   filterLogEntriesByTime,
@@ -81,7 +82,8 @@ async function listDir(dir: string): Promise<string[]> {
  * Crash and renderer-gone records from `userData/crashes`, newest first.
  * Recency comes from each record's own `timestamp`, never mtime, which
  * copy-fallback paths can rewrite. Breadcrumb args are dropped because
- * action args can carry user-entered text.
+ * action args can carry user-entered text; known secret shapes are scrubbed
+ * before the user's own replacements run.
  */
 async function collectCrashRecordEntries(
   crashesDir: string,
@@ -100,20 +102,24 @@ async function collectCrashRecordEntries(
       continue;
     }
     const timestamp = typeof record.timestamp === "number" ? record.timestamp : null;
-    if (timeWindowStartMs !== null && timestamp !== null && timestamp < timeWindowStartMs) {
+    // An undated record can't be placed inside a chosen window.
+    if (timeWindowStartMs !== null && (timestamp === null || timestamp < timeWindowStartMs)) {
       continue;
     }
     if (Array.isArray(record.recentActions)) {
-      record.recentActions = record.recentActions.map((crumb: unknown) => {
-        if (!crumb || typeof crumb !== "object") return crumb;
-        const { args: _args, ...rest } = crumb as Record<string, unknown>;
-        return rest;
-      });
+      record.recentActions = record.recentActions
+        .filter((crumb: unknown) => !!crumb && typeof crumb === "object")
+        .map((crumb: unknown) => {
+          const { args: _args, ...rest } = crumb as Record<string, unknown>;
+          return rest;
+        });
+    } else {
+      delete record.recentActions;
     }
     records.push({
       name: `crashes/${file}`,
       timestamp: timestamp ?? 0,
-      content: applyReplacements(JSON.stringify(record, null, 2), replacements),
+      content: applyReplacements(scrubSecrets(JSON.stringify(record, null, 2)), replacements),
     });
   }
   records.sort((a, b) => b.timestamp - a.timestamp);
@@ -142,7 +148,7 @@ async function collectPtyHostLogEntries(
     }
     try {
       const raw = await fs.readFile(filePath, "utf-8");
-      entries.push({ name: file, content: applyReplacements(raw, replacements) });
+      entries.push({ name: file, content: applyReplacements(scrubSecrets(raw), replacements) });
     } catch {
       // Unreadable log — the rest of the bundle is still useful.
     }
@@ -193,14 +199,18 @@ async function writeBundleZip(
       });
     }
 
-    logEntries.push(
-      ...(await collectPtyHostLogEntries(logDir, timeWindowStartMs, replacements)),
-      ...(await collectCrashRecordEntries(
-        path.join(app.getPath("userData"), "crashes"),
-        timeWindowStartMs,
-        replacements
-      ))
-    );
+    logEntries.push(...(await collectPtyHostLogEntries(logDir, timeWindowStartMs, replacements)));
+    let crashesDir: string | null = null;
+    try {
+      crashesDir = path.join(app.getPath("userData"), "crashes");
+    } catch {
+      // No userData path — ship the bundle without crash records.
+    }
+    if (crashesDir) {
+      logEntries.push(
+        ...(await collectCrashRecordEntries(crashesDir, timeWindowStartMs, replacements))
+      );
+    }
   }
 
   await new Promise<void>((resolve, reject) => {

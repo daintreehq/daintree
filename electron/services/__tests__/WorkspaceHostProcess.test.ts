@@ -1716,6 +1716,75 @@ describe("WorkspaceHostProcess crash window", () => {
     host.dispose();
   });
 
+  describe("unexpected exit log", () => {
+    const exitWarn = () =>
+      loggerCalls.find((c) => c.message.includes("] Host process ") && c.level === "warn");
+
+    async function readyHost() {
+      const { WorkspaceHostProcess } = await loadModule();
+      const host = new WorkspaceHostProcess("/tmp/project", {
+        maxRestartAttempts: 3,
+        healthCheckIntervalMs: 30000,
+      } as any);
+      host.waitForReady().catch(() => {});
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      return { host, child };
+    }
+
+    it("describes an external SIGTERM that arrives after a clean-looking exit code", async () => {
+      const { host, child } = await readyHost();
+
+      child.emit("exit", 0);
+      // Nothing logs until the authoritative reason has had its tick.
+      expect(exitWarn()).toBeUndefined();
+      appMock.emit(
+        "child-process-gone",
+        {} as Electron.Event,
+        {
+          type: "Utility",
+          name: serviceNameFor("/tmp/project"),
+          reason: "killed",
+          exitCode: 15,
+        } as Electron.Details
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      const log = exitWarn();
+      expect(log?.message).toContain("SIGTERM");
+      expect(log?.message).toContain("from outside the process");
+      expect(log?.context).toMatchObject({ reason: "killed", exitCode: 15 });
+      expect(loggerCalls.some((c) => c.message.includes("Restarting in"))).toBe(true);
+
+      host.dispose();
+    });
+
+    it("falls back to the exit code when no reason arrives", async () => {
+      const { host, child } = await readyHost();
+
+      child.emit("exit", 3);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(exitWarn()?.message).toContain("exited with code 3 (no reason reported)");
+      expect(exitWarn()?.context).toMatchObject({ reason: null, exitCode: 3 });
+
+      host.dispose();
+    });
+
+    it("still records the exit at info when a dispose lands during the defer", async () => {
+      const { host, child } = await readyHost();
+
+      child.emit("exit", 1);
+      host.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(exitWarn()).toBeUndefined();
+      const info = loggerCalls.find((c) => c.message.includes("] Host process exited with code 1"));
+      expect(info?.level).toBe("info");
+      expect(info?.context).toMatchObject({ disposedDuringDefer: true });
+    });
+  });
+
   it("child-process-gone with non-matching serviceName is ignored", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {

@@ -31,6 +31,7 @@ import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
+import { getTerminationIntent } from "../services/processTerminationIntent.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
@@ -318,9 +319,18 @@ export function setupViewHandlers(
     } else {
       console.log("[ProjectViewManager] Renderer crash, auto-reloading view");
       if (projectId && projectId === host.activeProjectId) {
-        notifyError(new Error(rendererReloadNotice("A project view", details.reason)), {
-          source: "renderer-crash",
-        });
+        notifyError(
+          new Error(
+            rendererReloadNotice(
+              "A project view",
+              details.reason,
+              getTerminationIntent({ webContentsId: wc.id })
+            )
+          ),
+          {
+            source: "renderer-crash",
+          }
+        );
       }
       setImmediate(() => {
         if (!wc.isDestroyed()) wc.reload();

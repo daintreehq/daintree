@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { utilityProcess } from "electron";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import type { DatabaseToolRequest, DatabaseToolResponse } from "./databaseTools.js";
+import { noteTerminationIntent } from "../processTerminationIntent.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +62,10 @@ const defaultDeps: DatabaseProcessDeps = {
   // Not `child.kill()`: Electron's UtilityProcess.kill() blocks main on macOS
   // until the child is gone (#11069). A raw SIGKILL does not.
   kill: (pid) => {
+    noteTerminationIntent(
+      { serviceName: "daintree-plugin-database" },
+      "query finished or cancelled"
+    );
     try {
       process.kill(pid, "SIGKILL");
     } catch {

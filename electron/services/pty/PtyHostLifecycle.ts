@@ -46,6 +46,7 @@ import type {
 } from "../../../shared/types/pty-host.js";
 import { mainBootAbsMs, markPerformance } from "../../utils/performance.js";
 import { describeProcessDeath } from "../processDeathDescription.js";
+import { getTerminationIntent, noteTerminationIntent } from "../processTerminationIntent.js";
 
 /**
  * Map an authoritative `child-process-gone` reason (Electron 37+) to our CrashType.
@@ -406,6 +407,10 @@ export class PtyHostLifecycle {
     });
   }
 
+  private get serviceName(): string {
+    return this.config.serviceName ?? DEFAULT_SERVICE_NAME;
+  }
+
   /** Send one request to the host. Treats `postMessage` failure as a crash. */
   postMessage(request: PtyHostRequest): void {
     if (!this.child) {
@@ -417,6 +422,7 @@ export class PtyHostLifecycle {
     } catch (error) {
       console.error("[PtyClient] postMessage failed:", error);
       if (this.child) {
+        noteTerminationIntent({ serviceName: this.serviceName }, "postMessage failed");
         this.child.kill();
       }
     }
@@ -446,6 +452,7 @@ export class PtyHostLifecycle {
       this.disposeTimer = setTimeout(() => {
         this.disposeTimer = null;
         if (this.child) {
+          noteTerminationIntent({ serviceName: this.serviceName }, "dispose backstop");
           this.child.kill();
           this.child = null;
         }
@@ -538,10 +545,16 @@ export class PtyHostLifecycle {
       // bug (fixed in electron/electron#50386, landed Electron 41.0.4).
       const reportedCode = gone ? gone.exitCode : code;
 
-      const serviceName = this.config.serviceName ?? DEFAULT_SERVICE_NAME;
+      const serviceName = this.serviceName;
       this.callbacks.logWarn(
         gone
-          ? `[PtyClient] Pty Host ${serviceName} ${describeProcessDeath(gone.reason, gone.exitCode)}`
+          ? `[PtyClient] Pty Host ${serviceName} ${describeProcessDeath(
+              gone.reason,
+              gone.exitCode,
+              {
+                intent: getTerminationIntent({ serviceName }),
+              }
+            )}`
           : `[PtyClient] Pty Host ${serviceName} exited with code ${reportedCode}` +
               (crashType !== "CLEAN_EXIT" ? ` (${crashType})` : "")
       );

@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { trackEvent } from "./TelemetryService.js";
 import { createLogger } from "../utils/logger.js";
+import { noteTerminationIntent } from "./processTerminationIntent.js";
 
 const logger = createLogger("main:Watchdog");
 
@@ -161,7 +162,12 @@ export class MainProcessWatchdogClient {
       process.stderr.write(`[watchdog] ${chunk.toString()}`);
     });
 
-    const watchdogPid = this.child.pid;
+    // Electron assigns `pid` only once the child has spawned.
+    const launchedChild = this.child;
+    let watchdogPid = launchedChild.pid;
+    launchedChild.on("spawn", () => {
+      watchdogPid = launchedChild.pid;
+    });
     this.child.on("exit", (code) => {
       const wasDisposed = this.isDisposed;
       this.child = null;
@@ -422,6 +428,7 @@ export class MainProcessWatchdogClient {
       } catch {
         // Channel may already be closed; falling through to kill().
       }
+      noteTerminationIntent({ serviceName: SERVICE_NAME }, "dispose");
       try {
         this.child.kill();
       } catch {

@@ -57,6 +57,10 @@ import {
 } from "../lifecycle/windowRecreationState.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
+import {
+  getTerminationIntent,
+  noteTerminationIntent,
+} from "../services/processTerminationIntent.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
@@ -352,7 +356,10 @@ export function setupBrowserWindow(
             console.warn("[MAIN] User triggered force-restart of unresponsive renderer");
             const activeWc = getProjectViewManagerFor(win)?.getActiveView()?.webContents;
             const target = activeWc && !activeWc.isDestroyed() ? activeWc : appWebContents;
-            if (!target.isDestroyed()) target.forcefullyCrashRenderer();
+            if (!target.isDestroyed()) {
+              noteTerminationIntent({ webContentsId: target.id }, "user force-restarted view");
+              target.forcefullyCrashRenderer();
+            }
           }
         })
         .catch(() => {
@@ -692,9 +699,18 @@ export function setupBrowserWindow(
       }
     } else {
       console.log("[MAIN] Renderer crash, auto-reloading");
-      notifyError(new Error(rendererReloadNotice("The renderer process", details.reason)), {
-        source: "renderer-crash",
-      });
+      notifyError(
+        new Error(
+          rendererReloadNotice(
+            "The renderer process",
+            details.reason,
+            getTerminationIntent({ webContentsId: appWebContents.id })
+          )
+        ),
+        {
+          source: "renderer-crash",
+        }
+      );
       setImmediate(() => {
         if (win.isDestroyed()) return;
         appWebContents.reload();

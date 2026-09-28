@@ -27,6 +27,7 @@ import type {
 import { RequestResponseBroker } from "../rpc/index.js";
 import { PtyHealthWatchdog } from "./PtyHealthWatchdog.js";
 import { PtyHostLifecycle } from "./PtyHostLifecycle.js";
+import { noteTerminationIntent } from "../processTerminationIntent.js";
 
 export interface PtyShardConfig {
   /** Stable shard key: "main" for the default shard, the projectId otherwise. */
@@ -117,7 +118,11 @@ export class PtyShard {
       getChild: () => this.lifecycle.child,
       isHostInitialized: () => this.lifecycle.isInitialized,
       send: (request) => this.send(request),
-      emitCrashDetails: (payload) => callbacks.emitCrashDetails(this, payload),
+      // Called just before the watchdog SIGKILLs the unresponsive host.
+      emitCrashDetails: (payload) => {
+        noteTerminationIntent({ serviceName: config.serviceName }, "unresponsive to health checks");
+        callbacks.emitCrashDetails(this, payload);
+      },
     });
 
     this.lifecycle = new PtyHostLifecycle(

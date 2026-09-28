@@ -23,6 +23,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
+import { getTerminationIntent, noteTerminationIntent } from "./processTerminationIntent.js";
 
 const logger = createLogger("main:WorkspaceHost");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -533,6 +534,7 @@ export class WorkspaceHostProcess extends EventEmitter {
     const pid = this.child.pid;
     if (!pid) return false;
     try {
+      noteTerminationIntent({ serviceName: this.serviceName }, "e2e fault injection");
       process.kill(pid, "SIGKILL");
       return true;
     } catch {
@@ -617,6 +619,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       // thread — main — for up to 2s waiting for the child to die, freezing
       // window input routing. A raw SIGKILL is non-blocking and cannot be
       // trapped by the child. Matches the health watchdog's force-kill.
+      noteTerminationIntent({ serviceName: this.serviceName }, `dispose backstop: ${killReason}`);
       try {
         process.kill(pid, "SIGKILL");
       } catch (error) {
@@ -863,7 +866,12 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.emit("host-crash", -1);
     });
 
-    const hostPid = this.child.pid;
+    // Electron assigns `pid` only once the child has spawned.
+    const launchedChild = this.child;
+    let hostPid = launchedChild.pid;
+    launchedChild.on("spawn", () => {
+      hostPid = launchedChild.pid;
+    });
     this.child.on("exit", (code) => {
       this.flushHostOutputBuffers();
       // A disposed host exiting is the cooperative path, not a crash — every
@@ -924,11 +932,6 @@ export class WorkspaceHostProcess extends EventEmitter {
       // authoritative reason and exit code can arrive; fall back to the
       // exit-code from the `exit` event when no reason was captured in time.
       setImmediate(() => {
-        if (this.isDisposed) {
-          this.pendingChildProcessGoneReason = null;
-          return;
-        }
-
         const gone = this.pendingChildProcessGoneReason;
         this.pendingChildProcessGoneReason = null;
         // Prefer the authoritative exit code from `child-process-gone` over
@@ -936,18 +939,25 @@ export class WorkspaceHostProcess extends EventEmitter {
         // pre-41.0.4 builds and future regressions of the Windows signed/unsigned
         // mangling bug (fixed in electron/electron#50386, landed Electron 41.0.4).
         const reportedCode = gone ? gone.exitCode : code;
-        logWarn(
+        // Logged even when a dispose landed during the defer: the exit was
+        // still unexpected, and nothing else records it.
+        const disposedDuringDefer = this.isDisposed;
+        (disposedDuringDefer ? logInfo : logWarn)(
           `[WorkspaceHost:${this.serviceName}] Host process ${
             gone
-              ? describeProcessDeath(gone.reason, gone.exitCode)
+              ? describeProcessDeath(gone.reason, gone.exitCode, {
+                  intent: getTerminationIntent({ serviceName: this.serviceName }),
+                })
               : `exited with code ${code} (no reason reported)`
           }`,
           {
             pid: hostPid ?? null,
             reason: gone?.reason ?? null,
             exitCode: reportedCode,
+            ...(disposedDuringDefer ? { disposedDuringDefer: true } : {}),
           }
         );
+        if (disposedDuringDefer) return;
 
         // If `manualRestart()` or some other path already spawned a new host
         // during the defer window, don't schedule a second auto-restart — it
@@ -1030,6 +1040,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         );
 
         if (this.child.pid) {
+          noteTerminationIntent({ serviceName: this.serviceName }, "unresponsive to health checks");
           try {
             process.kill(this.child.pid, "SIGKILL");
           } catch {

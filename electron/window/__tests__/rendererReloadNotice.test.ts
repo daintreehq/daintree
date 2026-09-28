@@ -8,6 +8,12 @@ describe("rendererReloadNotice", () => {
     expect(text).not.toContain("crashed");
   });
 
+  it("doesn't blame an outside process when Daintree restarted the view itself", () => {
+    const text = rendererReloadNotice("A project view", "killed", "user force-restarted view");
+    expect(text).not.toContain("outside");
+    expect(text).not.toContain("crashed");
+  });
+
   it("keeps crash wording for real crashes", () => {
     expect(rendererReloadNotice("The renderer process", "crashed")).toBe(
       "The renderer process crashed and was automatically reloaded."
