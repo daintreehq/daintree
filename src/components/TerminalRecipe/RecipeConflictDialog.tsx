@@ -50,7 +50,9 @@ function RecipeConflictDialogInner() {
     <AppDialog
       isOpen={true}
       onClose={() => resolveConflict("cancel")}
-      size="sm"
+      // md, not sm: three footer answers plus the forward-compat label don't
+      // fit the small card without pushing the primary into its edge.
+      size="md"
       // Focus lands on Reload, never on the destructive Overwrite, so a
       // reflexive Enter takes the safe answer.
       initialFocus="confirm"
