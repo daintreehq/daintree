@@ -148,3 +148,22 @@ describe("menu keybinding column", () => {
     expect(container.innerHTML).toBe("");
   });
 });
+
+describe("menu keybinding with asChild", () => {
+  it("appends the key column inside the slotted child", () => {
+    render(
+      <DropdownMenu open modal={false}>
+        <DropdownMenuTrigger>Open</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem asChild keybinding={BOUND}>
+            <a href="#settings">Settings</a>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+    const row = document.querySelector('[role="menuitem"]')!;
+    expect(row.tagName).toBe("A");
+    expect(row.querySelectorAll("kbd").length).toBeGreaterThan(0);
+    expect(row.getAttribute("aria-keyshortcuts")).toBeTruthy();
+  });
+});

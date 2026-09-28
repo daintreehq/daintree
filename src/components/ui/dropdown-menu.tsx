@@ -1,6 +1,6 @@
 import * as React from "react";
 import type * as DropdownMenuPrimitiveType from "@radix-ui/react-dropdown-menu";
-import { Slot } from "@radix-ui/react-slot";
+import { Slot, Slottable } from "@radix-ui/react-slot";
 import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
@@ -505,7 +505,9 @@ const DropdownMenuKeyboundItem = React.forwardRef<
   const ariaKeyshortcuts = useAriaKeyshortcuts(keybinding);
   return (
     <DropdownMenuItemBase ref={ref} aria-keyshortcuts={ariaKeyshortcuts} {...props}>
-      {children}
+      {/* Slottable: with `asChild` the child stays the slotted element and the
+          key column is appended inside it, not beside it. */}
+      <Slottable>{children}</Slottable>
       <DropdownMenuShortcut shortcut={combo} />
     </DropdownMenuItemBase>
   );
