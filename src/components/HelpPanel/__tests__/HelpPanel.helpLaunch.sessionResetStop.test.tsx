@@ -1241,12 +1241,14 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     };
   }
 
-  // Found by `title` rather than `aria-label`: the close control is pointer-only and
-  // `aria-hidden`, because a focusable control beside a `tab` is what makes a roving
-  // tabindex impossible and would leave a stray non-`tab` child in the tablist. The
-  // keyboard route is Delete on the focused tab, covered in HelpSessionTabs.test.tsx.
+  // Found by its family hook rather than by role: the close control is pointer-only and
+  // `aria-hidden`, because a focusable control inside a `tab` is the nesting ARIA
+  // forbids. The keyboard route is Delete on the focused tab, covered in
+  // HelpSessionTabs.test.tsx.
   function closeButtonFor(container: HTMLElement, label: string): HTMLButtonElement {
-    const button = container.querySelector<HTMLButtonElement>(`button[title="Close ${label}"]`);
+    const button = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-document-tab-close]")
+    ).find((b) => b.getAttribute("aria-label") === `Close ${label}`);
     if (!button) throw new Error(`no close button for ${label}`);
     return button;
   }
@@ -1341,8 +1343,8 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
 
     expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "fix auth tests"]);
-    expect(tabs[1]!.getAttribute("title")).toBe("fix auth tests");
-    expect(tabs[0]!.hasAttribute("title")).toBe(false);
+    // Full titles reach the pointer through the app tooltip, never a native `title`.
+    expect(tabs.some((t) => t.hasAttribute("title"))).toBe(false);
     expect(closeButtonFor(container, "fix auth tests")).toBeTruthy();
   });
 
@@ -1356,11 +1358,12 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
     const { container } = render(<HelpPanel width={380} />);
     const tab = container.querySelectorAll<HTMLElement>('[role="tab"]')[1]!;
-    const label = tab.textContent!;
+    // The visible label only — the tab also holds its screen-reader state text.
+    const label = tab.querySelector(".truncate")!.textContent!;
 
     expect(label.endsWith("…")).toBe(true);
     expect(Array.from(label).length).toBeLessThanOrEqual(28);
-    expect(tab.getAttribute("title")).toBe(long);
+    expect(tab.hasAttribute("title")).toBe(false);
     expect(tab.getAttribute("aria-label")).toBe(long);
   });
 

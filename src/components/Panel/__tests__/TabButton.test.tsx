@@ -641,13 +641,18 @@ describe("TabButton", () => {
     });
   });
 
-  describe("close button in the Tab order", () => {
-    it("is a Tab stop only on the active tab — inactive tabs are reached with the arrows", () => {
-      const { unmount } = render(<TabButton {...defaultProps} isActive />);
-      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(0);
-      unmount();
-      render(<TabButton {...defaultProps} isActive={false} />);
-      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(-1);
+  describe("close control", () => {
+    it("never takes focus or joins the tab's accessible subtree — Delete is the keyboard route", () => {
+      // A focusable control inside a `tab` is the nesting ARIA forbids, and its label
+      // would otherwise be read as part of the tab's name.
+      for (const isActive of [true, false]) {
+        const { container, unmount } = render(<TabButton {...defaultProps} isActive={isActive} />);
+        const close = container.querySelector<HTMLElement>("[data-document-tab-close]")!;
+        expect(close.tabIndex).toBe(-1);
+        expect(close.getAttribute("aria-hidden")).toBe("true");
+        expect(screen.getByRole("tab").getAttribute("aria-keyshortcuts")).toBe("Delete");
+        unmount();
+      }
     });
   });
 

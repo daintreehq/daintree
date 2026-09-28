@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { PortalToolbar } from "./PortalToolbar";
+import { PORTAL_TAB_PANEL_ID, portalTabDomId } from "./portalTabIds";
 import { PortalLaunchpad } from "./PortalLaunchpad";
 import { DevServerDashboard } from "./DevServerDashboard";
 import { PortalTabSkeleton } from "./PortalTabSkeleton";
@@ -531,7 +532,11 @@ export function PortalDock() {
           />
           <div
             ref={contentRef}
-            id="portal-placeholder"
+            id={PORTAL_TAB_PANEL_ID}
+            // The tabs' controlled region while one is selected; with none, it is
+            // the launchpad and nothing names it.
+            role={activeTab ? "tabpanel" : undefined}
+            aria-labelledby={activeTab ? portalTabDomId(activeTab.id) : undefined}
             className="flex-1 flex flex-col min-h-0 relative"
           >
             {showLaunchpad ? (

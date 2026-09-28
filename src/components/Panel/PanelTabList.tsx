@@ -20,6 +20,8 @@ export interface PanelTabListProps {
   hiddenTabIds?: ReadonlySet<string>;
   tabListRef: (el: HTMLDivElement | null) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
+  onFocus?: (e: React.FocusEvent<HTMLDivElement>) => void;
+  onBlur?: (e: React.FocusEvent<HTMLDivElement>) => void;
   onAddTab?: () => void;
   addTabTooltipContent: React.ReactNode;
   overflowTrigger: React.ReactNode | null;
@@ -34,6 +36,8 @@ export function PanelTabList({
   hiddenTabIds,
   tabListRef,
   onKeyDown,
+  onFocus,
+  onBlur,
   onAddTab,
   addTabTooltipContent,
   overflowTrigger,
@@ -59,6 +63,8 @@ export function PanelTabList({
         role="tablist"
         aria-label="Panel tabs"
         onKeyDown={onKeyDown}
+        onFocus={onFocus}
+        onBlur={onBlur}
       >
         <LayoutGroup id={layoutGroupId}>
           <div className="flex items-center">

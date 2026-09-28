@@ -211,6 +211,10 @@ async function withPage<T>(context: BrowserContext, body: (page: Page) => Promis
 }
 
 test("document tab strips — four surfaces, four states, every theme", async ({ context }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_DOCTABS is required for the document tab strips capture",
+  });
   test.skip(!ENABLED, "set DAINTREE_SHOT_DOCTABS=1 to run the capture");
   const snap = makeSnap(OUT_DIR);
   const written: string[] = [];

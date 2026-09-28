@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-import { useState } from "react";
-import { render, fireEvent } from "@testing-library/react";
+import { useState, type ReactElement } from "react";
+import { render as rtlRender, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "../HelpSessionTabs";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
 /**
  * The session strip.
@@ -12,9 +15,8 @@ import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "../HelpS
  * all expected to move again. Each of these instead names something that, if it broke,
  * would take a whole signal with it and do so silently.
  *
- * Most of it is unreachable from a rendering test on purpose: the selected tab's rail is
- * an `::after` in `index.css` keyed on `data-active`, and jsdom has no layout. So the
- * rail is pinned by its hook rather than its paint.
+ * The strip is a member of the document tab family (`ui/document-tab`), so the
+ * selection mark is the family's indicator, pinned by its hook rather than its paint.
  */
 
 const TABS: HelpSessionTab[] = [
@@ -36,46 +38,49 @@ function renderStrip(overrides: Partial<Parameters<typeof HelpSessionTabs>[0]> =
   );
 }
 
-const chips = (container: HTMLElement) =>
-  Array.from(container.querySelectorAll<HTMLElement>(".session-tab"));
+/** The tabs drawing the family's selection mark. */
+const marked = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll<HTMLElement>("[data-document-tab-indicator]")).map((mark) =>
+    mark.closest<HTMLElement>('[role="tab"]')!
+  );
+
+const closers = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll<HTMLElement>("[data-document-tab-close]"));
 
 const tabs = (container: HTMLElement) =>
   Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
 
 describe("HelpSessionTabs", () => {
-  it("marks exactly one chip, and it is the active slot's", () => {
+  it("marks exactly one tab, and it is the active slot's", () => {
     const { container } = renderStrip();
-    const marked = chips(container).filter((c) => c.dataset.active === "true");
 
-    expect(marked).toHaveLength(1);
-    expect(marked[0]!.textContent).toContain("Session 2");
+    expect(marked(container)).toHaveLength(1);
+    expect(marked(container)[0]!.getAttribute("aria-label")).toBe("Session 2");
+    expect(marked(container)[0]!.getAttribute("aria-selected")).toBe("true");
   });
 
   it("moves the mark with the active slot", () => {
     const { container } = renderStrip({ activeSlot: 0 });
-    const marked = chips(container).filter((c) => c.dataset.active === "true");
 
-    expect(marked).toHaveLength(1);
-    expect(marked[0]!.textContent).toContain("Session 1");
+    expect(marked(container)).toHaveLength(1);
+    expect(marked(container)[0]!.getAttribute("aria-label")).toBe("Session 1");
   });
 
-  it("puts the mark on the chip that holds the whole tab, not on a control inside it", () => {
-    // The rail is an `::after` on `.session-tab`, so the attribute driving it has to
-    // live on the element that spans the chip. Moving it onto the tab button would
-    // silently shorten the rail to the button's box.
+  it("makes the tab the element that spans the whole chip, close control included", () => {
+    // The mark and the focus ring are drawn on the tab's own box, so the tab has to be
+    // the element holding everything the chip shows — a ring that stopped short of the
+    // close control read as two shapes.
     const { container } = renderStrip();
-    const marked = container.querySelector<HTMLElement>('[data-active="true"]')!;
-
-    expect(marked.classList.contains("session-tab")).toBe(true);
-    expect(marked.getAttribute("role")).toBe("presentation");
+    for (const closer of closers(container)) {
+      expect(closer.closest('[role="tab"]')).not.toBeNull();
+    }
   });
 
   it("draws the selection mark for the only lane too", () => {
-    // Nothing else in the app withholds a selected state at a single item, and with a
-    // content-width chip the rail is a mark on a tab, not a second bottom border.
+    // Nothing else in the app withholds a selected state at a single item.
     const { container } = renderStrip({ tabs: [TABS[0]!], activeSlot: 0 });
 
-    expect(container.querySelectorAll('[data-active="true"]')).toHaveLength(1);
+    expect(marked(container)).toHaveLength(1);
     expect(tabs(container)[0]!.getAttribute("aria-selected")).toBe("true");
   });
 
@@ -90,8 +95,8 @@ describe("HelpSessionTabs", () => {
         panelId="grow-body"
       />
     );
-    const marked = () => chips(container).filter((c) => c.dataset.active === "true");
-    expect(marked()).toHaveLength(1);
+    const marks = () => marked(container);
+    expect(marks()).toHaveLength(1);
 
     rerender(
       <HelpSessionTabs
@@ -103,8 +108,8 @@ describe("HelpSessionTabs", () => {
         panelId="grow-body"
       />
     );
-    expect(marked()).toHaveLength(1);
-    expect(marked()[0]!.textContent).toContain("Session 1");
+    expect(marks()).toHaveLength(1);
+    expect(marks()[0]!.textContent).toContain("Session 1");
 
     rerender(
       <HelpSessionTabs
@@ -116,8 +121,8 @@ describe("HelpSessionTabs", () => {
         panelId="grow-body"
       />
     );
-    expect(marked()).toHaveLength(1);
-    expect(marked()[0]!.textContent).toContain("Session 2");
+    expect(marks()).toHaveLength(1);
+    expect(marks()[0]!.textContent).toContain("Session 2");
   });
 
   it("is a tablist whose tabs point at the body they drive", () => {
@@ -156,11 +161,10 @@ describe("HelpSessionTabs", () => {
     expect(second!.tabIndex).toBe(0);
   });
 
-  it("moves the tab stop with the arrow keys, not just the focus ring", () => {
-    // The half of roving tabindex that is easy to leave out, because arrow keys appear to
-    // work without it. What it costs is the return trip: with the stop pinned to the
-    // SELECTED lane, tabbing away and back lands on that lane rather than the one you
-    // arrowed to, so the arrow keys' effect evaporates whenever focus leaves the panel.
+  it("keeps the tab stop on the selected lane while the arrow keys roam", () => {
+    // APG tabs: focus entering the tablist lands on the selected tab. Under manual
+    // activation the arrows move focus without moving the selection, and the stop stays
+    // with the selection, so tabbing back in lands on the session the body is showing.
     const { container } = renderStrip();
     const list = container.querySelector('[role="tablist"]')!;
     const [first, second] = tabs(container);
@@ -169,23 +173,10 @@ describe("HelpSessionTabs", () => {
     fireEvent.keyDown(list, { key: "ArrowRight" });
 
     expect(document.activeElement).toBe(first!);
-    expect(first!.tabIndex).toBe(0);
-    expect(second!.tabIndex).toBe(-1);
-    // …and the stop moving is not selection moving.
+    expect(first!.tabIndex).toBe(-1);
+    expect(second!.tabIndex).toBe(0);
     expect(first!.getAttribute("aria-selected")).toBe("false");
     expect(second!.getAttribute("aria-selected")).toBe("true");
-  });
-
-  it("hands the tab stop to a lane reached by pointer as well", () => {
-    // One route for every way focus arrives, rather than one for arrows and none for a
-    // click.
-    const { container } = renderStrip();
-    const [first, second] = tabs(container);
-
-    fireEvent.focus(first!);
-
-    expect(first!.tabIndex).toBe(0);
-    expect(second!.tabIndex).toBe(-1);
   });
 
   it("moves focus along the strip with arrow keys without selecting", () => {
@@ -425,12 +416,8 @@ describe("HelpSessionTabs", () => {
 
   it("keeps the close control out of the tab order and out of the a11y tree", () => {
     const { container } = renderStrip();
-    const closers = Array.from(container.querySelectorAll("button")).filter((b) =>
-      b.getAttribute("title")?.startsWith("Close ")
-    );
-
-    expect(closers).toHaveLength(2);
-    for (const c of closers) {
+    expect(closers(container)).toHaveLength(2);
+    for (const c of closers(container)) {
       expect(c.tabIndex).toBe(-1);
       expect(c.getAttribute("aria-hidden")).toBe("true");
     }
@@ -446,8 +433,8 @@ describe("HelpSessionTabs", () => {
       onSelect,
       onClose,
     });
-    const closer = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.getAttribute("title") === "Close Session 3"
+    const closer = closers(container).find(
+      (b) => b.getAttribute("aria-label") === "Close Session 3"
     )!;
 
     fireEvent.click(closer);
@@ -460,8 +447,8 @@ describe("HelpSessionTabs", () => {
     // A native button takes focus on mousedown. This one is about to unmount, and focus
     // on a node that unmounts falls to the document body.
     const { container } = renderStrip();
-    const closer = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.getAttribute("title") === "Close Session 2"
+    const closer = closers(container).find(
+      (b) => b.getAttribute("aria-label") === "Close Session 2"
     )!;
 
     const prevented = !fireEvent.mouseDown(closer);
@@ -520,7 +507,9 @@ describe("HelpSessionTabs", () => {
       activeSlot: 0,
     });
     const tab = tabs(container)[0]!;
-    const spans = Array.from(tab.querySelectorAll("span"));
+    const spans = Array.from(tab.querySelectorAll("span")).filter(
+      (span) => !span.closest("[data-document-tab-close]")
+    );
 
     expect(spans).toHaveLength(1);
     expect(spans[0]!.className).toContain("truncate");
@@ -544,11 +533,12 @@ describe("HelpSessionTabs", () => {
     // Capped titles that share an opening would otherwise announce identically.
     expect(titled!.textContent).toBe("refactor the assistant…");
     expect(titled!.getAttribute("aria-label")).toBe("refactor the assistant session strip");
-    expect(titled!.getAttribute("title")).toBe("refactor the assistant session strip");
     expect(
-      container.querySelector('button[title="Close refactor the assistant session strip"]')
+      container.querySelector('[aria-label="Close refactor the assistant session strip"]')
     ).not.toBeNull();
-    // A `Session N` tooltip would only repeat the tab.
+    // The whole title reaches the pointer through the app's tooltip, never a native
+    // `title`, which cannot be hovered, dismissed or styled.
+    expect(container.querySelector("[title]")).toBeNull();
     expect(plain!.hasAttribute("title")).toBe(false);
   });
 
@@ -579,14 +569,14 @@ describe("HelpSessionTabs", () => {
     // Parked rather than removed: a control that vanishes takes its own explanation with
     // it, and the strip's width budget stays constant either way. `aria-disabled` rather
     // than `disabled` is what keeps the explanation reachable — a disabled button leaves
-    // the tab order and stops firing pointer events, so its `title` never surfaces.
+    // the tab order and stops firing pointer events, so its tooltip never surfaces.
     const onOpenSession = vi.fn();
     const { getByLabelText } = renderStrip({ canOpenSession: false, onOpenSession });
     const control = getByLabelText("New session") as HTMLButtonElement;
 
     expect(control.disabled).toBe(false);
     expect(control.getAttribute("aria-disabled")).toBe("true");
-    expect(control.title).toContain("maximum");
+    expect(control.hasAttribute("title")).toBe(false);
 
     fireEvent.click(control);
     expect(onOpenSession).not.toHaveBeenCalled();

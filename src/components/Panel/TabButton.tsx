@@ -1,11 +1,15 @@
 import React, { useCallback, useState, useRef, useEffect, forwardRef } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { m, AnimatePresence } from "framer-motion";
-import { X, AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import type { PanelKind, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
+import {
+  DocumentTabClose,
+  DocumentTabIndicator,
+  documentTabClassName,
+} from "@/components/ui/document-tab";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import {
   getEffectiveStateIcon,
@@ -14,7 +18,7 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
-import { UI_ANIMATION_DURATION, DURATION_100, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
+import { DURATION_100 } from "@/lib/animationUtils";
 
 export interface TabInfo {
   id: string;
@@ -131,38 +135,12 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     return () => controller.abort();
   }, [id, title, onRename]);
 
-  const handleClose = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      onClose();
-    },
-    [onClose]
-  );
-
-  const handleClosePointerDown = useCallback((e: React.PointerEvent) => {
-    // Keep the close button from bubbling into the panel drag handle. The close
-    // button is not a sortable activator, so this stays a pure stopPropagation —
-    // it must NOT route through the tab's sortable pointer listener.
-    e.stopPropagation();
-  }, []);
-
   // For sortable tabs, merge attributes but filter out conflicting role/tabIndex
   const mergedAttributes = sortableAttributes
     ? Object.fromEntries(
         Object.entries(sortableAttributes).filter(([key]) => key !== "role" && key !== "tabIndex")
       )
     : {};
-
-  const handleCloseKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    },
-    [onClose]
-  );
 
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -285,7 +263,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
 
   return (
-    <Tooltip>
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <div
           ref={ref}
@@ -293,33 +271,19 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           role="tab"
           aria-selected={isActive}
           aria-controls={tabPanelId}
+          aria-keyshortcuts="Delete"
+          data-document-tab=""
           data-tab-parked={parked || undefined}
           tabIndex={isActive ? 0 : -1}
           onClick={handleClick}
           onKeyDown={handleKeyDown}
-          className={cn(
-            "relative flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
-            "border-r border-divider transition-colors",
-            parked && "invisible",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-            isActive
-              ? "bg-tint/[0.04] text-text-primary"
-              : "text-text-secondary hover:text-text-primary hover:bg-overlay-subtle"
-          )}
+          className={cn(documentTabClassName(isActive), "px-2 py-1", parked && "invisible")}
           data-tab-id={id}
           {...mergedAttributes}
           {...sortablePointerListeners}
           onPointerDown={handleTabPointerDown}
         >
-          {isActive && (
-            <m.div
-              layoutId="panel-tab-indicator"
-              layout="position"
-              className="absolute inset-x-0 bottom-0 h-0.5 bg-accent-primary pointer-events-none"
-              transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_OUT_EXPO_FM }}
-              aria-hidden="true"
-            />
-          )}
+          {isActive && <DocumentTabIndicator />}
           <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
             <TerminalIcon
               kind={kind}
@@ -431,32 +395,14 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             </Tooltip>
           )}
 
-          {/* Close button - visible on hover */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={handleClose}
-                onKeyDown={handleCloseKeyDown}
-                onPointerDown={handleClosePointerDown}
-                // A 24px target on a 24px tab: the button spans the tab's
-                // height and gives most of its width back with -mr-1.5. Only
-                // the active tab's close is a Tab stop — the strip already
-                // roves, and an inactive tab is reached with the arrows.
-                tabIndex={isActive ? undefined : -1}
-                className={cn(
-                  "-my-1 -mr-1.5 shrink-0",
-                  "opacity-0 group-hover/tab:opacity-100 group-focus-visible/tab:opacity-100 focus-visible:opacity-100",
-                  "hover:bg-status-error/15 hover:text-status-error focus-visible:text-status-error"
-                )}
-                aria-label={`Close ${title}`}
-              >
-                <X aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Close tab</TooltipContent>
-          </Tooltip>
+          {/* A 24px target on a 24px tab: -my-1 lets it span the tab's height and
+              -mr-1.5 gives most of its width back. */}
+          <DocumentTabClose
+            title={title}
+            isActive={isActive}
+            onClose={onClose}
+            className="-my-1 -mr-1.5"
+          />
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom">

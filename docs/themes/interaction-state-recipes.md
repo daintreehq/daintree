@@ -74,6 +74,20 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 ---
 
+### Document Tab
+
+**Role:** A horizontal strip of documents with one open: grid pane tab groups and dock tab groups (`TabButton`), portal browser tabs (`PortalToolbar`), assistant session lanes (`HelpSessionTabs`). All four draw from `ui/document-tab.tsx`.
+
+```tsx
+documentTabClassName(isActive); // text-xs font-medium, border-r divider, inset -2px accent focus ring
+// selected: bg-tint/[0.04] text-text-primary + <DocumentTabIndicator /> (2px accent underline)
+// unselected: text-text-secondary hover:text-text-primary hover:bg-overlay-subtle
+```
+
+**Usage:** Hosts add only geometry (padding, height, width limits). One weight across states, so selection never reflows widths. Close is `<DocumentTabClose />`: a 24px `icon-xs` ghost button with the red close hover, shown on the selected tab and revealed on hover or keyboard focus for the rest, `tabIndex={-1}` and `aria-hidden` because it sits inside the `tab`. Keyboard contract is APG tabs with manual activation (arrows and Home/End move focus, Enter/Space select, Delete/Backspace close via `useKeyboardTabClose`), with the single tab stop on the selected tab. Every tab carries `aria-controls`, `aria-keyshortcuts="Delete"` and `data-document-tab` (the forced-colors hook). Full titles go in `Tooltip`, never `title=`. Under manual activation the selected tab's underline and the focused tab's ring can sit on two different tabs at once; that is the one sanctioned case of two accent marks in a strip, because they answer different questions (which document is open, where the keyboard is).
+
+---
+
 ### Dock Item Active
 
 **Role:** Dock buttons (launch pill, popover-open triggers). Use a neutral lift — no accent border or ring.
@@ -286,6 +300,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Button Link | `button.tsx` (`link` variant, `inline` size) | Underlined secondary text that inherits its sentence |
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |
+| Document Tab | `ui/document-tab.tsx` (`TabButton`, `PortalToolbar`, `HelpSessionTabs`) | Accent underline on a lifted fill, one close control, manual activation |
 | Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |
 | Settings Switch Row | `SettingsSwitchCard.tsx` + `ui/switch.tsx` | Neutral row, neutral switch track (accent only on focus) |
 | Portal Drag Handle | `PortalToolbar.tsx` (`isDragging`) | Drag state with elevation + scale, no accent |

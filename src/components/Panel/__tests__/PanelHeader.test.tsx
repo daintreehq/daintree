@@ -2451,7 +2451,39 @@ describe("PanelHeader", () => {
       ).toBeGreaterThanOrEqual(2);
     });
 
-    it("moves focus onto a parked tab only once its activation has painted it", async () => {
+    it("closes the focused tab on Delete or Backspace, and only from a tab", () => {
+      const onTabClose = vi.fn();
+      const onTabClick = vi.fn();
+      const tabsProp = [
+        {
+          id: "test-panel",
+          title: "Tab 1",
+          kind: "terminal" as const,
+          chrome: deriveTerminalChrome(),
+          isActive: true,
+        },
+        {
+          id: "t2",
+          title: "Tab 2",
+          kind: "terminal" as const,
+          chrome: deriveTerminalChrome(),
+          isActive: false,
+        },
+      ];
+      render(<PanelHeader {...makeProps({ tabs: tabsProp, onTabClose, onTabClick })} />);
+      const [, second] = screen.getAllByRole("tab", { hidden: true });
+      second!.focus();
+      fireEvent.keyDown(second!, { key: "Delete" });
+      expect(onTabClose).toHaveBeenCalledWith("t2");
+      fireEvent.keyDown(second!, { key: "Backspace" });
+      expect(onTabClose).toHaveBeenCalledTimes(2);
+      // A key reaching the strip from anything but a tab closes nothing.
+      fireEvent.keyDown(screen.getByRole("tablist"), { key: "Delete" });
+      expect(onTabClose).toHaveBeenCalledTimes(2);
+      expect(onTabClick).not.toHaveBeenCalled();
+    });
+
+    it("paints a parked tab for keyboard focus without selecting it", async () => {
       // jsdom has no frame loop; a frame is a macrotask here.
       const raf = vi
         .spyOn(globalThis, "requestAnimationFrame")
@@ -2479,11 +2511,12 @@ describe("PanelHeader", () => {
       }
       render(<Host />);
       const tabs = () => screen.getAllByRole("tab", { hidden: true });
-      // Parked before activation: hidden from paint, so not focusable.
+      // Parked: hidden from paint, so not focusable.
       expect(tabs()[1]?.getAttribute("data-tab-parked")).toBe("true");
-      fireEvent.keyDown(screen.getByRole("tablist"), { key: "ArrowRight" });
-      // Activation repaints it first…
-      expect(tabs()[1]?.getAttribute("aria-selected")).toBe("true");
+      tabs()[0]!.focus();
+      fireEvent.keyDown(tabs()[0]!, { key: "ArrowRight" });
+      // Manual activation: the arrow repaints the tab for focus but selects nothing…
+      expect(tabs()[1]?.getAttribute("aria-selected")).toBe("false");
       expect(tabs()[1]?.getAttribute("data-tab-parked")).toBeNull();
       // …then the deferred focus lands on it.
       await new Promise((r) => setTimeout(r, 5));

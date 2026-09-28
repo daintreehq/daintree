@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   useDndMonitor,
@@ -33,6 +33,7 @@ import {
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { useTabOverflow } from "@/hooks";
+import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -67,6 +68,7 @@ import {
   useTransientDockFinishedCue,
 } from "./useDockActivityState";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
+import { tabDomId } from "@/components/Panel/TabButton";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
@@ -383,6 +385,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
   // Tab IDs for sortable context
   const tabIds = useMemo(() => panels.map((p) => p.id), [panels]);
+  // The popover body the strip drives, for `aria-controls`.
+  const tabPanelId = useId();
 
   const hiddenTabIds = useTabOverflow(tabListEl, tabIds);
   const hiddenPanels = useMemo(
@@ -444,6 +448,35 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     [updateTitle]
   );
 
+  const focusTabById = useCallback(
+    (tabId: string) => {
+      // Iterate rather than build a `[data-tab-id="${id}"]` selector so we
+      // don't need to escape panel IDs containing quotes or other CSS-special
+      // characters (and so the lookup works in jsdom, which lacks CSS.escape).
+      for (const el of tabListEl?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? []) {
+        if (el.getAttribute("data-tab-id") === tabId) {
+          el.focus();
+          break;
+        }
+      }
+    },
+    [tabListEl]
+  );
+
+  const { armKeyboardClose, disarmKeyboardClose } = useKeyboardTabClose({
+    ids: tabIds,
+    activeId: activeTabId || null,
+    focusTab: focusTabById,
+  });
+
+  const handleTabListFocus = useCallback(
+    (e: React.FocusEvent<HTMLDivElement>) => {
+      const tabId = (e.target as HTMLElement).getAttribute("data-tab-id");
+      if (tabId) disarmKeyboardClose(tabId);
+    },
+    [disarmKeyboardClose]
+  );
+
   // APG manual activation: arrow keys move focus only; Space/Enter activates.
   // Activation triggers PTY refit + buffering-state work, so following
   // automatic-activation would re-run that on every arrow press while skimming.
@@ -453,6 +486,16 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const handleTabListKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (isTabDragActiveRef.current) return;
+
+      const target = e.target as HTMLElement;
+      const closingTabId = target.getAttribute("data-tab-id");
+      if (closingTabId && isTabCloseKey(e.key)) {
+        e.preventDefault();
+        armKeyboardClose(closingTabId);
+        handleTabClose(closingTabId);
+        return;
+      }
+
       if (panels.length < 2) return;
 
       // Anchor arrow movement to the currently focused tab when one is
@@ -491,20 +534,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
       e.preventDefault();
       const nextPanel = panels[nextIndex];
-      if (nextPanel && tabListEl) {
-        // Iterate rather than build a `[data-tab-id="${id}"]` selector so we
-        // don't need to escape panel IDs containing quotes or other CSS-special
-        // characters (and so the lookup works in jsdom, which lacks CSS.escape).
-        const tabs = tabListEl.querySelectorAll<HTMLElement>("[data-tab-id]");
-        for (const el of tabs) {
-          if (el.getAttribute("data-tab-id") === nextPanel.id) {
-            el.focus();
-            break;
-          }
-        }
-      }
+      if (nextPanel) focusTabById(nextPanel.id);
     },
-    [panels, activeTabId, tabListEl]
+    [panels, activeTabId, tabListEl, armKeyboardClose, handleTabClose, focusTabById]
   );
 
   // Handle add tab - duplicate the current panel as a new tab
@@ -785,6 +817,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     role="tablist"
                     aria-label="Dock panel tabs"
                     onKeyDown={handleTabListKeyDown}
+                    onFocus={handleTabListFocus}
                   >
                     {performanceMode ? (
                       panels.map((panel) => {
@@ -810,6 +843,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             isActive={panel.id === activeTabId}
                             presetColor={panelPresetColors.get(panel.id)}
                             isUsingFallback={panel.isUsingFallback}
+                            tabPanelId={tabPanelId}
                             onClick={() => handleTabClick(panel.id)}
                             onClose={() => handleTabClose(panel.id)}
                             onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
@@ -848,6 +882,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                 isActive={panel.id === activeTabId}
                                 presetColor={panelPresetColors.get(panel.id)}
                                 isUsingFallback={panel.isUsingFallback}
+                                tabPanelId={tabPanelId}
                                 onClick={() => handleTabClick(panel.id)}
                                 onClose={() => handleTabClose(panel.id)}
                                 onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
@@ -867,7 +902,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             handleAddTab();
                           }}
                           onPointerDown={(e) => e.stopPropagation()}
-                          className="shrink-0 [&_svg]:size-3.5"
+                          className="shrink-0 focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
                           aria-label="Duplicate panel as new tab"
                         >
                           <CopyPlus aria-hidden="true" />
@@ -885,7 +920,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               variant="ghost"
                               size="icon-xs"
                               onPointerDown={(e) => e.stopPropagation()}
-                              className="shrink-0 [&_svg]:size-3.5"
+                              className="shrink-0 focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
                               aria-label={
                                 activeTabIsHidden
                                   ? `Show ${hiddenPanels.length} hidden tabs, including active`
@@ -961,6 +996,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
           <div
             ref={portalContainerRef}
+            id={tabPanelId}
+            role="tabpanel"
+            aria-labelledby={tabDomId(activePanel.id)}
             className="flex-1 min-h-0 flex flex-col"
             data-dock-portal-target={activePanel.id}
           />
