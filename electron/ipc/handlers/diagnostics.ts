@@ -64,6 +64,92 @@ const EVENT_LOOP_HISTOGRAM_IDLE_MS = 60_000;
 // not. Backs the "Since application launch" time-window option.
 const APP_LAUNCH_TIMESTAMP = Date.now();
 
+const MAX_BUNDLED_CRASH_RECORDS = 20;
+const CRASH_RECORD_FILE = /^(crash|renderer-gone)-[\w-]+\.json$/;
+// The default shard writes `pty-host.log`; other shards `pty-host-<suffix>.log`.
+const PTY_HOST_LOG_FILE = /^pty-host(-[\w-]+)?\.log$/;
+
+async function listDir(dir: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Crash and renderer-gone records from `userData/crashes`, newest first.
+ * Recency comes from each record's own `timestamp`, never mtime, which
+ * copy-fallback paths can rewrite. Breadcrumb args are dropped because
+ * action args can carry user-entered text.
+ */
+async function collectCrashRecordEntries(
+  crashesDir: string,
+  timeWindowStartMs: number | null,
+  replacements: ReplacementRule[]
+): Promise<Array<{ name: string; content: string }>> {
+  const records: Array<{ name: string; timestamp: number; content: string }> = [];
+  for (const file of await listDir(crashesDir)) {
+    if (!CRASH_RECORD_FILE.test(file)) continue;
+    let record: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(path.join(crashesDir, file), "utf-8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      record = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const timestamp = typeof record.timestamp === "number" ? record.timestamp : null;
+    if (timeWindowStartMs !== null && timestamp !== null && timestamp < timeWindowStartMs) {
+      continue;
+    }
+    if (Array.isArray(record.recentActions)) {
+      record.recentActions = record.recentActions.map((crumb: unknown) => {
+        if (!crumb || typeof crumb !== "object") return crumb;
+        const { args: _args, ...rest } = crumb as Record<string, unknown>;
+        return rest;
+      });
+    }
+    records.push({
+      name: `crashes/${file}`,
+      timestamp: timestamp ?? 0,
+      content: applyReplacements(JSON.stringify(record, null, 2), replacements),
+    });
+  }
+  records.sort((a, b) => b.timestamp - a.timestamp);
+  return records
+    .slice(0, MAX_BUNDLED_CRASH_RECORDS)
+    .map(({ name, content }) => ({ name, content }));
+}
+
+/** PTY host emergency logs: process start lines and fatal errors, no terminal output. */
+async function collectPtyHostLogEntries(
+  logDir: string,
+  timeWindowStartMs: number | null,
+  replacements: ReplacementRule[]
+): Promise<Array<{ name: string; content: string }>> {
+  const entries: Array<{ name: string; content: string }> = [];
+  for (const file of (await listDir(logDir)).sort()) {
+    if (!PTY_HOST_LOG_FILE.test(file)) continue;
+    const filePath = path.join(logDir, file);
+    if (timeWindowStartMs !== null) {
+      try {
+        const stat = await fs.stat(filePath);
+        if (stat.mtimeMs < timeWindowStartMs) continue;
+      } catch {
+        // stat failed — include rather than silently drop relevant lines.
+      }
+    }
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      entries.push({ name: file, content: applyReplacements(raw, replacements) });
+    } catch {
+      // Unreadable log — the rest of the bundle is still useful.
+    }
+  }
+  return entries;
+}
+
 async function writeBundleZip(
   zipPath: string,
   jsonContent: string,
@@ -106,6 +192,15 @@ async function writeBundleZip(
         content: applyReplacements(raw, replacements),
       });
     }
+
+    logEntries.push(
+      ...(await collectPtyHostLogEntries(logDir, timeWindowStartMs, replacements)),
+      ...(await collectCrashRecordEntries(
+        path.join(app.getPath("userData"), "crashes"),
+        timeWindowStartMs,
+        replacements
+      ))
+    );
   }
 
   await new Promise<void>((resolve, reject) => {

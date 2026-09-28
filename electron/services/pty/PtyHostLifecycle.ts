@@ -45,6 +45,7 @@ import type {
   PtyHostRequest,
 } from "../../../shared/types/pty-host.js";
 import { mainBootAbsMs, markPerformance } from "../../utils/performance.js";
+import { describeProcessDeath } from "../processDeathDescription.js";
 
 /**
  * Map an authoritative `child-process-gone` reason (Electron 37+) to our CrashType.
@@ -537,9 +538,12 @@ export class PtyHostLifecycle {
       // bug (fixed in electron/electron#50386, landed Electron 41.0.4).
       const reportedCode = gone ? gone.exitCode : code;
 
-      console.error(
-        `[PtyClient] Pty Host exited with code ${reportedCode}` +
-          (crashType !== "CLEAN_EXIT" ? ` (${crashType})` : "")
+      const serviceName = this.config.serviceName ?? DEFAULT_SERVICE_NAME;
+      this.callbacks.logWarn(
+        gone
+          ? `[PtyClient] Pty Host ${serviceName} ${describeProcessDeath(gone.reason, gone.exitCode)}`
+          : `[PtyClient] Pty Host ${serviceName} exited with code ${reportedCode}` +
+              (crashType !== "CLEAN_EXIT" ? ` (${crashType})` : "")
       );
 
       const payload: HostCrashPayload | null =

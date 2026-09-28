@@ -56,6 +56,7 @@ import {
   isWindowRecreating,
 } from "../lifecycle/windowRecreationState.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import { rendererReloadNotice } from "./rendererReloadNotice.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
@@ -691,7 +692,7 @@ export function setupBrowserWindow(
       }
     } else {
       console.log("[MAIN] Renderer crash, auto-reloading");
-      notifyError(new Error("The renderer process crashed and was automatically reloaded."), {
+      notifyError(new Error(rendererReloadNotice("The renderer process", details.reason)), {
         source: "renderer-crash",
       });
       setImmediate(() => {

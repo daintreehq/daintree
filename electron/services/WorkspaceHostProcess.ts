@@ -17,6 +17,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
 import { createLogger, ingestHostLogEvent } from "../utils/logger.js";
+import { describeProcessDeath } from "./processDeathDescription.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
@@ -862,14 +863,15 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.emit("host-crash", -1);
     });
 
+    const hostPid = this.child.pid;
     this.child.on("exit", (code) => {
       this.flushHostOutputBuffers();
       // A disposed host exiting is the cooperative path, not a crash — every
-      // eviction ends here, so warning on it would read as a fault.
+      // eviction ends here, so warning on it would read as a fault. An
+      // unexpected exit is logged once the authoritative reason arrives below:
+      // the `exit` code alone reads as a clean exit even for a SIGTERM.
       if (this.isDisposed) {
         this.logDisposeExit(code);
-      } else {
-        logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
       }
 
       if (this.healthCheckInterval) {
@@ -934,6 +936,18 @@ export class WorkspaceHostProcess extends EventEmitter {
         // pre-41.0.4 builds and future regressions of the Windows signed/unsigned
         // mangling bug (fixed in electron/electron#50386, landed Electron 41.0.4).
         const reportedCode = gone ? gone.exitCode : code;
+        logWarn(
+          `[WorkspaceHost:${this.serviceName}] Host process ${
+            gone
+              ? describeProcessDeath(gone.reason, gone.exitCode)
+              : `exited with code ${code} (no reason reported)`
+          }`,
+          {
+            pid: hostPid ?? null,
+            reason: gone?.reason ?? null,
+            exitCode: reportedCode,
+          }
+        );
 
         // If `manualRestart()` or some other path already spawned a new host
         // during the defer window, don't schedule a second auto-restart — it
@@ -967,7 +981,7 @@ export class WorkspaceHostProcess extends EventEmitter {
           );
           const delay =
             RESTART_FLOOR_MS + Math.floor(Math.random() * Math.max(0, cap - RESTART_FLOOR_MS));
-          console.log(
+          logInfo(
             `[WorkspaceHost:${this.serviceName}] Restarting in ${delay}ms (attempt ${windowAttempt}/${CRASH_THRESHOLD - 1} in window)`
           );
 
@@ -985,7 +999,7 @@ export class WorkspaceHostProcess extends EventEmitter {
           const cause = slowOomLoop
             ? `slow crash-loop (${this.consecutiveShortCrashIntervals + 1} crashes under ${OOM_LOOP_INTERVAL_MS / 60_000}min apart — likely OOM)`
             : `${CRASH_THRESHOLD} crashes in ${CRASH_WINDOW_MS / 60_000}min`;
-          console.error(
+          logWarn(
             `[WorkspaceHost:${this.serviceName}] Max restart attempts reached (${cause}), giving up`
           );
           this.emit("host-crash", reportedCode);

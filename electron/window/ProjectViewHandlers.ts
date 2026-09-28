@@ -30,6 +30,7 @@ import { evictDeadView, getAvailableMemoryMb } from "./ProjectViewEvictionContro
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
+import { rendererReloadNotice } from "./rendererReloadNotice.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
@@ -317,7 +318,7 @@ export function setupViewHandlers(
     } else {
       console.log("[ProjectViewManager] Renderer crash, auto-reloading view");
       if (projectId && projectId === host.activeProjectId) {
-        notifyError(new Error("A project view crashed and was automatically reloaded."), {
+        notifyError(new Error(rendererReloadNotice("A project view", details.reason)), {
           source: "renderer-crash",
         });
       }
