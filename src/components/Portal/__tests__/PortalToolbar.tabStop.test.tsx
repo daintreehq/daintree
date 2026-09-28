@@ -131,4 +131,17 @@ describe("PortalToolbar tab strip — one way in", () => {
       expect(tab.getAttribute("aria-roledescription")).toBeNull();
     }
   });
+
+  it("gives the control row one tab stop, with arrow keys between its buttons", () => {
+    renderToolbar("a");
+    const row = screen.getByRole("toolbar", { name: "Portal controls" });
+    const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>("button:not([disabled])"));
+    expect(buttons.length).toBeGreaterThan(1);
+    expect(buttons.filter((b) => b.tabIndex === 0)).toHaveLength(1);
+
+    const [first, second] = buttons;
+    first!.focus();
+    fireEvent.keyDown(first!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(second);
+  });
 });

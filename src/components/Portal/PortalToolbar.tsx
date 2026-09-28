@@ -29,6 +29,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { usePortalStore } from "@/store/portalStore";
 import { PortalIcon } from "./PortalIcon";
 import { useAriaKeyshortcuts, useEffectiveCombo, useOverlayClaim } from "@/hooks";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   DropdownMenu,
@@ -312,6 +313,10 @@ export function PortalToolbar({
   }, [getBrowserTabLabel]);
 
   const tablistRef = useRef<HTMLDivElement>(null);
+  // The control row is a toolbar like every pane toolbar: one tab stop, arrow
+  // keys between its buttons. The tab strip below keeps its own tablist.
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const onControlsKeyDown = useToolbarRoving(controlsRef);
   const [overflow, setOverflow] = useState({ before: false, after: false });
   const isOverflowing = overflow.before || overflow.after;
 
@@ -394,7 +399,13 @@ export function PortalToolbar({
 
   return (
     <div className="flex flex-col bg-surface-canvas border-b border-divider">
-      <div className="flex items-center gap-0.5 h-10 px-2">
+      <div
+        ref={controlsRef}
+        role="toolbar"
+        aria-label="Portal controls"
+        onKeyDown={onControlsKeyDown}
+        className="flex items-center gap-0.5 h-10 px-2"
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <button

@@ -272,8 +272,10 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
           </ZoomButton>
           <button
             type="button"
-            onClick={resetView}
-            disabled={!isZoomed}
+            onClick={() => {
+              if (isZoomed) resetView();
+            }}
+            aria-disabled={!isZoomed || undefined}
             className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
           >
             Fit to screen
@@ -301,8 +303,12 @@ function ZoomButton({
         <button
           type="button"
           aria-label={label}
-          disabled={disabled}
-          onClick={onClick}
+          // aria-disabled, not disabled: an unavailable zoom step keeps its
+          // place in the toolbar's arrow-key order and its tooltip.
+          aria-disabled={disabled || undefined}
+          onClick={() => {
+            if (!disabled) onClick();
+          }}
           className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
         >
           {children}
