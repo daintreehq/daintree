@@ -130,7 +130,18 @@ export async function makeShortTempRoot(prefix = "dse-"): Promise<string> {
   return fs.realpath(await fs.mkdtemp(path.join(parent, prefix)));
 }
 
-export async function startPrivateSshd(root: string): Promise<PrivateSshd> {
+export interface PrivateSshdOptions {
+  /**
+   * False refuses Unix-socket forwards, as a locked-down server does: the Shell
+   * then has to reach the host over `--attach-stdio` instead of `-L`.
+   */
+  streamLocalForwarding?: boolean;
+}
+
+export async function startPrivateSshd(
+  root: string,
+  options: PrivateSshdOptions = {}
+): Promise<PrivateSshd> {
   const home = path.join(root, "home");
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   const hostKey = path.join(root, "hostkey");
@@ -155,7 +166,7 @@ export async function startPrivateSshd(root: string): Promise<PrivateSshd> {
       "UsePAM no",
       "StrictModes no",
       `PidFile ${path.join(root, "sshd.pid")}`,
-      "AllowStreamLocalForwarding yes",
+      `AllowStreamLocalForwarding ${options.streamLocalForwarding === false ? "no" : "yes"}`,
       "AllowTcpForwarding yes",
       // Never run the real user's ~/.ssh/rc.
       "PermitUserRC no",
