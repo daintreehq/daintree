@@ -66,6 +66,7 @@ import {
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { CountBadge } from "@/components/ui/badge";
 
 // Three, not five. Even as compact previews, five pinned rows took three
 // quarters of a laptop-height list, so the first screen held one row of what
@@ -2044,9 +2045,9 @@ function ContextSectionHeader({
           </span>
           {/* Beside the name it counts, not beside the button — at the far end
             it read as part of "Mark read". */}
-          <span className="shrink-0 tabular-nums" aria-label={`${count} notifications`}>
+          <CountBadge label={`${count} ${count === 1 ? "notification" : "notifications"}`}>
             {count}
-          </span>
+          </CountBadge>
           {newCount > 0 && (
             <span data-testid="context-section-new" className="shrink-0 tabular-nums">
               · {newCount} new

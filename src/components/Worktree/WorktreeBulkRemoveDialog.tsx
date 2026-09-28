@@ -25,6 +25,7 @@ import {
   type UseWorktreeBulkRemoveReturn,
 } from "./useWorktreeBulkRemove";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { CountBadge } from "@/components/ui/badge";
 
 /**
  * When the long-wait hint appears. The design system puts a "still working"
@@ -390,7 +391,9 @@ function Section({
         <span id={id} role="heading" aria-level={3} className={SECTION_LABEL_CLASS}>
           {label}
         </span>
-        <span className="text-2xs tabular-nums text-text-secondary">{count}</span>
+        <CountBadge label={`${count} ${count === 1 ? "worktree" : "worktrees"}`}>
+          {count}
+        </CountBadge>
       </div>
       {children}
     </section>

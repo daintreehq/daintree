@@ -136,11 +136,13 @@ function confirmButton(): HTMLButtonElement | null {
     null) as HTMLButtonElement | null;
 }
 
-/** The count each outcome group states beside its heading. */
+/** The count each outcome group shows beside its heading (the visible numeral). */
 function scopeCounts(): { eligible: number; excluded: number } {
   const count = (testId: string) =>
     Number(
-      document.querySelector(`[data-testid="${testId}"] [role="heading"] + span`)?.textContent ?? 0
+      document.querySelector(
+        `[data-testid="${testId}"] [role="heading"] + [data-slot="count-badge"] [aria-hidden="true"]`
+      )?.textContent ?? 0
     );
   return { eligible: count("bulk-remove-eligible"), excluded: count("bulk-remove-excluded-group") };
 }
