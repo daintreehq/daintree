@@ -685,3 +685,34 @@ describe("ProjectSwitcherPalette pointer cursor", () => {
     }
   });
 });
+
+describe("ProjectSwitcherPalette current workspace mark", () => {
+  it("checks the workspace you are in, apart from the cursor fill", () => {
+    render(
+      <ProjectSwitcherPalette
+        isOpen
+        query="pro"
+        selectedIndex={1}
+        onQueryChange={vi.fn()}
+        onSelectPrevious={vi.fn()}
+        onSelectNext={vi.fn()}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        mode="modal"
+        rankedSearch
+        results={[
+          makeProject({ id: "here", name: "project here", isActive: true }),
+          makeProject({ id: "there", name: "project there" }),
+        ]}
+      />
+    );
+
+    const here = document.getElementById("project-option-here")!;
+    const there = document.getElementById("project-option-there")!;
+    expect(here.querySelector("svg.lucide-check")).not.toBeNull();
+    expect(there.querySelector("svg.lucide-check")).toBeNull();
+    // The cursor is on the other row; the check is not the cursor.
+    expect(there.getAttribute("aria-selected")).toBe("true");
+    expect(here.getAttribute("aria-selected")).toBe("false");
+  });
+});
