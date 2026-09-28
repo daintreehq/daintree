@@ -178,7 +178,6 @@ export function BrowserToolbar({
     back: null,
     forward: null,
   });
-  const historyOpenedByKeyRef = useRef(false);
 
   const clearLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
@@ -584,14 +583,6 @@ export function BrowserToolbar({
           // Radix labels the menu by its trigger, which here is the inert
           // stand-in with no name of its own.
           aria-labelledby={undefined}
-          onOpenAutoFocus={(e) => {
-            if (!historyOpenedByKeyRef.current) return;
-            historyOpenedByKeyRef.current = false;
-            e.preventDefault();
-            (e.currentTarget as HTMLElement | null)
-              ?.querySelector<HTMLElement>('[role="menuitem"]')
-              ?.focus();
-          }}
           onCloseAutoFocus={(e) => {
             e.preventDefault();
             // Jumping to the oldest or newest entry disables this direction's
@@ -638,7 +629,6 @@ export function BrowserToolbar({
                   const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
                   if (entries.length === 0) return;
                   e.preventDefault();
-                  historyOpenedByKeyRef.current = true;
                   setLongPressDir(dir);
                 }}
                 onContextMenu={(e) => {
