@@ -22,16 +22,17 @@
  *   finished-<theme>.png         the finished check, settled
  *   rail-mid-<theme>.png         the rail scrolled to its middle — both chevrons
  * Plus, in the first theme only:
- *   finished-enter-60ms.png      the check 60ms into its entry
- *   finished-enter-120ms.png     the check 120ms into its entry
+ *   finished-enter-20ms.png      the check 20ms into its entry
+ *   finished-enter-50ms.png      the check 50ms into its entry
  *   finished-exit-940ms.png      the check 60ms before the dwell ends
- *   finished-enter-reduced.png   60ms in, under prefers-reduced-motion
+ *   finished-enter-reduced.png   20ms in, under prefers-reduced-motion
  *   state-colour-75ms.png        an agent icon 75ms into working → waiting
  *   rail-start.png               the rail at rest, scrolled to the start
  *   rail-end-fading.png          the right chevron, under the cursor, mid-fade at the end
  *   rail-end.png                 the same, settled
  *   rail-wheel.png               the rail after one vertical wheel notch
- * and `scroll-log.json` with the rail's scrollLeft around the wheel notch.
+ * and `scroll-log.json` with the check's computed opacity/scale at each frozen
+ * frame and the rail's scrollLeft around the wheel notch.
  *
  * Never writes a PNG it has not verified, and counts the files itself.
  */
@@ -206,6 +207,16 @@ async function freezeAt(page: Page, t0: number, ms: number): Promise<number> {
   );
 }
 
+/** The finished check's computed opacity and scale — the numbers behind a 14px glyph. */
+async function checkStyle(page: Page) {
+  return page.evaluate(() => {
+    const svg = document.querySelector('[data-dock-activity-state="finished"] svg');
+    if (!svg) return null;
+    const style = getComputedStyle(svg);
+    return { opacity: style.opacity, scale: style.scale };
+  });
+}
+
 async function railMetrics(page: Page) {
   return page.locator(RAIL).evaluate((el) => ({
     scrollLeft: Math.round(el.scrollLeft),
@@ -260,13 +271,13 @@ test("content dock — cues and rail scrolling, mid-flight", async ({ context })
 
   const theme = THEMES[0]!;
 
-  for (const ms of [60, 120, 940]) {
+  for (const ms of [20, 50, 940]) {
     const name = ms > 500 ? `finished-exit-${ms}ms.png` : `finished-enter-${ms}ms.png`;
     written.push(
       await withPage(context, name, async (page) => {
         const dock = await load(page, theme);
         const t0 = await patchPanel(page, "c-build", { activityStatus: "success" });
-        log[name] = { frozen: await freezeAt(page, t0, ms) };
+        log[name] = { frozen: await freezeAt(page, t0, ms), check: await checkStyle(page) };
         await expect(page.locator('[data-dock-activity-state="finished"]')).toBeAttached();
         return snap(dock, name);
       })
@@ -278,7 +289,10 @@ test("content dock — cues and rail scrolling, mid-flight", async ({ context })
       await page.emulateMedia({ reducedMotion: "reduce" });
       const dock = await load(page, theme);
       const t0 = await patchPanel(page, "c-build", { activityStatus: "success" });
-      log["finished-enter-reduced.png"] = { frozen: await freezeAt(page, t0, 60) };
+      log["finished-enter-reduced.png"] = {
+        frozen: await freezeAt(page, t0, 20),
+        check: await checkStyle(page),
+      };
       await expect(page.locator('[data-dock-activity-state="finished"]')).toBeAttached();
       return snap(dock, "finished-enter-reduced.png");
     })
