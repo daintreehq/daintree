@@ -1003,9 +1003,14 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     const branchInput = screen.getByTestId("branch-name-input");
     expect(branchInput.getAttribute("aria-invalid")).toBeNull();
 
+    const createButton = screen.getByTestId("create-worktree-button");
+    createButton.focus();
     await act(async () => {
-      fireEvent.click(screen.getByTestId("create-worktree-button"));
+      fireEvent.click(createButton);
     });
+
+    // The failed Create hands the cursor to the field its error sits under.
+    expect(document.activeElement).toBe(branchInput);
 
     const alert = screen.getByRole("alert");
     expect(alert.id).toBe("validation-error");
@@ -1036,10 +1041,13 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
       fireEvent.change(pathInput, { target: { value: "" } });
     });
 
+    const createButton = screen.getByTestId("create-worktree-button");
+    createButton.focus();
     await act(async () => {
-      fireEvent.click(screen.getByTestId("create-worktree-button"));
+      fireEvent.click(createButton);
     });
 
+    expect(document.activeElement).toBe(pathInput);
     expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
     expect(pathInput.getAttribute("aria-invalid")).toBe("true");
     expect(pathInput.getAttribute("aria-describedby")).toBe("validation-error");
@@ -1060,10 +1068,13 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     const baseBranchButton = document.getElementById("base-branch");
     expect(baseBranchButton?.getAttribute("aria-invalid")).toBeNull();
 
+    const createButton = screen.getByTestId("create-worktree-button");
+    createButton.focus();
     await act(async () => {
-      fireEvent.click(screen.getByTestId("create-worktree-button"));
+      fireEvent.click(createButton);
     });
 
+    expect(document.activeElement).toBe(baseBranchButton);
     const alerts = screen.getAllByRole("alert");
     const validationAlert = alerts.find((el) => el.id === "validation-error");
     expect(validationAlert).toBeDefined();
@@ -1074,6 +1085,57 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
 
     expect(baseBranchButton?.getAttribute("aria-invalid")).toBe("true");
     expect(baseBranchButton?.getAttribute("aria-describedby")).toBe("validation-error");
+  });
+
+  it("moves focus to the failing field on a failed Cmd/Ctrl+Enter", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/new-feature" } });
+    });
+    await advanceTimersGradually(1000);
+
+    const pathInput = screen.getByTestId("worktree-path-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: "" } });
+    });
+
+    branchInput.focus();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
+    expect(document.activeElement).toBe(pathInput);
+  });
+
+  it("submits on Cmd/Ctrl+Enter from the name field without completing an open prefix", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input") as HTMLInputElement;
+    const pathInput = screen.getByTestId("worktree-path-input") as HTMLInputElement;
+    branchInput.focus();
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "d" } });
+    });
+    await advanceTimersGradually(1000);
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: "" } });
+    });
+    branchInput.focus();
+    expect(branchInput.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      fireEvent.keyDown(branchInput, { key: "Enter", ctrlKey: true });
+    });
+    await advanceTimersGradually(100);
+
+    expect(branchInput.value).toBe("d");
+    expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
+    expect(document.activeElement).toBe(pathInput);
   });
 
   it("keeps a failed branch list on screen while other fields are edited", async () => {
@@ -1139,6 +1201,21 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     });
 
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps spellcheck and text assistance off the branch name and path", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    // Both hold identifiers, not prose: a squiggle under "feature/add-user-auth"
+    // flags nothing wrong, and autocorrect or capitalisation would change it.
+    for (const testId of ["branch-name-input", "worktree-path-input"]) {
+      const input = screen.getByTestId(testId) as HTMLInputElement;
+      expect(input.getAttribute("spellcheck")).toBe("false");
+      expect(input.getAttribute("autocomplete")).toBe("off");
+      expect(input.getAttribute("autocorrect")).toBe("off");
+      expect(input.getAttribute("autocapitalize")).toBe("off");
+    }
   });
 
   it("does not set aria-invalid on any input on initial render", async () => {

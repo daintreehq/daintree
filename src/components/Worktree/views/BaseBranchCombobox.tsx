@@ -32,7 +32,10 @@ export function BaseBranchCombobox({
           aria-haspopup="listbox"
           aria-invalid={hasError ? true : undefined}
           aria-describedby={hasError ? "validation-error" : undefined}
-          className={cn(FIELD_TRIGGER, hasError && "border-status-error")}
+          className={cn(
+            FIELD_TRIGGER,
+            hasError && "border-status-error focus-visible:outline-status-error"
+          )}
           disabled={disabled}
         >
           {/* The trigger keeps the composed "(current)"/"(remote)" label — it has

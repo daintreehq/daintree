@@ -34,10 +34,24 @@ export function usePrefixPicker({
     return [];
   }, [branchInput]);
 
-  // Reset index on open/close
-  useEffect(() => {
+  // The cursor belongs to one list: opening, closing, or a keystroke that
+  // changes which prefixes are offered puts it back on the first row. Adjusted
+  // during render rather than in an effect, so no frame ever points
+  // aria-activedescendant — or Enter and Tab — at a row that is gone. A
+  // keystroke that leaves the same rows on offer keeps the cursor where it is.
+  const listKey = `${prefixPickerOpen}|${prefixSuggestions.map((s) => s.type.prefix).join(",")}`;
+  const [cursorListKey, setCursorListKey] = useState(listKey);
+  if (cursorListKey !== listKey) {
+    setCursorListKey(listKey);
     setPrefixSelectedIndex(0);
-  }, [prefixPickerOpen]);
+  }
+
+  useEffect(() => {
+    if (!prefixPickerOpen) return;
+    prefixListRef.current
+      ?.querySelector<HTMLElement>(`#prefix-option-${prefixSelectedIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [prefixPickerOpen, prefixSelectedIndex]);
 
   // Whether the input's current contents are worth suggesting a prefix for.
   // Read from two places: the value effect below, and the field's own focus
@@ -87,6 +101,9 @@ export function usePrefixPicker({
 
   const handlePrefixKeyDown = (e: React.KeyboardEvent) => {
     if (!prefixPickerOpen || prefixSuggestions.length === 0) return;
+    // Mid-composition, Arrow, Enter and Tab belong to the IME.
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    const active = prefixSuggestions[prefixSelectedIndex];
 
     switch (e.key) {
       case "ArrowDown":
@@ -99,18 +116,16 @@ export function usePrefixPicker({
           (prev) => (prev - 1 + prefixSuggestions.length) % prefixSuggestions.length
         );
         break;
+      // Tab completes the prefix and keeps focus so the slug can be typed next,
+      // like shell completion. Either key is only swallowed when it actually
+      // picks a row; otherwise Tab must still leave the field. A modified key is
+      // never a pick: Cmd/Ctrl+Enter is the dialog's submit, and Shift+Tab goes
+      // back a field.
       case "Enter":
-        e.preventDefault();
-        if (prefixSuggestions[prefixSelectedIndex]) {
-          handlePrefixSelect(prefixSuggestions[prefixSelectedIndex].type.prefix);
-        }
-        break;
       case "Tab":
-        if (branchInput.trim().length > 0 || prefixSelectedIndex !== 0) {
+        if (active && !(e.shiftKey || e.metaKey || e.ctrlKey || e.altKey)) {
           e.preventDefault();
-          if (prefixSuggestions[prefixSelectedIndex]) {
-            handlePrefixSelect(prefixSuggestions[prefixSelectedIndex].type.prefix);
-          }
+          handlePrefixSelect(active.type.prefix);
         }
         break;
       case "Escape":
