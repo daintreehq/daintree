@@ -95,7 +95,7 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         }}
         aria-current={isCurrent || undefined}
         aria-label={`Open ${file.path}`}
-        className="-mx-1 flex min-w-0 flex-1 items-center rounded-[var(--radius-md)] px-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        className="-my-1 -ml-1.5 flex min-w-0 flex-1 items-center rounded-[var(--radius-lg)] py-1 pr-1 pl-1.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         data-testid="diff-sidebar-file"
       >
         <span className={cn("w-4 shrink-0 font-bold", config.color)}>{config.label}</span>
