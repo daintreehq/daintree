@@ -803,6 +803,7 @@ function RowOptionsMenu({
         onSnooze?.(option);
       }}
     >
+      <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
       {SNOOZE_LABEL[option]}
       {/* The commitment, before it's made: "Until tomorrow" is 8:00 AM, and
           "Until next week" is Monday. */}

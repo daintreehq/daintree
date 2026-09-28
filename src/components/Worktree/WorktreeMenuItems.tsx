@@ -48,10 +48,10 @@ import {
   Save,
   Scissors,
   Server,
-  Square,
   SquareTerminal,
   Trash2,
   Zap,
+  CircleStop,
 } from "lucide-react";
 import {
   ArrowUpDown,
@@ -830,7 +830,7 @@ export function WorktreeMenuItems({
     ),
     devServerState === "running" && onStopDevServer && (
       <C.Item key="stop" onSelect={() => onStopDevServer(worktree.id)}>
-        <Square className={ICON} />
+        <CircleStop className={ICON} />
         Stop dev server
       </C.Item>
     ),

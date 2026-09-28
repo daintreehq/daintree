@@ -140,11 +140,13 @@ function DiffNoteTargetItems({
           disabled={disabled || target.isInputLocked}
           onSelect={() => onSend(target.id)}
         >
-          <TerminalIcon
-            kind={target.kind}
-            chrome={target.chrome}
-            className="mr-2 h-3.5 w-3.5 shrink-0"
-          />
+          <span
+            data-menu-icon
+            aria-hidden="true"
+            className="mr-2 flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+          >
+            <TerminalIcon kind={target.kind} chrome={target.chrome} className="h-3.5 w-3.5" />
+          </span>
           <span className="truncate">{target.title}</span>
         </DropdownMenuItem>
       ))}

@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { LayoutDashboard, LayoutGrid } from "lucide-react";
+import { Columns3, LayoutGrid } from "lucide-react";
 import { useDroppable } from "@dnd-kit/core";
 import type { Transition, TransformProperties } from "framer-motion";
 import { logError } from "@/utils/logger";
@@ -1151,7 +1151,7 @@ export function useContentGridContext({
       <ContextMenuSeparator />
       <ContextMenuSub>
         <ContextMenuSubTrigger>
-          <LayoutDashboard data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          <Columns3 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Grid layout
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>

@@ -20,9 +20,9 @@ import {
   Pencil,
   Pin,
   PinOff,
-  Clipboard,
+  Copy,
   Settings,
-  Square,
+  CircleStop,
   X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -2508,7 +2508,7 @@ export function Toolbar({
                         )}
                       </ContextMenuItem>
                       <ContextMenuItem onSelect={handleCopyProjectPath}>
-                        <Clipboard data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                        <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Copy path
                       </ContextMenuItem>
                       <ContextMenuSeparator />
@@ -2521,7 +2521,7 @@ export function Toolbar({
                           destructive
                           onSelect={() => handleStopProject(currentProject.id)}
                         >
-                          <Square data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                          <CircleStop data-menu-icon className="mr-2 h-3.5 w-3.5" />
                           Stop all agents
                         </ContextMenuItem>
                       )}

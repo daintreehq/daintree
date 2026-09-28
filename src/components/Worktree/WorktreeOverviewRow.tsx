@@ -656,11 +656,14 @@ export function WorktreeOverviewRow({
                   key={line.id}
                   onSelect={() => void openSession(line.id, onBeforeMenuAction)}
                 >
-                  <TerminalIcon
-                    kind={line.kind}
-                    chrome={line.chrome}
-                    className="mr-2 h-3.5 w-3.5 shrink-0 self-start mt-0.5"
-                  />
+                  {/* Marked, so the icon gutter rule sees this slot as taken. */}
+                  <span
+                    data-menu-icon
+                    aria-hidden="true"
+                    className="mr-2 mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center self-start"
+                  >
+                    <TerminalIcon kind={line.kind} chrome={line.chrome} className="h-3.5 w-3.5" />
+                  </span>
                   <span className="flex min-w-0 flex-col">
                     <span className="whitespace-normal break-words">{line.name}</span>
                     {line.detail && line.detail !== line.name && (

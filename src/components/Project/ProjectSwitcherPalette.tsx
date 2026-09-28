@@ -6,7 +6,6 @@ import {
   BellOff,
   ChevronDown,
   ChevronRight,
-  Clipboard,
   Download,
   FileText,
   FolderInput,
@@ -18,10 +17,11 @@ import {
   PinOff,
   Plus,
   Settings2,
-  Square,
   Trash2,
   X,
   AppWindow,
+  CircleStop,
+  Copy,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Moon } from "@/components/icons";
@@ -861,7 +861,7 @@ function ProjectListItem({
         )}
         {onCopyPath && (
           <ContextMenuItem onSelect={() => onCopyPath(project.path)}>
-            <Clipboard className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Copy path
           </ContextMenuItem>
         )}
@@ -875,7 +875,7 @@ function ProjectListItem({
           (onStopProject || onSleepProject || onCloseProject) && <ContextMenuSeparator />}
         {showStop && onStopProject && (
           <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
-            <Square className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Stop all agents
           </ContextMenuItem>
         )}

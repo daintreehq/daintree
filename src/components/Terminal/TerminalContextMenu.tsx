@@ -77,6 +77,7 @@ import {
   Globe,
   Info,
   Link,
+  Clock,
   Lock,
   Maximize2,
   Mic,
@@ -1457,13 +1458,13 @@ export function TerminalContextMenu({
               {isKnownRun && (
                 <ContextMenuSub>
                   <ContextMenuSubTrigger>
-                    <BellOff className={ICON_CLASS} aria-hidden="true" />
+                    <Clock className={ICON_CLASS} aria-hidden="true" />
                     Snooze
                   </ContextMenuSubTrigger>
                   <ContextMenuSubContent>
                     {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
                       <ContextMenuItem key={option} onSelect={() => handleSnooze(option)}>
-                        <BellOff className={ICON_CLASS} aria-hidden="true" />
+                        <Clock className={ICON_CLASS} aria-hidden="true" />
                         {AGENT_SNOOZE_LABEL[option]}
                       </ContextMenuItem>
                     ))}
