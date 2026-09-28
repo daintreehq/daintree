@@ -46,7 +46,7 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 //
 // Chrome follows the forge issue/PR dropdowns: a fixed
 // 450×500 panel, the search shell as the region's one accent, a grid popup so
-// rows may carry a control, and a neutral cursor ladder with a leading rail.
+// rows may carry a control, and the shared highlight fill on the cursor row.
 
 interface LocalCommitsDropdownProps {
   cwd: string;
@@ -1110,7 +1110,10 @@ export function LocalCommitsDropdown({
                               onClick={handleLoadMore}
                               className={cn(
                                 "h-6 text-xs shrink-0",
-                                isLoadMoreActive && "bg-overlay-soft text-text-primary"
+                                // The row carries the highlight fill; the button
+                                // only steps its text up rather than painting a
+                                // second fill on top.
+                                isLoadMoreActive && "text-text-primary"
                               )}
                             >
                               <RefreshCw className="h-3 w-3" />
@@ -1126,9 +1129,10 @@ export function LocalCommitsDropdown({
                             disabled={loadingMore}
                             className={cn(
                               "w-full",
-                              // Neutral, like the row cursor — the search field
-                              // keeps the region's one accent.
-                              isLoadMoreActive && "bg-overlay-soft text-text-primary"
+                              // The row carries the highlight fill; the button
+                              // only steps its text up rather than painting a
+                              // second fill on top.
+                              isLoadMoreActive && "text-text-primary"
                             )}
                           >
                             {showLoadingMore ? (

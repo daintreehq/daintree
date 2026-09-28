@@ -71,7 +71,7 @@ function EventRow({ event, isSelected, onSelect }: EventRowProps) {
       type="button"
       onClick={handleClick}
       // A list-detail row, not a listbox option: `aria-current` for AT and
-      // `data-selected` for the shared selected-row treatment (fill + rail).
+      // `data-selected` for the shared selected-row fill.
       aria-current={isSelected ? "true" : undefined}
       data-selected={isSelected ? "true" : undefined}
       className={cn(

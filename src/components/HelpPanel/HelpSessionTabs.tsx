@@ -150,9 +150,10 @@ function SessionTabChip({
         // the identifying numeral out of the part that gives way.
         "session-tab group relative flex items-center min-w-0 shrink",
         "rounded-[var(--radius-sm)] transition-colors duration-150 ease-out",
-        // `overlay-raised` is the app's selection fill — the same one a palette row and
-        // a highlighted menu item wear. It cannot carry the signal alone; the rail below
-        // it is what meets WCAG 1.4.11. Drawn for the only lane too: nothing else in the
+        // `overlay-raised` is the app's active-tab fill. It cannot carry the signal
+        // alone; the underline below it is what meets WCAG 1.4.11 — a persistent
+        // "this lane is showing" mark, which is navigation, not the highlighted-row
+        // language palettes and menus use. Drawn for the only lane too: nothing else in the
         // app withholds its selected state at a single item, and with a content-width
         // chip the rail is a mark on a tab rather than a second bottom border.
         isActive ? "bg-overlay-raised" : "hover:bg-overlay-subtle"

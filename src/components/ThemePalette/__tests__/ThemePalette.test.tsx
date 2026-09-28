@@ -50,6 +50,31 @@ describe("ThemePalette", () => {
     expect(cursor.getAttribute("aria-current")).toBeNull();
   });
 
+  it("previews the theme under the pointer, and restores the saved one on close", async () => {
+    // Theme injection lands on the next frame; flush it before every read.
+    const readCanvas = () => {
+      flushPendingTheme();
+      return document.documentElement.style.getPropertyValue("--theme-surface-canvas").trim();
+    };
+    const { rerender } = renderOpen();
+    await act(async () => {});
+    const savedCanvas = readCanvas();
+
+    // The pointer moves the one cursor, and the preview follows the cursor.
+    const other = rows().find((o) => o.getAttribute("aria-selected") !== "true")!;
+    const otherId = other.id.replace("theme-option-", "");
+    const otherScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === otherId)!;
+    fireEvent.pointerMove(other);
+    await act(async () => {});
+    expect(other.getAttribute("aria-selected")).toBe("true");
+    expect(readCanvas()).toBe(otherScheme.tokens["surface-canvas"]);
+
+    // Closing without choosing puts the saved theme back.
+    rerender(<ThemePalette isOpen={false} onClose={() => {}} />);
+    await act(async () => {});
+    expect(readCanvas()).toBe(savedCanvas);
+  });
+
   it("spends no status colour on the saved theme", async () => {
     const { container } = renderOpen();
     await act(async () => {});

@@ -660,7 +660,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         // Hover moves the highlight rather than painting a second, lookalike
         // state beside it — so there is only ever one lit row, and it is the
         // one Enter runs.
-        onMouseMove={() => {
+        onPointerMove={() => {
           if (!selected) setFocusedSuggestionIndex(index);
         }}
         onClick={() => {

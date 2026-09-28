@@ -110,6 +110,8 @@ interface LoadMoreFooterContext {
   rowIndex: number;
   onLoadMore: () => void;
   onOpenSettings: () => void;
+  /** Moves the list's cursor onto this row on real pointer movement. */
+  onPointerActivate: () => void;
 }
 
 /**
@@ -132,10 +134,16 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
     rowIndex,
     onLoadMore,
     onOpenSettings,
+    onPointerActivate,
   } = context;
   const isTokenError = loadMoreError !== null && isTokenRelatedError(loadMoreError);
   return (
-    <div role="row" aria-rowindex={rowIndex} className="p-3">
+    <div
+      role="row"
+      aria-rowindex={rowIndex}
+      className="p-3"
+      onPointerMove={isLoadMoreActive ? undefined : onPointerActivate}
+    >
       <div role="gridcell">
         {loadMoreError ? (
           // ONE way out, not two. This used to render Retry-or-Settings AND
@@ -927,6 +935,7 @@ export function GitHubResourceList({
       rowIndex: data.length + 1,
       onLoadMore: handleLoadMore,
       onOpenSettings: handleOpenGitHubSettings,
+      onPointerActivate: () => setActiveIndex(data.length),
     }),
     [
       canLoadMore,
