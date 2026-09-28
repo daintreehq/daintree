@@ -27,7 +27,8 @@
  *   DAINTREE_SHOT_MOTION        required — any truthy value runs the capture
  *   DESIGN_CAPTURE_DIR          output directory (default artifacts/motion-shots)
  *   DAINTREE_SHOT_ONLY          comma-separated step filter
- *   DAINTREE_SHOT_FRACTION      how far into each animation to freeze (default 0.3)
+ *   DAINTREE_SHOT_FRACTION      how far into each animation to freeze (default 0.1;
+ *                               the spring-critical entry curve is ~96% settled by 0.3)
  *   DAINTREE_SCREENSHOT_SCALE   device scale factor (default 1)
  *
  * Output: <dir>/<NN-slug>--<full|reduced>.png plus motion-audit.json.
@@ -47,7 +48,7 @@ import { T_LONG } from "../helpers/timeouts";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_MOTION;
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "1";
-const FRACTION = Number(process.env.DAINTREE_SHOT_FRACTION ?? "0.3");
+const FRACTION = Number(process.env.DAINTREE_SHOT_FRACTION ?? "0.1");
 const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
   ? path.resolve(process.env.DESIGN_CAPTURE_DIR)
   : path.resolve(process.cwd(), "artifacts", "motion-shots");
@@ -220,6 +221,9 @@ async function capture(
   if (ONLY.length > 0 && !ONLY.includes(name)) return;
   expected += 1;
   try {
+    // Park the pointer on neutral canvas so no hover state rides into a frame.
+    await page.mouse.move(700, 720);
+    await settle(page, 200);
     const t0 = await timelineNow(page);
     await trigger();
     const animations = await freeze(page, t0, FRACTION);
