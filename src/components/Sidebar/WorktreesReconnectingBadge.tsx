@@ -4,8 +4,8 @@ import { formatRelativeTime } from "@/lib/formatRelativeTime";
 
 /**
  * The worktree list's "Reconnecting…" mark beside the header. Past the
- * escalation threshold it turns warning-toned and says, on hover, how stale
- * the list is. Hidden from AT: the sidebar announces the edges itself.
+ * escalation threshold its words turn warning-toned and say, on hover, how
+ * stale the list is; the spinner stays neutral, as every busy glyph does. Hidden from AT: the sidebar announces the edges itself.
  */
 export function WorktreesReconnectingBadge({ escalatedSince }: { escalatedSince: number | null }) {
   return (
@@ -18,7 +18,7 @@ export function WorktreesReconnectingBadge({ escalatedSince }: { escalatedSince:
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
             <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs">
-              <Spinner size="xs" />
+              <Spinner size="xs" className="text-text-secondary" />
               <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
             </span>
           </TooltipTrigger>

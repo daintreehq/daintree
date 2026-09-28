@@ -1089,8 +1089,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 variant="zero-data"
                 scale="canvas"
                 icon={<Package />}
-                title="No plugin selected"
-                description="Install a plugin to view its details and settings here."
+                title="Install a plugin to see it here"
+                description="Its details and settings appear once it's installed."
               />
             </div>
           )}
