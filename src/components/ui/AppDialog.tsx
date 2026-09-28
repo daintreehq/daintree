@@ -10,6 +10,7 @@ import {
   useContext,
   type CSSProperties,
 } from "react";
+import { InsetSurface } from "@/components/ui/insetSurface";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -736,7 +737,7 @@ AppDialog.Body = function AppDialogBody({
       className="flex-1 min-h-0"
       scrollClassName={cn("py-6 dialog-body-inset", className)}
     >
-      {children}
+      <InsetSurface>{children}</InsetSurface>
     </ScrollShadow>
   );
 };
@@ -757,7 +758,7 @@ AppDialog.BodyScroll = function AppDialogBodyScroll({
   // leave the reservation behind as dead inset.
   return (
     <div className={cn("flex-1 overflow-auto min-h-0 py-6 dialog-body-inset", className)}>
-      {children}
+      <InsetSurface>{children}</InsetSurface>
     </div>
   );
 };
