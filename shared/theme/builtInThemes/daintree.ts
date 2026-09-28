@@ -127,6 +127,10 @@ export const theme: BuiltInThemeSource = {
     // white-alpha, because an alpha border composites differently on every
     // surface. 3.22:1 on `surface-input` (#2c2c29), 3.67:1 on `surface-panel`.
     "border-input": "#787a71",
+    // The keyboard selection ring in menus and palettes. The derived 42% lichen
+    // measured 2.98:1 against a highlighted row on the lifted overlay plane;
+    // 44% is the floor; 48% leaves margin against both the row and the plane.
+    "selection-outline": "rgba(223,224,216,0.48)",
     // A placeholder is the quietest rung of the ramp, so this house tiers it at
     // 3:1 rather than AA (`scripts/theme-text-contrast.test.ts` orders the ramp).
     // 3.58:1 on the elevated field up to 4.92:1 on the grid. Solid rather than
@@ -193,11 +197,12 @@ export const theme: BuiltInThemeSource = {
     // read as holes. This lifts them between panel (#21221f) and the elevated
     // input plane (#2c2c29): above what they cover, below the search field
     // inside them. Text on it: 11.3 / 6.2 / 5.0:1 for primary / secondary / muted.
-    "floating-surface-bg": "#262724",
+    "overlay-surface-color": "#262724",
     // The one shaft of the hero's light: its sunlit bark (#9C9168) on the brand
     // mark of the welcome screen and the empty workbench. 6.1:1 on the grid,
     // below secondary prose and far below the waiting amber.
     "welcome-mark-color": "#9C9168",
+    "grid-mark-color": "#9C9168",
     "settings-dialog-bg": "#21221f",
     "settings-card-bg": "#252622",
     "settings-list-item-bg": "#252622",
