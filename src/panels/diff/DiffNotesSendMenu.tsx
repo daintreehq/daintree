@@ -123,13 +123,19 @@ function DiffNoteTargetItems({
 }) {
   const targets = useDiffNoteTargets();
   if (targets.length === 0) {
-    return <DropdownMenuItem disabled>No agents running</DropdownMenuItem>;
+    return (
+      <DropdownMenuItem inset disabled>
+        No agents running
+      </DropdownMenuItem>
+    );
   }
   return (
     <>
       {targets.map((target) => (
+        // Inset onto the scope rows' label edge above.
         <DropdownMenuItem
           key={target.id}
+          inset
           disabled={disabled || target.isInputLocked}
           onSelect={() => onSend(target.id)}
         >
