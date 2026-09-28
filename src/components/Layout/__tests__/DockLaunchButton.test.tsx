@@ -378,7 +378,7 @@ import { DockLaunchButton } from "../DockLaunchButton";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import { SlidersHorizontal } from "lucide-react";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
-import { describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
+import { comboToAriaKeyshortcuts, describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 
 /** Spoken by name ("Alt P" / "Option P"), never as the "Alt+P" string. */
@@ -2237,7 +2237,8 @@ describe("DockLaunchButton", () => {
       // real button there trips `nested-interactive` — so the chord and the verb
       // have to be announced by the option that owns it. The control keeps only
       // the mouse tooltip, which is not an accessibility surface.
-      expect(row.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
+      // Alt+P pins; it does not activate the row, so it is spoken, not declared.
+      expect(row.getAttribute("aria-keyshortcuts")).not.toBe("Alt+P");
       expect(row.getAttribute("aria-label")).toContain(PIN_SPOKEN);
       expect(pin.getAttribute("title")).toContain(labelWithShortcut("", "Alt+P", isMac()).trim());
       // No second tab stop inside a row: the palette moves selection, not focus,
@@ -2281,7 +2282,19 @@ describe("DockLaunchButton", () => {
       const row = rowFor(container, "My recipe");
 
       expect(row.getAttribute("aria-label")).toContain(`Press ${PIN_SPOKEN} to pin to toolbar`);
-      expect(row.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
+    });
+
+    it("declares a row's launch binding as aria-keyshortcuts and keeps it out of the name", () => {
+      mockKeybindings["agent.claude"] = "Cmd+Alt+C";
+      const { container } = renderButton();
+      const row = rowFor(container, "Claude");
+
+      expect(row.getAttribute("aria-keyshortcuts")).toBe(
+        comboToAriaKeyshortcuts("Cmd+Alt+C", isMac())
+      );
+      expect(row.getAttribute("aria-label")).not.toContain(describeChord("Cmd+Alt+C", isMac()));
+      // The visible chip draws the same binding.
+      expect(row.textContent).toContain(describeChord("Cmd+Alt+C", isMac()));
     });
 
     it("leaves the unavailable-agent warning to the description, not the name", () => {

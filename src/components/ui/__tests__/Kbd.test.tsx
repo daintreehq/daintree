@@ -84,19 +84,19 @@ describe("KbdChord modifier glyph face", () => {
   it.each(["default", "compact", "bare"] as const)(
     "sets every macOS key glyph in one face and every other key in mono (%s)",
     (density) => {
-      // The glyphs JetBrains Mono's subset lacks: the modifiers, and the named
-      // keys macOS also draws as symbols (Return, Escape, Tab, Delete).
+      // The glyphs JetBrains Mono's subset lacks: the modifiers, the named keys
+      // macOS also draws as symbols (Return, Escape, Tab, Delete), and arrows.
       const { container } = render(
         <KbdChord
-          shortcut="Ctrl+Alt+Shift+Cmd+K Cmd+Enter Shift+Escape Tab Cmd+Backspace"
+          shortcut="Ctrl+Alt+Shift+Cmd+K Cmd+Enter Shift+Escape Tab Cmd+Backspace Alt+Up"
           isMac
           density={density}
         />
       );
       const chips = Array.from(container.querySelectorAll("kbd"));
-      const glyphs = chips.filter((k) => /^[⌘⇧⌥⌃⏎⎋⇥⌫⌦]$/.test(k.textContent ?? ""));
+      const glyphs = chips.filter((k) => /^[⌘⇧⌥⌃⏎⎋⇥⌫⌦↑↓←→]$/.test(k.textContent ?? ""));
       const others = chips.filter((k) => !glyphs.includes(k));
-      expect(glyphs.length).toBe(11);
+      expect(glyphs.length).toBe(13);
       expect(others.length).toBeGreaterThan(0);
 
       const face = (k: Element) =>
