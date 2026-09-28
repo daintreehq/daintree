@@ -5,10 +5,12 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { HighlightedText, substringMatchIndices } from "@/components/ui/HighlightedText";
 import type { WorktreeState } from "@/types";
 
 interface WorktreeListItemProps {
   worktree: WorktreeState;
+  query: string;
   isActive: boolean;
   isSelected: boolean;
   onClick: () => void;
@@ -17,6 +19,7 @@ interface WorktreeListItemProps {
 
 function WorktreeListItem({
   worktree,
+  query,
   isActive,
   isSelected,
   onClick,
@@ -50,10 +53,20 @@ function WorktreeListItem({
         <div className="flex items-center justify-between gap-2 text-sm">
           {/* Both sides truncate: branch names have no length worth trusting,
               so no tier is wide enough to make this unnecessary. */}
-          <span className="font-medium text-text-primary truncate">{worktree.name}</span>
+          <span className="font-medium text-text-primary truncate">
+            <HighlightedText
+              text={worktree.name}
+              indices={substringMatchIndices(worktree.name, query)}
+            />
+          </span>
           <div className="flex items-center gap-2 min-w-0 text-xs text-text-secondary">
             {worktree.branch && (
-              <span className="font-mono text-text-secondary truncate">{worktree.branch}</span>
+              <span className="font-mono text-text-secondary truncate">
+                <HighlightedText
+                  text={worktree.branch}
+                  indices={substringMatchIndices(worktree.branch, query)}
+                />
+              </span>
             )}
             {isActive && <span className="shrink-0">Current</span>}
           </div>
@@ -129,6 +142,7 @@ export function WorktreePalette({
         <WorktreeListItem
           key={worktree.id}
           worktree={worktree}
+          query={query}
           isActive={worktree.id === activeWorktreeId}
           isSelected={isSelected}
           onClick={() => onSelect(worktree)}

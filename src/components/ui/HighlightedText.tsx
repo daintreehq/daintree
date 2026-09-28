@@ -54,6 +54,42 @@ export function HighlightedText({ text, indices }: HighlightedTextProps) {
   return <>{parts}</>;
 }
 
+/**
+ * The range a plain case-insensitive substring filter matched, for lists that
+ * filter with `includes` rather than fuse. One range, the first occurrence: it
+ * marks exactly what the filter tested, where a whitespace-tokenised highlight
+ * would mark words the whole-query filter never matched.
+ */
+export function substringMatchIndices(
+  text: string,
+  query: string
+): readonly [number, number][] | undefined {
+  const q = query.trim().toLowerCase();
+  if (!q) return undefined;
+  const lower = text.toLowerCase();
+  if (lower.length === text.length) {
+    const start = lower.indexOf(q);
+    return start < 0 ? undefined : [[start, start + q.length - 1]];
+  }
+  // Some characters lowercase to more code units ("İ" → "i̇"), so an offset in
+  // the lowered string is not an offset in the text. Lower one character at a
+  // time and remember which original character each lowered unit came from.
+  let lowered = "";
+  let offset = 0;
+  const from: [number, number][] = [];
+  for (const ch of text) {
+    const unit: [number, number] = [offset, offset + ch.length - 1];
+    const l = ch.toLowerCase();
+    lowered += l;
+    for (let i = 0; i < l.length; i++) from.push(unit);
+    offset += ch.length;
+  }
+  const at = lowered.indexOf(q);
+  const first = from[at];
+  const last = from[at + q.length - 1];
+  return at < 0 || !first || !last ? undefined : [[first[0], last[1]]];
+}
+
 export function findMatchIndices(
   matches: readonly FuseResultMatch[] | undefined,
   key: string
