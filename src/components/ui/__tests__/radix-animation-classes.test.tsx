@@ -158,14 +158,16 @@ describe("Radix overlay animation classes — wrapper source", () => {
  */
 describe("overlay motion is defined once and stays on its tiers", () => {
   it.each([
-    ["open", UI_ENTER_DURATION],
-    ["closed", UI_EXIT_DURATION],
-  ])("times its %s state on the shared entry/exit tier", (state, duration) => {
+    ["open", "enter", UI_ENTER_DURATION],
+    ["closed", "exit", UI_EXIT_DURATION],
+  ])("times its %s state on the shared entry/exit tier", (state, phase, duration) => {
     // Not a tautology: these are two independent spellings of one value — a JS
     // constant the dialogs animate on, and a Tailwind class a utility cannot
     // read it from. Deriving the class here is what makes retiming
     // `animationUtils.ts` fail loudly instead of desyncing the overlays.
-    expect(OVERLAY_MOTION_CLASS).toContain(`data-[state=${state}]:animation-duration-${duration}`);
+    expect(OVERLAY_MOTION_CLASS).toContain(
+      `data-[state=${state}]:animation-duration-[var(--overlay-${phase}-duration,${duration}ms)]`
+    );
   });
 
   it.each([

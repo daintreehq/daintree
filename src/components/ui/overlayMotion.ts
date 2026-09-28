@@ -42,7 +42,11 @@ const OVERLAY_SLIDE =
  * Durations are `animation-duration-*`, not `duration-*`: the latter also sets
  * `transition-duration`, and with no transition list of its own the surface
  * then interpolated every property that changed under it (the Radix
- * `transform-origin`, tooltip `visibility`).
+ * `transform-origin`, tooltip `visibility`). They read through
+ * `--overlay-enter-duration` / `--overlay-exit-duration` so a surface on another
+ * tier (the anchored palette, at 150/100) retimes the same class by setting the
+ * variables rather than stacking a second duration utility that `cn()` cannot
+ * merge away.
  *
  * Plain `join()` rather than `cn()` because there is nothing here to merge: no
  * conditional segments and no two tokens in the same conflict group. Every
@@ -51,7 +55,7 @@ const OVERLAY_SLIDE =
  */
 export const OVERLAY_MOTION_CLASS = [
   "data-[state=open]:animate-in data-[state=closed]:animate-out",
-  "data-[state=open]:animation-duration-200 data-[state=closed]:animation-duration-120",
+  "data-[state=open]:animation-duration-[var(--overlay-enter-duration,200ms)] data-[state=closed]:animation-duration-[var(--overlay-exit-duration,120ms)]",
   "data-[state=open]:ease-[var(--ease-spring-critical)] data-[state=closed]:ease-[var(--ease-exit)]",
   "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
   "data-[state=open]:zoom-in-97 data-[state=closed]:zoom-out-97",
