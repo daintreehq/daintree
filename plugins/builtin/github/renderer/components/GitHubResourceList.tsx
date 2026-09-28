@@ -792,17 +792,11 @@ export function GitHubResourceList({
     setActiveIndex(data.findIndex((item) => item.number === previousNumber));
   }, [data, cursorScope]);
 
-  // A row the pointer claimed is already under the pointer; revealing it would
-  // scroll a half-visible row out from under it.
-  const pointerMovedRef = useRef(false);
-  const pointToCursor = useCallback((index: number) => {
-    pointerMovedRef.current = true;
-    setActiveIndex(index);
-  }, []);
   useEffect(() => {
-    const fromPointer = pointerMovedRef.current;
-    pointerMovedRef.current = false;
-    if (fromPointer || activeIndex < 0) return;
+    if (activeIndex < 0) return;
+    // A row under the pointer was just claimed by it; revealing it would scroll
+    // a half-visible row out from under the pointer.
+    if (document.getElementById(activeItemId ?? "")?.matches(":hover")) return;
     if (isLoadMoreActive) {
       document.getElementById(`github-${type}-load-more`)?.scrollIntoView({ block: "nearest" });
       return;
@@ -810,7 +804,7 @@ export function GitHubResourceList({
     if (activeIndex < data.length) {
       virtuosoRef.current?.scrollIntoView({ index: activeIndex, behavior: "auto" });
     }
-  }, [activeIndex, data.length, isLoadMoreActive, type]);
+  }, [activeIndex, activeItemId, data.length, isLoadMoreActive, type]);
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
@@ -944,7 +938,7 @@ export function GitHubResourceList({
       rowIndex: data.length + 1,
       onLoadMore: handleLoadMore,
       onOpenSettings: handleOpenGitHubSettings,
-      onPointerActivate: () => pointToCursor(data.length),
+      onPointerActivate: () => setActiveIndex(data.length),
     }),
     [
       canLoadMore,
@@ -957,7 +951,6 @@ export function GitHubResourceList({
       data.length,
       handleLoadMore,
       handleOpenGitHubSettings,
-      pointToCursor,
     ]
   );
 
@@ -1629,7 +1622,7 @@ export function GitHubResourceList({
                     onMenuClose={focusSearchInput}
                     onOpenExternalUrl={handleOpenUrlExternal}
                     isActive={activeIndex === index}
-                    onPointerActivate={() => pointToCursor(index)}
+                    onPointerActivate={() => setActiveIndex(index)}
                     isSelected={selection.selectedIds.has(item.number)}
                     isSelectionActive={selection.isSelectionActive}
                     onToggleSelect={(e: { shiftKey: boolean }) => {

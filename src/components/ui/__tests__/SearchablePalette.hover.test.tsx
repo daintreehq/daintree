@@ -125,7 +125,16 @@ describe("SearchablePalette hover wiring", () => {
     const { getByTestId, getByRole } = render(<Harness />);
     scrollIntoView.mockClear();
 
+    // jsdom has no pointer, so `:hover` is stubbed onto the row being pointed at.
+    const realMatches = Element.prototype.matches;
+    let hovered: Element | null = null;
+    Element.prototype.matches = function (this: Element, selector: string) {
+      if (selector === ":hover") return this === hovered;
+      return realMatches.call(this, selector);
+    };
+
     // The row under the pointer takes the cursor, and stays where it is.
+    hovered = getByTestId("row-c");
     fireEvent.pointerMove(getByTestId("row-c"));
     expect(getByTestId("row-c").getAttribute("aria-selected")).toBe("true");
     expect(scrollIntoView).not.toHaveBeenCalled();
@@ -134,5 +143,6 @@ describe("SearchablePalette hover wiring", () => {
     fireEvent.keyDown(getByRole("combobox"), { key: "ArrowUp" });
     expect(getByTestId("row-b").getAttribute("aria-selected")).toBe("true");
     expect(scrollIntoView).toHaveBeenCalled();
+    Element.prototype.matches = realMatches;
   });
 });

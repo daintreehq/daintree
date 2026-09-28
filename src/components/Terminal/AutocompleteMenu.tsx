@@ -185,14 +185,12 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
     // `shouldRender` is a dependency because presence mounts the menu a commit
     // after `isOpen` flips: without it the first pass finds no list, and a menu
     // that opens with its selection below the fold never scrolls to it.
-    // A row the pointer claimed is already under the pointer; revealing it would
-    // scroll a half-visible row out from under it.
-    const pointerMovedRef = useRef(false);
     useEffect(() => {
-      const fromPointer = pointerMovedRef.current;
-      pointerMovedRef.current = false;
-      if (fromPointer || !isOpen || !shouldRender) return;
+      if (!isOpen || !shouldRender) return;
       const selected = listRef.current?.querySelector('[aria-selected="true"]');
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (selected?.matches(":hover")) return;
       selected?.scrollIntoView?.({ block: "nearest" });
     }, [isOpen, shouldRender, selectedIndex, items]);
 
@@ -315,12 +313,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                   )}
                   // An inert row doesn't answer the pointer either.
                   onPointerMove={
-                    isRowStale || !onHoverIndex || isSelected
-                      ? undefined
-                      : () => {
-                          pointerMovedRef.current = true;
-                          onHoverIndex(idx);
-                        }
+                    isRowStale || !onHoverIndex || isSelected ? undefined : () => onHoverIndex(idx)
                   }
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {

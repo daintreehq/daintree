@@ -2300,27 +2300,14 @@ function ProjectPaletteInner({
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
   const fleetSummary = fleetLiveness ? formatFleetLiveness(fleetLiveness) : null;
 
-  // A row the pointer put the cursor on is already under the pointer; revealing
-  // it would scroll a half-visible row out from under it. The keys, opening and
-  // a re-ranked list still reveal.
-  const pointerMovedRef = useRef(false);
-  const hoverRow = useCallback(
-    (rowId: string) => {
-      pointerMovedRef.current = true;
-      onHoverRow?.(rowId);
-    },
-    [onHoverRow]
-  );
-
   useEffect(() => {
-    const fromPointer = pointerMovedRef.current;
-    pointerMovedRef.current = false;
-    if (fromPointer) return;
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
       const selectedItem = listRef.current.querySelector(
         `#project-option-${results[selectedIndex]!.id}`
       );
-      if (selectedItem) {
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (selectedItem && !selectedItem.matches(":hover")) {
         selectedItem.scrollIntoView({ block: "nearest" });
       }
     }
@@ -2500,7 +2487,7 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
-          onHoverRow={onHoverRow ? hoverRow : undefined}
+          onHoverRow={onHoverRow}
           onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (

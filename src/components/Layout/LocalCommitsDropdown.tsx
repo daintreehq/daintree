@@ -644,19 +644,13 @@ export function LocalCommitsDropdown({
     setExpandedHashes(new Set());
   }, [debouncedSearch, cwd, branch]);
 
-  // A row the pointer claimed is already under the pointer; revealing it would
-  // scroll a half-visible row out from under it.
-  const pointerMovedRef = useRef(false);
-  const pointToCursor = useCallback((index: number) => {
-    pointerMovedRef.current = true;
-    setCursorIndex(index);
-  }, []);
   useEffect(() => {
-    const fromPointer = pointerMovedRef.current;
-    pointerMovedRef.current = false;
-    if (fromPointer) return;
     if (activeDescendantId) {
-      document.getElementById(activeDescendantId)?.scrollIntoView({ block: "nearest" });
+      const row = document.getElementById(activeDescendantId);
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (row?.matches(":hover")) return;
+      row?.scrollIntoView({ block: "nearest" });
     }
   }, [activeDescendantId]);
 
@@ -1080,7 +1074,7 @@ export function LocalCommitsDropdown({
                         isCopied={copiedHash === commit.hash}
                         onToggle={toggleCommitExpanded}
                         onCopy={copyHash}
-                        onPointerActivate={() => pointToCursor(index)}
+                        onPointerActivate={() => setCursorIndex(index)}
                       />
                     ))}
                   </div>
@@ -1099,7 +1093,7 @@ export function LocalCommitsDropdown({
                         isLoadMoreActive && "bg-overlay-highlight"
                       )}
                       onPointerMove={
-                        isLoadMoreActive ? undefined : () => pointToCursor(data.length)
+                        isLoadMoreActive ? undefined : () => setCursorIndex(data.length)
                       }
                     >
                       <div role="gridcell">

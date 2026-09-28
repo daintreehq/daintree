@@ -174,15 +174,12 @@ export function ResumeSessionsPalette() {
 
   // Depends on visibleResults (not results) so arrowing past the visible end —
   // which lazily reveals the next page — re-runs once the row actually exists.
-  // A row the pointer claimed is already under the pointer; revealing it would
-  // scroll a half-visible row out from under it.
-  const pointerMovedRef = useRef(false);
   useEffect(() => {
-    const fromPointer = pointerMovedRef.current;
-    pointerMovedRef.current = false;
-    if (fromPointer) return;
     if (selectedIndex >= 0 && results[selectedIndex]) {
       const node = itemsRef.current.get(results[selectedIndex]!.id);
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (node?.matches(":hover")) return;
       node?.scrollIntoView({ block: "nearest" });
     }
   }, [selectedIndex, results, visibleResults]);
@@ -265,9 +262,7 @@ export function ResumeSessionsPalette() {
         matches={matchesById.get(item.id)}
         onSelect={launch}
         onHover={() => {
-          if (index === selectedIndex) return;
-          pointerMovedRef.current = true;
-          setSelectedIndex(index);
+          if (index !== selectedIndex) setSelectedIndex(index);
         }}
         itemRef={setItemRef(item.id)}
       />

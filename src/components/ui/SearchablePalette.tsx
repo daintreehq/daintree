@@ -15,6 +15,8 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 
+const noopHoverIndex = () => {};
+
 // The action palette's band head, so a later band opens with air above it.
 const SECTION_HEADER_CLASS = `${PALETTE_SECTION_LABEL_CLASS} px-3 py-1 not-first:mt-2`;
 
@@ -268,25 +270,8 @@ export function SearchablePalette<T>({
       ? `${itemIdPrefix}-${getItemId(results[selectedIndex]!)}`
       : null;
   const banded = getSectionLabel !== undefined;
-  // A cursor the pointer moved is already under the pointer, so the reveal below
-  // must not scroll it: a half-visible row would jump out from under the pointer
-  // that just claimed it. Keyboard navigation, the opening position and results
-  // settling still reveal.
-  const pointerMovedRef = useRef(false);
-  const selectedIndexRef = useRef(selectedIndex);
-  useEffect(() => {
-    selectedIndexRef.current = selectedIndex;
-  }, [selectedIndex]);
-  // A new query re-ranks the list; its new cursor is always revealed, even if a
-  // hover the consumer declined left the pointer mark standing.
-  useEffect(() => {
-    pointerMovedRef.current = false;
-  }, [query]);
   useEffect(() => {
     const list = listRef.current;
-    const fromPointer = pointerMovedRef.current;
-    pointerMovedRef.current = false;
-    if (fromPointer) return;
     if (!list || selectedOptionId === null) return;
     // Band heads sit between the options, so a banded list finds the row by
     // id. Unbanded lists keep child position: some consumers render rows
@@ -295,7 +280,11 @@ export function SearchablePalette<T>({
     const selectedItem = banded
       ? list.querySelector(`[id="${CSS.escape(selectedOptionId)}"]`)
       : list.children[selectedIndex];
-    if (selectedItem instanceof HTMLElement) {
+    // A row under the pointer is already where the user is looking — the
+    // pointer just claimed it — so revealing it would scroll a half-visible row
+    // out from under the pointer. The keys, opening and a re-ranked list land
+    // elsewhere and still reveal.
+    if (selectedItem instanceof HTMLElement && !selectedItem.matches(":hover")) {
       selectedItem.scrollIntoView({ block: "nearest", behavior: "instant" });
     }
   }, [selectedOptionId, selectedIndex, banded, results]);
@@ -398,14 +387,7 @@ export function SearchablePalette<T>({
     }
   });
 
-  const hoverIndexHandler = useCallback(
-    (index: number) => {
-      if (!onHoverIndex) return;
-      if (index !== selectedIndexRef.current) pointerMovedRef.current = true;
-      onHoverIndex(index);
-    },
-    [onHoverIndex]
-  );
+  const hoverIndexHandler = onHoverIndex ?? noopHoverIndex;
   const jumpToIndex = onSelectIndex ?? onHoverIndex;
 
   /**
@@ -416,8 +398,6 @@ export function SearchablePalette<T>({
    */
   const handleNavigationKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
-      // The keys always reveal, whatever the pointer last did.
-      pointerMovedRef.current = false;
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
