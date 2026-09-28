@@ -574,7 +574,7 @@ describe("PtyHostLifecycle", () => {
 
     const warns = (callbacks.callbacks.logWarn as Mock).mock.calls.map((c) => c[0] as string);
     const line = warns.find((m) => m.startsWith("[PtyClient] Pty Host daintree-pty-host "));
-    expect(line).toContain("SIGTERM");
+    expect(line).toContain(process.platform === "win32" ? "exit code 15" : "SIGTERM");
     expect(line).toContain("from outside the process");
   });
 

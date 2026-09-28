@@ -48,7 +48,9 @@ async function openConflictReviewHub(ctx: AppContext) {
     await reviewTrigger.click();
   }
   await expect(reviewItem).toBeVisible({ timeout: T_MEDIUM });
-  await reviewItem.click();
+  // Radix can remount the hovered submenu during the pointer-stability check.
+  // Keyboard activation uses the same menu action without depending on its geometry.
+  await reviewItem.press("Enter");
 
   const hub = window.locator(SEL.reviewHub.container);
   await expect(hub).toBeVisible({ timeout: T_MEDIUM });

@@ -407,6 +407,8 @@ function collectSourceFiles(dir: string): string[] {
     }
 
     if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+    // Compiler tests create and remove these files while this source scan runs.
+    if (/\.compiled-\d+-\d+\.tsx?$/.test(entry.name)) continue;
     if (/\.(test|spec)\./.test(entry.name)) continue;
 
     result.push(fullPath);

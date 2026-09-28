@@ -72,12 +72,12 @@ test.describe.serial("Presets: Launch Env Overrides (63–70)", () => {
 
     // Open the popover listbox and pick the default (blank) option.
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    await trigger.click({ force: true, noWaitAfter: true });
+    await trigger.click();
     const listbox = ctx.window.locator(SEL.preset.selectorListbox);
     await expect(listbox).toBeVisible({ timeout: T_SHORT });
     const defaultOption = listbox.locator(SEL.preset.defaultOption);
     await expect(defaultOption).toBeVisible({ timeout: T_SHORT });
-    await defaultOption.click({ force: true, noWaitAfter: true });
+    await defaultOption.click();
     await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
 
     await expect
@@ -118,12 +118,12 @@ test.describe.serial("Presets: Launch Env Overrides (63–70)", () => {
 
     // Switch back to the default (blank) option and verify the override clears.
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    await trigger.click({ force: true, noWaitAfter: true });
+    await trigger.click();
     const listbox = ctx.window.locator(SEL.preset.selectorListbox);
     await expect(listbox).toBeVisible({ timeout: T_SHORT });
     const defaultOption = listbox.locator(SEL.preset.defaultOption);
     await expect(defaultOption).toBeVisible({ timeout: T_SHORT });
-    await defaultOption.click({ force: true, noWaitAfter: true });
+    await defaultOption.click();
     await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
 
     await expect

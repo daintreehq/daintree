@@ -786,10 +786,16 @@ export class IdentityWatcher {
 
     const agentCommitted = agentIdentity || Boolean(this.delegate.detectedAgentId);
     const unambiguousShellPromptVisible = this.hasUnambiguousShellPromptVisible(agentCommitted);
+    // A plain process command may leave the prior shell prompt in scrollback.
+    // On Windows, a missed descendant reading would otherwise let that stale
+    // prompt cancel the shell-command fallback before it commits the badge.
+    const promptScanLines = agentCommitted
+      ? this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES)
+      : [];
     const promptVisible =
       unambiguousShellPromptVisible ||
       detectPrompt(
-        this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES),
+        promptScanLines,
         {
           promptPatterns: agentCommitted
             ? [...SHELL_PROMPT_PATTERNS_NO_AGENT_GLYPHS]

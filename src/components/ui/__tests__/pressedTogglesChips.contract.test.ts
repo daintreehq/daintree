@@ -49,7 +49,7 @@ interface JsxSite {
 
 function jsxSites(): JsxSite[] {
   return sourceFiles(SRC).flatMap((full) => {
-    const file = path.relative(ROOT, full);
+    const file = path.relative(ROOT, full).split(path.sep).join("/");
     const source = ts.createSourceFile(
       full,
       readFileSync(full, "utf8"),

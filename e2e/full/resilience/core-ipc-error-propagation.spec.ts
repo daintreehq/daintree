@@ -145,42 +145,41 @@ async function openRecoveryMenu(
   window: Page,
   banner: Locator,
   expectedButtonLabels: string[]
-): Promise<Locator> {
+): Promise<void> {
   const trigger = banner.locator('[aria-label="More recovery options"]');
   await expect(trigger).toBeVisible();
   await trigger.hover();
-  // The popover wrapper is upgraded after its deferred Radix chunk loads.
-  // Synchronize on that upgrade before sending a real pointer interaction;
-  // a DOM-level click can briefly expose the fallback content and then close
-  // it again while the primitive remounts.
-  await expect(trigger).toHaveAttribute("data-state", /closed|open/, { timeout: T_MEDIUM });
+  // The deferred Radix menu can remount after the first pointer interaction.
+  // Use the menu's aria-expanded state below: the tooltip sharing this trigger
+  // can overwrite data-state with "closed" while the menu is open.
 
   const menu = window
     .locator("[data-radix-popper-content-wrapper]")
     .filter({
-      has: window.getByRole("button", { name: expectedButtonLabels[0], exact: true }),
+      has: window.getByRole("menuitem", { name: expectedButtonLabels[0], exact: true }),
     })
     .last();
 
   await expect(async () => {
-    // A failed attempt can leave the controlled popover open while its portal
+    // A failed attempt can leave the controlled menu open while its portal
     // is remounting. Close it before retrying so the next click always opens.
-    if ((await trigger.getAttribute("data-state", { timeout: T_SHORT })) === "open") {
+    if ((await trigger.getAttribute("aria-expanded", { timeout: T_SHORT })) === "true") {
       await window.keyboard.press("Escape");
-      await expect(trigger).toHaveAttribute("data-state", "closed", { timeout: T_SHORT });
+      await expect(trigger).toHaveAttribute("aria-expanded", "false", { timeout: T_SHORT });
     }
 
     await trigger.click({ timeout: T_SHORT });
-    await expect(trigger).toHaveAttribute("data-state", "open", { timeout: T_SHORT });
+    await expect(trigger).toHaveAttribute("aria-expanded", "true", { timeout: T_SHORT });
     await expect(menu).toBeVisible({ timeout: T_SHORT });
     for (const label of expectedButtonLabels) {
-      await expect(menu.getByRole("button", { name: label, exact: true })).toBeVisible({
+      await expect(menu.getByRole("menuitem", { name: label, exact: true })).toBeVisible({
         timeout: T_SHORT,
       });
     }
   }).toPass({ timeout: T_LONG });
 
-  return menu;
+  await window.keyboard.press("Escape");
+  await expect(trigger).toHaveAttribute("aria-expanded", "false", { timeout: T_SHORT });
 }
 
 /* ---------- tests ---------- */

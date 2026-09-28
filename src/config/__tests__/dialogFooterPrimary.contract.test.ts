@@ -173,7 +173,7 @@ function scan(filePath: string): ScanResult {
   );
   const footerTag = `${dialogBinding(source)}.${FOOTER_MEMBER}`;
   const result: ScanResult = { violations: [], footers: 0, buttons: 0 };
-  const relative = path.relative(REPO_ROOT, filePath);
+  const relative = path.relative(REPO_ROOT, filePath).split(path.sep).join("/");
 
   const inspectButtons = (node: ts.Node) => {
     if (

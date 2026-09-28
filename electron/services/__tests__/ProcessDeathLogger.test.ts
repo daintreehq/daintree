@@ -135,7 +135,9 @@ describe("ProcessDeathLogger", () => {
     expect(loggerCalls).toHaveLength(1);
     expect(loggerCalls[0].level).toBe("warn");
     expect(loggerCalls[0].message).toMatch(/^Child process gone: Network Service \(Utility\) /);
-    expect(loggerCalls[0].message).toContain("SIGTERM");
+    expect(loggerCalls[0].message).toContain(
+      process.platform === "win32" ? "exit code 15" : "SIGTERM"
+    );
     expect(loggerCalls[0].context).toMatchObject({
       name: "Network Service",
       reason: "killed",
@@ -278,7 +280,7 @@ describe("ProcessDeathLogger", () => {
     const [entry] = loggerCalls;
     expect(entry.context).toMatchObject({ count: 4, externalKills: 0 });
     expect(entry.message).toContain(
-      "daintree-pty-host (Utility) was terminated by SIGTERM by Daintree"
+      `daintree-pty-host (Utility) was terminated ${process.platform === "win32" ? "(exit code 15)" : "by SIGTERM"} by Daintree`
     );
     expect(entry.message).toContain("Utility crashed");
     expect(entry.message).toContain("user force-restarted view");

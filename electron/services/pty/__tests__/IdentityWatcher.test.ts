@@ -509,6 +509,28 @@ describe("IdentityWatcher", () => {
       watcher.dispose();
     });
 
+    it("ignores an old PowerShell prompt when a running command has no descendant reading", async () => {
+      const inject = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: inject,
+        clearShellCommandEvidence: vi.fn(),
+      } as unknown as ProcessDetector;
+      const { delegate } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["PS C:\\repo>", 'PS C:\\repo> node -e "..."', "NPM_READY"],
+        cursorLine: "NPM_READY",
+        ptyDescendantCount: 0,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit('node -e "..."');
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(inject).toHaveBeenCalledTimes(1);
+      expect(inject.mock.calls[0]?.[0]).toMatchObject({ processIconId: "node" });
+      watcher.dispose();
+    });
+
     it("calls processDetector.clearShellCommandEvidence('prompt-return') on demotion", async () => {
       const inject = vi.fn();
       const clear = vi.fn();

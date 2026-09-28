@@ -261,7 +261,9 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await editor.locator(SEL.recipeEditor.createButton).click();
 
       // Validation error should appear and editor should stay open
-      await expect(editor.getByText("Recipe name is required")).toBeVisible({ timeout: T_SHORT });
+      await expect(editor.getByText("Name the recipe to save it")).toBeVisible({
+        timeout: T_SHORT,
+      });
       await expect(editor).toBeVisible();
 
       // Cancel (no dirty state since only validation was triggered)

@@ -245,7 +245,7 @@ describe("focus ring recipe contract", () => {
 
     for (const root of SCAN_ROOTS) {
       for (const file of collectSourceFiles(root)) {
-        const rel = path.relative(REPO_ROOT, file);
+        const rel = path.relative(REPO_ROOT, file).split(path.sep).join("/");
         const lines = fs.readFileSync(file, "utf8").split("\n");
         lines.forEach((text, idx) => {
           if (isCommentLine(text)) return;

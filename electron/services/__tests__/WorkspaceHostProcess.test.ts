@@ -1751,7 +1751,7 @@ describe("WorkspaceHostProcess crash window", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       const log = exitWarn();
-      expect(log?.message).toContain("SIGTERM");
+      expect(log?.message).toContain(process.platform === "win32" ? "exit code 15" : "SIGTERM");
       expect(log?.message).toContain("from outside the process");
       expect(log?.context).toMatchObject({ reason: "killed", exitCode: 15 });
       expect(loggerCalls.some((c) => c.message.includes("Restarting in"))).toBe(true);

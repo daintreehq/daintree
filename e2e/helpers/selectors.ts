@@ -437,7 +437,7 @@ export const SEL = {
     listPrs: "#github-pr-list",
     loadMore: (type: "issue" | "pr") => `#github-${type}-load-more`,
     item: (number: number) => `[data-testid="github-item-${number}"]`,
-    selectionActions: '[role="dialog"][aria-label="Selection actions"]',
+    selectionActions: '[role="menu"]',
     noTokenEmptyState: 'text="GitHub not connected"',
     rateLimitedEmptyState: 'text="GitHub requests are paused"',
     // Bulk selection action bar + dialog

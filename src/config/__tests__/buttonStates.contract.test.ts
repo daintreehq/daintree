@@ -123,7 +123,7 @@ describe("Button state contract", () => {
   const files = SCAN_ROOTS.flatMap((root) => tsxFiles(root));
   const hits = new Map<string, number[]>();
   for (const file of files) {
-    const rel = path.relative(REPO_ROOT, file);
+    const rel = path.relative(REPO_ROOT, file).split(path.sep).join("/");
     for (const { rule, line } of violations(file)) {
       const key = `${rel}:${rule}`;
       hits.set(key, [...(hits.get(key) ?? []), line]);

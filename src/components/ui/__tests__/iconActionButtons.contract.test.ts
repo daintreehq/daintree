@@ -153,7 +153,7 @@ describe("close, dismiss and copy icon buttons", () => {
   for (const root of SCAN_ROOTS) {
     for (const file of walk(root)) {
       const hits = handRolled(file);
-      const rel = path.relative(REPO_ROOT, file);
+      const rel = path.relative(REPO_ROOT, file).split(path.sep).join("/");
       if (hits.length && !PRIMITIVES.has(rel)) found.set(rel, hits);
     }
   }
