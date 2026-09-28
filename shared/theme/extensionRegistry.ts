@@ -35,11 +35,12 @@ export interface ExtensionKeyMetadata {
 
 const OPTIONAL: ExtensionKeyMetadata = { required: false };
 
-// Optional, but a single colour: the value feeds color-mix() and colour-typed
-// custom properties, where a background shorthand would invalidate the rule.
+// Optional, but a single opaque colour: the value feeds color-mix(), scroll
+// fades and badge rings, and must stay solid when Reduce Transparency and
+// performance mode drop the material.
 const OPTIONAL_COLOR: ExtensionKeyMetadata = {
   required: false,
-  formatGuard: /^(#[0-9a-fA-F]{6}|rgba?\([^)]*\))$/,
+  formatGuard: /^#[0-9a-fA-F]{6}$/,
 };
 
 // Round-2 selection-direction flip (Issue 1): on LIGHT, the selected/hovered

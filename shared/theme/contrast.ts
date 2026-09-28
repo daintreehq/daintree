@@ -653,7 +653,8 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
   // Dark overlays paint the sidebar plane unless the theme lifts them with the
   // `overlay-surface-color` extension (the `.surface-overlay` rules in index.css).
   const plane = scheme.extensions?.["overlay-surface-color"] ?? scheme.tokens["surface-sidebar"];
-  if (!isHexColor(plane)) return null;
+  // An alpha hex would be scored as opaque; report it as unevaluable instead.
+  if (!isHexColor(plane) || splitHexAlpha(plane)) return null;
   // The solid plane stays in the running: performance mode and
   // `prefers-contrast: more` both drop the material and render it opaque.
   return [

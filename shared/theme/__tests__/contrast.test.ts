@@ -427,6 +427,19 @@ describe("getThemeContrastWarnings", () => {
     expect(surfacePair(lifted)).toBe(true);
   });
 
+  it("refuses to score a translucent overlay plane as if it were opaque", () => {
+    const flat = makeFlatDarkScheme({});
+    const translucent = {
+      ...flat,
+      extensions: { ...flat.extensions, "overlay-surface-color": "#3A3A3A80" },
+    };
+    expect(
+      getThemeContrastWarnings(translucent).some(
+        (w) => w.kind === "unevaluable" && w.message.includes("palette selection contrast")
+      )
+    ).toBe(true);
+  });
+
   it("fails an outline that clears the surrounding surface but not the row fill it touches", () => {
     // The row lifts towards the outline on dark, so the surface pair is the
     // permissive one — an outline can pass it while vanishing into the fill it
