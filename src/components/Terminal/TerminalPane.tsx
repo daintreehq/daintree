@@ -8,8 +8,9 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
-import { Settings, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
+import { AlertTriangle, Settings, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -1602,8 +1603,11 @@ function TerminalPaneComponent({
           ) : spawnStatus === "spawning" && !eagerAttach ? (
             <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
           ) : spawnStatus === "failed" ? (
-            <div className="flex-1 min-h-0 bg-surface-canvas flex items-center justify-center">
-              <p className="text-sm text-text-secondary">Terminal failed to start</p>
+            <div className="relative flex-1 min-h-0">
+              <PaneState
+                icon={<AlertTriangle className="text-status-warning" />}
+                title="Terminal failed to start"
+              />
             </div>
           ) : (
             <>
