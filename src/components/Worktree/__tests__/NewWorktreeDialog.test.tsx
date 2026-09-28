@@ -1541,7 +1541,7 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
     expect(baseBranchLabel()).toBe("develop (current)");
 
     const row = baseBranchOption(IN_USE_BRANCH);
-    expect(row.querySelector('[title^="In use by worktree:"]')).not.toBeNull();
+    expect(row.querySelector("[data-in-use]")).not.toBeNull();
 
     await act(async () => {
       fireEvent.click(row);
