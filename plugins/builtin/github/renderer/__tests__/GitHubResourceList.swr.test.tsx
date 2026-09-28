@@ -2991,7 +2991,7 @@ describe("GitHubResourceList polish (#7202)", () => {
     expect(sortButton.classList.contains("text-status-info")).toBe(false);
     expect(sortButton.className).not.toBe(defaultSortClass);
     // ...and the order itself is now stated, not implied.
-    expect(sortButton.getAttribute("title")).toMatch(/recently updated/i);
+    expect(sortButton.getAttribute("aria-label")).toMatch(/sorted by recently updated/i);
   });
 
   it("declares aria-multiselectable as a capability, not as current state", async () => {

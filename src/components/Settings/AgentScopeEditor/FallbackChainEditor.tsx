@@ -3,6 +3,9 @@ import { ArrowDown, ArrowUp, X as XIcon } from "lucide-react";
 import { FALLBACK_CHAIN_MAX } from "../../../../shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
 import { Button } from "@/components/ui/button";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   Select,
   SelectContent,
@@ -52,6 +55,8 @@ export function FallbackChainEditor({
           `[data-fallback-scope="${scopeId}"]${selector}`
         );
         if (el && !el.matches(":disabled")) {
+          // Keeping focus in the list is not asking for the next button's tooltip.
+          armTooltipFocusSuppression();
           el.focus();
           return;
         }
@@ -142,7 +147,9 @@ export function FallbackChainEditor({
                     <span className="text-xs text-text-secondary font-mono tabular-nums">
                       {idx + 1}.
                     </span>
-                    <span className="truncate">{name}</span>
+                    <TruncatedTooltip content={name}>
+                      <span className="truncate">{name}</span>
+                    </TruncatedTooltip>
                   </span>
                 }
                 description={missing ? "This preset no longer exists, so it is skipped" : undefined}
@@ -152,44 +159,56 @@ export function FallbackChainEditor({
                     {/* Reordering needs something to reorder against. */}
                     {chain.length > 1 && (
                       <>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          disabled={disabled || idx === 0}
-                          data-fallback-scope={scopeId}
-                          data-fallback-action={`${id}:up`}
-                          onClick={() => move(id, idx, idx - 1)}
-                          aria-label={`Move ${name} up`}
-                          title="Move up"
-                        >
-                          <ArrowUp aria-hidden="true" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          disabled={disabled || idx === chain.length - 1}
-                          data-fallback-scope={scopeId}
-                          data-fallback-action={`${id}:down`}
-                          onClick={() => move(id, idx, idx + 1)}
-                          aria-label={`Move ${name} down`}
-                          title="Move down"
-                        >
-                          <ArrowDown aria-hidden="true" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              disabled={disabled || idx === 0}
+                              data-fallback-scope={scopeId}
+                              data-fallback-action={`${id}:up`}
+                              onClick={() => move(id, idx, idx - 1)}
+                              aria-label={`Move ${name} up`}
+                            >
+                              <ArrowUp aria-hidden="true" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Move up</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              disabled={disabled || idx === chain.length - 1}
+                              data-fallback-scope={scopeId}
+                              data-fallback-action={`${id}:down`}
+                              onClick={() => move(id, idx, idx + 1)}
+                              aria-label={`Move ${name} down`}
+                            >
+                              <ArrowDown aria-hidden="true" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Move down</TooltipContent>
+                        </Tooltip>
                       </>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={disabled}
-                      data-fallback-scope={scopeId}
-                      data-fallback-action={`${id}:remove`}
-                      onClick={() => remove(id, idx)}
-                      aria-label={`Remove ${name} from fallback chain`}
-                      title="Remove"
-                    >
-                      <XIcon aria-hidden="true" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={disabled}
+                          data-fallback-scope={scopeId}
+                          data-fallback-action={`${id}:remove`}
+                          onClick={() => remove(id, idx)}
+                          aria-label={`Remove ${name} from fallback chain`}
+                        >
+                          <XIcon aria-hidden="true" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Remove</TooltipContent>
+                    </Tooltip>
                   </div>
                 )}
               />

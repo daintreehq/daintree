@@ -176,7 +176,7 @@ export function ErrorBanner({
         <TruncatedTooltip
           content={message}
           isTruncated={clamped || shown !== message}
-          contentClassName="max-w-md [overflow-wrap:anywhere]"
+          contentClassName="[overflow-wrap:anywhere]"
         >
           <span
             ref={messageRef}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Mic } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -245,6 +246,20 @@ export function VoiceInputButton({
 
   if (!isConfigured && !isActive) return null;
 
+  const tooltipText = !isConfigured
+    ? "Configure voice input"
+    : status === "error"
+      ? formatVoiceErrorTooltip(lastError)
+      : isFinishing
+        ? "Finishing transcription…"
+        : isPaused
+          ? "Paused — click to resume"
+          : isReconnecting
+            ? "Reconnecting… Click to stop"
+            : isListening
+              ? "Stop recording"
+              : "Start voice input";
+
   return (
     <div
       className="relative flex items-center"
@@ -311,71 +326,61 @@ export function VoiceInputButton({
           </div>
         </>
       )}
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={(disabled && !isActive) || isFinishing}
-        title={
-          !isConfigured
-            ? "Configure voice input"
-            : status === "error"
-              ? formatVoiceErrorTooltip(lastError)
-              : isFinishing
-                ? "Finishing transcription…"
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={handleClick}
+            disabled={(disabled && !isActive) || isFinishing}
+            className={cn(
+              "relative flex items-center justify-center rounded-full transition duration-150",
+              "h-6 w-6",
+              // The focus outline is inset because the wrapper above is
+              // `contain: strict`, which includes paint containment and clips
+              // descendants at its 24x24 box — and this button fills that box
+              // exactly, so an outward indicator is painted straight into the clip.
+              COMPOSER_CONTROL_FOCUS_CLASS,
+              showOrbit
+                ? "bg-[color-mix(in_oklab,var(--ib-fg)_12%,transparent)] text-[var(--ib-fg)] hover:bg-[color-mix(in_oklab,var(--ib-fg)_18%,transparent)]"
+                : status === "error"
+                  ? cn("text-activity-waiting", COMPOSER_CONTROL_HOVER_BG_CLASS)
+                  : cn(COMPOSER_CONTROL_TEXT_CLASS, COMPOSER_CONTROL_HOVER_BG_CLASS),
+              disabled && !isActive && "pointer-events-none opacity-40"
+            )}
+            aria-label={
+              !isConfigured
+                ? "Set up voice input"
                 : isPaused
-                  ? "Paused — click to resume"
-                  : isReconnecting
-                    ? "Reconnecting… Click to stop"
-                    : isListening
-                      ? "Stop recording"
-                      : "Start voice input"
-        }
-        className={cn(
-          "relative flex items-center justify-center rounded-full transition duration-150",
-          "h-6 w-6",
-          // The focus outline is inset because the wrapper above is
-          // `contain: strict`, which includes paint containment and clips
-          // descendants at its 24x24 box — and this button fills that box
-          // exactly, so an outward indicator is painted straight into the clip.
-          COMPOSER_CONTROL_FOCUS_CLASS,
-          showOrbit
-            ? "bg-[color-mix(in_oklab,var(--ib-fg)_12%,transparent)] text-[var(--ib-fg)] hover:bg-[color-mix(in_oklab,var(--ib-fg)_18%,transparent)]"
-            : status === "error"
-              ? cn("text-activity-waiting", COMPOSER_CONTROL_HOVER_BG_CLASS)
-              : cn(COMPOSER_CONTROL_TEXT_CLASS, COMPOSER_CONTROL_HOVER_BG_CLASS),
-          disabled && !isActive && "pointer-events-none opacity-40"
-        )}
-        aria-label={
-          !isConfigured
-            ? "Set up voice input"
-            : isPaused
-              ? "Resume voice recording"
-              : isListening
-                ? "Stop voice recording"
-                : "Start voice recording"
-        }
-        aria-pressed={isConfigured ? isListening || isPaused : undefined}
-      >
-        {isFinishing && !showOrbit ? (
-          <Spinner size="sm" />
-        ) : isPaused ? (
-          <span
-            ref={iconRef}
-            className="flex h-2.5 w-2.5 items-stretch justify-between"
-            aria-hidden="true"
+                  ? "Resume voice recording"
+                  : isListening
+                    ? "Stop voice recording"
+                    : "Start voice recording"
+            }
+            aria-pressed={isConfigured ? isListening || isPaused : undefined}
           >
-            <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
-            <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
-          </span>
-        ) : showOrbit ? (
-          <span
-            ref={iconRef}
-            className="status-mark block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
-          />
-        ) : (
-          <Mic className="h-3.5 w-3.5 relative" />
-        )}
-      </button>
+            {isFinishing && !showOrbit ? (
+              <Spinner size="sm" />
+            ) : isPaused ? (
+              <span
+                ref={iconRef}
+                className="flex h-2.5 w-2.5 items-stretch justify-between"
+                aria-hidden="true"
+              >
+                <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
+                <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
+              </span>
+            ) : showOrbit ? (
+              <span
+                ref={iconRef}
+                className="status-mark block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
+              />
+            ) : (
+              <Mic className="h-3.5 w-3.5 relative" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{tooltipText}</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

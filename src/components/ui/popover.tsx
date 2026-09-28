@@ -128,7 +128,10 @@ const PopoverTrigger = React.forwardRef<
 
     React.useLayoutEffect(() => {
       const node = triggerNodeRef.current;
-      if (node && node.getAttribute("data-state") !== "open") {
+      // `aria-expanded`, not `data-state`: a Tooltip sharing this trigger writes its
+      // own `data-state` over the popover's, which read as closed while the popover
+      // was open and stripped the attribute that names it.
+      if (node && node.getAttribute("aria-expanded") !== "true") {
         node.removeAttribute("aria-controls");
       }
     });

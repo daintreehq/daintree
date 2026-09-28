@@ -1345,6 +1345,16 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "fix auth tests"]);
     // Full titles reach the pointer through the app tooltip, never a native `title`.
     expect(tabs.some((t) => t.hasAttribute("title"))).toBe(false);
+    // The task title is what shows, not the lane number it replaced. Read without the
+    // tab's screen-reader state text, which is a description rather than the label.
+    const visible = (t: HTMLElement) => {
+      const copy = t.cloneNode(true);
+      if (!(copy instanceof HTMLElement)) throw new Error("tab did not clone");
+      copy.querySelectorAll(".sr-only").forEach((n) => n.remove());
+      return copy.textContent;
+    };
+    expect(visible(tabs[1]!)).toBe("fix auth tests");
+    expect(visible(tabs[0]!)).toBe("Session 1");
     expect(closeButtonFor(container, "fix auth tests")).toBeTruthy();
   });
 
@@ -1364,6 +1374,11 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(label.endsWith("…")).toBe(true);
     expect(Array.from(label).length).toBeLessThanOrEqual(28);
     expect(tab.hasAttribute("title")).toBe(false);
+    // Capped from the title's own opening, not replaced by something else.
+    expect(long.startsWith(label.slice(0, -1).trimEnd())).toBe(true);
+    // The whole title is the tab's name, and the tooltip that reveals it is driven off the
+    // label being capped — opened and read in HelpSessionTabs.test.tsx, since this suite
+    // stubs the tooltip primitives out.
     expect(tab.getAttribute("aria-label")).toBe(long);
   });
 

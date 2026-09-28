@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { isSecretEnvEntry, looksLikeSecret } from "@/utils/secretDetection";
 import { ImportEnvDialog } from "./ImportEnvDialog";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRowFocus } from "./useRowFocus";
 import { ENV_KEY_DUPLICATE_MESSAGE, ENV_KEY_INVALID_MESSAGE, isValidEnvKey } from "./EnvVarRow";
 import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
@@ -921,20 +922,30 @@ export function EnvVarEditor({
                     data-testid="env-editor-value"
                   />
                   {isSecret && (
-                    <button
-                      type="button"
-                      onClick={() => toggleReveal(row.rowId)}
-                      aria-pressed={isRevealed}
-                      aria-label={`${isRevealed ? "Hide" : "Show"} value${trimmedKey ? ` of ${trimmedKey}` : ""}`}
-                      className={cn(ENV_CELL_ACTION, "absolute right-1.5 top-1/2 -translate-y-1/2")}
-                      data-testid="env-editor-reveal"
-                    >
-                      {isRevealed ? (
-                        <EyeOff size={12} aria-hidden="true" />
-                      ) : (
-                        <Eye size={12} aria-hidden="true" />
-                      )}
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => toggleReveal(row.rowId)}
+                          aria-pressed={isRevealed}
+                          aria-label={`${isRevealed ? "Hide" : "Show"} value${trimmedKey ? ` of ${trimmedKey}` : ""}`}
+                          className={cn(
+                            ENV_CELL_ACTION,
+                            "absolute right-1.5 top-1/2 -translate-y-1/2"
+                          )}
+                          data-testid="env-editor-reveal"
+                        >
+                          {isRevealed ? (
+                            <EyeOff size={12} aria-hidden="true" />
+                          ) : (
+                            <Eye size={12} aria-hidden="true" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {isRevealed ? "Hide value" : "Show value"}
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                 </div>
                 {hasSecretWarning && (
@@ -962,40 +973,53 @@ export function EnvVarEditor({
               {/* Actions cell — remove / revert / override by row kind. */}
               <div className="flex items-start justify-center w-9 pt-1.5 border-l border-border-subtle">
                 {row.isInherited ? (
-                  <button
-                    type="button"
-                    className={ENV_CELL_ACTION}
-                    aria-label={`Override ${trimmedKey} in this preset`}
-                    onClick={() => handleOverride(row.rowId)}
-                    data-testid="env-editor-override"
-                    title="Override this inherited value"
-                  >
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className={ENV_CELL_ACTION}
+                        aria-label={`Override ${trimmedKey} in this preset`}
+                        onClick={() => handleOverride(row.rowId)}
+                        data-testid="env-editor-override"
+                      >
+                        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Override this inherited value</TooltipContent>
+                  </Tooltip>
                 ) : isOverride ? (
-                  <button
-                    type="button"
-                    className={ENV_CELL_ACTION}
-                    aria-label={`Revert ${trimmedKey} to inherited value`}
-                    onClick={() => handleRevert(row.rowId)}
-                    data-testid="env-editor-revert"
-                    title="Revert to inherited value"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className={ENV_CELL_ACTION}
+                        aria-label={`Revert ${trimmedKey} to inherited value`}
+                        onClick={() => handleRevert(row.rowId)}
+                        data-testid="env-editor-revert"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Revert to inherited value</TooltipContent>
+                  </Tooltip>
                 ) : (
-                  <button
-                    type="button"
-                    className={cn(
-                      ENV_CELL_ACTION,
-                      "text-status-error hover:text-status-error hover:bg-status-error/10"
-                    )}
-                    aria-label={`Delete ${trimmedKey || "unnamed variable"} (row ${rowIndex + 1})`}
-                    onClick={() => handleRemove(row.rowId)}
-                    data-testid="env-editor-remove"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className={cn(
+                          ENV_CELL_ACTION,
+                          "text-status-error hover:text-status-error hover:bg-status-error/10"
+                        )}
+                        aria-label={`Delete ${trimmedKey || "unnamed variable"} (row ${rowIndex + 1})`}
+                        onClick={() => handleRemove(row.rowId)}
+                        data-testid="env-editor-remove"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Delete variable</TooltipContent>
+                  </Tooltip>
                 )}
               </div>
             </div>

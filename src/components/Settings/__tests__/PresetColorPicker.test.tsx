@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render as rtlRender, fireEvent, act, type RenderOptions } from "@testing-library/react";
 import { contrastRatio } from "@shared/theme";
 import { PresetColorPicker } from "../PresetColorPicker";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 // Mirrors the curated PALETTE inside PresetColorPicker. Kept here so the
 // checkmark-contrast invariant below exercises every swatch.

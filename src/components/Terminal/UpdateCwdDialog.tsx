@@ -4,6 +4,8 @@ import { CircleAlert, FolderPen } from "lucide-react";
 import { basename, dirname, normalize } from "@shared/utils/path";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PathSegments } from "@/components/ui/PathSegments";
 import { FormGrid, FormRow } from "@/components/Worktree/views";
 import { BrowseSlotButton, SlottedInputField } from "@/components/Project/projectDialogFields";
@@ -285,17 +287,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-xs text-text-secondary">Use</span>
                       {shownSuggestions.map((path) => (
-                        <Button
-                          key={path}
-                          variant="subtle"
-                          size="xs"
-                          className="max-w-full font-mono"
-                          title={path}
-                          aria-label={`Use ${path}`}
-                          onClick={() => choosePath(path)}
-                        >
-                          <span className="truncate">{basename(path) || path}</span>
-                        </Button>
+                        <SuggestionChip key={path} path={path} onChoose={choosePath} />
                       ))}
                     </div>
                   )}
@@ -342,5 +334,30 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         }}
       />
     </AppDialog>
+  );
+}
+
+/**
+ * A suggested folder, named by its basename. The name is an abbreviation of the path —
+ * two suggestions can share it — so the full path is revealed whenever the chip shows
+ * less than the whole path, not only once the name itself clips.
+ */
+function SuggestionChip({ path, onChoose }: { path: string; onChoose: (path: string) => void }) {
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
+  const name = basename(path) || path;
+  return (
+    <TruncatedTooltip content={path} isTruncated={isNameTruncated || name !== path}>
+      <Button
+        variant="subtle"
+        size="xs"
+        className="max-w-full font-mono"
+        aria-label={`Use ${path}`}
+        onClick={() => onChoose(path)}
+      >
+        <span ref={nameRef} className="truncate">
+          {name}
+        </span>
+      </Button>
+    </TruncatedTooltip>
   );
 }

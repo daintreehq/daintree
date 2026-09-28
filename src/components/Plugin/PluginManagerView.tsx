@@ -37,6 +37,8 @@ import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager } from "./usePluginManager";
@@ -143,6 +145,7 @@ function PluginRow({
   highlighted,
 }: PluginRowProps) {
   const label = pluginLabel(plugin);
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
   const blocklisted = plugin.blocklisted === true;
   // The switch reflects the user's INTENT, which is the only thing it controls.
   // Whether the plugin actually runs is a separate fact and gets its own line —
@@ -167,44 +170,54 @@ function PluginRow({
         !selected && !highlighted && "hover:bg-overlay-subtle"
       )}
     >
-      <button
-        type="button"
-        aria-current={selected ? "true" : undefined}
-        onClick={onSelect}
-        title={`${label} v${plugin.manifest.version}`}
-        className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+      <TruncatedTooltip
+        content={`${label} v${plugin.manifest.version}`}
+        isTruncated={isNameTruncated}
       >
-        <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled || !healthy} />
-        <span className="min-w-0 flex-1">
-          <span
-            className={cn("block text-sm font-medium truncate", !enabled && "text-text-secondary")}
-          >
-            {label}
+        <button
+          type="button"
+          aria-current={selected ? "true" : undefined}
+          onClick={onSelect}
+          className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+        >
+          <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled || !healthy} />
+          <span className="min-w-0 flex-1">
+            <span
+              ref={nameRef}
+              className={cn(
+                "block text-sm font-medium truncate",
+                !enabled && "text-text-secondary"
+              )}
+            >
+              {label}
+            </span>
+            <span
+              data-testid="plugin-row-badges"
+              className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]"
+            >
+              {signal ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
+                    signal.tone
+                  )}
+                >
+                  <signal.icon className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{signal.label}</span>
+                </span>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
+                  {blurb}
+                </span>
+              )}
+              {plugin.devMode && <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>Dev</span>}
+              {!plugin.isBuiltin && (
+                <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>{sourceLabel}</span>
+              )}
+            </span>
           </span>
-          <span
-            data-testid="plugin-row-badges"
-            className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]"
-          >
-            {signal ? (
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
-                  signal.tone
-                )}
-              >
-                <signal.icon className="w-3 h-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{signal.label}</span>
-              </span>
-            ) : (
-              <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">{blurb}</span>
-            )}
-            {plugin.devMode && <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>Dev</span>}
-            {!plugin.isBuiltin && (
-              <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>{sourceLabel}</span>
-            )}
-          </span>
-        </span>
-      </button>
+        </button>
+      </TruncatedTooltip>
 
       <span className="shrink-0 pr-2.5">
         <SettingsSwitch

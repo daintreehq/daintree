@@ -1,11 +1,24 @@
 // @vitest-environment jsdom
-import { useState, type ReactElement } from "react";
-import { render as rtlRender, fireEvent } from "@testing-library/react";
+import { useState, type ReactElement, type ReactNode } from "react";
+import {
+  act,
+  render as rtlRender,
+  fireEvent,
+  screen,
+  type RenderOptions,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "../HelpSessionTabs";
 
-const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: InstantTooltips, ...options });
+}
+
+// No hover delay, so a tooltip opened by a pointer in a test is up by the next assertion.
+function InstantTooltips({ children }: { children: ReactNode }) {
+  return <TooltipProvider delayDuration={0}>{children}</TooltipProvider>;
+}
 
 /**
  * The session strip.
@@ -49,6 +62,14 @@ const closers = (container: HTMLElement) =>
 
 const tabs = (container: HTMLElement) =>
   Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+
+/** The close control inside the tab named `name`. */
+const closerFor = (container: HTMLElement, name: string) => {
+  const tab = tabs(container).find((t) => t.getAttribute("aria-label") === name);
+  return tab?.querySelector<HTMLButtonElement>("[data-document-tab-close]") ?? null;
+};
+
+const tooltipTexts = () => screen.queryAllByRole("tooltip").map((t) => t.textContent ?? "");
 
 describe("HelpSessionTabs", () => {
   it("marks exactly one tab, and it is the active slot's", () => {
@@ -516,7 +537,7 @@ describe("HelpSessionTabs", () => {
     expect(spans[0]!.textContent).toBe("fix auth tests");
   });
 
-  it("names a task-titled tab by its whole title everywhere but the visible label", () => {
+  it("names a task-titled tab by its whole title everywhere but the visible label", async () => {
     const { container } = renderStrip({
       tabs: [
         { slot: 0, label: "Session 1", agentState: undefined },
@@ -540,6 +561,25 @@ describe("HelpSessionTabs", () => {
     // `title`, which cannot be hovered, dismissed or styled.
     expect(container.querySelector("[title]")).toBeNull();
     expect(plain!.hasAttribute("title")).toBe(false);
+
+    // A `Session N` tooltip would only repeat the tab.
+    await act(async () => {
+      fireEvent.focus(plain!);
+    });
+    expect(tooltipTexts()).toEqual([]);
+    fireEvent.blur(plain!);
+
+    // The capped title reveals the whole of itself.
+    fireEvent.focus(titled!);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "refactor the assistant session strip"
+    );
+    fireEvent.blur(titled!);
+
+    // Its close control explains itself through the family's shared tooltip too.
+    const closer = closerFor(container, "refactor the assistant session strip")!;
+    fireEvent.pointerMove(closer, { pointerType: "mouse" });
+    expect(await screen.findByText("Close tab")).toBeTruthy();
   });
 
   it("states each selector's accessible name instead of deriving it from the split", () => {
@@ -565,7 +605,7 @@ describe("HelpSessionTabs", () => {
     expect(container.querySelector(`[id="${describedBy}"]`)!.textContent).toBe("working");
   });
 
-  it("keeps the new-session control present, focusable and explained once every lane is taken", () => {
+  it("keeps the new-session control present, focusable and explained once every lane is taken", async () => {
     // Parked rather than removed: a control that vanishes takes its own explanation with
     // it, and the strip's width budget stays constant either way. `aria-disabled` rather
     // than `disabled` is what keeps the explanation reachable — a disabled button leaves
@@ -577,6 +617,9 @@ describe("HelpSessionTabs", () => {
     expect(control.disabled).toBe(false);
     expect(control.getAttribute("aria-disabled")).toBe("true");
     expect(control.hasAttribute("title")).toBe(false);
+
+    fireEvent.focus(control);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("maximum");
 
     fireEvent.click(control);
     expect(onOpenSession).not.toHaveBeenCalled();
