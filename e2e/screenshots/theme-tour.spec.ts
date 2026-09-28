@@ -54,7 +54,14 @@ const COMPARE = process.env.DAINTREE_TOUR_COMPARE ?? "daintree";
 // same fixture, no reviewer — so an asynchronous review reads exactly what an
 // interactive one would have seen.
 const AUTO = process.env.DAINTREE_TOUR_AUTO === "1";
-const SHOT_DIR = path.resolve(process.cwd(), "artifacts", "theme-tour", THEME);
+// Reviews that keep their captures out of the working tree point this elsewhere.
+const SHOT_DIR = process.env.DAINTREE_TOUR_SHOT_DIR
+  ? path.resolve(process.env.DAINTREE_TOUR_SHOT_DIR)
+  : path.resolve(process.cwd(), "artifacts", "theme-tour", THEME);
+// Scenes that missed their surface, or captures that failed to write. An
+// unattended run fails on any of them rather than handing a reviewer a
+// directory that looks complete.
+const tourFailures: string[] = [];
 
 function git(cmd: string, cwd: string): void {
   execSync(`git ${cmd}`, { cwd, stdio: "ignore" });
@@ -214,6 +221,7 @@ interface TourScene extends TourSceneMeta {
 async function requireSurface(label: string, present: () => Promise<boolean>): Promise<boolean> {
   const ok = await present().catch(() => false);
   if (!ok) {
+    tourFailures.push(`${label}: surface not reached`);
     console.warn(
       `[tour] WARNING: "${label}" did not reach its surface — this capture does NOT show what its note claims. Do not review it.`
     );
@@ -828,7 +836,9 @@ test("theme tour — interactive", async () => {
         .catch(() => {});
       await page
         .screenshot({ path: file, type: "png", animations: "disabled", caret: "hide" })
-        .catch(() => {});
+        .catch((error) => {
+          tourFailures.push(`${scene.id}: capture failed — ${String(error).slice(0, 120)}`);
+        });
       await page
         .evaluate(() => {
           const el = document.getElementById("daintree-theme-tour");
@@ -846,6 +856,7 @@ test("theme tour — interactive", async () => {
       try {
         await scene.run(page);
       } catch (error) {
+        tourFailures.push(`${scene.id}: ${String(error).slice(0, 120)}`);
         console.warn(`[tour] scene "${scene.id}" failed:`, String(error).slice(0, 200));
       }
       await pushState("ready", false);
@@ -858,6 +869,9 @@ test("theme tour — interactive", async () => {
       // Unattended: walk every scene, capture each, exit. The agent scenes are
       // ordered so `working` runs before `waiting` and can hand off its panel.
       for (let i = 0; i < SCENES.length; i++) await runScene(i, true);
+      if (tourFailures.length > 0) {
+        throw new Error(`[tour] ${tourFailures.length} scene(s) unusable:\n${tourFailures.join("\n")}`);
+      }
       console.log(`\n[tour] captured ${SCENES.length} scenes to ${SHOT_DIR}\n`);
       return;
     }
