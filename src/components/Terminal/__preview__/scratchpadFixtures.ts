@@ -2,8 +2,8 @@ import type { TerminalScratchpad } from "@shared/types/panel";
 
 /**
  * Scratchpad states for the visual-review harness. Type-only imports: the
- * screenshot spec reads `SCRATCHPAD_FIXTURE_NAMES` under Playwright's Node
- * loader, where anything that reaches `import.meta.glob` fails.
+ * preview entry is the only consumer, but keeping this module free of runtime
+ * imports lets a spec read it under Playwright's Node loader.
  */
 export interface ScratchpadFixture {
   what: string;
@@ -50,6 +50,10 @@ export const SCRATCHPAD_FIXTURES = {
     scratchpad: { content: NOTES, collapsed: false, width: 420 },
     paneWidth: 980,
   },
+  full: {
+    what: "Notes close to the character limit, so the status bar counts them",
+    scratchpad: { content: `${NOTES}\n\n${"- ".padEnd(79, "·")}\n`.repeat(67), collapsed: false },
+  },
   collapsed: {
     what: "Hidden with notes in it — the header keeps the way back",
     scratchpad: { content: NOTES, collapsed: true },
@@ -57,8 +61,6 @@ export const SCRATCHPAD_FIXTURES = {
 } as const satisfies Record<string, ScratchpadFixture>;
 
 export type ScratchpadFixtureName = keyof typeof SCRATCHPAD_FIXTURES;
-
-export const SCRATCHPAD_FIXTURE_NAMES = Object.keys(SCRATCHPAD_FIXTURES) as ScratchpadFixtureName[];
 
 export function isScratchpadFixtureName(value: string): value is ScratchpadFixtureName {
   return value in SCRATCHPAD_FIXTURES;

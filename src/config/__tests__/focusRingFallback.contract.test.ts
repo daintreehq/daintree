@@ -552,6 +552,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   // wrapper's ring is the only focus indication. The scanner can't see the
   // sibling JSX parent, so these get per-occurrence allowlists.
   {
+    file: "src/components/Terminal/TerminalScratchpad.tsx",
+    fragment: "block min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-3 py-2",
+    reason:
+      "The Scratchpad editor is the column's whole body, so a ring on it would trace the pane's own edges; the caret plus the title bar lifting via group-has-[textarea:focus-visible] is its focus cue, and forced-colors mode restores the ring globally",
+  },
+  {
     file: "src/components/FileViewer/FileViewerModal.tsx",
     fragment:
       "w-44 bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden",

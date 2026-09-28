@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { PanelRightClose } from "lucide-react";
+import { NotebookPen } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -17,6 +18,7 @@ import {
   SCRATCHPAD_RESIZE_STEP_COARSE,
   clampScratchpadWidth,
   SCRATCHPAD_BOUNDARY_ATTR,
+  SCRATCHPAD_COUNT_THRESHOLD,
 } from "@/lib/terminalScratchpad";
 
 interface TerminalScratchpadProps {
@@ -40,6 +42,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
   const setScratchpadWidth = usePanelStore((state) => state.setScratchpadWidth);
   const collapseScratchpad = usePanelStore((state) => state.collapseScratchpad);
 
+  const columnId = useId();
   const editorId = useId();
   const hintId = useId();
   const [dragWidth, setDragWidth] = useState<number | null>(null);
@@ -67,8 +70,26 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
+  // The half-pane cap, tracked so the separator announces the width actually
+  // on screen and the range a drag can actually reach.
+  const [paneCap, setPaneCap] = useState<number | null>(null);
+  const isOpen = scratchpad !== undefined && !scratchpad.collapsed;
+  useEffect(() => {
+    const pane = columnRef.current?.parentElement;
+    if (!isOpen || !pane || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const paneWidth = entry?.contentRect.width ?? 0;
+      setPaneCap(paneWidth > 0 ? Math.floor(paneWidth / 2) : null);
+    });
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [isOpen]);
+
   const committedWidth = scratchpad?.width ?? SCRATCHPAD_DEFAULT_WIDTH;
   const width = dragWidth ?? committedWidth;
+  const reachableMax = Math.min(SCRATCHPAD_MAX_WIDTH, paneCap ?? Infinity);
+  const reachableMin = Math.min(SCRATCHPAD_MIN_WIDTH, reachableMax);
+  const shownWidth = Math.round(Math.min(width, reachableMax));
 
   // The column is capped at half the pane, so a resize works from the width
   // actually on screen and never asks for more than the pane can show —
@@ -168,13 +189,16 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
   // control, without them there is nothing left to bring back.
   const hideLabel = "Hide scratchpad";
 
+  const nearLimit = scratchpad.content.length >= SCRATCHPAD_COUNT_THRESHOLD;
+
   return (
     <aside
       ref={columnRef}
+      id={columnId}
       {...{ [SCRATCHPAD_BOUNDARY_ATTR]: terminalId }}
       aria-label="Scratchpad"
       data-testid="terminal-scratchpad"
-      className="relative flex min-h-0 shrink-0 flex-col border-l border-border-default bg-surface-panel"
+      className="group/scratchpad relative flex min-h-0 shrink-0 flex-col border-l border-divider bg-surface-panel"
       // Capped at half the pane so the terminal always keeps the larger share.
       style={{ width, maxWidth: "50%" }}
     >
@@ -182,47 +206,60 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
         role="separator"
         aria-label="Resize scratchpad"
         aria-orientation="vertical"
-        aria-controls={editorId}
-        aria-valuenow={Math.round(width)}
-        aria-valuemin={SCRATCHPAD_MIN_WIDTH}
-        aria-valuemax={SCRATCHPAD_MAX_WIDTH}
+        aria-controls={columnId}
+        aria-valuenow={shownWidth}
+        aria-valuemin={reachableMin}
+        aria-valuemax={reachableMax}
+        aria-valuetext={`${shownWidth} pixels wide`}
         tabIndex={0}
         data-testid="terminal-scratchpad-resize"
         className={cn(
           "group absolute -left-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
-          "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+          "transition-colors outline-hidden focus-visible:bg-overlay-soft",
           // Hover styling is off while resizing, or it outranks the drag state.
-          isDragging ? "bg-overlay-medium" : "hover:bg-overlay-soft"
+          isDragging ? "bg-overlay-soft" : "hover:bg-overlay-subtle"
         )}
         onMouseDown={handleResizeStart}
         onDoubleClick={() => setScratchpadWidth(terminalId, SCRATCHPAD_DEFAULT_WIDTH)}
         onKeyDown={handleResizeKeyDown}
       >
+        {/* The grip is the separator's focus mark: a short solid bar at the
+            edge rather than a ring drawn down the whole height of the pane. */}
         <div
           className={cn(
-            "h-8 rounded-full transition-[width] delay-100 duration-150",
+            "rounded-full transition-[width,height,background-color] duration-150 ease-out",
             isDragging
-              ? "w-0.5 bg-text-primary/50"
-              : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
+              ? "h-8 w-0.5 bg-text-secondary"
+              : "h-8 w-px bg-border-strong group-hover:w-0.5 group-hover:bg-text-secondary group-focus-visible:h-10 group-focus-visible:w-1 group-focus-visible:bg-text-primary"
           )}
         />
       </div>
 
-      <div className="flex shrink-0 items-start gap-2 px-3 pt-2 pb-1.5">
-        <div className="min-w-0 flex-1">
-          <label htmlFor={editorId} className="block text-xs font-medium text-text-primary">
-            Scratchpad
-          </label>
-          <p id={hintId} className="text-xs text-text-secondary">
-            Deleted with this terminal
-          </p>
-        </div>
+      {/* The title bar lifts while the notes are being written — the caret
+          plus this lift is the editor's focus cue, in place of a ring. */}
+      <SurfaceHeader
+        density="compact"
+        className={cn(
+          "gap-2 bg-overlay-subtle transition-colors duration-150 ease-out",
+          "group-has-[textarea:focus-visible]/scratchpad:border-border-strong group-has-[textarea:focus-visible]/scratchpad:bg-overlay-medium"
+        )}
+      >
+        <label
+          htmlFor={editorId}
+          className={cn(
+            "flex min-w-0 items-center gap-1.5 text-xs font-medium text-text-secondary transition-colors duration-150 ease-out",
+            "group-has-[textarea:focus-visible]/scratchpad:text-text-primary"
+          )}
+        >
+          <NotebookPen aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="truncate">Scratchpad</span>
+        </label>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="ghost"
               size="icon-xs"
-              className="-mr-1 [&_svg]:size-3.5"
+              className="-mr-1.5 [&_svg]:size-3.5"
               aria-label={hideLabel}
               data-testid="terminal-scratchpad-collapse"
               onClick={(e) => {
@@ -235,28 +272,40 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
           </TooltipTrigger>
           <TooltipContent side="bottom">{hideLabel}</TooltipContent>
         </Tooltip>
-      </div>
+      </SurfaceHeader>
 
-      <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
-        <Textarea
-          id={editorId}
-          aria-describedby={hintId}
-          variant="code"
-          density="compact"
-          resize="none"
-          spellCheck={false}
-          maxLength={SCRATCHPAD_MAX_CHARS}
-          placeholder={
-            "A command to run next, something to check when it finishes…\n\nMarkdown works here."
-          }
-          className="min-h-0 flex-1 leading-5"
-          value={scratchpad.content}
-          onChange={(e) => setScratchpadContent(terminalId, e.target.value)}
-          // The save is debounced; leaving the editor is a natural point to
-          // write the last keystrokes out rather than wait on the timer.
-          onBlur={() => flushPanelPersistence()}
-          data-testid="terminal-scratchpad-editor"
-        />
+      <textarea
+        id={editorId}
+        aria-describedby={hintId}
+        spellCheck={false}
+        maxLength={SCRATCHPAD_MAX_CHARS}
+        placeholder="Write a note…"
+        className={cn(
+          "block min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-3 py-2",
+          "font-mono text-xs leading-5 text-text-primary placeholder:text-text-secondary",
+          // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the title bar lifts via group-has-[textarea:focus-visible]; a ring here would trace the pane's own edges
+          "outline-hidden"
+        )}
+        value={scratchpad.content}
+        onChange={(e) => setScratchpadContent(terminalId, e.target.value)}
+        // The save is debounced; leaving the editor is a natural point to
+        // write the last keystrokes out rather than wait on the timer.
+        onBlur={() => flushPanelPersistence()}
+        data-testid="terminal-scratchpad-editor"
+      />
+
+      <div
+        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-divider px-3 text-2xs text-text-secondary"
+        data-testid="terminal-scratchpad-status"
+      >
+        <span id={hintId} className="truncate">
+          Deleted with this terminal
+        </span>
+        {nearLimit && (
+          <span className="shrink-0 tabular-nums" data-testid="terminal-scratchpad-count">
+            {scratchpad.content.length.toLocaleString()} / {SCRATCHPAD_MAX_CHARS.toLocaleString()}
+          </span>
+        )}
       </div>
     </aside>
   );

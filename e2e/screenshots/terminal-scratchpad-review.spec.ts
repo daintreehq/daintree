@@ -49,6 +49,7 @@ const DEFAULT_THEME_ONLY: Shot[] = [
   { fixture: "long", interaction: "editing" },
   { fixture: "narrow", interaction: "rest" },
   { fixture: "wide", interaction: "rest" },
+  { fixture: "full", interaction: "rest" },
   { fixture: "collapsed", interaction: "rest" },
   { fixture: "notes", interaction: "resize-hover" },
   { fixture: "notes", interaction: "resize-focus" },
@@ -84,7 +85,9 @@ test.afterAll(async () => {
 async function capture(page: Page, shot: Shot, theme: string): Promise<string> {
   await stubViteHmrClient(page);
   await page.setViewportSize({ width: 1040, height: 640 });
-  await page.goto(`${baseURL}/terminal-scratchpad-preview.html?theme=${theme}&fixture=${shot.fixture}`);
+  await page.goto(
+    `${baseURL}/terminal-scratchpad-preview.html?theme=${theme}&fixture=${shot.fixture}`
+  );
   const pane = page.locator(`[data-preview-pane="${shot.fixture}"]`);
   await expect(pane, `fixture "${shot.fixture}" rendered no pane`).toBeVisible();
 
@@ -121,7 +124,9 @@ async function capture(page: Page, shot: Shot, theme: string): Promise<string> {
 
   const box = await pane.boundingBox();
   if (!box || box.width < 100 || box.height < 100) {
-    throw new Error(`${shot.fixture}-${shot.interaction}-${theme}: no real box — refusing to write`);
+    throw new Error(
+      `${shot.fixture}-${shot.interaction}-${theme}: no real box — refusing to write`
+    );
   }
   const out = path.join(OUT_DIR, `${shot.fixture}-${shot.interaction}-${theme}.png`);
   await pane.screenshot({ path: out });

@@ -12,6 +12,12 @@ export const SCRATCHPAD_RESIZE_STEP_COARSE = 50;
  * anything that would make that save noticeable.
  */
 export const SCRATCHPAD_MAX_CHARS = 20_000;
+/**
+ * The status bar shows a character count only from here: the limit silently
+ * stops typing, so the count is worth its space once the notes near it and is
+ * noise before then.
+ */
+export const SCRATCHPAD_COUNT_THRESHOLD = 18_000;
 
 /** Folds non-finite input back to the default, or it survives as an invalid inline width. */
 export function clampScratchpadWidth(width: number): number {
