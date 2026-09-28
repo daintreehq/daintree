@@ -75,49 +75,56 @@ export function registerWorktreeServiceActions(
     keywords: ["sync", "reload", "update", "sidebar"],
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
-      const [refreshResult] = await Promise.allSettled([
-        window.electron.worktreePort.request("refresh"),
-        worktreeClient.refreshPullRequests(),
-      ]);
-      // Two failure modes the user can't otherwise see, both surfaced (the old
-      // allSettled swallowed them, which is why a wedged host looked like a dead
-      // Refresh button): a rejection means the host isn't responding at all
-      // (transport timeout / exit); an ok:false result means the host's own
-      // refresh watchdog tripped. The Refresh button is itself the retry
-      // surface, so no action button.
-      const fallback = "The worktree host isn't responding. Try again in a moment.";
-      let failureMessage: string | null = null;
-      if (refreshResult.status === "rejected") {
-        const reason: unknown = refreshResult.reason;
-        // Decoding also strips the `[BrokerError|<code>]` transport prefix from
-        // the message, so it never reaches the toast. A port that isn't attached
-        // yet (or is mid-replacement, or the app is quitting) isn't a failure the
-        // user can act on — a dead host has its own reconnect and restart
-        // surfaces. Toasting it made a successful forge token save read as an
-        // error (#12759).
-        if (
-          isClientBrokerError(reason) &&
-          (reason.code === "HOST_EXITED" || reason.code === "APP_SHUTDOWN")
-        ) {
-          logWarn("Worktree refresh deferred: port unavailable", {
-            code: reason.code,
-            reason: reason.message,
-          });
-          if (reason.code === "HOST_EXITED") refreshWhenPortReady();
-          return;
+      // The settled event pairs with the one above so the sidebar can show a
+      // refresh started from the palette, a shortcut or a context menu, not
+      // only one started from its own button.
+      try {
+        const [refreshResult] = await Promise.allSettled([
+          window.electron.worktreePort.request("refresh"),
+          worktreeClient.refreshPullRequests(),
+        ]);
+        // Two failure modes the user can't otherwise see, both surfaced (the old
+        // allSettled swallowed them, which is why a wedged host looked like a dead
+        // Refresh button): a rejection means the host isn't responding at all
+        // (transport timeout / exit); an ok:false result means the host's own
+        // refresh watchdog tripped. The Refresh button is itself the retry
+        // surface, so no action button.
+        const fallback = "The worktree host isn't responding. Try again in a moment.";
+        let failureMessage: string | null = null;
+        if (refreshResult.status === "rejected") {
+          const reason: unknown = refreshResult.reason;
+          // Decoding also strips the `[BrokerError|<code>]` transport prefix from
+          // the message, so it never reaches the toast. A port that isn't attached
+          // yet (or is mid-replacement, or the app is quitting) isn't a failure the
+          // user can act on — a dead host has its own reconnect and restart
+          // surfaces. Toasting it made a successful forge token save read as an
+          // error (#12759).
+          if (
+            isClientBrokerError(reason) &&
+            (reason.code === "HOST_EXITED" || reason.code === "APP_SHUTDOWN")
+          ) {
+            logWarn("Worktree refresh deferred: port unavailable", {
+              code: reason.code,
+              reason: reason.message,
+            });
+            if (reason.code === "HOST_EXITED") refreshWhenPortReady();
+            return;
+          }
+          failureMessage = formatErrorMessage(reason, fallback);
+        } else if (refreshResult.value.ok === false) {
+          failureMessage = refreshResult.value.error ?? fallback;
         }
-        failureMessage = formatErrorMessage(reason, fallback);
-      } else if (refreshResult.value.ok === false) {
-        failureMessage = refreshResult.value.error ?? fallback;
-      }
-      if (failureMessage !== null) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Refresh failed",
-          message: failureMessage,
-          duration: 5000,
-        });
+        if (failureMessage !== null) {
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "error",
+            title: "Refresh failed",
+            message: failureMessage,
+            duration: 5000,
+          });
+        }
+      } finally {
+        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar-settled"));
       }
     },
   }));

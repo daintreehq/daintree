@@ -83,6 +83,35 @@ describe("worktree service action definitions", () => {
     expect(registry.has("worktree.reconcileTopology")).toBe(true);
   });
 
+  it.each([
+    ["succeeds", () => mockRequest.mockResolvedValueOnce({ ok: true })],
+    ["fails", () => mockRequest.mockRejectedValueOnce(new Error("Worktree port timed out"))],
+    [
+      "defers on a missing port",
+      () => mockRequest.mockRejectedValueOnce(new Error("[BrokerError|HOST_EXITED] not ready")),
+    ],
+  ])(
+    "worktree.refresh settles every refresh it starts when the host %s",
+    async (_label, arrange) => {
+      // The sidebar counts in-flight refreshes off this pair, so a start with no
+      // settle would leave its refresh icon spinning for good.
+      arrange();
+      const events: string[] = [];
+      const record = (e: Event) => events.push(e.type);
+      window.addEventListener("daintree:refresh-sidebar", record);
+      window.addEventListener("daintree:refresh-sidebar-settled", record);
+      try {
+        const run = runRefresh();
+        expect(events).toEqual(["daintree:refresh-sidebar"]);
+        await run;
+        expect(events).toEqual(["daintree:refresh-sidebar", "daintree:refresh-sidebar-settled"]);
+      } finally {
+        window.removeEventListener("daintree:refresh-sidebar", record);
+        window.removeEventListener("daintree:refresh-sidebar-settled", record);
+      }
+    }
+  );
+
   it("worktree.refresh requests a host refresh and does not notify on success", async () => {
     const def = registry.get("worktree.refresh")!();
     await def.run!(undefined as never, undefined as never);

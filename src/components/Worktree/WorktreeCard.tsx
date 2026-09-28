@@ -108,6 +108,8 @@ export interface WorktreeCardProps {
   dragHandleActivatorRef?: (node: HTMLElement | null) => void;
   isDraggingSort?: boolean;
   isDragHandleDisabled?: boolean;
+  /** Why the grip is disabled, shown as its tooltip. */
+  dragDisabledReason?: string | null;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   canMoveUp?: boolean;
@@ -141,6 +143,7 @@ export function WorktreeCard({
   dragHandleActivatorRef,
   isDraggingSort,
   isDragHandleDisabled = false,
+  dragDisabledReason,
   onMoveUp,
   onMoveDown,
   canMoveUp,
@@ -1224,7 +1227,7 @@ export function WorktreeCard({
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="left" className="text-xs">
-                    Manual reorder paused while filter is active
+                    {dragDisabledReason ?? "Drag to reorder is off"}
                   </TooltipContent>
                 </Tooltip>
               ) : (

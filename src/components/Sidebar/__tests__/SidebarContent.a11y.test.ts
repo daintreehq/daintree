@@ -82,12 +82,14 @@ describe("SidebarContent accessibility — issue #9662", () => {
       expect(button).not.toMatch(/[^-]disabled=\{/);
     });
 
-    it("uses aria-disabled: Tailwind variants for the disabled styling", () => {
+    it("styles the busy state with aria-disabled: variants but never dims it", () => {
+      // Busy, not unavailable (see ARIA_DISABLED_CLASSES): the spinner is the
+      // only sign a refresh is running, so fading the button fades the signal.
       const refreshButton = source.match(
         /<(?:button|Button)[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
       );
       const button = refreshButton![0];
-      expect(button).toMatch(/aria-disabled:opacity-\d+/);
+      expect(button).not.toMatch(/aria-disabled:opacity-/);
       expect(button).toMatch(/aria-disabled:cursor-not-allowed/);
       expect(button).not.toMatch(/[^-]disabled:opacity-\d+/);
     });

@@ -72,6 +72,22 @@ describe("SpinningIcon", () => {
     expect(isSpinning(container)).toBe(false);
   });
 
+  it("marks itself data-spinning for exactly as long as it turns", () => {
+    // Containers key their visibility off this, so it must outlast `active`
+    // through the finishing rotation and clear with the class, not before.
+    const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={false} />);
+    const spinner = spinnerOf(container);
+    expect(spinner.hasAttribute("data-spinning")).toBe(false);
+    rerender(<SpinningIcon icon={RefreshCw} active={true} />);
+    expect(spinner.hasAttribute("data-spinning")).toBe(true);
+    rerender(<SpinningIcon icon={RefreshCw} active={false} />);
+    expect(spinner.hasAttribute("data-spinning")).toBe(isSpinning(container));
+    expect(spinner.hasAttribute("data-spinning")).toBe(true);
+    fireIteration(spinner);
+    expect(spinner.hasAttribute("data-spinning")).toBe(isSpinning(container));
+    expect(spinner.hasAttribute("data-spinning")).toBe(false);
+  });
+
   it("guarantees a rotation even when the active window is a single commit", () => {
     // Models an instant refresh: active is observably true for exactly one
     // render before flipping false. The spin must still hold until a boundary.
