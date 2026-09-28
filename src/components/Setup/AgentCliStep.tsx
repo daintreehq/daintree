@@ -358,7 +358,7 @@ export function AgentCliStep({
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
