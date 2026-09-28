@@ -48,7 +48,7 @@ export function BaseBranchFileRow({
           type="button"
           onClick={onClick}
           className={cn(
-            "relative flex min-w-0 flex-1 items-baseline rounded text-left",
+            "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded px-1 text-left",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
           )}
         >
