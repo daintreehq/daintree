@@ -49,7 +49,11 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,svalbard")
 const VIEWPORT = { width: 1720, height: 1000 };
 const CLIP_PAD = 12;
 
-type PageMode = "grid" | "plugin-manager";
+const PAGE_MODES = ["grid", "plugin-manager", "update-cwd", "update-cwd-long"] as const;
+type PageMode = (typeof PAGE_MODES)[number];
+
+/** Pages whose surface is a modal dialog: the frame is the dialog, not a cell. */
+const DIALOG_PAGES: readonly PageMode[] = ["update-cwd", "update-cwd-long"];
 
 interface TriggerDef {
   cell: string;
@@ -103,6 +107,8 @@ const TRIGGERS: TriggerDef[] = [
     kbd: true,
   },
   { cell: "env-vars", trigger: "revert", selector: 'button[aria-label^="Revert "]' },
+  { cell: "env-vars", trigger: "delete", selector: '[data-testid="env-editor-remove"]' },
+  { cell: "env-vars", trigger: "reveal", selector: '[data-testid="env-editor-reveal"]' },
   { cell: "preset-chrome", trigger: "rename", selector: 'button[aria-label^="Edit "]' },
   { cell: "fallback-chain", trigger: "move-up", selector: '[data-fallback-action="p-mid:up"]' },
   {
@@ -170,6 +176,40 @@ const TRIGGERS: TriggerDef[] = [
     trigger: "swatch-blue",
     selector: 'button[aria-label="Set project color to Blue"]',
     region: "around",
+  },
+  {
+    cell: "project-swatches",
+    trigger: "emoji",
+    selector: 'button[aria-label="Change project emoji"]',
+    region: "around",
+  },
+  {
+    cell: "project-swatches",
+    trigger: "custom-color",
+    selector: 'input[aria-label="Pick a custom color"]',
+    region: "around",
+  },
+  { cell: "github-list", trigger: "refresh", selector: 'button[aria-label^="Refresh"]' },
+  { cell: "github-list", trigger: "sort", selector: 'button[aria-label^="Sort"]', kbd: true },
+  { cell: "github-list", trigger: "select", selector: 'button[aria-label^="Select"]' },
+  {
+    cell: "update-cwd",
+    trigger: "app-first",
+    selector: 'button[aria-label^="Use "]',
+    page: "update-cwd",
+  },
+  {
+    cell: "update-cwd",
+    trigger: "app-second",
+    selector: 'button[aria-label="Use /Users/greg/worktrees/app"]',
+    page: "update-cwd",
+  },
+  {
+    cell: "update-cwd",
+    trigger: "long-chip",
+    selector: 'button[aria-label^="Use /Users/greg/worktrees/"]',
+    page: "update-cwd-long",
+    kbd: true,
   },
   {
     cell: "plugin-manager",
@@ -351,6 +391,14 @@ async function open(page: Page, theme: string, mode: PageMode): Promise<void> {
     await expect(page.locator('[role="toolbar"][aria-label="Main toolbar"]')).toBeVisible({
       timeout: 15_000,
     });
+    await expect(
+      page.locator('[data-shot="github-list"] button[aria-label^="Select"]:enabled')
+    ).toBeVisible({ timeout: 15_000 });
+  } else if (DIALOG_PAGES.includes(mode)) {
+    // Both suggestions are confirmed asynchronously after the dialog opens.
+    await expect(page.locator('[role="dialog"] button[aria-label^="Use "]')).toHaveCount(2, {
+      timeout: 15_000,
+    });
   } else {
     await expect(page.locator("li button.row-select-target").first()).toBeVisible({
       timeout: 15_000,
@@ -378,7 +426,9 @@ async function reset(page: Page): Promise<void> {
 }
 
 function cellLocator(page: Page, def: TriggerDef): Locator {
-  return def.page === "plugin-manager"
+  const pageMode = def.page ?? "grid";
+  if (DIALOG_PAGES.includes(pageMode)) return page.locator('[role="dialog"]');
+  return pageMode === "plugin-manager"
     ? page.locator("body")
     : page.locator(`[data-shot="${def.cell}"]`);
 }
@@ -716,7 +766,7 @@ test("Tooltip consistency — every trigger, hover and keyboard", async ({ page 
   const written: string[] = [];
 
   for (const theme of THEMES) {
-    for (const pageMode of ["grid", "plugin-manager"] as const) {
+    for (const pageMode of PAGE_MODES) {
       await open(page, theme, pageMode);
       if (pageMode === "grid") {
         const file = `overview-${theme}.png`;

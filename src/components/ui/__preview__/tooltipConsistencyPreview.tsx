@@ -1,7 +1,15 @@
 // First, so the bridge shim (with the toolbar's project / MCP / onboarding answers)
 // and the platform override exist before any store module evaluates.
 import { PREVIEW_PROJECT } from "@/components/Layout/__preview__/toolbarShims";
-import { StrictMode, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  StrictMode,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { PanelLeft, Pin, RefreshCw, X } from "lucide-react";
 import { resolveAppTheme } from "@shared/theme/themes";
@@ -12,6 +20,7 @@ import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { DaintreeMcpTier, Project, ProjectSettings } from "@shared/types/project";
 import type { LoadedPluginInfo, ProjectPluginInfo } from "@shared/types/plugin";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
+import type { Issue, Page } from "@shared/types/forge";
 import type { AgentPreset } from "@/config/agents";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { initBuiltInPanelKinds } from "@/panels/registry";
@@ -57,6 +66,7 @@ import { HostMemoryPauseIndicator } from "@/components/Layout/HostMemoryPauseInd
 import { VoiceRecordingToolbarButton } from "@/components/Layout/VoiceRecordingToolbarButton";
 import { TrashContainer } from "@/components/Layout/TrashContainer";
 import { Toolbar } from "@/components/Layout/Toolbar";
+import { UpdateCwdDialog } from "@/components/Terminal/UpdateCwdDialog";
 import "@/index.css";
 
 /**
@@ -76,13 +86,21 @@ import "@/index.css";
  *
  * Query parameters:
  *   ?theme=<built-in theme id>
- *   ?mode=grid|plugin-manager   the plugin manager is a full-window portal, so it
- *                               gets a page of its own
+ *   ?mode=grid|plugin-manager|update-cwd|update-cwd-long
+ *                               the plugin manager and the change-directory dialog
+ *                               are full-window portals, so each gets a page of its
+ *                               own. The dialog's suggestions come from the project
+ *                               root plus the nearest surviving ancestor, so it can
+ *                               only ever show two chips: `update-cwd` makes them
+ *                               share a basename, `update-cwd-long` makes one clip.
  */
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
-const mode = params.get("mode") === "plugin-manager" ? "plugin-manager" : "grid";
+const PAGE_MODES = ["grid", "plugin-manager", "update-cwd", "update-cwd-long"] as const;
+type PageMode = (typeof PAGE_MODES)[number];
+const mode: PageMode = PAGE_MODES.find((m) => m === params.get("mode")) ?? "grid";
+const isCwdMode = mode === "update-cwd" || mode === "update-cwd-long";
 
 const NOW = Date.now();
 
@@ -94,6 +112,58 @@ const PROJECT: Project = {
   name: "helios-analytics-dashboard-platform",
   emoji: "☀️",
 };
+
+/** The change-directory pages' project, whose root is one of the suggestions. */
+const CWD_PROJECT_ROOT = "/Users/greg/repos/app";
+const CWD_LONG_BASENAME =
+  "helios-analytics-dashboard-platform-issue-12383-menu-rows-show-keyboard-focus-ring";
+const CWD_FIXTURE =
+  mode === "update-cwd-long"
+    ? {
+        missing: `/Users/greg/worktrees/${CWD_LONG_BASENAME}/packages/ingest`,
+        existing: [CWD_PROJECT_ROOT, `/Users/greg/worktrees/${CWD_LONG_BASENAME}`],
+      }
+    : {
+        missing: "/Users/greg/worktrees/app/packages/ingest",
+        existing: [CWD_PROJECT_ROOT, "/Users/greg/worktrees/app"],
+      };
+const ACTIVE_PROJECT: Project = isCwdMode
+  ? { ...PROJECT, path: CWD_PROJECT_ROOT, name: "app" }
+  : PROJECT;
+
+function issue(number: number, title: string, extra: Partial<Issue> = {}): Issue {
+  return {
+    number,
+    title,
+    body: "",
+    state: "open",
+    rawState: "OPEN",
+    url: `https://github.com/acme/helios/issues/${number}`,
+    author: { login: "gpriday", rawData: null },
+    assignees: [],
+    labels: [],
+    commentCount: 0,
+    createdAt: NOW - number * 3_600_000,
+    updatedAt: NOW - number * 600_000,
+    closedAt: null,
+    rawData: null,
+    ...extra,
+  };
+}
+
+const ISSUES: Issue[] = [
+  issue(12383, "Menu rows show a keyboard focus ring on mouse hover", {
+    labels: [{ name: "bug", color: "d73a4a" }],
+    commentCount: 4,
+  }),
+  issue(12377, "Worktree sidebar rail overflows at narrow widths"),
+  issue(12371, "Import budget ratchet double-counts type-only imports", {
+    labels: [{ name: "tooling", color: "0e8a16" }],
+  }),
+  issue(12366, "Dev preview console loses scroll position after a reload"),
+];
+
+const ISSUE_PAGE: Page<Issue> = { items: ISSUES, nextCursor: null, hasMore: false };
 
 const DEV_SESSIONS: DevPreviewSessionState[] = [
   {
@@ -212,6 +282,19 @@ const PROJECT_PLUGINS: ProjectPluginInfo[] = [
   },
 ];
 
+/** Like `namespace`, but unanswered names fall through to the shim's own answer. */
+function layered(name: string, answers: Record<string, unknown>): unknown {
+  const base: unknown = Reflect.get(baseBridge, name);
+  return new Proxy(answers, {
+    get: (target, key) =>
+      key in target
+        ? Reflect.get(target, key)
+        : base && typeof base === "object"
+          ? Reflect.get(base, key)
+          : () => inert(),
+  });
+}
+
 /** A thenable function: awaitable as a request, callable as an unsubscribe. */
 function inert(value?: unknown): unknown {
   const settled = Promise.resolve(value);
@@ -240,9 +323,19 @@ const OVERRIDES: Record<string, unknown> = {
     list: () => Promise.resolve(PLUGINS),
   }),
   project: namespace({
-    getAll: async () => [PROJECT],
-    getCurrent: async () => PROJECT,
+    getAll: async () => [ACTIVE_PROJECT],
+    getCurrent: async () => ACTIVE_PROJECT,
     onSwitch: () => () => {},
+  }),
+  // The GitHub list self-initializes its token state, then fetches its first page.
+  forge: layered("forge", {
+    getCredentialStatus: async () => ({ hasCredential: true }),
+    listIssues: async () => ISSUE_PAGE,
+    getIssueUrl: async () => "https://github.com/acme/helios/issues/1",
+  }),
+  // The change-directory dialog's suggestions are the folders this confirms.
+  system: layered("system", {
+    checkDirectory: async (dir: string) => CWD_FIXTURE.existing.includes(dir),
   }),
 };
 Reflect.set(
@@ -363,7 +456,7 @@ function seedStores(): void {
   worktreeStore.setState({ worktrees: new Map(WORKTREES.map((w) => [w.id, w])) });
   setCurrentViewStore(worktreeStore);
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-main" });
-  useProjectStore.setState({ currentProject: PROJECT });
+  useProjectStore.setState({ currentProject: ACTIVE_PROJECT });
 
   const availability: Record<string, AgentAvailabilityState> = {
     claude: "ready",
@@ -538,8 +631,11 @@ function FallbackChainCell() {
 }
 
 function EnvVarsCell() {
+  // An own (non-inherited) row renders Delete rather than Revert; a secret-sounding
+  // key with a key-shaped value renders the reveal eye.
   const [env, setEnv] = useState<Record<string, string>>({
     ANTHROPIC_MODEL: "claude-sonnet-4-5",
+    OPENAI_API_KEY: "sk-proj-Q7vN2kLm9XbT4wRz8YcP1aHs6JdF3gE0uViO5nBq",
   });
   return (
     <SettingsGroup>
@@ -555,6 +651,29 @@ function EnvVarsCell() {
         />
       </div>
     </SettingsGroup>
+  );
+}
+
+type ResourceListComponent = ComponentType<{ type: "issue" | "pr"; projectPath: string }>;
+
+// Through a glob, as the forge-stats harness does: the plugin tree is outside the
+// renderer's project graph, and only the grid page mounts it.
+const githubListModules = import.meta.glob<{ GitHubResourceList: ResourceListComponent }>(
+  "../../../../plugins/builtin/github/renderer/components/GitHubResourceList.tsx"
+);
+let GitHubResourceList: ResourceListComponent | null = null;
+if (mode === "grid") {
+  const load = Object.values(githubListModules)[0];
+  if (!load) throw new Error("GitHubResourceList module not found");
+  GitHubResourceList = (await load()).GitHubResourceList;
+}
+
+function GitHubListCell() {
+  if (!GitHubResourceList) return null;
+  return (
+    <Surface>
+      <GitHubResourceList type="issue" projectPath={PROJECT.path} />
+    </Surface>
   );
 }
 
@@ -788,6 +907,9 @@ function Grid() {
       <Cell shot="project-swatches" title="GeneralTab — project colour swatches" wide>
         <GeneralTabCell />
       </Cell>
+      <Cell shot="github-list" title="GitHubResourceList — issues, header icon row">
+        <GitHubListCell />
+      </Cell>
     </div>
   );
 }
@@ -817,6 +939,15 @@ function App() {
       {mode === "plugin-manager" ? (
         <div data-preview-shell="" data-mode="plugin-manager">
           <PluginManagerView />
+        </div>
+      ) : isCwdMode ? (
+        <div data-preview-shell="" data-mode={mode}>
+          <UpdateCwdDialog
+            isOpen
+            terminalId="t-1"
+            currentCwd={CWD_FIXTURE.missing}
+            onClose={() => {}}
+          />
         </div>
       ) : (
         <Grid />
