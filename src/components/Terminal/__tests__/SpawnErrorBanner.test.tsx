@@ -308,8 +308,8 @@ describe("SpawnErrorBanner", () => {
     renderBanner("ENOTDIR", { isRestarting: true, onRetry });
     const retry = screen.getByRole("button", { name: /retry starting terminal/i });
     expect(overflow().contains(retry)).toBe(true);
-    // Unavailable to activation, but still focusable: a busy Button is never
-    // natively disabled, so focus stays inside the open menu.
+    // Unavailable to activation, but still focusable: a busy row is never
+    // disabled outright, so focus stays inside the open menu.
     expect(retry.getAttribute("aria-disabled")).toBe("true");
     // Busy, not just unavailable: the retry is in flight.
     expect(retry.getAttribute("aria-busy")).toBe("true");

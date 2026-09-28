@@ -78,8 +78,12 @@ describe("BannerOverflowMenu", () => {
     );
     const item = openMenu().querySelector('[role="menuitem"]')!;
     expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("aria-busy")).toBe("true");
+    // Busy, not Radix-disabled: the row stays in the menu's roving focus.
+    expect(item.hasAttribute("data-disabled")).toBe(false);
     fireEvent.click(item);
     expect(onClick).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).not.toBeNull();
   });
 
   it("renders nothing without overflow actions", () => {
