@@ -89,6 +89,8 @@ export function CrashRecoveryDialog({
     () => new Set(panels.filter((p) => !(shouldDeselectSuspects && p.isSuspect)).map((p) => p.id))
   );
   const [resolving, setResolving] = useState(false);
+  // Which action is in flight, so only its button shows busy.
+  const [resolvingKind, setResolvingKind] = useState<CrashRecoveryAction["kind"] | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(initialError ?? null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
@@ -126,6 +128,7 @@ export function CrashRecoveryDialog({
     async (action: CrashRecoveryAction) => {
       if (resolving) return;
       setResolving(true);
+      setResolvingKind(action.kind);
       setRecoveryError(null);
       try {
         await onResolve(action);
@@ -137,6 +140,7 @@ export function CrashRecoveryDialog({
         setRecoveryError(formatErrorMessage(err, "Couldn't complete recovery action"));
       } finally {
         setResolving(false);
+        setResolvingKind(null);
       }
     },
     [resolving, onResolve]
@@ -326,6 +330,7 @@ export function CrashRecoveryDialog({
                 <Button
                   variant="contrast"
                   onClick={handleRestoreSelected}
+                  loading={resolvingKind === "restore"}
                   disabled={resolving || selectedCount === 0}
                   className="flex-1"
                   data-testid="restore-selected-button"

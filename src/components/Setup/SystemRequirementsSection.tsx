@@ -23,7 +23,13 @@ export function SystemRequirementsSection({
   const [userExpanded, setUserExpanded] = useState(false);
   const prefersReducedMotion = useReducedMotion();
 
-  const isExpanded = userExpanded || hasFatalFailure;
+  // The last settled answer, held while a re-check runs. `hasFatalFailure`
+  // reads false mid-check, and following it would unmount the failure panel —
+  // and the "Check again" button that has focus — until the result is back.
+  const [shownFatal, setShownFatal] = useState(hasFatalFailure);
+  if (allDone && shownFatal !== hasFatalFailure) setShownFatal(hasFatalFailure);
+
+  const isExpanded = userExpanded || shownFatal;
 
   useEffect(() => {
     onFatalFailureChange(hasFatalFailure);
@@ -107,7 +113,7 @@ export function SystemRequirementsSection({
     <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30">
       {/* While a required tool is missing the panel cannot fold, so the row is
           a heading rather than a disclosure that would do nothing. */}
-      {hasFatalFailure ? (
+      {shownFatal ? (
         <div className="flex items-center gap-2.5 w-full px-3 py-2.5">{headerSummary}</div>
       ) : (
         <button
@@ -171,7 +177,7 @@ export function SystemRequirementsSection({
             </Skeleton>
           )}
 
-          {allDone && hasFatalFailure && (
+          {shownFatal && (
             <div
               role="alert"
               aria-live="assertive"
@@ -216,7 +222,7 @@ export function SystemRequirementsSection({
             </div>
           )}
 
-          {!(allDone && hasFatalFailure) && (
+          {!shownFatal && (
             <Button
               variant="outline"
               size="xs"
