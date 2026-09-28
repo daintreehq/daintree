@@ -373,10 +373,14 @@ async function capturePluginManager(page: Page, theme: string): Promise<void> {
 }
 
 test.describe("fields and selects review", () => {
-  test.skip(!ENABLED, "Set DAINTREE_SHOT_FIELDS=1 to run");
   test.setTimeout(900_000);
 
   test("captures the field family", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "DAINTREE_SHOT_FIELDS is required for the field-family capture",
+    });
+    test.skip(!ENABLED, "Set DAINTREE_SHOT_FIELDS=1 to run the field-family capture");
     if (!OUTPUT_DIR) throw new Error("DESIGN_CAPTURE_DIR is required");
     mkdirSync(OUTPUT_DIR, { recursive: true });
     const repo = createRepo();
