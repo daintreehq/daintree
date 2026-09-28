@@ -67,7 +67,7 @@ test.describe.serial("Core: Dev Preview", () => {
       const { window } = ctx;
 
       await expect(window.locator(SEL.browser.addressBar)).toBeVisible({ timeout: T_MEDIUM });
-      await expect(window.getByRole("heading", { name: "Set a dev command" })).toBeVisible({
+      await expect(window.getByText("Set a dev command", { exact: true })).toBeVisible({
         timeout: T_MEDIUM,
       });
     });
@@ -161,7 +161,7 @@ test.describe.serial("Core: Dev Preview", () => {
       await expect(consoleToggle).toHaveCount(0);
 
       // Sanity-check we're in the unconfigured state the assertion above assumes.
-      await expect(window.getByRole("heading", { name: "Set a dev command" })).toBeVisible({
+      await expect(window.getByText("Set a dev command", { exact: true })).toBeVisible({
         timeout: T_MEDIUM,
       });
     });
@@ -201,7 +201,7 @@ server.listen(0, '127.0.0.1', () => {
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 
       // Confirm unconfigured state
-      await expect(window.getByRole("heading", { name: "Set a dev command" })).toBeVisible({
+      await expect(window.getByText("Set a dev command", { exact: true })).toBeVisible({
         timeout: T_MEDIUM,
       });
 

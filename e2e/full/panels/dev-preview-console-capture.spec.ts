@@ -65,7 +65,7 @@ server.listen(0, '127.0.0.1', () => {
     await openDevPreview(window);
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 
-    await expect(window.getByRole("heading", { name: "Set a dev command" })).toBeVisible({
+    await expect(window.getByText("Set a dev command", { exact: true })).toBeVisible({
       timeout: T_MEDIUM,
     });
 

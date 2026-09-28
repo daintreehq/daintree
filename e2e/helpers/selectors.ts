@@ -253,8 +253,7 @@ export const SEL = {
     conflictRebaseProgress: '[data-testid="conflict-rebase-progress"]',
     conflictRebaseSequence: '[data-testid="conflict-rebase-sequence"]',
     conflictResolvedToggle: '[data-testid="conflict-resolved-toggle"]',
-    conflictTakeOurs: (path: string) => `[aria-label="Take ours for ${path}"]`,
-    conflictTakeTheirs: (path: string) => `[aria-label="Take theirs for ${path}"]`,
+    conflictMoreActions: (path: string) => `[aria-label="More actions for ${path}"]`,
     conflictMarkResolved: (path: string) => `[aria-label="Mark ${path} as resolved"]`,
   },
   confirmDialog: {
