@@ -10,6 +10,8 @@ import {
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { Check, ChevronDown, Copy, Ellipsis, FileText, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -425,6 +427,7 @@ export function useMenuCopy(): { copied: boolean; copy: (text: string) => void }
     if (!navigator.clipboard?.writeText) return;
     void navigator.clipboard.writeText(text).then(
       () => {
+        useAnnouncerStore.getState().announce("Copied", "polite");
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         setCopied(true);
         timeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
@@ -441,7 +444,7 @@ export function useMenuCopy(): { copied: boolean; copy: (text: string) => void }
  * different durations, and handing this control the same seam is how the next
  * divergence would get in.
  */
-const COPY_FEEDBACK_MS = 2000;
+const COPY_FEEDBACK_MS = UI_ACTION_SUCCESS_DWELL_MS;
 
 /**
  * Copies the file's raw text — the bytes the source view shows, whichever view
@@ -487,6 +490,7 @@ function CopyContentsButton({ contents }: { contents: string | null }) {
     void navigator.clipboard.writeText(contents).then(
       () => {
         if (!mountedRef.current) return;
+        useAnnouncerStore.getState().announce("Copied", "polite");
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         setCopiedContents(contents);
         timeoutRef.current = setTimeout(() => {

@@ -63,6 +63,8 @@ import {
   type UnavailableReason,
 } from "@/components/FileViewer/FileUnavailableState";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -572,9 +574,10 @@ export function FileBrowserViewer({
     void navigator.clipboard
       .writeText(identityAbsolutePath)
       .then(() => {
+        useAnnouncerStore.getState().announce("Path copied");
         setPathCopied(true);
         if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setPathCopied(false), 1500);
+        copyTimerRef.current = setTimeout(() => setPathCopied(false), UI_ACTION_SUCCESS_DWELL_MS);
       })
       .catch(() => {
         /* clipboard unavailable — the tooltip simply never flips to Copied */
