@@ -39,6 +39,7 @@ import {
 import { buildDestructivePreview } from "@/utils/destructiveSessionConfirm";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
+import { Badge } from "@/components/ui/badge";
 
 interface GroupMember {
   worktree: DeletedWorktree;
@@ -296,13 +297,13 @@ function DeletedWorktreeRailMember({
         {hold !== undefined && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span
-                className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-secondary"
+              <Badge
+                size="xs"
                 data-testid="deleted-worktree-member-hold"
                 data-hold-reason={worktree.holdReason}
               >
                 {hold.label}
-              </span>
+              </Badge>
             </TooltipTrigger>
             <TooltipContent side="top">{hold.tooltip}</TooltipContent>
           </Tooltip>

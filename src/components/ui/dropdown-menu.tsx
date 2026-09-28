@@ -20,6 +20,7 @@ import { actionService } from "@/services/ActionService";
 import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
 import { KbdChord } from "./Kbd";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const DropdownMenuIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 
@@ -602,11 +603,7 @@ const DropdownMenuLabel = React.forwardRef<
   return (
     <Label
       ref={ref}
-      className={cn(
-        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary",
-        inset && "pl-8",
-        className
-      )}
+      className={cn(LIST_LABEL_CLASS, "px-2.5 py-1.5", inset && "pl-8", className)}
       {...props}
     />
   );

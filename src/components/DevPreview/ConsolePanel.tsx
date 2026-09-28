@@ -18,6 +18,7 @@ import { ObjectInspector } from "./ObjectInspector";
 import { DisclosureChevron } from "./DisclosureChevron";
 import { StackLocation, StackTrace } from "./StackTrace";
 import { stripV8StackTail } from "./stackFrames";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface ConsolePanelProps {
   paneId: string;
@@ -406,9 +407,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     <div className="flex h-full flex-col bg-surface-canvas">
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-overlay bg-surface shrink-0">
-        <span className="text-3xs font-semibold uppercase tracking-wide text-text-secondary mr-1">
-          Console
-        </span>
+        <span className={cn(LIST_LABEL_CLASS, "mr-1")}>Console</span>
 
         {/* Level filters */}
         <div className="flex items-center gap-0.5">

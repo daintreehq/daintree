@@ -1,6 +1,7 @@
 import { useId } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
 interface SettingsSectionProps {
   title: string;
@@ -53,11 +54,7 @@ export function SettingsSection({
             className="text-sm font-semibold text-text-primary flex items-center gap-2 flex-wrap"
           >
             {title}
-            {badge && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default text-text-secondary">
-                {badge}
-              </span>
-            )}
+            {badge && <Badge size="xs">{badge}</Badge>}
           </h4>
           {description && (
             <p className="mt-1 text-xs text-text-secondary select-text">{description}</p>

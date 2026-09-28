@@ -69,7 +69,8 @@ describe("PluginActionAuditLogViewer", () => {
     renderViewer([
       record({ recordType: "action-dispatch", source: "keybinding", result: "error" }),
     ]);
-    expect(screen.getByText("keybinding")).toBeTruthy();
+    // Sentence case, like every Settings badge — the raw id is never shown.
+    expect(screen.getByText("Keybinding")).toBeTruthy();
   });
 
   it("makes errorMessage searchable", () => {

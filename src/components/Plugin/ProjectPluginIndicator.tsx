@@ -6,8 +6,7 @@ import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import type { ProjectPluginInfo } from "@shared/types/plugin";
-
-const MICRO_LABEL = "text-3xs font-medium uppercase tracking-wider text-text-secondary";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 function stateLabel(state: ProjectPluginInfo["state"]): string {
   switch (state) {
@@ -144,7 +143,7 @@ export function ProjectPluginIndicator() {
       <PopoverContent side="top" align="start" className="w-72 p-3">
         <div className="space-y-3">
           <div>
-            <p className={MICRO_LABEL}>Project plugins</p>
+            <p className={LIST_LABEL_CLASS}>Project plugins</p>
             <p className="mt-1 text-2xs text-text-secondary leading-relaxed">
               Shipped in this project&apos;s <code className="font-mono">.daintree/plugins</code>{" "}
               folder. Plugin code runs with your account and isn&apos;t sandboxed.

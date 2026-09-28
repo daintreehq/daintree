@@ -7,6 +7,8 @@ import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
 import type { PluginMcpConsentDecision, PluginMcpDangerTier } from "@shared/types/pluginMcpConsent";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge } from "@/components/ui/badge";
 
 const CONFIRM_COOLDOWN_MS = 1_200;
 
@@ -27,9 +29,6 @@ const MAX_TOOL_NAME_IN_TITLE = 32;
  * its own marketing copy. Bound it and scroll in place; nothing is lost.
  */
 const DESCRIPTION_MAX_HEIGHT = "max-h-[9rem]";
-
-/** Shared micro-label, matching the section-heading grammar used app-wide. */
-const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 
 /**
  * The redacted payload's own treatment, shared by both tier paths. The same
@@ -157,7 +156,7 @@ export function PluginMcpConfirmDialog() {
           {isReprompt && <ChangeNotice reason={current.reason} tier={current.dangerTier} />}
 
           <div>
-            <div className={cn(MICRO_LABEL, "mb-1")}>What the plugin says this does</div>
+            <div className={cn(SECTION_LABEL_CLASS, "mb-1")}>What the plugin says this does</div>
             <p
               className={cn(
                 "text-sm text-text-primary whitespace-pre-wrap break-words overflow-y-auto",
@@ -173,7 +172,7 @@ export function PluginMcpConfirmDialog() {
           {showArgsPreview &&
             (isDestructive ? (
               <div>
-                <div className={cn(MICRO_LABEL, "mb-1")}>Arguments</div>
+                <div className={cn(SECTION_LABEL_CLASS, "mb-1")}>Arguments</div>
                 <pre className={ARGS_PRE}>{current.argsSummary || "No arguments"}</pre>
               </div>
             ) : (
@@ -232,7 +231,7 @@ function IdentityRow({
 }) {
   return (
     <div className="flex items-baseline gap-2 text-xs">
-      <span className={cn(MICRO_LABEL, "shrink-0 w-[5.5rem]")}>{label}</span>
+      <span className={cn(SECTION_LABEL_CLASS, "shrink-0 w-[5.5rem]")}>{label}</span>
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         <span
           className={cn("min-w-0 break-all text-text-primary", mono && "font-mono text-2xs")}
@@ -287,7 +286,7 @@ function ChangeNotice({ reason, tier }: { reason: string; tier: PluginMcpDangerT
       <div className="min-w-0 space-y-1">
         <div
           className={cn(
-            MICRO_LABEL,
+            SECTION_LABEL_CLASS,
             isRaisedDanger ? "text-status-danger/80" : "text-status-warning/80"
           )}
         >
@@ -324,7 +323,7 @@ function CapabilitiesDisclosure({
     // Said, not omitted. A silently absent section is indistinguishable from a
     // section that failed to load, and "this plugin declares nothing" is a
     // meaningful thing to know before granting a standing permission.
-    return <div className={MICRO_LABEL}>No capabilities declared</div>;
+    return <div className={SECTION_LABEL_CLASS}>No capabilities declared</div>;
   }
 
   return (
@@ -347,7 +346,7 @@ function CapabilitiesDisclosure({
             expanded && "rotate-90"
           )}
         />
-        <span className={MICRO_LABEL}>What this plugin can do ({capabilities.length})</span>
+        <span className={SECTION_LABEL_CLASS}>What this plugin can do ({capabilities.length})</span>
       </button>
       {expanded && (
         <ul className="mt-1.5 max-h-44 space-y-1.5 overflow-y-auto pl-[1.125rem]">
@@ -396,7 +395,7 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
             expanded && "rotate-90"
           )}
         />
-        <span className={MICRO_LABEL}>Arguments</span>
+        <span className={SECTION_LABEL_CLASS}>Arguments</span>
       </button>
       {expanded && <pre className={cn(ARGS_PRE, "mt-1.5")}>{argsSummary}</pre>}
     </div>
@@ -597,8 +596,8 @@ export function tierLabelFor(tier: PluginMcpDangerTier): string {
  */
 function DangerTierBadge({ tier }: { tier: PluginMcpDangerTier }) {
   return (
-    <span className="shrink-0 rounded border border-tint/[0.08] bg-overlay-subtle px-1.5 py-0.5 font-mono text-3xs text-text-secondary">
+    <Badge size="xs" tone="outline" className="font-mono">
       {tier} · {tierLabelFor(tier)}
-    </span>
+    </Badge>
   );
 }

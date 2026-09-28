@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginConfirmStore, type PluginConfirmationDecision } from "@/store/pluginConfirmStore";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 /**
  * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards
@@ -13,9 +14,6 @@ import { usePluginAttribution } from "@/hooks/usePluginAttribution";
  * freshly-promoted destructive write before the user has read it.
  */
 const CONFIRM_COOLDOWN_MS = 1_200;
-
-/** Shared micro-label, matching the section-heading grammar used app-wide. */
-const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 
 /**
  * Singleton dialog driven by the plugin-action confirmation queue. Mounted
@@ -142,7 +140,7 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
             expanded && "rotate-90"
           )}
         />
-        <span className={MICRO_LABEL}>Arguments</span>
+        <span className={SECTION_LABEL_CLASS}>Arguments</span>
       </button>
       {expanded && (
         <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-text-primary">

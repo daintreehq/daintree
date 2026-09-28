@@ -5,6 +5,7 @@ import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { logsClient } from "@/clients/logsClient";
 import { LOGGER_NAMES } from "@shared/config/loggerNames";
+import { Badge } from "@/components/ui/badge";
 
 interface LogLevelPaletteProps {
   isOpen: boolean;
@@ -220,16 +221,15 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
             <div className="flex-1 min-w-0 flex items-center justify-between gap-3">
               <span className="text-sm text-text-primary font-mono truncate">{item.name}</span>
               {item.current && (
-                <span
-                  className={cn(
-                    "text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded",
-                    isSelected
-                      ? "bg-overlay-medium text-text-secondary"
-                      : "bg-daintree-border/60 text-text-secondary"
-                  )}
+                <Badge
+                  size="xs"
+                  // Log levels keep the log viewer's own uppercase vocabulary. The
+                  // highlighted row's fill would swallow the neutral wash, so the
+                  // badge steps up a tone while its row is under the cursor.
+                  className={cn("uppercase tracking-wider", isSelected && "bg-overlay-medium")}
                 >
                   {item.current}
-                </span>
+                </Badge>
               )}
             </div>
           </LogLevelRow>

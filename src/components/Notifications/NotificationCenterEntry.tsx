@@ -52,6 +52,7 @@ import {
 import { useNotificationSource } from "./notificationSource";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
+import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -341,7 +342,8 @@ export function NotificationCenterEntry({
                 data-notification-count="true"
                 style={{ animationDuration: `${DURATION_150}ms` }}
                 className={cn(
-                  "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[2.5ch] text-center",
+                  COUNT_BADGE_CLASS,
+                  "min-w-[2.5ch]",
                   bumpKey > 0 && "animate-badge-bump"
                 )}
               >
@@ -376,7 +378,8 @@ export function NotificationCenterEntry({
             data-notification-count="true"
             style={{ animationDuration: `${DURATION_150}ms` }}
             className={cn(
-              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[2.5ch] text-center",
+              COUNT_BADGE_CLASS,
+              "col-span-2 row-start-2 mt-0.5 justify-self-start min-w-[2.5ch]",
               bumpKey > 0 && "animate-badge-bump"
             )}
           >

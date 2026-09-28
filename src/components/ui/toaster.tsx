@@ -50,6 +50,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { EVENT_KIND_LABEL, isNotificationEventKind } from "@/lib/notify";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { COUNT_BADGE_CLASS } from "./badge";
 
 const ACCENT_CLASS: Record<string, string> = {
   success: "border-l-status-success",
@@ -93,10 +94,7 @@ function CountBadge({
     // plain span is not exposed, so the glyph alone would read as "times 5".
     <span
       data-testid="toast-coalesce-badge"
-      className={cn(
-        "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[3.5ch] text-center",
-        isBumping && "animate-badge-bump"
-      )}
+      className={cn(COUNT_BADGE_CLASS, "min-w-[3.5ch]", isBumping && "animate-badge-bump")}
       style={{ animationDuration: `${DURATION_150}ms` }}
       onAnimationEnd={(e) => {
         if (e.animationName === "badge-bump") onBumpEnd();

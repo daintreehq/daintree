@@ -12,6 +12,7 @@ import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { REVIEW_HUB_DISABLED_CTA } from "./reviewHubUtils";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
+import { RefChip } from "@/components/Git/GitOperationPreview";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
@@ -696,12 +697,10 @@ export function CommitPanel({
             </div>
           )}
           <div>
-            <span
+            <RefChip
               data-testid="commit-panel-push-confirm-branch"
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono text-text-primary"
-            >
-              {destinationLabel ?? currentBranch ?? ""}
-            </span>
+              value={destinationLabel ?? currentBranch ?? ""}
+            />
           </div>
           <pre
             data-testid="commit-panel-push-confirm-message"

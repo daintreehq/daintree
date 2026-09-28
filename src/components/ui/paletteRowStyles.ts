@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { LIST_LABEL_CLASS } from "./sectionLabel";
 
 /**
  * The one definition of "this is the row Enter will act on".
@@ -67,8 +68,7 @@ export const PALETTE_ROW_CLASS = cn(
  * Daintree) and it is defined in all fifteen; the treatment is unchanged
  * otherwise, because the size and the tracking were never the problem.
  */
-export const PALETTE_SECTION_LABEL_CLASS =
-  "text-3xs font-medium tracking-wider uppercase text-text-secondary select-none";
+export const PALETTE_SECTION_LABEL_CLASS = LIST_LABEL_CLASS;
 
 /**
  * The keyboard-focus ring every palette control wears.

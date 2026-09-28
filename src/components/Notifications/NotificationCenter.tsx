@@ -65,6 +65,7 @@ import {
   PANE_TOOLBAR_ICON_CLASS,
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 // Three, not five. Even as compact previews, five pinned rows took three
 // quarters of a laptop-height list, so the first screen held one row of what
@@ -1625,9 +1626,7 @@ function NeedsAttentionSection({
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
-      <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
-        Needs attention
-      </div>
+      <div className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}>Needs attention</div>
       <div role="group" aria-label="Needs attention">
         {groups.map((group, idx) => {
           const flatIndex = indexOffset + idx;
@@ -1753,9 +1752,7 @@ function ChronoSection({
   return (
     <div data-testid="chrono-section">
       {!groupByContext && hasPinnedAbove && !dividerLeads && (
-        <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
-          {sectionLabel}
-        </div>
+        <div className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}>{sectionLabel}</div>
       )}
       {groupByContext && (
         <ContextSectionHeader
@@ -1808,7 +1805,7 @@ function ChronoSection({
               {groupKey === earlierKey && (
                 <div
                   data-testid="notification-earlier-boundary"
-                  className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary"
+                  className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}
                 >
                   Earlier
                 </div>
@@ -2085,7 +2082,10 @@ function NewSinceLastLookedDivider({
       ref={ref}
       tabIndex={-1}
       data-testid="new-since-last-looked"
-      className="flex items-center gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-text-secondary outline-hidden"
+      className={cn(
+        LIST_LABEL_CLASS,
+        "flex items-center gap-2 pl-4 pr-3 py-1 bg-overlay-raised outline-hidden"
+      )}
     >
       <span>New since you last looked</span>
       {unreadCount > 0 && (

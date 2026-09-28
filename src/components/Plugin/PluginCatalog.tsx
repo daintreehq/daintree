@@ -7,9 +7,7 @@ import { categoryIconFor, PluginIconTile } from "./pluginIcons";
 import { pluginLabel } from "./PluginDetailPane";
 import { groupPluginsByCategory } from "./pluginGrouping";
 import { pluginSignalFor } from "./pluginStatus";
-
-const CARD_BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
+import { Badge } from "@/components/ui/badge";
 
 const CARD_GRID_CLASS = "grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]";
 
@@ -49,7 +47,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
         </span>
         <span className="mt-0.5 flex items-center gap-1.5 min-w-0 text-2xs text-text-secondary">
           <span className="truncate">v{plugin.manifest.version}</span>
-          {disabled && <span className={cn(CARD_BADGE_CLASS, "shrink-0")}>Disabled</span>}
+          {disabled && <Badge size="xs">Disabled</Badge>}
         </span>
         {signal ? (
           <span className={cn("mt-1 flex items-center gap-1 text-xs font-medium", signal.tone)}>

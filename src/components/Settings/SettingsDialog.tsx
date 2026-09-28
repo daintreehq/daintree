@@ -82,6 +82,7 @@ import {
 } from "./SettingsValidationRegistry";
 import { SettingsFlushProvider, SettingsFlushContext } from "./SettingsFlushRegistry";
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
+import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -1682,10 +1683,7 @@ export function NavItem({
 
 function MatchBadge({ count }: { count: number }) {
   return (
-    <span
-      aria-hidden="true"
-      className="ml-auto text-3xs font-medium tabular-nums px-1.5 py-0.5 rounded-full bg-tint/10 text-text-secondary leading-none"
-    >
+    <span aria-hidden="true" className={cn(COUNT_BADGE_CLASS, "ml-auto")}>
       {count}
     </span>
   );

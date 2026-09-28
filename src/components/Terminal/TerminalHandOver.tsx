@@ -16,6 +16,8 @@ import { closeAndAnnounce } from "@/lib/accessibility";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import type { TerminalAdoptionRefusal } from "@shared/types/ipc/mcpServer";
+import { cn } from "@/lib/utils";
+import { HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE } from "./terminalHeaderChip";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -250,7 +252,7 @@ export function TerminalDrivenByBadge({ terminalId }: { terminalId: string }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className="inline-flex items-center gap-1 min-w-0 max-w-[14rem] text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded-full border border-divider"
+          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "min-w-0 max-w-[14rem] shrink")}
           role="status"
           aria-live="off"
           data-testid="terminal-driven-by-badge"

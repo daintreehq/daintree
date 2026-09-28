@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import type { WorktreeSnapshot } from "@/types";
 import { worktreeOptionLabel } from "./crossWorktreeDiffUtils";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface WorktreeSelectorProps {
   label: string;
@@ -28,10 +29,7 @@ export function WorktreeSelector({
   const triggerId = useId();
   return (
     <div className="flex flex-col gap-1.5 min-w-0">
-      <label
-        htmlFor={triggerId}
-        className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
-      >
+      <label htmlFor={triggerId} className={SECTION_LABEL_CLASS}>
         {label}
       </label>
       {/* "" is Radix's unset value: the trigger shows the placeholder. */}

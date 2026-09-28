@@ -33,6 +33,7 @@ import {
   sumChurn,
   truncateFilterQuery,
 } from "./reviewHubUtils";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface FileSectionProps {
   /** Drives every staged/unstaged copy, testid, and toggle-verb choice below. */
@@ -350,7 +351,7 @@ export function FileSection({
           while a long changeset scrolls. */}
       <div className={cn("@container/file-section", REVIEW_HUB_STICKY_BAND)}>
         <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
-          <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary shrink-0 flex items-center">
+          <span className={cn(SECTION_LABEL_CLASS, "shrink-0 flex items-center")}>
             {title}
             <span
               data-testid={countTestId}
@@ -378,7 +379,7 @@ export function FileSection({
                 role="status"
                 data-testid={`${section}-section-shown-chip`}
                 aria-label={`${shownCount} of ${totalCount} files shown`}
-                className="ml-1 tabular-nums rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-text-secondary bg-overlay-medium"
+                className={REVIEW_HUB_COUNT_CHIP}
               >
                 {shownCount} shown
               </span>

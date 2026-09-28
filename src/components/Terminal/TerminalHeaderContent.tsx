@@ -11,7 +11,11 @@ import { formatTokenCount } from "@/utils/formatTokenCount";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
-import { HEADER_CHIP_FOCUS_CLASS } from "./terminalHeaderChip";
+import {
+  HEADER_CHIP_CLASS,
+  HEADER_CHIP_FOCUS_CLASS,
+  HEADER_CHIP_SURFACE,
+} from "./terminalHeaderChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
@@ -258,7 +262,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              className="inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full text-2xs bg-overlay-soft border border-divider text-text-secondary"
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
               role="status"
               aria-label="Agent finished with no file changes"
             >
@@ -302,7 +306,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded-full border border-dashed border-divider"
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "border-dashed")}
               role="status"
               aria-live="off"
               data-testid="terminal-hibernated-badge"
@@ -328,12 +332,18 @@ export function TerminalHeaderContent({
       {hasPtyKind && <TerminalRateLimitBadge terminalId={id} />}
 
       {/* Command Pill - shows currently running command (inline with title).
-          Slimmed to px-2 py-0.5 to match the row's other small badges. */}
+          The row's one chip box; the command truncates inside it. */}
       {showCommandPill && (
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
-            <span className="px-2 py-0.5 rounded-full text-2xs font-mono bg-overlay-soft text-text-secondary border border-divider truncate max-w-[20rem]">
-              {lastCommand}
+            <span
+              className={cn(
+                HEADER_CHIP_CLASS,
+                HEADER_CHIP_SURFACE,
+                "min-w-0 max-w-[20rem] shrink font-mono"
+              )}
+            >
+              <span className="truncate">{lastCommand}</span>
             </span>
           </TooltipTrigger>
           <TooltipContent side="bottom">{lastCommand}</TooltipContent>
@@ -345,7 +355,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-text-primary px-1.5 py-0.5 rounded-full"
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
               role="status"
               aria-live="off"
             >

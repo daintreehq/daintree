@@ -19,6 +19,7 @@ import {
   STATUS_OPTIONS,
   TYPE_OPTIONS,
 } from "@/lib/worktreeFilterOptions";
+import { CountBadge } from "@/components/ui/badge";
 
 interface FilterSectionProps {
   title: string;
@@ -96,11 +97,7 @@ function FilterSection({
           >
             <span className="flex min-w-0 flex-1 items-center gap-1.5">
               <span className="shrink-0">{title}</span>
-              {hasActive && (
-                <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-text-secondary">
-                  {activeCount}
-                </span>
-              )}
+              {hasActive && <CountBadge>{activeCount}</CountBadge>}
               {!isOpen && summary && (
                 <span
                   ref={summaryRef}

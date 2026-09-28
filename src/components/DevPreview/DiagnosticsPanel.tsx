@@ -8,6 +8,7 @@ import type {
   DevPreviewUpstreamResolution,
 } from "@shared/types/ipc/devPreview";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
+import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
 interface DiagnosticsPanelProps {
   paneId: string;
@@ -344,9 +345,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
                       >
                         {label}
                         {event.count !== undefined && event.count > 1 && (
-                          <span className="ml-1 rounded-full bg-overlay-medium px-1.5 text-3xs tabular-nums text-text-secondary">
-                            ×{event.count}
-                          </span>
+                          <span className={cn(COUNT_BADGE_CLASS, "ml-1")}>×{event.count}</span>
                         )}
                       </span>
                       <span

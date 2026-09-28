@@ -20,6 +20,7 @@ import type {
   PluginActionAuditRecordType,
   PluginActionAuditResult,
 } from "@shared/types";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * "problems" is the default: the rare error, disabled and restricted rows would
@@ -45,6 +46,12 @@ const RECORD_TYPE_LABEL: Partial<Record<PluginActionAuditRecordType, string>> = 
   "ipc-invoke": "IPC",
   "decoration-failure": "Decoration",
 };
+
+/** "context-menu" → "Context menu": the tag is sentence case like every Settings badge. */
+function formatSource(source: string): string {
+  const words = source.replace(/-/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 const RESULT_LABEL: Record<PluginActionAuditResult, string> = {
   success: "Success",
@@ -237,13 +244,9 @@ export function PluginActionAuditLogViewer({
                     </span>
                   )}
                   {record.source ? (
-                    <span className="text-3xs uppercase tracking-wide text-text-secondary">
-                      {record.source}
-                    </span>
+                    <Badge size="xs">{formatSource(record.source)}</Badge>
                   ) : record.recordType && RECORD_TYPE_LABEL[record.recordType] ? (
-                    <span className="text-3xs uppercase tracking-wide text-text-secondary">
-                      {RECORD_TYPE_LABEL[record.recordType]}
-                    </span>
+                    <Badge size="xs">{RECORD_TYPE_LABEL[record.recordType]}</Badge>
                   ) : null}
                 </div>
                 <div className="mt-0.5 font-mono text-text-secondary break-all">
