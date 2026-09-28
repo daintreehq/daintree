@@ -204,7 +204,7 @@ function MatrixSheet({ prefix, surface }: { prefix: string; surface: string }) {
       )}
     >
       <div className="mb-3 font-mono text-2xs uppercase tracking-wide text-text-muted">
-        on bg-surface-{surface}
+        on the {surface} surface
       </div>
       {/* Inline, not an arbitrary utility: Tailwind scans preview dirs, and a
           preview-only value would otherwise land in the app's stylesheet. */}
@@ -223,12 +223,20 @@ function MatrixSheet({ prefix, surface }: { prefix: string; surface: string }) {
               <div key={key} className="contents">
                 <div className="font-mono text-2xs text-text-secondary">{key}</div>
                 <Cell>
-                  <Button variant={variant} size={size} data-capture-id={id(key)}>
+                  <Button
+                    variant={variant}
+                    size={variant === "link" ? undefined : size}
+                    data-capture-id={id(key)}
+                  >
                     Open plugin manager
                   </Button>
                 </Cell>
                 <Cell>
-                  <Button variant={variant} size={size} data-capture-id={id(`${key}-icon`)}>
+                  <Button
+                    variant={variant}
+                    size={variant === "link" ? undefined : size}
+                    data-capture-id={id(`${key}-icon`)}
+                  >
                     {variant === "link" ? (
                       <>
                         Open docs
@@ -245,7 +253,7 @@ function MatrixSheet({ prefix, surface }: { prefix: string; surface: string }) {
                 <Cell>
                   <Button
                     variant={variant}
-                    size={size}
+                    size={variant === "link" ? undefined : size}
                     disabled
                     data-capture-id={id(`${key}-disabled`)}
                   >
