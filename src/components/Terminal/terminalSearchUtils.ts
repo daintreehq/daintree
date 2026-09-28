@@ -28,9 +28,10 @@ export function validateRegexTerm(
 }
 
 function parseRgb(value: string): { rgb: [number, number, number]; alpha: number } | null {
-  const hex = value.match(/^#([0-9a-fA-F]{6})$/);
+  const hex = value.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
   if (hex) {
-    const n = parseInt(hex[1]!, 16);
+    const digits = hex[1]!.length === 3 ? hex[1]!.replace(/./g, "$&$&") : hex[1]!;
+    const n = parseInt(digits, 16);
     return { rgb: [(n >> 16) & 255, (n >> 8) & 255, n & 255], alpha: 1 };
   }
   const match = value.match(
@@ -89,8 +90,8 @@ export function getSearchDecorationColors(): SearchDecorationOptions {
 
   const styles = getComputedStyle(document.documentElement);
   const read = (name: string, fallback: string): string => {
-    const value = styles.getPropertyValue(name).trim();
-    return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
+    const parsed = parseRgb(styles.getPropertyValue(name).trim());
+    return parsed && parsed.alpha >= 1 ? toHex(parsed.rgb) : fallback;
   };
 
   const bgValue = styles.getPropertyValue("--theme-search-highlight-background").trim();

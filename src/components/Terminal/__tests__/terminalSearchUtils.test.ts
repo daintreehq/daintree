@@ -183,7 +183,12 @@ describe("getSearchDecorationColors", () => {
       expect(contrastRatio(match, scheme.tokens["terminal-background"])).toBeGreaterThanOrEqual(
         1.5
       );
-      expect(match).not.toBe(colors.activeMatchBackground?.toLowerCase());
+      const active = colors.activeMatchBackground ?? "";
+      expect(match).not.toBe(active.toLowerCase());
+      // The current match is the one anchor; the rest must never outrank it.
+      expect(contrastRatio(match, scheme.tokens["terminal-background"])).toBeLessThan(
+        contrastRatio(active, scheme.tokens["terminal-background"])
+      );
     }
   );
 
@@ -194,6 +199,18 @@ describe("getSearchDecorationColors", () => {
     );
     document.documentElement.style.setProperty("--theme-surface-canvas", "#000000");
     expect(getSearchDecorationColors().matchBackground).toBe("#808080");
+  });
+
+  it("accepts a percentage alpha and three-digit hex", () => {
+    document.documentElement.style.setProperty(
+      "--theme-search-highlight-background",
+      "rgba(255, 255, 255, 50%)"
+    );
+    document.documentElement.style.setProperty("--theme-terminal-background", "#000");
+    document.documentElement.style.setProperty("--theme-search-highlight-text", "#0f0");
+    const colors = getSearchDecorationColors();
+    expect(colors.matchBackground).toBe("#808080");
+    expect(colors.activeMatchBackground).toBe("#00ff00");
   });
 
   it("passes an opaque match colour through unchanged", () => {
