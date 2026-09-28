@@ -365,7 +365,10 @@ test("new-worktree dialog review — rest and interactive states", async () => {
       const popover = "[data-radix-popper-content-wrapper]";
       await settle(page, 400);
       await snap(page, "35-in-use-rest", popover);
-      await page.getByRole("option", { name: /feature\/streaming-uploads/ }).first().hover();
+      await page
+        .getByRole("option", { name: /feature\/streaming-uploads/ })
+        .first()
+        .hover();
       await snap(page, "36-in-use-highlighted", popover);
       await page
         .getByRole("option", { name: /feature\/issue-12015/ })
