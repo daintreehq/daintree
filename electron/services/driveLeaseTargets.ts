@@ -61,7 +61,10 @@ function resolveSource(
   resolvers: LeaseTargetResolvers
 ): MaybePromise<SourceResult> {
   if (source.from === "caller") return one(callerProjectId, "the caller's project");
-  if (source.from === "every-project") return "every";
+  if (source.from === "every-project") {
+    if (source.when && readArg(args, source.when.at) !== source.when.equals) return [];
+    return "every";
+  }
 
   const value = readArg(args, source.at);
   if (value === undefined || value === null) {

@@ -145,6 +145,26 @@ describe("resolveLeaseTarget", () => {
     });
   });
 
+  it("reads a plugin's agent-tool level for every project as host-wide, and one project's as the caller's", () => {
+    const setAccess = target("plugin-agent-mcp:set-plugin-access");
+    expect(
+      resolveLeaseTarget(
+        setAccess,
+        [{ pluginInstanceId: "acme.tools", access: "read-only", scope: "project" }],
+        "a",
+        stubResolvers()
+      )
+    ).toEqual({ kind: "projects", projectIds: ["a"] });
+    expect(
+      resolveLeaseTarget(
+        setAccess,
+        [{ pluginInstanceId: "acme.tools", access: "read-only", scope: "all-projects" }],
+        "a",
+        stubResolvers()
+      )
+    ).toEqual({ kind: "every" });
+  });
+
   it("checks the Host's current project for a spawn that names none, as its handler uses it", () => {
     const resolvers = stubResolvers({ currentProjectId: () => "b" });
     expect(
