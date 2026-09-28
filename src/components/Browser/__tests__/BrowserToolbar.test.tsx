@@ -1290,7 +1290,7 @@ describe("BrowserToolbar back/forward history menu", () => {
     });
     fireEvent.contextMenu(getByTestId("browser-back"));
 
-    const menu = await findByRole("menu");
+    const menu = await findByRole("menu", { name: "Back history" });
     const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
     expect(items.map((item) => item.firstElementChild?.textContent)).toEqual(["Dashboard", "Home"]);
     fireEvent.click(items[1]!);

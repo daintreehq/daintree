@@ -48,6 +48,7 @@ import type {
   BrowserNavigationHistorySnapshot,
 } from "@shared/types/browser";
 import { logError } from "@/utils/logger";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 
 const LONG_PRESS_MS = 400;
@@ -580,6 +581,9 @@ export function BrowserToolbar({
           align="start"
           className="min-w-[220px] max-w-[28rem]"
           aria-label={dir === "back" ? "Back history" : "Forward history"}
+          // Radix labels the menu by its trigger, which here is the inert
+          // stand-in with no name of its own.
+          aria-labelledby={undefined}
           onOpenAutoFocus={(e) => {
             if (!historyOpenedByKeyRef.current) return;
             historyOpenedByKeyRef.current = false;
@@ -590,7 +594,14 @@ export function BrowserToolbar({
           }}
           onCloseAutoFocus={(e) => {
             e.preventDefault();
-            navButtonRefs.current[dir]?.focus({ preventScroll: true });
+            // Jumping to the oldest or newest entry disables this direction's
+            // button, so focus falls back to the other one.
+            const other = dir === "back" ? "forward" : "back";
+            const target = [navButtonRefs.current[dir], navButtonRefs.current[other]].find(
+              (button) => button && !button.disabled
+            );
+            armTooltipFocusSuppression();
+            target?.focus({ preventScroll: true });
           }}
         >
           {entries.map((entry) => (

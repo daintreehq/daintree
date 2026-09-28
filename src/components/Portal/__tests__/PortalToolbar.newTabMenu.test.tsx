@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -75,15 +75,27 @@ describe("PortalToolbar new-tab menu", () => {
     expect(claimMock).toHaveBeenCalledWith("portal-new-tab-menu", true);
   });
 
-  it("opens links through the portal action", () => {
+  it("opens links only after the menu has released its claim on the page", async () => {
+    // portal.openUrl refuses to act while any overlay is claimed, so a link
+    // dispatched from inside the still-open menu would silently do nothing.
+    const events: string[] = [];
+    claimMock.mockImplementation((id: string, active: boolean) => {
+      if (id === "portal-new-tab-menu") events.push(`claim:${active}`);
+    });
+    dispatchMock.mockImplementation(() => {
+      events.push("dispatch");
+    });
     const plus = renderToolbar();
     fireEvent.contextMenu(plus);
     fireEvent.click(screen.getByRole("menuitem", { name: "Claude" }));
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "portal.openUrl",
-      { url: "https://claude.ai/", title: "Claude" },
-      expect.objectContaining({ source: "context-menu" })
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "portal.openUrl",
+        { url: "https://claude.ai/", title: "Claude" },
+        expect.objectContaining({ source: "context-menu" })
+      )
     );
+    expect(events.slice(0, events.indexOf("dispatch")).at(-1)).toBe("claim:false");
   });
 
   it("keeps a plain click as new tab", () => {
