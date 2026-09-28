@@ -10,11 +10,12 @@ import {
   FileCode,
   FileDiff,
   FileText,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
+import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FileStack } from "@/components/icons";
@@ -352,15 +353,7 @@ function OutcomeLine({
       />
       <div className="min-w-0 flex-1 text-text-primary">{children}</div>
       {onDismiss && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={onDismiss}
-          aria-label="Dismiss"
-          className="-my-1 -mr-1"
-        >
-          <X />
-        </Button>
+        <DismissButton onClick={onDismiss} aria-label="Dismiss" className="-my-1 -mr-1" />
       )}
     </div>
   );
@@ -1009,14 +1002,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
               >
                 Clear
               </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={closePanel}
-                aria-label="Close artifacts"
-              >
-                <X />
-              </Button>
+              <SurfaceHeaderCloseButton onClick={closePanel} aria-label="Close artifacts" />
             </div>
 
             {showBulkBar && (
@@ -1124,15 +1110,11 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       )}
                       <span className="min-w-0 flex-1 text-text-primary">{bulkStatus.text}</span>
                       {bulkStatus.persistent && (
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
+                        <DismissButton
                           onClick={() => setBulkStatus(null)}
                           aria-label="Dismiss"
                           className="-my-1"
-                        >
-                          <X />
-                        </Button>
+                        />
                       )}
                     </>
                   ) : null}

@@ -3,6 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { BrandSurface } from "@/components/icons";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 
@@ -91,23 +92,24 @@ export interface SurfaceHeaderCloseButtonProps extends Omit<
   "aria-label": string;
 }
 
+// The full-surface close: ghost `icon-sm` (28px target, 14px glyph), the same
+// button the plugin manager and artifact overlay close with. Hover, focus,
+// press and disabled are the Button primitive's, so a locked dialog's X reads
+// disabled the way every other disabled button in the app does.
 const SurfaceHeaderCloseButton = React.forwardRef<HTMLButtonElement, SurfaceHeaderCloseButtonProps>(
   ({ className, ...props }, ref) => (
-    <button
+    <Button
       ref={ref}
-      className={cn(
-        "shrink-0 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-raised transition-colors p-1 rounded",
-        "disabled:cursor-not-allowed disabled:text-text-muted disabled:hover:bg-transparent",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-        className
-      )}
+      variant="ghost"
+      size="icon-sm"
+      className={cn("shrink-0", className)}
       {...props}
       // After the spread: a cast-through `type: "submit"` would otherwise submit
       // the surrounding form instead of closing the surface.
       type="button"
     >
-      <X className="h-5 w-5" />
-    </button>
+      <X aria-hidden="true" />
+    </Button>
   )
 );
 SurfaceHeaderCloseButton.displayName = "SurfaceHeaderCloseButton";
