@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDeferredLoading } from "@/hooks";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AlertCircle, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -79,6 +81,9 @@ interface PluginMcpServersSectionProps {
 export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServersSectionProps) {
   const [servers, setServers] = useState<PluginMcpServerInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  // Past the Doherty threshold only, so a fast read never flashes bones — the
+  // bones' own delayed pulse is switched off in performance mode.
+  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [stderr, setStderr] = useState<Record<string, StderrState>>({});
@@ -256,9 +261,9 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
   if (rows.length === 0) {
     return (
       <div className="space-y-3">
-        {loading && (
+        {showLoading && (
           <Skeleton label="Loading MCP servers" className="space-y-2">
-            <SkeletonBone className="h-10 w-full rounded-[var(--radius-md)]" />
+            <SkeletonBone immediate className="h-10 w-full rounded-[var(--radius-md)]" />
           </Skeleton>
         )}
         {!loading && !error && (

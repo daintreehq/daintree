@@ -59,7 +59,7 @@ describe("PaneLoadingState", () => {
     const { container } = render(
       <PaneLoadingState variant="full" isLoading phaseLabel="Installing dependencies" />
     );
-    const live = container.querySelector('[aria-live="polite"]');
+    const live = container.querySelector('[aria-live="polite"]:not([role="status"])');
     expect(live).toBeTruthy();
     expect(live!.closest('[role="status"]')).toBeNull();
   });
@@ -75,19 +75,21 @@ describe("PaneLoadingState", () => {
     expect(caption?.textContent).toBe("Rehydrating preview");
   });
 
-  it("speaks the phase from live regions outside the status wrapper, which is not itself live", () => {
+  it("announces the phase once from the status wrapper, with the hint as a separate sibling", () => {
     const { container } = render(
       <PaneLoadingState variant="overlay" isLoading phaseLabel="Rehydrating preview" />
     );
     advance(UI_DOHERTY_THRESHOLD);
-    // The hint speaks the phase. A status wrapper that was also live would say
-    // it a second time, so it is named but `aria-live="off"`, and never busy.
+    // The wait is spoken as it becomes visible, not only when the hint
+    // escalates eight seconds later — and never from inside a busy region.
     const wrapper = container.querySelector('[role="status"]')!;
-    expect(wrapper.getAttribute("aria-live")).toBe("off");
+    expect(wrapper.getAttribute("aria-live")).toBe("polite");
     expect(wrapper.closest('[aria-busy="true"]')).toBeNull();
-    const liveRegions = container.querySelectorAll('[aria-live]:not([aria-live="off"])');
-    expect(liveRegions.length).toBeGreaterThan(0);
-    for (const region of liveRegions) {
+    expect(wrapper.querySelector(".sr-only")?.textContent).toBe("Rehydrating preview");
+    // A live region nested in another is spoken twice or not at all.
+    const hintRegions = [...container.querySelectorAll("[aria-live]")].filter((r) => r !== wrapper);
+    expect(hintRegions.length).toBeGreaterThan(0);
+    for (const region of hintRegions) {
       expect(region.closest('[role="status"]')).toBeNull();
     }
   });

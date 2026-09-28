@@ -64,12 +64,12 @@ function runner(overrides: Partial<RunCommand> = {}): RunCommand {
 describe("DevPreviewEmptyStates", () => {
   it("renders the loading state while restarting", () => {
     render(<DevPreviewEmptyStates {...baseProps({ isRestarting: true })} />);
-    expect(screen.getByText(/restarting/i)).toBeTruthy();
+    expect(screen.getByRole("status", { name: /restarting/i })).toBeTruthy();
   });
 
   it("renders the loading state while installing dependencies", () => {
     render(<DevPreviewEmptyStates {...baseProps({ status: "installing" })} />);
-    expect(screen.getByText(/installing dependencies/i)).toBeTruthy();
+    expect(screen.getByRole("status", { name: /installing dependencies/i })).toBeTruthy();
   });
 
   it("renders the dev-server error state with a retry action", () => {

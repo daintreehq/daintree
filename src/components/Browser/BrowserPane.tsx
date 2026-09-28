@@ -164,6 +164,10 @@ export function BrowserPane({
   const [zoomFactor, setZoomFactor] = useState<number>(() => clampZoom(initialZoom ?? 1.0));
 
   const [isLoading, setIsLoading] = useState(true);
+  // Keys the loading overlay, so a load that replaces another — an auto-reload
+  // after a crash lands in the same render as the previous load's end —
+  // starts its slow-load hint from zero.
+  const [loadAttempt, setLoadAttempt] = useState(0);
   // Doherty 400ms gate: skip loading affordances on fast loads to prevent flicker.
   const showLoadingOverlay = useDohertyGate(isLoading);
   const [loadError, setLoadError] = useState<LoadError | null>(null);
@@ -404,6 +408,7 @@ export function BrowserPane({
     zoomFactor,
     setIsWebviewReady,
     setIsLoading,
+    onLoadStart: () => setLoadAttempt((n) => n + 1),
     setLoadError,
     setBlockedNav,
     setHistory,
@@ -1007,6 +1012,7 @@ export function BrowserPane({
                 />
               ) : (
                 <BrowserBlockedNavNotice
+                  key={blockedNav.noticeId}
                   url={blockedNav.url}
                   hostname={extractHostname(blockedNav.url)}
                   canOpenExternal={blockedNav.canOpenExternal}
@@ -1020,7 +1026,11 @@ export function BrowserPane({
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {isLoading && (
-                <BrowserLoadingOverlay isLoading={isLoading} onCancel={handleCancelLoad} />
+                <BrowserLoadingOverlay
+                  key={loadAttempt}
+                  isLoading={isLoading}
+                  onCancel={handleCancelLoad}
+                />
               )}
               {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview

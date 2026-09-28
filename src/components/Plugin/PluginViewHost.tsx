@@ -216,8 +216,10 @@ export function PluginViewLoadError({ pluginId, displayName, message }: PluginVi
   }, [pluginId, displayName, message]);
 
   return (
-    <div role="region" aria-label="Plugin view unavailable" className="relative flex-1 min-h-0">
+    <div role="region" aria-label="Plugin view unavailable" className="flex flex-1 flex-col">
       <PaneState
+        inFlow
+        className="flex-1"
         live="alert"
         icon={<AlertTriangle className="text-status-warning" />}
         title={`${displayName} unavailable`}

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useDeferredLoading } from "@/hooks";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -18,6 +20,9 @@ import { logError } from "@/utils/logger";
 export function PluginsTab() {
   const [count, setCount] = useState<number | null>(null);
   const [countFailed, setCountFailed] = useState(false);
+  // Past the Doherty threshold only, so a fast read never flashes bones — the
+  // bones' own delayed pulse is switched off in performance mode.
+  const showLoading = useDeferredLoading(count === null, UI_DOHERTY_THRESHOLD);
   // Opt-in background update check (#10893). `null` until the main-process
   // electron-store value loads; renders OFF while loading so it never implies
   // the feature is on before we know.
@@ -142,11 +147,12 @@ export function PluginsTab() {
             label="Plugin manager"
             description={
               <div className="min-h-[1rem]">
-                {summary ?? (
-                  <Skeleton label="Loading installed plugins" className="py-0.5">
-                    <SkeletonBone className="h-3 w-40" />
-                  </Skeleton>
-                )}
+                {summary ??
+                  (showLoading ? (
+                    <Skeleton label="Loading installed plugins" className="py-0.5">
+                      <SkeletonBone immediate className="h-3 w-40" />
+                    </Skeleton>
+                  ) : null)}
               </div>
             }
             control={

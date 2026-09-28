@@ -1,8 +1,9 @@
-import { AlertTriangle, ExternalLink, Globe, RotateCw } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Check, Copy, ExternalLink, Globe, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PanePlaceholder, PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { PaneLoadingState } from "@/components/ui/PaneLoadingState";
-import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import type { LoadError } from "./browserUtils";
 
 const EXAMPLE_HOSTS = ["localhost:3000", "localhost:5173", "localhost:8080"];
@@ -111,9 +112,15 @@ export function BrowserLoadErrorOverlay({
   );
 }
 
+// How long "Copied" lingers — the dev preview's notice uses the same beat. A
+// failed copy stays until the notice goes: it may be the only way forward.
+const COPY_FEEDBACK_MS = 2000;
+
 /**
  * Same notice as the dev preview's blocked-navigation banner: the host in the
- * title, the full address beneath it, the way out as the banner's action.
+ * title, the full address beneath it, opening elsewhere as the way out and
+ * copying the address beside it (or instead of it, when nothing can open it).
+ * Mount it keyed by notice so a new block starts with fresh copy feedback.
  */
 export function BrowserBlockedNavNotice({
   url,
@@ -130,27 +137,58 @@ export function BrowserBlockedNavNotice({
   onOpenExternal: () => void;
   onDismiss: () => void;
 }) {
+  const [copyFeedback, setCopyFeedback] = useState<"copied" | "copy-failed" | null>(null);
+
+  useEffect(() => {
+    if (copyFeedback !== "copied") return;
+    const timer = setTimeout(() => setCopyFeedback(null), COPY_FEEDBACK_MS);
+    return () => clearTimeout(timer);
+  }, [copyFeedback]);
+
+  const handleCopy = async () => {
+    try {
+      await window.electron.clipboard.writeText(url);
+      setCopyFeedback("copied");
+    } catch {
+      setCopyFeedback("copy-failed");
+    }
+  };
+
+  const copyAction: BannerAction = {
+    id: "copy-url",
+    label:
+      copyFeedback === "copied"
+        ? "Copied"
+        : copyFeedback === "copy-failed"
+          ? "Couldn't copy"
+          : "Copy URL",
+    icon: copyFeedback === "copied" ? Check : Copy,
+    onClick: () => void handleCopy(),
+    variant: canOpenExternal ? "dismiss" : "primary",
+  };
+
   return (
     <InlineStatusBanner
       icon={ExternalLink}
       severity="warning"
       title={hostname ? `Can't open ${hostname} here` : "Can't open this link here"}
       contextLine={url}
-      actions={
-        canOpenExternal
+      actions={[
+        ...(canOpenExternal
           ? [
               {
                 id: "open-external",
                 label: opening ? "Opening…" : "Open in external browser",
                 icon: ExternalLink,
-                variant: "primary",
+                variant: "primary" as const,
                 loading: opening,
                 disabled: opening,
                 onClick: onOpenExternal,
               },
             ]
-          : undefined
-      }
+          : []),
+        copyAction,
+      ]}
       onClose={onDismiss}
       closeAriaLabel="Dismiss navigation notice"
       animated={false}

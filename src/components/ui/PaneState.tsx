@@ -17,6 +17,7 @@ export function PaneState({
   description,
   children,
   live = "status",
+  inFlow = false,
   className,
 }: {
   icon?: ReactNode;
@@ -24,10 +25,21 @@ export function PaneState({
   description?: ReactNode;
   children?: ReactNode;
   live?: "status" | "alert";
+  /**
+   * Take up room in the layout instead of covering the pane — for a host that
+   * sizes to its content, such as a dialog, where an overlay has no height.
+   */
+  inFlow?: boolean;
   className?: string;
 }) {
   return (
-    <div className={cn("absolute inset-0 overflow-y-auto bg-surface-canvas", className)}>
+    <div
+      className={cn(
+        inFlow ? "relative w-full" : "absolute inset-0",
+        "overflow-y-auto bg-surface-canvas",
+        className
+      )}
+    >
       <div className="flex min-h-full flex-col items-center justify-center gap-5 p-6">
         <div role={live} aria-live={live === "status" ? "polite" : undefined} className="w-full">
           <EmptyState

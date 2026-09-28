@@ -28,6 +28,8 @@ export type UseWebviewEventsOptions = {
   zoomFactor: number;
   setIsWebviewReady: (v: boolean) => void;
   setIsLoading: (v: boolean) => void;
+  /** Fires as each main-frame load starts, including reloads and auto-reloads. */
+  onLoadStart?: () => void;
   setLoadError: (v: LoadError | null) => void;
   /**
    * Navigation events only ever *clear* the blocked-navigation notice — the
@@ -63,6 +65,7 @@ export function useWebviewEvents({
   zoomFactor,
   setIsWebviewReady,
   setIsLoading,
+  onLoadStart,
   setLoadError,
   setBlockedNav,
   setHistory,
@@ -76,6 +79,10 @@ export function useWebviewEvents({
   // are torn down/rebuilt only when the webview element itself swaps.
   const fireRenderProcessGone = useEffectEvent((details: { reason: string; exitCode: number }) => {
     onRenderProcessGone?.(details);
+  });
+
+  const fireLoadStart = useEffectEvent(() => {
+    onLoadStart?.();
   });
 
   useEffect(() => {
@@ -99,6 +106,7 @@ export function useWebviewEvents({
     };
 
     const handleDidStartLoading = () => {
+      fireLoadStart();
       setIsLoading(true);
       setLoadError(null);
       if (loadTimeoutRef.current) {

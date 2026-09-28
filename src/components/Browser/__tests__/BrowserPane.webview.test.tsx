@@ -992,6 +992,27 @@ describe("BrowserPane webview lifecycle regression", () => {
         );
       }
 
+      it("copies the blocked address, as the dev preview's notice does", async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).electron.clipboard.writeText = writeText;
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://docs.example.com/guide");
+
+        await act(async () => {
+          findButton(container, "Copy URL")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+        });
+
+        expect(writeText).toHaveBeenCalledWith("https://docs.example.com/guide");
+        expect(findButton(container, "Copied")).toBeDefined();
+        act(() => {
+          vi.advanceTimersByTime(2000);
+        });
+        expect(findButton(container, "Copy URL")).toBeDefined();
+      });
+
       // Deferred on purpose: the old code cleared the notice synchronously, so a
       // test that only checks the end state would pass on the pre-fix build. The
       // load-bearing assertion is that the notice SURVIVES until the result lands.
@@ -1528,6 +1549,34 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(cancel()).toBeDefined();
+    });
+
+    it("starts the slow-load hint from zero when a new load replaces the stalled one", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      const cancel = () =>
+        Array.from(container.querySelectorAll("button")).find((b) =>
+          b.textContent?.includes("Cancel")
+        );
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      act(() => {
+        vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS);
+      });
+      expect(cancel()).toBeDefined();
+
+      // An auto-reload lands its start in the same render the old load ended in.
+      act(() => {
+        emitWebviewEvent(webview, "did-stop-loading");
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      expect(cancel()).toBeUndefined();
     });
 
     it("Cancel stops the webview and shows cancelled error", () => {

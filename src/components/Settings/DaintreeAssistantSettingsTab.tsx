@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { ReactNode } from "react";
 import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { useHelpSessionLiveStatus } from "@/hooks";
+import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { actionService } from "@/services/ActionService";
@@ -1018,6 +1019,10 @@ export function DaintreeAssistantSettingsTab() {
   const apiKeySuffix =
     mcpStatus?.apiKey && mcpStatus.apiKey.length >= 8 ? mcpStatus.apiKey.slice(-4) : "";
 
+  // Past the Doherty threshold only, so a fast read never flashes bones — the
+  // bones' own delayed pulse is switched off in performance mode.
+  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
+
   const handleGoToMcpSettings = () => {
     void actionService.dispatch("app.settings.openTab", { tab: "mcp" }, { source: "user" });
   };
@@ -1521,12 +1526,14 @@ export function DaintreeAssistantSettingsTab() {
           <InlineError onRetry={() => void handleCopyConfig()}>{connectionError}</InlineError>
         )}
         {loading ? (
-          <SettingsGroup>
-            <Skeleton label="Loading external client settings" className="space-y-3 px-4 py-3">
-              <SkeletonBone className="h-5 w-2/3" />
-              <SkeletonBone className="h-5 w-1/2" />
-            </Skeleton>
-          </SettingsGroup>
+          showLoading ? (
+            <SettingsGroup>
+              <Skeleton label="Loading external client settings" className="space-y-3 px-4 py-3">
+                <SkeletonBone immediate className="h-5 w-2/3" />
+                <SkeletonBone immediate className="h-5 w-1/2" />
+              </Skeleton>
+            </SettingsGroup>
+          ) : null
         ) : mcpState !== "ready" ? (
           <SettingsGroup>
             <SettingsRow

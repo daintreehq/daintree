@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from "react";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDeferredLoading } from "@/hooks";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Eye, EyeOff, ChevronRight } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
@@ -73,6 +75,9 @@ export function McpServerSettingsTab() {
   const [runtimeSnapshot, setRuntimeSnapshot] =
     useState<McpRuntimeSnapshot>(INITIAL_RUNTIME_SNAPSHOT);
   const [loading, setLoading] = useState(true);
+  // Past the Doherty threshold only, so a fast read never flashes bones — the
+  // bones' own delayed pulse is switched off in performance mode.
+  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   // One state, not two booleans: the plain and scoped copies share a single
   // reset timer, so independent flags let the second copy cancel the first's
   // reset and strand its "Copied!" indefinitely.
@@ -623,9 +628,11 @@ export function McpServerSettingsTab() {
   const maxRecordsUnchanged = maxRecordsInput === auditMaxRecords.toString();
 
   const statusRow = !status.enabled ? null : loading ? (
-    <Skeleton label="Loading server status" className="px-4 py-3">
-      <SkeletonBone className="h-5 w-1/2" />
-    </Skeleton>
+    showLoading ? (
+      <Skeleton label="Loading server status" className="px-4 py-3">
+        <SkeletonBone immediate className="h-5 w-1/2" />
+      </Skeleton>
+    ) : null
   ) : runtimeSnapshot.state === "starting" ? (
     <SettingsRow
       label={
