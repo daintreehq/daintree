@@ -36,6 +36,7 @@ export function FindBar({ find }: FindBarProps) {
     if (isComposingRef.current) return;
     if (e.key === "Enter") {
       e.preventDefault();
+      e.stopPropagation();
       if (e.shiftKey) {
         goPrev();
       } else {
@@ -43,6 +44,7 @@ export function FindBar({ find }: FindBarProps) {
       }
     } else if (e.key.toLowerCase() === "g" && (e.metaKey || e.ctrlKey) && !e.altKey) {
       e.preventDefault();
+      e.stopPropagation();
       if (e.shiftKey) {
         goPrev();
       } else {
@@ -67,6 +69,7 @@ export function FindBar({ find }: FindBarProps) {
       onKeyDown={(e) => {
         if (isComposingRef.current || e.key !== "Escape") return;
         e.preventDefault();
+        e.stopPropagation();
         close();
       }}
     >

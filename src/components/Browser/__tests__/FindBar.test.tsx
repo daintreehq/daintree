@@ -81,6 +81,22 @@ describe("FindBar keyboard", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the keys it handles from reaching the pane's own shortcuts", () => {
+    const outer = vi.fn();
+    render(
+      <div onKeyDown={outer}>
+        <FindBar find={makeFindState({ query: "foo", matchCount: 2 })} />
+      </div>
+    );
+    const input = screen.getByLabelText("Find in page");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "g", metaKey: true });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(outer).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "a" });
+    expect(outer).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves Escape to an IME composition in progress", () => {
     const close = vi.fn();
     render(<FindBar find={makeFindState({ close, isComposingRef: { current: true } })} />);
