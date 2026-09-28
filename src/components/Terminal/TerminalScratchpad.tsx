@@ -293,10 +293,10 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       />
 
       <div
-        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-border-default px-3 text-3xs text-text-secondary"
+        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-divider px-3 text-3xs text-text-secondary"
         data-testid="terminal-scratchpad-status"
       >
-        <span className="flex min-w-0 items-center gap-1">
+        <span className="flex min-w-0 items-center gap-1.5">
           <Info aria-hidden="true" className="size-3 shrink-0" />
           <span id={hintId} className="truncate">
             Temporary with this terminal
