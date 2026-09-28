@@ -5,6 +5,7 @@ import type { AgentPreset } from "@/config/agents";
 import { Button } from "@/components/ui/button";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   Select,
   SelectContent,
@@ -146,7 +147,9 @@ export function FallbackChainEditor({
                     <span className="text-xs text-text-secondary font-mono tabular-nums">
                       {idx + 1}.
                     </span>
-                    <span className="truncate">{name}</span>
+                    <TruncatedTooltip content={name}>
+                      <span className="truncate">{name}</span>
+                    </TruncatedTooltip>
                   </span>
                 }
                 description={missing ? "This preset no longer exists, so it is skipped" : undefined}

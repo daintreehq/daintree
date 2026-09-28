@@ -4,6 +4,7 @@ import { CircleStop, Play, RotateCw, Server, X } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -111,11 +112,17 @@ function DevServerRow({
         className={cn("status-mark flex-shrink-0 w-2 h-2 rounded-full", presentation.dotClass)}
         aria-hidden="true"
       />
-      {/* The log line rides the text, not the row: a title on the row would be
-          inherited by the action buttons and show beside their own tooltips. */}
-      <div className="flex flex-col min-w-0 flex-1" title={session.lastOutput}>
-        <span className="truncate text-xs font-medium text-text-primary">{worktreeName}</span>
-        <span className="flex min-w-0 items-baseline gap-1.5 text-xs text-text-secondary">
+      <div className="flex flex-col min-w-0 flex-1">
+        <TruncatedTooltip content={worktreeName}>
+          <span className="truncate text-xs font-medium text-text-primary">{worktreeName}</span>
+        </TruncatedTooltip>
+        {/* The log line rides the status line only: on the row it would be inherited
+            by the action buttons, and on the name it would sit over that name's own
+            full-text reveal. */}
+        <span
+          className="flex min-w-0 items-baseline gap-1.5 text-xs text-text-secondary"
+          title={session.lastOutput}
+        >
           <span className="shrink-0">{presentation.label}</span>
           {port && <span className="shrink-0 tabular-nums">:{port}</span>}
           {detail && (
