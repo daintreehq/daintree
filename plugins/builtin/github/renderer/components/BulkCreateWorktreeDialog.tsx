@@ -1153,7 +1153,7 @@ export function BulkCreateWorktreeDialog({
               ? "Creation complete"
               : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
         </AppDialog.Title>
-        {!isExecuting && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body>

@@ -1166,7 +1166,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       <ConfirmDialog
         isOpen={pendingPatch !== null}
         onClose={handleCancelApplyPatch}
-        title={`Apply patch to ${pendingPatchName}?`}
+        title={`Apply patch to '${pendingPatchName}'?`}
         description={
           <span>
             Runs <span className="font-mono">git apply</span> with the diff below in{" "}
