@@ -15,6 +15,9 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
 }));
 
+const notifyMock = vi.fn();
+vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => notifyMock(...args) }));
+
 vi.mock("@/utils/timeAgo", () => ({
   formatTimeAgo: (date: string) => `time:${date}`,
 }));
@@ -57,6 +60,8 @@ const rowOf = (commit: GitCommit) => document.getElementById(`local-commit-row-$
 
 beforeEach(() => {
   dispatchMock.mockReset();
+  dispatchMock.mockResolvedValue({ ok: true });
+  notifyMock.mockReset();
   listCommitsMock.mockReset();
   listPushCommitsMock.mockReset();
   listPushCommitsMock.mockRejectedValue(new Error("no remote"));
@@ -96,6 +101,23 @@ describe("CommitList", () => {
       expect.objectContaining({ cwd: "/tmp/repo", branch: "main", skip: 0 })
     );
     expect(listPushCommitsMock).toHaveBeenCalledWith("/tmp/repo", "main", 100);
+  });
+
+  it("offers one way to try again when the browser hand-off fails", async () => {
+    dispatchMock.mockResolvedValue({ ok: false, error: { code: "EXECUTION_ERROR" } });
+    const { getByRole } = await renderList([commitNoBody]);
+
+    fireEvent.click(getByRole("button", { name: /view on github/i }));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const payload = notifyMock.mock.calls[0]![0] as {
+      type: string;
+      action?: { label: string; onClick: () => void };
+    };
+    expect(payload.type).toBe("error");
+    expect(payload.action?.label).toBe("Try again");
+    payload.action!.onClick();
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
   });
 
   it("opens the branch's commits on GitHub and closes", async () => {
