@@ -103,7 +103,12 @@ export const PopoverSearchField = forwardRef<HTMLInputElement, PopoverSearchFiel
             disabled={inputProps.disabled}
             // Pressing the button would otherwise pull focus off the input.
             onMouseDown={(event) => event.preventDefault()}
-            onClick={onClear}
+            // The button goes away with the query, so focus goes back to the text
+            // rather than falling to the body.
+            onClick={() => {
+              onClear();
+              localRef.current?.focus();
+            }}
           >
             <X className="h-3 w-3" aria-hidden="true" />
           </button>

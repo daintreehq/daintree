@@ -186,6 +186,7 @@ describe("search inside a dismissable layer", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
     expect(onClear).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(screen.getByLabelText("Find"));
   });
 });
 

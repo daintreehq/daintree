@@ -100,10 +100,7 @@ export function BranchPickerPanel({
         // "Clear", not the family default: the no-match state owns "Clear
         // search", and two buttons with one name are indistinguishable.
         clearLabel="Clear"
-        onClear={() => {
-          setQuery("");
-          inputRef.current?.focus();
-        }}
+        onClear={() => setQuery("")}
         onKeyDown={handleKeyDown}
         role="combobox"
         aria-label={searchAriaLabel}

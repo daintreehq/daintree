@@ -145,13 +145,13 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 
 ### Search Field
 
-**Role:** Every place the app offers a query box — the Worktrees rail, the settings nav search, settings-page filters, palette header inputs, find bars, log and audit filters. One control in two sizes.
+**Role:** Every place the app offers a query box — the Worktrees rail, the settings nav search, settings-page filters, palette header inputs, find bars, log and audit filters. One control: two inset sizes (dense and compact) plus the palette header size.
 
 ```tsx
 <SearchField size="compact" value={q} onChange={...} onClear={...} aria-label="Search worktrees" />
 ```
 
-**Usage:** Use `SearchField` (`src/components/ui/SearchField.tsx`); never hand-roll a wrapper, magnifier and input. Styling lives in `src/styles/components/search-field.css`, inside `@layer components` so a caller's utilities (a width, a flex basis) win. Three sizes, and sites never set their own height: `compact` is 28px `text-xs` for rails, nav columns and dropdown headers; `dense` is 24px `text-xs` for filter strips and pane toolbars, level with xs chips and icon buttons; `palette` is 38px `text-sm` for palette and dialog headers (`AppPaletteDialog.Input` renders it).
+**Usage:** Use `SearchField` (`src/components/ui/SearchField.tsx`); never hand-roll a wrapper, magnifier and input. Styling lives in `src/styles/components/search-field.css`, inside `@layer components` so a caller's utilities (a width, a flex basis) win. Two inset sizes and a header size, and sites never set their own height: `compact` is 28px `text-xs` for rails, nav columns and dropdown headers; `dense` is 24px `text-xs` for filter strips and pane toolbars, level with xs chips and icon buttons; `palette` is 38px `text-sm` for palette and dialog headers (`AppPaletteDialog.Input` renders it).
 
 **Escape** clears before it closes. A `SearchField` given `onClear` claims Escape while it holds a query — clears it and stops the key there — and lets an empty field's Escape fall through to the surface. It runs after the caller's own `onKeyDown` and stands down if that handler claimed the key (a field that first closes its own popover), and during IME composition. Inside a Radix popover the layer dismisses on capture before the field sees the key, so the popover passes `clearSearchBeforeDismiss` from its `onEscapeKeyDown`. A site that can type a query has a clear button: pass `onClear`. In-page find bars (terminal, browser) are the exception: they own Escape and have no clear button.
 
