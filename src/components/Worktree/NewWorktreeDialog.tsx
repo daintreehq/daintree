@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
@@ -1411,8 +1412,11 @@ export function NewWorktreeDialog({
             </Button>
             <Button
               variant="contrast"
-              onClick={handleCreate}
-              disabled={submitDisabled}
+              onClick={() => {
+                if (!submitDisabled) handleCreate();
+              }}
+              aria-disabled={submitDisabled || undefined}
+              className={cn(submitDisabled && ARIA_DISABLED_CLASSES)}
               aria-keyshortcuts="Meta+Enter Control+Enter"
               data-testid="create-worktree-button"
             >

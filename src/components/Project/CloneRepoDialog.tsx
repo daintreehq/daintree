@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
+import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, CircleSlash, FolderOpen, LogIn } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -815,6 +817,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                     id="clone-parent-dir"
                     value={parentPath}
                     onBrowse={() => void pickDirectory()}
+                    // Enter here answers like the dialog's other fields do.
+                    onEnter={() => {
+                      if (canClone && !isCloning && !isComplete) void startClone();
+                    }}
                     disabled={isCloning}
                     browseLabel="Browse for a location"
                   />
@@ -889,8 +895,12 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             <Button
               ref={footerActionRef}
               variant="contrast"
-              onClick={() => void startClone()}
-              disabled={isCloning || !canClone}
+              onClick={() => {
+                if (isCloning || !canClone) return;
+                void startClone();
+              }}
+              aria-disabled={isCloning || !canClone || undefined}
+              className={cn((isCloning || !canClone) && ARIA_DISABLED_CLASSES)}
             >
               Retry
             </Button>
@@ -902,8 +912,12 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             </Button>
             <Button
               variant="contrast"
-              onClick={() => void startClone()}
-              disabled={!canClone}
+              onClick={() => {
+                if (!canClone) return;
+                void startClone();
+              }}
+              aria-disabled={!canClone || undefined}
+              className={cn(!canClone && ARIA_DISABLED_CLASSES)}
               loading={isCloning}
               aria-keyshortcuts="Enter"
             >

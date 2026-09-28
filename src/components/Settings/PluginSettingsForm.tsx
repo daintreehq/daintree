@@ -836,7 +836,7 @@ function SettingField({
           void handleReset();
         }}
         onClose={() => setConfirmingSecretClear(false)}
-        title={`Clear ${label}?`}
+        title={`Clear '${label}'?`}
         description="The saved value is deleted. The plugin can't use it until you enter it again."
         confirmLabel={`Clear ${label}`}
         zIndex="nested"

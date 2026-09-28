@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/SegmentedRadioGroup";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 /**
  * Shared form conventions for the project-entry dialogs (clone, create folder,
@@ -90,10 +91,17 @@ export function DirectoryPickerField({
         title={value || undefined}
         onClick={onBrowse}
         onKeyDown={(e) => {
-          if (e.key === " " || (e.key === "Enter" && !value)) {
+          if (e.key === " ") {
             e.preventDefault();
             onBrowse();
-          } else if (e.key === "Enter" && onEnter && !e.nativeEvent.isComposing) {
+            return;
+          }
+          // The same Enter every form dialog answers: plain, never mid-composition.
+          if (!isEnterToSubmit(e)) return;
+          if (!value) {
+            e.preventDefault();
+            onBrowse();
+          } else if (onEnter) {
             e.preventDefault();
             onEnter();
           }

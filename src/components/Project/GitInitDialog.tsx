@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, AlertTriangle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -772,7 +773,14 @@ export function GitInitDialog({
           // part-way, so the only honest footer is the escape hatch, visibly
           // unavailable — rather than a primary button wearing a spinner over
           // its own label.
-          <Button variant="ghost" data-testid="git-init-cancel" disabled>
+          // Focusable like every footer action: announced unavailable, not removed
+          // from the tab order.
+          <Button
+            variant="ghost"
+            data-testid="git-init-cancel"
+            aria-disabled="true"
+            className={ARIA_DISABLED_CLASSES}
+          >
             Cancel
           </Button>
         ) : error ? (
@@ -784,22 +792,37 @@ export function GitInitDialog({
               ref={footerActionRef}
               variant="contrast"
               data-testid="git-init-retry"
-              onClick={() => void startInitialization()}
-              disabled={isInitializing || !canStart}
+              onClick={() => {
+                if (isInitializing || !canStart) return;
+                void startInitialization();
+              }}
+              aria-disabled={isInitializing || !canStart || undefined}
+              className={cn((isInitializing || !canStart) && ARIA_DISABLED_CLASSES)}
             >
               Retry
             </Button>
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-3">
-            <Button variant="ghost" onClick={onCancel} disabled={isInitializing}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (!isInitializing) onCancel();
+              }}
+              aria-disabled={isInitializing || undefined}
+              className={cn(isInitializing && ARIA_DISABLED_CLASSES)}
+            >
               Cancel
             </Button>
             <Button
               variant="contrast"
               data-testid="git-init-start"
-              onClick={() => void startInitialization()}
-              disabled={isInitializing || !canStart}
+              onClick={() => {
+                if (isInitializing || !canStart) return;
+                void startInitialization();
+              }}
+              aria-disabled={isInitializing || !canStart || undefined}
+              className={cn((isInitializing || !canStart) && ARIA_DISABLED_CLASSES)}
             >
               Initialize repository
             </Button>

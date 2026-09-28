@@ -159,6 +159,10 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
               id="create-folder-parent"
               value={parentPath}
               onBrowse={() => void handleBrowseParent()}
+              // Enter here answers like the folder name field does.
+              onEnter={() => {
+                if (!isCreating) void handleCreate();
+              }}
               disabled={isCreating}
               browseLabel="Browse for a location"
             />

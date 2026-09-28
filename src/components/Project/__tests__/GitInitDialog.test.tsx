@@ -159,7 +159,7 @@ describe("GitInitDialog", () => {
     expect(initGitGuidedMock).not.toHaveBeenCalled();
 
     const button = startButton();
-    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBeNull();
 
     fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
@@ -229,7 +229,7 @@ describe("GitInitDialog", () => {
     });
 
     const button = startButton();
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.click(button);
     expect(initGitGuidedMock).not.toHaveBeenCalled();
@@ -718,7 +718,7 @@ describe("GitInitDialog", () => {
       fireEvent.change(nameInput(), { target: { value: "   " } });
 
       const start = startButton();
-      expect(start.disabled).toBe(true);
+      expect(start.getAttribute("aria-disabled")).toBe("true");
     });
 
     it("says why the button went dead instead of only painting the field red", () => {
@@ -1021,7 +1021,7 @@ describe("GitInitDialog", () => {
       for (const input of inputs) {
         const original = input.value;
         fireEvent.change(input, { target: { value: "   " } });
-        expect(start.disabled).toBe(true);
+        expect(start.getAttribute("aria-disabled")).toBe("true");
         // Emptying it must produce an explanation, and that explanation must be
         // wired to the field it is about — not merely painted on the border.
         const describedBy = input.getAttribute("aria-describedby");
