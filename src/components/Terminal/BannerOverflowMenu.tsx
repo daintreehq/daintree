@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { BannerAction } from "./InlineStatusBanner";
 
 interface BannerOverflowMenuProps {
@@ -32,17 +33,16 @@ export function BannerOverflowMenu({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={ariaLabel}
-          title="More options"
-          className="shrink-0"
-        >
-          <MoreHorizontal aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label={ariaLabel} className="shrink-0">
+              <MoreHorizontal aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">More options</TooltipContent>
+      </Tooltip>
       {/* `start`: the trigger sits at the left of a banner's control row, and
           an end-aligned menu hangs off the pane's left edge. */}
       <DropdownMenuContent align="start" className="min-w-44">

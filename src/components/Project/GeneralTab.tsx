@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import type { ChoiceboxOption } from "@/components/Settings/SettingsChoicebox";
@@ -488,34 +489,42 @@ export function GeneralTab({
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
                     {resolvedSwatches.map((hex, i) => (
-                      <button
-                        key={PRESET_SWATCHES[i]!.cssVar}
-                        type="button"
-                        title={PRESET_SWATCHES[i]!.label}
-                        aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
-                        onClick={() => onColorChange(hex)}
-                        className={cn(
-                          "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
-                          color === hex
-                            ? "border-text-primary scale-110 shadow-sm"
-                            : "border-transparent hover:border-border-default hover:scale-105"
-                        )}
-                        style={{ backgroundColor: hex }}
-                      />
+                      <Tooltip key={PRESET_SWATCHES[i]!.cssVar}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
+                            onClick={() => onColorChange(hex)}
+                            className={cn(
+                              "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
+                              color === hex
+                                ? "border-text-primary scale-110 shadow-sm"
+                                : "border-transparent hover:border-border-default hover:scale-105"
+                            )}
+                            style={{ backgroundColor: hex }}
+                          />
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">{PRESET_SWATCHES[i]!.label}</TooltipContent>
+                      </Tooltip>
                     ))}
                   </div>
                   <div className="flex items-center gap-2">
                     {/* The native input is invisible, so the ring is drawn on the swatch
                         it covers — the same has-focus shell RadioChoice uses. */}
                     <div className="relative rounded-[var(--radius-md)] has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent-primary">
-                      <input
-                        ref={colorInputRef}
-                        type="color"
-                        value={color ?? "#6366f1"}
-                        onChange={(e) => onColorChange(e.target.value.toLowerCase())}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        aria-label="Pick a custom color"
-                      />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <input
+                            ref={colorInputRef}
+                            type="color"
+                            value={color ?? "#6366f1"}
+                            onChange={(e) => onColorChange(e.target.value.toLowerCase())}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            aria-label="Pick a custom color"
+                          />
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Pick a custom color</TooltipContent>
+                      </Tooltip>
                       <div
                         className="h-8 w-8 rounded-[var(--radius-md)] border border-border-strong flex items-center justify-center cursor-pointer"
                         style={{

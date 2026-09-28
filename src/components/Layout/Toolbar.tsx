@@ -1484,13 +1484,11 @@ export function Toolbar({
                       </ContextMenuTrigger>
                     </DropdownMenuTrigger>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom" className="font-medium">
+                  <TooltipContent side="bottom">
                     {copyTreeNotice ? (
                       <span className="flex flex-col gap-0.5">
-                        <span>{copyTreeNotice.title}</span>
-                        <span className="font-normal text-text-secondary">
-                          {copyTreeNotice.message}
-                        </span>
+                        <span className="font-medium">{copyTreeNotice.title}</span>
+                        <span className="text-text-secondary">{copyTreeNotice.message}</span>
                       </span>
                     ) : isCopyingTree ? (
                       "Copying…"
@@ -2536,7 +2534,7 @@ export function Toolbar({
                   )}
                 </ContextMenu>
                 {currentProject && (
-                  <TooltipContent side="bottom" className="max-w-[28rem]">
+                  <TooltipContent side="bottom">
                     <ToolbarProjectPillTooltipBody
                       name={currentProject.name}
                       branchLabel={pillBranchLabel}
@@ -2545,7 +2543,7 @@ export function Toolbar({
                   </TooltipContent>
                 )}
                 {!currentProject && currentScratch && (
-                  <TooltipContent side="bottom" className="max-w-[28rem]">
+                  <TooltipContent side="bottom">
                     <ToolbarProjectPillTooltipBody
                       name={currentScratch.name}
                       branchLabel={undefined}

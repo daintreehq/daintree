@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, type RenderOptions } from "@testing-library/react";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSelect } from "../SettingsSelect";
 import { SettingsNumberInput } from "../SettingsNumberInput";
@@ -11,6 +11,12 @@ import { SettingsChoicebox, type ChoiceboxOption } from "../SettingsChoicebox";
 import { SettingsCheckbox } from "../SettingsCheckbox";
 import { SettingsSwitch } from "../SettingsSwitch";
 import { PresetColorPicker } from "../PresetColorPicker";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 // Strip CSS comments without treating a `/*` inside a quoted string as one —
 // index.css opens with `@source not "../.lessons/**/*"`, whose glob contains a

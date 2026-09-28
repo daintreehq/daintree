@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+import {
+  cleanup,
+  render as rtlRender,
+  screen,
+  fireEvent,
+  type RenderOptions,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 
@@ -27,6 +33,12 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 }));
 
 import { DevServerDashboard } from "../DevServerDashboard";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 function session(overrides: Partial<DevPreviewSessionState> = {}): DevPreviewSessionState {
   return {
@@ -102,7 +114,14 @@ describe("DevServerDashboard", () => {
     expect(screen.getByText("feature-foo")).toBeTruthy();
     expect(screen.getByText(":4321")).toBeTruthy();
     expect(screen.queryByText("ready in 200ms")).toBeNull();
-    expect(container.querySelector("li")?.getAttribute("title")).toBe("ready in 200ms");
+    // On the text rather than the row, so the action buttons don't inherit it beside their
+    // own tooltips.
+    const row = container.querySelector("li")!;
+    expect(row.hasAttribute("title")).toBe(false);
+    const titled = row.querySelectorAll("[title]");
+    expect(titled).toHaveLength(1);
+    expect(titled[0]!.getAttribute("title")).toBe("ready in 200ms");
+    expect(titled[0]!.querySelector("button")).toBeNull();
   });
 
   it("shows progress output while a server is starting", () => {

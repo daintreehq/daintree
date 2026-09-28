@@ -119,7 +119,7 @@ export function ToolbarProjectPillTooltipBody({
       </div>
       {path ? (
         // Breaks after a separator where it can, inside a segment only where it must.
-        <div className="text-text-secondary font-mono text-2xs break-words">
+        <div className="text-text-secondary font-mono break-words">
           {path.split(/(?<=[/\\])/).map((segment, i) => (
             <Fragment key={i}>
               {segment}
@@ -128,7 +128,7 @@ export function ToolbarProjectPillTooltipBody({
           ))}
         </div>
       ) : (
-        <div className="text-text-secondary text-2xs">Scratch workspace</div>
+        <div className="text-text-secondary">Scratch workspace</div>
       )}
     </div>
   );

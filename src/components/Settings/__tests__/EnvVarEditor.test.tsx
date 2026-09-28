@@ -11,10 +11,15 @@
  *  - Removing a row commits the updated env immediately.
  *  - Renaming a key commits only when the new name is non-empty and unique.
  */
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render as rtlRender, fireEvent, screen, type RenderOptions } from "@testing-library/react";
 import { EnvVarEditor } from "../EnvVarEditor";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 vi.mock("lucide-react", () => ({
   X: () => <span data-testid="x-icon" />,

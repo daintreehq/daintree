@@ -5,6 +5,8 @@ import { PluginLogsSection, usePluginLogs } from "@/components/Plugin/PluginLogs
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
 import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
 import {
@@ -57,6 +59,7 @@ function ProjectPluginRow({
 }) {
   const running = plugin.state === "active";
   const failed = plugin.loadError !== undefined;
+  const nameTruncation = useTruncationDetection();
 
   return (
     <li
@@ -67,46 +70,54 @@ function ProjectPluginRow({
         !selected && "hover:bg-overlay-subtle"
       )}
     >
-      <button
-        type="button"
-        aria-current={selected ? "true" : undefined}
-        onClick={onSelect}
-        title={plugin.version ? `${plugin.displayName} v${plugin.version}` : plugin.displayName}
-        className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+      <TruncatedTooltip
+        content={plugin.version ? `${plugin.displayName} v${plugin.version}` : plugin.displayName}
+        isTruncated={nameTruncation.isTruncated}
       >
-        {/* The same tile and the same two lines as an installed row, so the
-            project section reads as part of one list rather than a second
-            layout grafted on top of it. */}
-        <PluginGlyphTile icon={Package} size="sm" dimmed={!running || failed} />
-        <span className="min-w-0 flex-1">
-          <span
-            className={cn("block text-sm font-medium truncate", !running && "text-text-secondary")}
-          >
-            {plugin.displayName}
+        <button
+          type="button"
+          aria-current={selected ? "true" : undefined}
+          onClick={onSelect}
+          className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+        >
+          {/* The same tile and the same two lines as an installed row, so the
+              project section reads as part of one list rather than a second
+              layout grafted on top of it. */}
+          <PluginGlyphTile icon={Package} size="sm" dimmed={!running || failed} />
+          <span className="min-w-0 flex-1">
+            <span
+              ref={nameTruncation.ref}
+              className={cn(
+                "block text-sm font-medium truncate",
+                !running && "text-text-secondary"
+              )}
+            >
+              {plugin.displayName}
+            </span>
+            <span className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]">
+              {failed || plugin.collidesWithGlobal ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
+                    failed ? "text-status-danger" : "text-status-warning"
+                  )}
+                >
+                  <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{failed ? "Error" : "Id clash"}</span>
+                </span>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary font-mono">
+                  {plugin.id}
+                </span>
+              )}
+              {plugin.state !== "active" && (
+                <span className={cn(BADGE_CLASS, "shrink-0")}>{STATE_BADGE[plugin.state]}</span>
+              )}
+              <span className={cn(BADGE_CLASS, "shrink-0")}>Project</span>
+            </span>
           </span>
-          <span className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]">
-            {failed || plugin.collidesWithGlobal ? (
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
-                  failed ? "text-status-danger" : "text-status-warning"
-                )}
-              >
-                <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{failed ? "Error" : "Id clash"}</span>
-              </span>
-            ) : (
-              <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary font-mono">
-                {plugin.id}
-              </span>
-            )}
-            {plugin.state !== "active" && (
-              <span className={cn(BADGE_CLASS, "shrink-0")}>{STATE_BADGE[plugin.state]}</span>
-            )}
-            <span className={cn(BADGE_CLASS, "shrink-0")}>Project</span>
-          </span>
-        </span>
-      </button>
+        </button>
+      </TruncatedTooltip>
 
       {plugin.state === "staged" && (
         <span className="shrink-0 pr-2.5">

@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertTriangle, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
 import { notify } from "@/lib/notify";
 import { useShallow } from "zustand/react/shallow";
@@ -218,26 +219,34 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
         )}
         {!editing && (
           <span className="ml-auto flex items-center gap-0.5">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Edit note"
-              title="Edit note"
-              onClick={() => setEditing(true)}
-            >
-              <Pencil />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Delete note"
-              title="Delete note"
-              onClick={handleDelete}
-            >
-              <Trash2 />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Edit note"
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Edit note</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Delete note"
+                  onClick={handleDelete}
+                >
+                  <Trash2 />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Delete note</TooltipContent>
+            </Tooltip>
           </span>
         )}
       </div>

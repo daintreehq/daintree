@@ -11,6 +11,7 @@ import {
   documentTabClassName,
 } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import type { AgentState } from "@/types";
 
 /**
@@ -61,8 +62,22 @@ function TabStateIndicator({ agentState }: { agentState: AgentState | null | und
  * the end. It has already been capped to a tab's worth of text, so it simply
  * truncates from the end like every other tab in the app.
  */
-function TabLabel({ label, isTaskTitle }: { label: string; isTaskTitle: boolean }) {
-  if (isTaskTitle) return <span className="truncate">{label}</span>;
+function TabLabel({
+  label,
+  isTaskTitle,
+  labelRef,
+}: {
+  label: string;
+  isTaskTitle: boolean;
+  /** Measures a task title for clipping; a `Session N` label never needs revealing. */
+  labelRef?: (el: HTMLElement | null) => void;
+}) {
+  if (isTaskTitle)
+    return (
+      <span ref={labelRef} className="truncate">
+        {label}
+      </span>
+    );
   const split = label.lastIndexOf(" ");
   if (split <= 0) return <span className="truncate">{label}</span>;
   return (
@@ -135,6 +150,7 @@ function SessionTabChip({
 }: SessionTabChipProps) {
   const stateId = `${tabId}-state`;
   const title = tab.fullTitle ?? tab.label;
+  const { ref: labelRef, isTruncated: isLabelTruncated } = useTruncationDetection();
 
   const chip = (
     <div
@@ -183,7 +199,11 @@ function SessionTabChip({
     >
       {isActive && <DocumentTabIndicator />}
       <TabStateIndicator agentState={agentState} />
-      <TabLabel label={tab.label} isTaskTitle={tab.fullTitle !== undefined} />
+      <TabLabel
+        label={tab.label}
+        isTaskTitle={tab.fullTitle !== undefined}
+        labelRef={labelRef}
+      />
       <DocumentTabClose
         title={title}
         isActive={isActive}
@@ -198,15 +218,20 @@ function SessionTabChip({
     </div>
   );
 
-  // The whole task title, since the visible one may be capped or truncated. Only for a
-  // task title: a `Session N` tooltip would repeat the tab word for word. The wrapper
-  // stays mounted either way and is simply held shut — swapping it in when a title
-  // arrives would remount the tab and drop keyboard focus on the floor.
-  const hasTitleTip = tab.fullTitle !== undefined;
+  // The whole task title, whenever the visible one was capped upstream or is clipped
+  // here — `TruncatedTooltip`'s rule. Only for a task title: a `Session N` tooltip would
+  // repeat the tab word for word. Spelled out rather than wrapped in `TruncatedTooltip`,
+  // which hands a non-button trigger `tabIndex={0}` and would put every clipped lane back
+  // in the tab order. The wrapper stays mounted either way and is simply held shut —
+  // swapping it in when a title arrives would remount the tab and drop keyboard focus.
+  const hasTitleTip =
+    tab.fullTitle !== undefined && (tab.fullTitle !== tab.label || isLabelTruncated);
   return (
     <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
       <TooltipTrigger asChild>{chip}</TooltipTrigger>
-      {hasTitleTip && <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>}
+      {tab.fullTitle !== undefined && (
+        <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
+      )}
     </Tooltip>
   );
 }

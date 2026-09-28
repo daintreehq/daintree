@@ -45,9 +45,7 @@ export function PRDetectionPausedIndicator({
       ) : (
         trigger
       )}
-      <TooltipContent side="bottom" className="px-3 py-1.5">
-        <span className="text-xs text-text-secondary">PR detection paused — retrying</span>
-      </TooltipContent>
+      <TooltipContent side="bottom">PR detection paused — retrying</TooltipContent>
     </Tooltip>
   );
 }

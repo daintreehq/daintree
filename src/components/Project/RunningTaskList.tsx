@@ -9,6 +9,8 @@ import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { logError } from "@/utils/logger";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 
@@ -157,8 +159,11 @@ export function RunningTaskList({ worktreeId, onFocusFallback }: RunningTaskList
       const next = rows[at + 1] ?? rows[at - 1];
       const options = { preventScroll: true, focusVisible: keyboard };
       const target = next?.querySelector<HTMLElement>("[data-task-focus]");
-      if (target) target.focus(options);
-      else onFocusFallback?.(options);
+      if (target) {
+        // Focus follows the dismissal; it is not asking for the command's full text.
+        armTooltipFocusSuppression();
+        target.focus(options);
+      } else onFocusFallback?.(options);
     }
     handleDismiss(id);
   };
@@ -314,15 +319,16 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       <StatusDot status={status} />
 
       {/* Command */}
-      <button
-        type="button"
-        data-task-focus=""
-        onClick={() => onFocus(terminal.id)}
-        className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0 rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-        title={command}
-      >
-        {command}
-      </button>
+      <TruncatedTooltip content={command}>
+        <button
+          type="button"
+          data-task-focus=""
+          onClick={() => onFocus(terminal.id)}
+          className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0 rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        >
+          {command}
+        </button>
+      </TruncatedTooltip>
 
       {/* Elapsed time */}
       {/* Elapsed time and the failure word trade places with the actions on

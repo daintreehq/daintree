@@ -3,6 +3,7 @@ import { Check, X } from "lucide-react";
 import { HexColorInput, HexColorPicker } from "react-colorful";
 import { contrastRatio } from "@shared/theme";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { inputVariants } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -99,20 +100,24 @@ export function PresetColorPicker({
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-border-strong focus-visible:ring-accent-primary focus-visible:outline-hidden transition-shadow"
-          aria-label={ariaLabel}
-          title={ariaLabel}
-          data-testid="preset-color-picker-trigger"
-        >
-          <span
-            className="block w-4 h-4 rounded-full border border-border-default/60"
-            style={{ backgroundColor: effectiveColor }}
-          />
-        </button>
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-border-strong focus-visible:ring-accent-primary focus-visible:outline-hidden transition-shadow"
+              aria-label={ariaLabel}
+              data-testid="preset-color-picker-trigger"
+            >
+              <span
+                className="block w-4 h-4 rounded-full border border-border-default/60"
+                style={{ backgroundColor: effectiveColor }}
+              />
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{ariaLabel}</TooltipContent>
+      </Tooltip>
       <PopoverContent
         align="start"
         className="w-56 p-3 space-y-3"

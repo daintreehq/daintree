@@ -496,7 +496,14 @@ export function TrashContainer({
       data-visible="true"
     >
       <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <Tooltip open={hintOpen || scopeTooltipOpen} onOpenChange={setScopeTooltipOpen}>
+        <Tooltip
+          open={hintOpen || scopeTooltipOpen}
+          onOpenChange={(open) => {
+            setScopeTooltipOpen(open);
+            // A close request (Escape, the pointer leaving) ends the moved hint too.
+            if (!open) setShowMovedHint(false);
+          }}
+        >
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
               <Button
@@ -533,7 +540,7 @@ export function TrashContainer({
               </Button>
             </PopoverTrigger>
           </TooltipTrigger>
-          <TooltipContent side="top" align="center" sideOffset={6}>
+          <TooltipContent side="top" align="center">
             {hintOpen
               ? "Moved to trash"
               : `Recently closed ${dockStatusScopeDescription(count, hereCount)}`}

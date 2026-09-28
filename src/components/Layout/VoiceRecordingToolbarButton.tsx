@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -47,8 +48,8 @@ export function VoiceRecordingToolbarButton({
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
-  const shortcut = useKeybindingDisplay("voiceInput.toggle");
-  const pauseShortcut = useKeybindingDisplay("voiceInput.togglePause");
+  const shortcut = useEffectiveCombo("voiceInput.toggle");
+  const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
   const ariaShortcut = useAriaKeyshortcuts("voiceInput.toggle");
   const hover = useShortcutHintHover("voiceInput.toggle");
 
@@ -214,19 +215,10 @@ export function VoiceRecordingToolbarButton({
             : contextLabel
               ? `Recording: ${contextLabel}`
               : "Recording in another panel";
-  const tooltipExtra = (() => {
-    const parts: Array<string | null> = [];
-    if (isRecording || isPaused) parts.push(formatDuration(elapsedSeconds));
-    if (isPaused) {
-      // The toggle shortcut would start a new session when focused elsewhere;
-      // the pause shortcut is the resume affordance the user actually wants.
-      if (pauseShortcut) parts.push(`Press ${pauseShortcut} to resume`);
-      else parts.push("Click to jump to panel");
-    } else {
-      parts.push(shortcut ? `Press ${shortcut} to stop` : "Click to jump to panel");
-    }
-    return parts.filter(Boolean).join(" · ");
-  })();
+  const elapsedLabel = isRecording || isPaused ? formatDuration(elapsedSeconds) : null;
+  // The toggle shortcut would start a new session when focused elsewhere; the
+  // pause shortcut is the resume affordance the user actually wants.
+  const actionCombo = isPaused ? pauseShortcut : shortcut;
 
   return (
     <ContextMenu>
@@ -333,9 +325,16 @@ export function VoiceRecordingToolbarButton({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-center">
-              <div className="font-medium">{tooltipTitle}</div>
-              {tooltipExtra && <div className="text-2xs text-text-secondary">{tooltipExtra}</div>}
+            <TooltipContent side="bottom">
+              <div className="flex flex-col gap-0.5">
+                <span className="font-medium">{tooltipTitle}</span>
+                {elapsedLabel && <span className="text-text-secondary">{elapsedLabel}</span>}
+                {actionCombo ? (
+                  createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)
+                ) : (
+                  <span className="text-text-secondary">Click to jump to panel</span>
+                )}
+              </div>
             </TooltipContent>
           </Tooltip>
         </span>

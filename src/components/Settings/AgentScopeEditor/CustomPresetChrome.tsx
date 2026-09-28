@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PresetColorPicker } from "../PresetColorPicker";
 import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "../SettingsGroup";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type { AgentPreset } from "@/config/agents";
 
 interface CustomPresetChromeProps {
@@ -47,6 +49,8 @@ export function CustomPresetChrome({
   useEffect(() => {
     if (!isEditing && restoreFocusRef.current) {
       restoreFocusRef.current = false;
+      // Returning focus is not asking for the button's tooltip.
+      armTooltipFocusSuppression();
       renameButtonRef.current?.focus();
     }
   }, [isEditing]);
@@ -93,18 +97,22 @@ export function CustomPresetChrome({
                 placeholder="Preset name"
               />
             ) : (
-              <Button
-                ref={renameButtonRef}
-                variant="ghost"
-                size="sm"
-                className="-mx-2 h-auto px-2 py-0.5 text-sm text-text-primary justify-start"
-                onClick={() => onStartEdit(selectedPreset)}
-                aria-label={`Edit ${selectedPreset.name}`}
-                title="Rename"
-              >
-                <span>{selectedPreset.name}</span>
-                <Pencil className="text-text-secondary" aria-hidden="true" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    ref={renameButtonRef}
+                    variant="ghost"
+                    size="sm"
+                    className="-mx-2 h-auto px-2 py-0.5 text-sm text-text-primary justify-start"
+                    onClick={() => onStartEdit(selectedPreset)}
+                    aria-label={`Edit ${selectedPreset.name}`}
+                  >
+                    <span>{selectedPreset.name}</span>
+                    <Pencil className="text-text-secondary" aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Rename</TooltipContent>
+              </Tooltip>
             )}
           </span>
         }

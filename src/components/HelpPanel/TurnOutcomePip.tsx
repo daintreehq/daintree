@@ -62,9 +62,7 @@ export function TurnOutcomePip({ outcome, onDismiss }: TurnOutcomePipProps) {
           </span>
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-64 whitespace-normal">
-        {title}
-      </TooltipContent>
+      <TooltipContent side="top">{title}</TooltipContent>
     </Tooltip>
   );
 }
