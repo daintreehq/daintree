@@ -61,7 +61,14 @@ export const FilterChip = React.forwardRef<HTMLButtonElement, FilterChipProps>(
         {...props}
       >
         {children}
-        {count !== undefined && <span className="tabular-nums">({count})</span>}
+        {/* The space is for the accessible name ("Dirty (3)"); the flex gap
+            already spaces the pixels, so it renders nothing. */}
+        {count !== undefined && (
+          <>
+            {" "}
+            <span className="tabular-nums">({count})</span>
+          </>
+        )}
       </button>
     );
   }

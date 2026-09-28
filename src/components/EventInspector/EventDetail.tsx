@@ -39,7 +39,7 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
               e.stopPropagation();
               onToggle(filterKey, value);
             }}
-            className="w-fit max-w-full font-mono"
+            className="w-fit max-w-full"
           >
             <span className="truncate">{strValue}</span>
           </FilterChip>

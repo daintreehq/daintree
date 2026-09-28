@@ -246,6 +246,15 @@ describe("Button pressed toggle", () => {
     }
   });
 
+  it("announces the state it draws even when a caller also passes aria-pressed", () => {
+    const { container } = render(
+      <Button pressed aria-pressed={false}>
+        Toggle
+      </Button>
+    );
+    expect(container.querySelector("button")!.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("leaves an ordinary button with no toggle semantics and no pressed paint", () => {
     const button = renderToggle({}, undefined);
     expect(button.hasAttribute("aria-pressed")).toBe(false);

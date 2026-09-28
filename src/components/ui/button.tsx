@@ -204,9 +204,11 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         // <body> mid-operation. `loading` already vetoes activation.
         disabled={loading ? undefined : disabled}
         onClick={handleClick}
-        aria-pressed={pressed}
-        data-toggle={pressed !== undefined || undefined}
         {...props}
+        // After the spread: when the caller asks for a toggle, the state it
+        // draws is the state it announces. Undefined leaves a raw aria-pressed
+        // (the toolbar's armed chip) alone.
+        {...(pressed !== undefined && { "aria-pressed": pressed, "data-toggle": true })}
         // Component-owned loading state — placed after the prop spread so a
         // consumer can't silently desync the announced ARIA state.
         // A consumer's own busy signal (a rotating refresh glyph) passes through
