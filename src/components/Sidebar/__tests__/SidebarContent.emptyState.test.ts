@@ -188,7 +188,7 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(source).not.toContain('title={formatButtonTitle("Open overview"');
       const overviewTooltips = [
         ...source.matchAll(
-          /<Tooltip>\s*<TooltipTrigger asChild>\s*<Button\b[^>]*onClick=\{onOpenOverview\}[^>]*aria-keyshortcuts=\{overviewAriaShortcut\}[^>]*>\s*Open overview\s*<\/Button>\s*<\/TooltipTrigger>\s*<TooltipContent[^>]*>\s*\{createTooltipContent\("Open overview", overviewCombo\)\}/g
+          /<Tooltip>\s*<TooltipTrigger asChild>\s*<Button\b[^>]*onClick=\{onOpenOverview\}[^>]*aria-keyshortcuts=\{overviewAriaShortcut\}[^>]*>\s*Open overview\s*<\/Button>\s*<\/TooltipTrigger>\s*<TooltipContent[^>]*>\s*\{createTooltipContent\("Open overview", overviewShortcut\)\}/g
         ),
       ];
       expect(overviewTooltips).toHaveLength(3);
