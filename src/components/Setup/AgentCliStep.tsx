@@ -3,7 +3,6 @@ import { Spinner } from "@/components/ui/Spinner";
 import {
   CircleCheck,
   CircleDashed,
-  Loader2,
   ExternalLink,
   ChevronDown,
   ChevronRight,
