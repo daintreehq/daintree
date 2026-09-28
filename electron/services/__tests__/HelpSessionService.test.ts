@@ -2774,6 +2774,40 @@ describe("HelpSessionService", () => {
       );
     });
 
+    it("honours a deliberate close from a live renderer during a project-scoped capture (#10815)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 95,
+        projectId: "proj-sleep",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-sleep")).toBe(true);
+      service.reportPanelOpen("proj-sleep", true);
+
+      // Project sleep keeps the project view alive, so the user can still
+      // close the panel while the agent is flushing.
+      const revoke = service.revokeByProjectId("proj-sleep");
+      service.reportPanelOpen("proj-sleep", false);
+      resolveKill("agent-resume-id-sleep");
+      await revoke;
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-sleep", 0)
+      );
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-sleep",
+          panelWasOpen: false,
+        })
+      );
+    });
+
     it("reportPanelOpen(false) clears a prior open report so a later eviction does not auto-resume (#10815)", async () => {
       mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-789");
 

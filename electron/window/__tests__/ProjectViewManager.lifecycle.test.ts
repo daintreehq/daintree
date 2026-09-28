@@ -245,6 +245,7 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
 import { onProjectPresenceChanged } from "../projectPresenceChanges.js";
 import { BACKGROUND_HYDRATION_TIMEOUT_MS } from "../ProjectViewRestoreController.js";
 import { MIN_PRESSURE_EVICTION_AGE_MS } from "../ProjectViewEvictionController.js";
@@ -1506,6 +1507,30 @@ describe("ProjectViewManager — startup view crash hook (#12954)", () => {
 
     expect(setup.manager.notifyActiveViewCrashed({ id: 9_999 } as never)).toBe(false);
     expect(onViewCrashed).not.toHaveBeenCalled();
+  });
+
+  it("routes a real startup-view crash through createWindow's handler to onViewCrashed once, then reloads", () => {
+    const setup = createManager();
+    const onViewCrashed = vi.fn();
+    setup.manager.onViewCrashed = onViewCrashed;
+    attachAppViewRendererGoneHandler({
+      win: setup.win as never,
+      appWebContents: setup.initialWc as never,
+      getProjectViewManager: () => setup.manager,
+      getRecoveryUrl: () => "app://daintree/recovery.html",
+    });
+    vi.useFakeTimers();
+    try {
+      setup.initialWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+
+      expect(onViewCrashed).toHaveBeenCalledTimes(1);
+      expect(onViewCrashed).toHaveBeenCalledWith(setup.initialWc);
+      expect(setup.initialWc.reload).not.toHaveBeenCalled();
+      vi.runAllTimers();
+      expect(setup.initialWc.reload).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("skips the startup view once it has been cached behind another project", async () => {

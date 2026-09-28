@@ -22,6 +22,7 @@ vi.mock("../../utils/logger.js", () => ({ logError: vi.fn(), logWarn: vi.fn() })
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { logError, logWarn } from "../../utils/logger.js";
 import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
+import { isWindowRecreating } from "../../lifecycle/windowRecreationState.js";
 import type { ProjectViewManager } from "../ProjectViewManager.js";
 
 type Handler = (event: unknown, details: { reason: string; exitCode: number }) => void;
@@ -87,6 +88,7 @@ describe("app-view render-process-gone (#12954)", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("registers exactly one render-process-gone listener", () => {
@@ -216,10 +218,48 @@ describe("app-view render-process-gone (#12954)", () => {
 
     crash("crashed");
     expect(onViewCrashed).toHaveBeenCalledTimes(1);
-    vi.runAllTimers();
+    await vi.runAllTimersAsync();
 
     expect(win.destroy).toHaveBeenCalledTimes(1);
     expect(onRecreateWindow).toHaveBeenCalledTimes(1);
+    expect(isWindowRecreating()).toBe(false);
+  });
+
+  it("releases the recreation guard when recreating after an explicit oom fails", async () => {
+    const onRecreateWindow = vi.fn(() => Promise.reject(new Error("recreate failed")));
+    const { win, crash } = createHarness({ onRecreateWindow });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    crash("oom");
+    await vi.runAllTimersAsync();
+
+    expect(win.destroy).toHaveBeenCalledTimes(1);
+    expect(onRecreateWindow).toHaveBeenCalledTimes(1);
+    expect(isWindowRecreating()).toBe(false);
+  });
+
+  it("does not reload when the window is destroyed between the crash and the deferred reload", () => {
+    const { pvm, onViewCrashed } = createClaimingManager({ claimed: true, active: true });
+    const { appWebContents, win, crash } = createHarness({ pvm });
+
+    crash("crashed");
+    expect(onViewCrashed).toHaveBeenCalledTimes(1);
+    win.isDestroyed.mockReturnValue(true);
+    vi.runAllTimers();
+
+    expect(appWebContents.reload).not.toHaveBeenCalled();
+  });
+
+  it("does not count memory evictions toward the crash-loop budget", () => {
+    const { appWebContents, crash } = createHarness();
+
+    crash("memory-eviction", 0);
+    crash("memory-eviction", 0);
+    crash("crashed");
+    vi.runAllTimers();
+
+    expect(appWebContents.loadURL).not.toHaveBeenCalled();
+    expect(appWebContents.reload).toHaveBeenCalledTimes(3);
   });
 
   it("logs memory eviction as a warning, not an error", () => {
