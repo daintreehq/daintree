@@ -665,7 +665,9 @@ export function RecipeEditor({
           </FormGrid>
 
           {error && (
-            <div ref={errorRef} className="mt-6">
+            // The scroll margin clears the body's bottom padding and edge fade, so
+            // scrolling the banner into view leaves it readable.
+            <div ref={errorRef} className="mt-6 scroll-mb-6">
               <InlineStatusBanner
                 severity="error"
                 title={recipe ? "Couldn't update the recipe" : "Couldn't create the recipe"}
