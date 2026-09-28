@@ -42,6 +42,7 @@ export {
   GitPullRequest, // forge provider / code-host plugin category
   History, // resume closed session / session history
   Hourglass, // an environment reporting it is still coming up (starting, provisioning) — a shape beside the neutral status word, so the word keeps its contrast
+  Info, // a quiet note on how something behaves — the Scratchpad's "temporary with this terminal" hint
   Joystick, // a terminal the user handed to an orchestrating agent pane, which drives it until taken back
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
   Layers, // worktree overview (multiple worktrees, stacked)
