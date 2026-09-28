@@ -100,7 +100,7 @@ async function open(page: Page, fixture: string, theme: string, width = DEFAULT_
     `${baseURL}/quick-state-filter-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`
   );
   await expect(page.locator("[data-preview-shell]")).toBeAttached();
-  await expect(page.getByRole("toolbar", { name: "Quick state filter" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Quick state filter" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(200);
 }
@@ -115,11 +115,11 @@ async function snap(target: Locator, file: string): Promise<string> {
   if (!box || box.width < 8 || box.height < 8) {
     throw new Error(`${file}: target has no real box (${JSON.stringify(box)}) — refusing to write`);
   }
-  const buttons = target
-    .page()
-    .getByRole("toolbar", { name: "Quick state filter" })
-    .getByRole("button");
-  await expect(buttons).toHaveCount(5);
+  const page = target.page();
+  await expect(
+    page.getByRole("radiogroup", { name: "Quick state filter" }).getByRole("radio")
+  ).toHaveCount(4);
+  await expect(page.locator("[data-filter-region]").getByRole("button")).toHaveCount(1);
   const out = path.join(OUT_DIR, file);
   await target.screenshot({ path: out, animations: "disabled" });
   return out;
@@ -154,20 +154,20 @@ test("Quick state filter — states, widths and themes", async ({ page }) => {
     const theme = THEMES[0]!;
 
     await open(page, "default", theme);
-    await page.getByRole("button", { name: /^Attention/ }).hover();
+    await page.getByRole("radio", { name: /^Attention/ }).hover();
     await page.waitForTimeout(250);
     written.push(await snap(bar(page), `hover-segment-${theme}.png`));
 
     // Keyboard focus on a status segment, reached the way a keyboard user does.
     await open(page, "default", theme);
-    await page.getByRole("button", { name: /^All/ }).focus();
+    await page.getByRole("radio", { name: /^All/ }).focus();
     await page.keyboard.press("ArrowRight");
     await page.waitForTimeout(250);
     written.push(await snap(bar(page), `focus-segment-${theme}.png`));
 
     // The tooltip is where each status segment's name lives.
     await open(page, "default", theme);
-    await page.getByRole("button", { name: /^Working/ }).hover();
+    await page.getByRole("radio", { name: /^Working/ }).hover();
     await expect(page.getByRole("tooltip")).toBeVisible({ timeout: 3000 });
     written.push(await snap(shell(page), `tooltip-${theme}.png`));
 
@@ -223,7 +223,7 @@ test("Quick state filter — empty glyphs hold 3:1 in every theme", async ({ pag
 
   /** The segment's glyph colour, its opacity, and the colour actually painted behind it. */
   const measure = (segment: string) =>
-    page.getByRole("button", { name: new RegExp(`^${segment}`) }).evaluate((button) => {
+    page.getByRole("radio", { name: new RegExp(`^${segment}`) }).evaluate((button) => {
       const rgba = (css: string): number[] => {
         const canvas = document.createElement("canvas");
         canvas.width = canvas.height = 1;
@@ -274,15 +274,15 @@ test("Quick state filter — empty glyphs hold 3:1 in every theme", async ({ pag
     await open(page, "idle", theme);
     for (const segment of SEGMENTS) check(theme, segment, "rest", await measure(segment));
     for (const segment of SEGMENTS) {
-      await page.getByRole("button", { name: new RegExp(`^${segment}`) }).hover();
+      await page.getByRole("radio", { name: new RegExp(`^${segment}`) }).hover();
       await page.waitForTimeout(200);
       check(theme, segment, "hover", await measure(segment));
     }
     for (const segment of SEGMENTS) {
-      const button = page.getByRole("button", { name: new RegExp(`^${segment}`) });
+      const button = page.getByRole("radio", { name: new RegExp(`^${segment}`) });
       await button.click();
       await page.mouse.move(0, 0);
-      await expect(button).toHaveAttribute("aria-pressed", "true");
+      await expect(button).toHaveAttribute("aria-checked", "true");
       await page.waitForTimeout(200);
       check(theme, segment, "selected", await measure(segment));
     }
@@ -304,7 +304,7 @@ test("Quick state filter — forced colors keeps the selection", async ({ page }
 
   await page.emulateMedia({ forcedColors: "active" });
   await open(page, "working-active", THEMES[0]!);
-  const marker = await page.getByRole("button", { name: /^Working/ }).evaluate((button) => {
+  const marker = await page.getByRole("radio", { name: /^Working/ }).evaluate((button) => {
     const after = getComputedStyle(button, "::after");
     return { content: after.content, height: after.height };
   });

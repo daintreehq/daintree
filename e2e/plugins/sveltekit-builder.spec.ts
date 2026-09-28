@@ -298,8 +298,8 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     await expect(strip.getByText("Click an element to ask an agent about it")).toBeVisible({
       timeout: PLUGIN_TIMEOUT,
     });
-    await expect(strip.getByRole("button", { name: "Inspect" })).toHaveAttribute(
-      "aria-pressed",
+    await expect(strip.getByRole("radio", { name: "Inspect" })).toHaveAttribute(
+      "aria-checked",
       "true"
     );
   });
@@ -337,8 +337,8 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     // The request's scope follows the pick: the composer's About control.
     const scope = window
       .getByRole("complementary", { name: "SvelteKit Tools details" })
-      .getByRole("button", { name: "FeatureCard", exact: true });
-    await expect(scope).toHaveAttribute("aria-pressed", "true");
+      .getByRole("radio", { name: "FeatureCard", exact: true });
+    await expect(scope).toHaveAttribute("aria-checked", "true");
     await window.screenshot({ path: test.info().outputPath("component-selected.png") });
 
     // Back to the heading, so the next test starts from an element selection.

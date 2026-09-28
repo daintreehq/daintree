@@ -218,7 +218,7 @@ test.describe.serial("Core: File browser preview", () => {
     const dialog = await openFileBrowser(ctx.window, "tall.md");
     await expect(dialog.locator(".markdown-document")).toBeVisible({ timeout: T_LONG });
 
-    await dialog.getByRole("button", { name: "Source", exact: true }).click();
+    await dialog.getByRole("radio", { name: "Source", exact: true }).click();
     await expect(dialog.locator(".cm-content")).toContainText("# Tall browser document", {
       timeout: T_LONG,
     });

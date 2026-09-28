@@ -327,7 +327,7 @@ async function setChoice(page: Page, choice: "surface" | "stock" | null): Promis
  */
 async function expectShowing(page: Page, mode: "surface" | "stock"): Promise<void> {
   const pressed = await page
-    .locator(`${STRIP} button[aria-pressed="true"]`)
+    .locator(`${STRIP} [role="radio"][aria-checked="true"]`)
     .first()
     .textContent()
     .catch(() => null);

@@ -564,7 +564,7 @@ test("file browser review — viewer formats and states", async () => {
          * fold it into. Menus are closed by picking an item, never Escape.
          */
         const setMode = async (label: "Source" | "Rendered"): Promise<void> => {
-          const segment = panel.getByRole("button", { name: label, exact: true });
+          const segment = panel.getByRole("radio", { name: label, exact: true });
           if ((await segment.count()) > 0) {
             await segment.click();
           } else {

@@ -98,9 +98,9 @@ async function imagesSettled(page: Page, expected: number): Promise<void> {
 }
 
 async function selectMode(page: Page, label: string): Promise<void> {
-  const button = page.getByRole("button", { name: label, exact: true });
+  const button = page.getByRole("radio", { name: label, exact: true });
   await button.click();
-  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await expect(button).toHaveAttribute("aria-checked", "true");
 }
 
 test("image diff viewer — modes, states and themes", async ({ page }) => {
@@ -208,7 +208,7 @@ test("image diff viewer — modes, states and themes", async ({ page }) => {
     const theme = THEMES[0]!;
     const shell = await open(page, "resized", theme, DEFAULT_WIDTH);
     await imagesSettled(page, 2);
-    await page.getByRole("button", { name: "Actual size" }).click();
+    await page.getByRole("radio", { name: "Actual size" }).click();
     await page.waitForTimeout(200);
     written.push(await snap(shell, `two-up-actual-${theme}.png`));
     await selectMode(page, "Swipe");
