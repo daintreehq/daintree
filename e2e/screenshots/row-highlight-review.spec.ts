@@ -12,6 +12,8 @@
  *   pointer        pointer resting on a row further down
  *   pointer-kbd    pointer still resting there, then one arrow press — the frame
  *                  where a list that tracks hover separately lights two rows
+ *   contrast       the pointer state under `prefers-contrast: more` (first theme only)
+ *   forced         the pointer state under `forced-colors: active` (first theme only)
  *
  * Every surface is the real component in its existing `*-preview.html` entry,
  * except the project switcher and the plain dropdown menu, which live in
@@ -216,6 +218,13 @@ async function load(page: Page, surface: Surface, theme: string): Promise<Locato
  */
 async function litRows(list: Locator, rowSelector: string) {
   return list.evaluate((root, sel) => {
+    // An outline painted in the surface's own colour is a layout reservation,
+    // not a mark — forced colours uses exactly that to hide one.
+    const probe = document.createElement("div");
+    probe.style.color = "Canvas";
+    document.body.appendChild(probe);
+    const canvas = getComputedStyle(probe).color;
+    probe.remove();
     const rows = Array.from(root.querySelectorAll<HTMLElement>(sel));
     return rows
       .map((row, index) => {
@@ -227,16 +236,27 @@ async function litRows(list: Locator, rowSelector: string) {
           Number(before.opacity) > 0 &&
           before.backgroundColor !== "rgba(0, 0, 0, 0)" &&
           parseFloat(before.width) > 0;
+        const style = getComputedStyle(row);
+        const outline =
+          style.outlineStyle !== "none" &&
+          parseFloat(style.outlineWidth) > 0 &&
+          style.outlineColor !== canvas &&
+          style.outlineColor !== "rgba(0, 0, 0, 0)"
+            ? `${style.outlineWidth} ${style.outlineColor}`
+            : null;
         return {
           index,
           text: (row.textContent ?? "").trim().slice(0, 40),
           bg,
           rail,
+          outline,
           selected:
             row.getAttribute("aria-selected") === "true" || row.hasAttribute("data-highlighted"),
         };
       })
-      .filter((r) => (r.bg !== "rgba(0, 0, 0, 0)" && r.bg !== "transparent") || r.rail);
+      .filter(
+        (r) => (r.bg !== "rgba(0, 0, 0, 0)" && r.bg !== "transparent") || r.rail || r.outline
+      );
   }, rowSelector);
 }
 
@@ -326,6 +346,33 @@ test("highlighted-row language — every list family", async ({ page }) => {
       await shoot(page, list, surface, "pointer-kbd", theme, written);
       planned += 3;
     }
+  }
+
+  // The two increased-contrast modes, where the highlight stops being a fill
+  // alone and gains an outline. One theme is enough: the modes, not the
+  // palettes, are what is under test.
+  for (const [state, media] of [
+    ["contrast", { contrast: "more" }],
+    ["forced", { forcedColors: "active" }],
+  ] as const) {
+    await page.emulateMedia(media);
+    for (const surface of surfaces) {
+      const list = await load(page, surface, THEMES[0]!);
+      await restPointerOn(page, list, surface);
+      // Exactly one outlined row, and it is the highlighted one. Written to
+      // the sidecar either way, but a frame that outlines the wrong rows (or
+      // every row) is refused rather than captured as if it were the design.
+      const lit = await litRows(list, surface.row);
+      const outlined = lit.filter((r) => r.outline);
+      if (outlined.length !== 1 || !outlined[0]!.selected) {
+        throw new Error(
+          `${surface.slug}/${state}: expected only the highlighted row outlined, got ${JSON.stringify(outlined.map((r) => r.text))}`
+        );
+      }
+      await shoot(page, list, surface, state, THEMES[0]!, written);
+      planned += 1;
+    }
+    await page.emulateMedia({ contrast: null, forcedColors: null });
   }
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));

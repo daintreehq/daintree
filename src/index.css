@@ -2713,6 +2713,21 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: 2px solid ButtonText;
   }
 
+  /* The Radix item rows carry `outline-hidden`, which Tailwind turns into a 2px
+     transparent outline in this mode so a focus ring can still be recoloured —
+     and the engine paints that transparent outline in CanvasText. Every row of
+     every menu came out boxed, so the highlighted one was the only row that did
+     NOT look different. Canvas gives back the invisibility on the rows that are
+     not highlighted; the rule below outlines the one that is. */
+  :is(
+      [role="menuitem"],
+      [role="menuitemcheckbox"],
+      [role="menuitemradio"],
+      [role="option"]
+    ).outline-hidden:not([data-highlighted]):not(:focus-visible) {
+    outline-color: Canvas;
+  }
+
   /* Radix highlighted items rely on background-color which is stripped here.
      Fall back to a system outline so the active menu/select row stays visible. */
   [data-highlighted] {
