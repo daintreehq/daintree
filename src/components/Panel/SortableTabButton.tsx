@@ -53,7 +53,7 @@ function SortableTabButtonComponent({
   );
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={style} className="flex">
       <TabButton
         ref={setActivatorNodeRef}
         id={id}

@@ -32,8 +32,9 @@ const SURVIVORS: Record<string, string> = {
   "src/components/Browser/BrowserToolbar.tsx": "pane toolbar (address-bar copy)",
   "src/components/Portal/PortalToolbar.tsx": "portal toolbar and its tab strip",
   "src/components/Portal/DevServerDashboard.tsx": "portal toolbar family",
-  // Tab strips close their tabs with the tab's own control.
-  "src/components/Panel/TabButton.tsx": "tab close",
+  // Tab strips close their tabs with the tab's own control — one shared
+  // `DocumentTabClose` for the grid, dock, portal and assistant strips.
+  "src/components/ui/document-tab.tsx": "document tab close",
   // The dev-preview console and the diagnostics dock are twins with their own
   // shared chrome.
   "src/components/DevPreview/ConsolePanel.tsx": "dev-preview console chrome",

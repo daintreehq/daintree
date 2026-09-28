@@ -148,6 +148,15 @@ const DURABLE_ALLOWLIST = new Set([
   // underline is one of the two accents the settings dialog reserves
   // (.claude/rules/settings-pages.md). One underline per page, never more.
   "src/components/Settings/SettingsSubjectPicker.tsx",
+
+  // Document tab family (grid, dock, portal and assistant strips): the selected
+  // tab's 2px underline, the documented "Settings Nav Active" / "Document Tab"
+  // recipe. It is the strip's one selection mark; the other accent in the
+  // strip is the focus ring, and under manual activation the two can sit on
+  // different tabs because they answer different questions (which document is
+  // open, where the keyboard is). Recorded in interaction-state-recipes.md.
+  // Owned here once so the four hosts carry no accent of their own.
+  "src/components/ui/document-tab.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all
@@ -161,7 +170,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Layout/DockedTabGroup.tsx",
     "src/components/Layout/DockedTerminalItem.tsx",
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
-    "src/components/Panel/TabButton.tsx",
     "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/HybridInputBar.tsx",

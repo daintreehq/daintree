@@ -338,6 +338,8 @@ const fixtureName = params.get("fixture") ?? "rest";
 const width = Number(params.get("width")) || 1440;
 const DENSITIES: readonly DockDensity[] = ["compact", "normal", "comfortable"];
 const density: DockDensity = DENSITIES.find((d) => d === params.get("density")) ?? "normal";
+/** A docked panel id to open on load — shows a tab group's popover and its tab strip. */
+const openPanelId = params.get("open");
 
 const fixture = FIXTURES[fixtureName];
 if (!fixture) {
@@ -375,6 +377,7 @@ usePanelStore.setState({
   panelIds: fixture.panels.map((p) => p.id),
   trashedTerminals,
   tabGroups: new Map((fixture.tabGroups ?? []).map((g) => [g.id, g])),
+  ...(openPanelId ? { activeDockTerminalId: openPanelId } : {}),
 });
 
 /** Stand-in chrome, so the strip sits where it sits in the app. */

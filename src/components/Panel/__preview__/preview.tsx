@@ -77,13 +77,16 @@ const PANE_HEIGHT = 150;
 
 const noop = () => {};
 
-function toTabInfo(tabs: NonNullable<PanelHeaderFixture["tabs"]>): TabInfo[] {
+function toTabInfo(
+  tabs: NonNullable<PanelHeaderFixture["tabs"]>,
+  activeId: string | null
+): TabInfo[] {
   return tabs.map((tab) => ({
     id: tab.id,
     title: tab.title,
     kind: tab.kind,
     agentState: tab.agentState,
-    isActive: tab.isActive ?? false,
+    isActive: activeId === null ? (tab.isActive ?? false) : tab.id === activeId,
     hasDangerousFlags: tab.hasDangerousFlags,
     chrome: deriveTerminalChrome({
       kind: tab.kind,
@@ -256,6 +259,9 @@ function Pane({ name }: { name: FixtureName }) {
   const location = fixture.location ?? "grid";
   const isDock = location === "dock";
   const width = fixture.width ?? DEFAULT_WIDTH;
+  // Tab selection is live so the harness can drive it — Enter on a tab, a pick
+  // from the overflow menu — and see where the strip puts the selected tab.
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   return (
     <div
@@ -295,9 +301,9 @@ function Pane({ name }: { name: FixtureName }) {
           isSelected={fixture.isSelected}
           isFleetFollower={fixture.isFleetFollower}
           isHibernated={fixture.isHibernated}
-          tabs={fixture.tabs ? toTabInfo(fixture.tabs) : undefined}
+          tabs={fixture.tabs ? toTabInfo(fixture.tabs, activeTabId) : undefined}
           groupId={fixture.tabs ? "group-under-review" : undefined}
-          onTabClick={fixture.tabs ? noop : undefined}
+          onTabClick={fixture.tabs ? setActiveTabId : undefined}
           onTabClose={fixture.tabs ? noop : undefined}
           onTabRename={fixture.tabs ? noop : undefined}
           onTabReorder={fixture.tabs ? noop : undefined}

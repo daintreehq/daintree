@@ -641,13 +641,39 @@ describe("TabButton", () => {
     });
   });
 
-  describe("close button in the Tab order", () => {
-    it("is a Tab stop only on the active tab — inactive tabs are reached with the arrows", () => {
-      const { unmount } = render(<TabButton {...defaultProps} isActive />);
-      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(0);
-      unmount();
-      render(<TabButton {...defaultProps} isActive={false} />);
-      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(-1);
+  describe("rename field", () => {
+    it.each(["Enter", "Escape"])("hands focus back to its tab on %s", async (key) => {
+      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
+      fireEvent.doubleClick(screen.getByText("Test Agent"));
+      const input = screen.getByTestId("motion-input");
+      fireEvent.change(input, { target: { value: "Renamed" } });
+      fireEvent.keyDown(input, { key });
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      expect(document.activeElement).toBe(screen.getByRole("tab"));
+    });
+
+    it("sits beside the tab rather than inside it", () => {
+      // A focusable input inside `role="tab"` is the nesting ARIA forbids.
+      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
+      fireEvent.doubleClick(screen.getByText("Test Agent"));
+      const input = screen.getByTestId("motion-input");
+      expect(input.closest('[role="tab"]')).toBeNull();
+      expect(input.parentElement!.contains(screen.getByRole("tab"))).toBe(true);
+    });
+  });
+
+  describe("close control", () => {
+    it("never takes focus or joins the tab's accessible subtree — Delete is the keyboard route", () => {
+      // A focusable control inside a `tab` is the nesting ARIA forbids, and its label
+      // would otherwise be read as part of the tab's name.
+      for (const isActive of [true, false]) {
+        const { container, unmount } = render(<TabButton {...defaultProps} isActive={isActive} />);
+        const close = container.querySelector<HTMLElement>("[data-document-tab-close]")!;
+        expect(close.tabIndex).toBe(-1);
+        expect(close.getAttribute("aria-hidden")).toBe("true");
+        expect(screen.getByRole("tab").getAttribute("aria-keyshortcuts")).toBe("Delete");
+        unmount();
+      }
     });
   });
 

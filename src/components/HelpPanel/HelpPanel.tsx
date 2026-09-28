@@ -193,6 +193,10 @@ export function HelpPanel({
   // Null means no close is pending — closing is destructive (the conversation
   // is discarded, not paused), so it takes the same gate the Stop control uses.
   const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
+  // The lane focus should land on once a confirmed close removes a background
+  // lane: its neighbour, the following one first. Null when the lane being
+  // closed is the selected one — focus then follows the store's new selection.
+  const [pendingCloseSuccessor, setPendingCloseSuccessor] = useState<number | null>(null);
   // Tracks the last preferredAgentId the switch effect acted on so a single
   // preference change drives at most one switch attempt (the effect re-runs
   // on unrelated dep changes while the async launch settles).
@@ -1190,12 +1194,18 @@ export function HelpPanel({
   const handleCloseSlot = useCallback(
     (slot: number) => {
       if (laneNeedsCloseConfirm(slot)) {
+        const index = sessionTabs.findIndex((tab) => tab.slot === slot);
+        const successor =
+          slot === activeSlot
+            ? null
+            : (sessionTabs[index + 1]?.slot ?? sessionTabs[index - 1]?.slot ?? null);
+        setPendingCloseSuccessor(successor);
         setPendingCloseSlot(slot);
         return;
       }
       closeSlotNow(slot);
     },
-    [laneNeedsCloseConfirm, closeSlotNow]
+    [laneNeedsCloseConfirm, closeSlotNow, sessionTabs, activeSlot]
   );
 
   const handleConfirmCloseSlot = useCallback(() => {
@@ -1815,14 +1825,23 @@ export function HelpPanel({
         onConfirm={handleConfirmCloseSlot}
         onClose={handleCancelCloseSlot}
         variant="destructive"
-        // Where focus goes once the tab this was opened from no longer exists. The
-        // strip has already moved its single tab stop to the lane that took over,
-        // so asking for "the tab that currently holds the stop" lands on the same
-        // element the strip chose, without this dialog needing to know which one.
-        // On cancel the trigger still exists and the dialog restores to it directly.
-        restoreFocusTo={() =>
-          panelRef.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') ?? null
-        }
+        // Where focus goes once the tab this was opened from no longer exists: the
+        // closed lane's neighbour, or the newly selected lane when the selected one
+        // was closed — the same rule the strip's own Delete handoff follows. On
+        // cancel the trigger still exists and the dialog restores to it directly.
+        restoreFocusTo={() => {
+          const panel = panelRef.current;
+          if (!panel) return null;
+          const successor =
+            pendingCloseSuccessor === null
+              ? null
+              : panel.querySelector<HTMLElement>(
+                  `[role="tab"][data-slot="${pendingCloseSuccessor}"]`
+                );
+          return (
+            successor ?? panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+          );
+        }}
       />
       <ConfirmDialog
         isOpen={showAgentSwitchConfirm}

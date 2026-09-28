@@ -53,6 +53,8 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
+import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
+import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
@@ -781,27 +783,65 @@ function PanelHeaderComponent({
 
   const activeTabId = tabs?.find((t) => t.isActive)?.id ?? null;
 
+  // The tab the arrow keys have reached. Under manual activation it is often not
+  // the selected one, and a tab the overflow observer parked is invisible and
+  // refuses focus, so this one is kept painted until focus leaves the strip.
+  const [keyboardTabId, setKeyboardTabId] = useState<string | null>(null);
+  const stripHiddenTabIds = useMemo(() => {
+    if (keyboardTabId === null || !hiddenTabIds.has(keyboardTabId)) return hiddenTabIds;
+    const next = new Set(hiddenTabIds);
+    next.delete(keyboardTabId);
+    return next;
+  }, [hiddenTabIds, keyboardTabId]);
+
+  // Focus after the render that un-parks the tab: a `visibility: hidden` tab
+  // refuses focus.
+  const focusTab = useCallback(
+    (tabId: string) => {
+      setKeyboardTabId(tabId);
+      if (pendingTabFocusRef.current !== null) {
+        cancelAnimationFrame(pendingTabFocusRef.current);
+      }
+      pendingTabFocusRef.current = requestAnimationFrame(() => {
+        pendingTabFocusRef.current = null;
+        for (const el of tabListEl?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? []) {
+          if (el.getAttribute("data-tab-id") === tabId) {
+            el.focus();
+            break;
+          }
+        }
+      });
+    },
+    [tabListEl]
+  );
+
+  const { armKeyboardClose, disarmKeyboardClose } = useKeyboardTabClose({
+    ids: tabIds,
+    activeId: activeTabId,
+    focusTab,
+  });
+
+  const handleTabListBlur = useCallback((e: React.FocusEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setKeyboardTabId(null);
+  }, []);
+
+  const handleTabListFocus = useCallback(
+    (e: React.FocusEvent<HTMLDivElement>) => {
+      const tabId = (e.target as HTMLElement).getAttribute("data-tab-id");
+      // Focus coming back to a tab a keyboard close was waiting on means the
+      // close was cancelled.
+      if (tabId) disarmKeyboardClose(tabId);
+    },
+    [disarmKeyboardClose]
+  );
+
   useLayoutEffect(() => {
     if (!tabListEl || !activeTabId || isDragging) return;
 
     const tabEl = tabListEl.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement | null;
     if (!tabEl) return;
 
-    const containerLeft = tabListEl.scrollLeft;
-    const containerRight = containerLeft + tabListEl.clientWidth;
-    const tabLeft = tabEl.offsetLeft;
-    const tabRight = tabLeft + tabEl.offsetWidth;
-
-    // A tab wider than the strip cannot fit either way; show its start — the
-    // brand glyph and the first words are what identify it, not its close.
-    if (tabLeft < containerLeft || tabEl.offsetWidth > tabListEl.clientWidth) {
-      tabListEl.scrollTo({ left: tabLeft, behavior: prefersReducedMotion() ? "auto" : "smooth" });
-    } else if (tabRight > containerRight) {
-      tabListEl.scrollTo({
-        left: tabRight - tabListEl.clientWidth,
-        behavior: prefersReducedMotion() ? "auto" : "smooth",
-      });
-    }
+    revealTabInStrip(tabListEl, tabEl, prefersReducedMotion() ? "auto" : "smooth");
   }, [activeTabId, isDragging, tabListEl]);
 
   // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
@@ -868,15 +908,36 @@ function PanelHeaderComponent({
     [tabs, onTabReorder]
   );
 
-  // Arrow key navigation for tabs (standard tablist behavior)
+  // APG tabs with manual activation, like every document tab strip: arrows and
+  // Home/End move focus, Enter/Space activate (TabButton), Delete closes.
+  // Switching a tab swaps a live pane and refits it, which is too much to do on
+  // every arrow press while skimming.
   const handleTabListKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (isTabDragActiveRef.current) return;
-      if (!tabs || tabs.length < 2 || !onTabClick) return;
+      if (!tabs || tabs.length === 0) return;
 
-      const currentIndex = tabs.findIndex((t) => t.isActive);
-      let nextIndex: number | undefined;
+      // Only keys from a tab: the add and overflow buttons share the strip.
+      const focusedTabId = (e.target as HTMLElement).getAttribute("data-tab-id");
+      if (!focusedTabId) return;
+      const currentIndex = tabs.findIndex((t) => t.id === focusedTabId);
+      if (currentIndex === -1) return;
 
+      if (isTabCloseKey(e.key)) {
+        if (!onTabClose) return;
+        e.preventDefault();
+        armKeyboardClose(focusedTabId);
+        // Two tabs becoming one takes the whole strip away — and in the grid the
+        // tab group with it — so there is no tab left to hand focus to. Land on
+        // the surviving pane's header instead of dropping focus to the body.
+        const survivor = tabs.length === 2 ? tabs.find((t) => t.id !== focusedTabId) : undefined;
+        onTabClose(focusedTabId);
+        if (survivor) focusPaneWhenStripCloses(survivor.id);
+        return;
+      }
+
+      if (tabs.length < 2) return;
+      let nextIndex: number;
       switch (e.key) {
         case "ArrowLeft":
           nextIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
@@ -896,24 +957,9 @@ function PanelHeaderComponent({
 
       e.preventDefault();
       const nextTab = tabs[nextIndex];
-      if (nextTab) {
-        onTabClick(nextTab.id);
-        // Focus after the activation has rendered: a parked tab is
-        // `visibility: hidden` until it becomes active, and a hidden element
-        // refuses focus.
-        if (pendingTabFocusRef.current !== null) {
-          cancelAnimationFrame(pendingTabFocusRef.current);
-        }
-        pendingTabFocusRef.current = requestAnimationFrame(() => {
-          pendingTabFocusRef.current = null;
-          const tabButton = tabListEl?.querySelector(
-            `[data-tab-id="${nextTab.id}"]`
-          ) as HTMLElement | null;
-          tabButton?.focus();
-        });
-      }
+      if (nextTab) focusTab(nextTab.id);
     },
-    [tabs, onTabClick, tabListEl]
+    [tabs, onTabClose, armKeyboardClose, focusTab]
   );
 
   // A tab you cannot see can still be the one asking for you. The trigger wears
@@ -933,7 +979,8 @@ function PanelHeaderComponent({
               variant="ghost"
               size="icon-xs"
               onPointerDown={(e) => e.stopPropagation()}
-              className={cn(CONTROL_ICON, "relative shrink-0")}
+              // Inset like every control inside a document tab strip.
+              className={cn(CONTROL_ICON, "relative shrink-0 focus-visible:outline-offset-[-2px]")}
               aria-label={hiddenTabsLabel}
               aria-haspopup="menu"
               data-testid="panel-tabs-overflow"
@@ -1108,9 +1155,11 @@ function PanelHeaderComponent({
                 <PanelTabList
                   layoutGroupId={`panel-tabs-dnd-${id}`}
                   tabs={tabs}
-                  hiddenTabIds={hiddenTabIds}
+                  hiddenTabIds={stripHiddenTabIds}
                   tabListRef={setTabListEl}
                   onKeyDown={handleTabListKeyDown}
+                  onFocus={handleTabListFocus}
+                  onBlur={handleTabListBlur}
                   onAddTab={onAddTab}
                   addTabTooltipContent={addTabTooltipContent}
                   overflowTrigger={overflowTrigger}
@@ -1144,9 +1193,11 @@ function PanelHeaderComponent({
             <PanelTabList
               layoutGroupId={`panel-tabs-static-${id}`}
               tabs={tabs}
-              hiddenTabIds={hiddenTabIds}
+              hiddenTabIds={stripHiddenTabIds}
               tabListRef={setTabListEl}
               onKeyDown={handleTabListKeyDown}
+              onFocus={handleTabListFocus}
+              onBlur={handleTabListBlur}
               onAddTab={onAddTab}
               addTabTooltipContent={addTabTooltipContent}
               overflowTrigger={overflowTrigger}
