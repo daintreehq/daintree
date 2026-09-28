@@ -91,6 +91,7 @@ import {
   RadioTower,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Send,
   Settings,
   Trash2,
@@ -1085,7 +1086,7 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
-            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+            <RotateCw className={ICON_CLASS} aria-hidden="true" />
             Reload page
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
@@ -1150,7 +1151,7 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
-            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+            <RotateCw className={ICON_CLASS} aria-hidden="true" />
             Reload preview
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
@@ -1597,7 +1598,7 @@ export function TerminalContextMenu({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill terminal
           </ContextMenuItem>
-          <PluginContextMenuSection items={pluginItems} inset />
+          <PluginContextMenuSection items={pluginItems} />
         </ContextMenuContent>
         {movePicker}
       </ContextMenu>

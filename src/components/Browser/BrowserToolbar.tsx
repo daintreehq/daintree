@@ -6,10 +6,12 @@ import {
   ExternalLink,
   Copy,
   Check,
+  Link,
   Globe,
   Lock,
   ZoomIn,
   ZoomOut,
+  Scan,
   Camera,
   SquareTerminal,
   Code,
@@ -1120,7 +1122,7 @@ export function BrowserToolbar({
                 {isCompact && (
                   <>
                     <DropdownMenuItem disabled={!address} onSelect={() => void handleCopy()}>
-                      <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <Link className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Copy URL
                     </DropdownMenuItem>
                     {consoleInMenu && (
@@ -1164,7 +1166,7 @@ export function BrowserToolbar({
                       Zoom out
                     </DropdownMenuItem>
                     <DropdownMenuItem disabled={!isNonDefaultZoom} onSelect={handleZoomReset}>
-                      <span className="w-3.5 mr-2" aria-hidden="true" />
+                      <Scan className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Actual size
                     </DropdownMenuItem>
                   </>

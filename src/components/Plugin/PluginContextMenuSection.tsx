@@ -1,3 +1,4 @@
+import { Puzzle } from "lucide-react";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { useMenuActionSource } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
@@ -30,12 +31,6 @@ interface PluginContextMenuSectionProps {
    * does since #12206.
    */
   leadingSeparator?: boolean;
-  /**
-   * Indent the items onto the host menu's icon gutter. Plugin items carry no
-   * icon, so a host whose own rows all lead with one passes this to keep a
-   * single label edge.
-   */
-  inset?: boolean;
 }
 
 /**
@@ -56,7 +51,6 @@ export function PluginContextMenuSection({
   components,
   dispatchArgs,
   leadingSeparator = true,
-  inset = false,
 }: PluginContextMenuSectionProps) {
   const source = useMenuActionSource();
   const Item = components?.Item ?? ContextMenuItem;
@@ -68,12 +62,15 @@ export function PluginContextMenuSection({
       {items.map((entry) => (
         <Item
           key={`${entry.pluginId}:${entry.item.actionId}`}
-          inset={inset || undefined}
           onSelect={() =>
             void actionService.dispatch(entry.item.actionId, dispatchArgs, { source })
           }
         >
-          {entry.item.label}
+          {/* The manifest names no icon, so every contributed row takes the
+              plugin glyph the panel menus give theirs (`genericPanelMenu.ts`),
+              and the host menu's icon column stays unbroken. */}
+          <Puzzle data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="truncate">{entry.item.label}</span>
         </Item>
       ))}
     </>

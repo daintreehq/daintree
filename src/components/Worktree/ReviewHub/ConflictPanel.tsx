@@ -682,6 +682,11 @@ export function ConflictPanel({
                             onSelect={() => setPendingCheckout({ filePath: file.path, side })}
                             aria-label={`Use ${sideSource[side]} for ${file.path} (${side})`}
                           >
+                            <GitMerge
+                              data-menu-icon
+                              className="mr-2 h-3.5 w-3.5"
+                              aria-hidden="true"
+                            />
                             Use {sideSource[side]}
                             <DropdownMenuMeta>{side}</DropdownMenuMeta>
                           </DropdownMenuItem>

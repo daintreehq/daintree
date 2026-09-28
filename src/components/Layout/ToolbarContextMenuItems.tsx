@@ -1,4 +1,4 @@
-import { Settings2, Unplug } from "lucide-react";
+import { Unplug } from "lucide-react";
 import {
   ContextMenuActionItem,
   ContextMenuItem,
@@ -11,7 +11,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import { TOOLBAR_CUSTOMIZE_LABEL, TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
+import {
+  TOOLBAR_CUSTOMIZE_ICON,
+  TOOLBAR_CUSTOMIZE_LABEL,
+  TOOLBAR_UNPIN_LABEL,
+} from "./toolbarMenuStrings";
 
 type Variant = "context" | "dropdown";
 
@@ -57,7 +61,7 @@ export function ToolbarContextMenuItems({
     return (
       <>
         <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
-          <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          <TOOLBAR_CUSTOMIZE_ICON data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
         <DropdownMenuSeparator />
@@ -72,7 +76,7 @@ export function ToolbarContextMenuItems({
   return (
     <>
       <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
-        <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+        <TOOLBAR_CUSTOMIZE_ICON data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         {TOOLBAR_CUSTOMIZE_LABEL}
       </ContextMenuActionItem>
       <ContextMenuSeparator />

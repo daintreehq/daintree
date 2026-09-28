@@ -15,6 +15,8 @@ import {
   GitBranch,
   MoreHorizontal,
   Pin,
+  PinOff,
+  Clipboard,
 } from "lucide-react";
 import { Plug, Workflow } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
@@ -348,7 +350,11 @@ export function RecipeManager({
                   )
                 }
               >
-                <Pin className="mr-2 h-3.5 w-3.5" />
+                {isPinned ? (
+                  <PinOff className="mr-2 h-3.5 w-3.5" />
+                ) : (
+                  <Pin className="mr-2 h-3.5 w-3.5" />
+                )}
                 {isPinned ? "Unpin from canvas" : "Pin to canvas"}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void handleDuplicateRecipe(recipe)}>
@@ -573,11 +579,13 @@ export function RecipeManager({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" sideOffset={4}>
                     <DropdownMenuItem onSelect={() => setShowImportDialog(true)}>
+                      <Clipboard data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from clipboard…
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onSelect={() => void importRecipeFromFile(currentProject?.id)}
                     >
+                      <FileDown data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from file…
                     </DropdownMenuItem>
                   </DropdownMenuContent>

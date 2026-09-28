@@ -1,10 +1,12 @@
 import { Globe, Search } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 
 interface PortalIconProps {
   icon: string;
   size?: "tab" | "launchpad";
+  className?: string;
 }
 
 const ICON_CLASS: Record<NonNullable<PortalIconProps["size"]>, string> = {
@@ -12,8 +14,8 @@ const ICON_CLASS: Record<NonNullable<PortalIconProps["size"]>, string> = {
   launchpad: "w-5 h-5",
 };
 
-export function PortalIcon({ icon, size = "launchpad" }: PortalIconProps) {
-  const iconClass = ICON_CLASS[size];
+export function PortalIcon({ icon, size = "launchpad", className }: PortalIconProps) {
+  const iconClass = cn(ICON_CLASS[size], className);
 
   if (icon === "globe") {
     return <Globe className={iconClass} />;

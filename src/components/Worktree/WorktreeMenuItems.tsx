@@ -20,8 +20,8 @@ import {
   ArrowUpFromLine,
   CheckSquare,
   Clock,
-  Code,
   Copy,
+  ExternalLink,
   FileDiff,
   FileText,
   GitBranch,
@@ -31,7 +31,6 @@ import {
   GitPullRequest,
   Globe,
   History,
-  LayoutGrid,
   Link,
   MonitorPlay,
   OctagonX,
@@ -43,7 +42,9 @@ import {
   PinOff,
   Play,
   Plug,
+  Puzzle,
   RefreshCw,
+  RotateCcw,
   Save,
   Scissors,
   Server,
@@ -403,7 +404,7 @@ export function WorktreeMenuItems({
           </C.Item>
         )}
         <C.Item onSelect={onOpenEditor}>
-          <Code className={ICON} />
+          <ExternalLink className={ICON} />
           Open in editor
         </C.Item>
         <C.Item onSelect={onRevealInFinder}>
@@ -693,7 +694,7 @@ export function WorktreeMenuItems({
               disabled={counts.dock === 0}
               {...counted("Move all to grid", counts.dock)}
             >
-              <LayoutGrid className={ICON} />
+              <PanelTopClose className={ICON} />
               Move all to grid
               <C.Meta>{counts.dock}</C.Meta>
             </C.Item>
@@ -793,6 +794,7 @@ export function WorktreeMenuItems({
               runningRecipeId !== null ? `${recipe.name}, a recipe is running` : recipe.name
             }
           >
+            <Workflow className={ICON} />
             {recipe.name}
             {runningRecipeId !== null && <C.Meta>Recipe running</C.Meta>}
           </C.Item>
@@ -800,9 +802,7 @@ export function WorktreeMenuItems({
         {hasRecipes && canSaveLayout && <C.Separator />}
         {canSaveLayout && (
           <C.Item onSelect={onSaveLayout}>
-            {/* Marked, so the recipe rows above take the icon gutter only while
-                this row is there to need it. */}
-            <Save data-menu-icon className={ICON} />
+            <Save className={ICON} />
             Save current layout as recipe…
           </C.Item>
         )}
@@ -824,7 +824,7 @@ export function WorktreeMenuItems({
     ),
     devServerState === "running" && onRestartDevServer && (
       <C.Item key="restart" onSelect={() => onRestartDevServer(worktree.id)}>
-        <RefreshCw className={ICON} />
+        <RotateCcw className={ICON} />
         Restart dev server
       </C.Item>
     ),
@@ -1123,6 +1123,7 @@ export function WorktreeMenuItems({
                   void actionService.dispatch(entry.item.actionId, undefined, { source })
                 }
               >
+                <Puzzle className={ICON} />
                 <span className="truncate">{entry.item.label}</span>
               </C.Item>
             ))}

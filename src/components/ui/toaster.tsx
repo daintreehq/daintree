@@ -9,6 +9,8 @@ import {
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
+  BellMinus,
+  BellOff,
   Check,
   CheckCircle2,
   Info,
@@ -680,6 +682,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
                         });
                       }}
                     >
+                      <BellMinus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Silence {EVENT_KIND_LABEL[eventKind]}
                       {notification.context?.projectId && eventKind !== "uiFeedback"
                         ? " from this project"
@@ -695,6 +698,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
                         void actionService.dispatch("project.muteNotifications", { projectId });
                       }}
                     >
+                      <BellOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Mute project notifications
                     </DropdownMenuItem>
                   )}

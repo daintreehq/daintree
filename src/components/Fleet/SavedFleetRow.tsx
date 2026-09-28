@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { RadioTower } from "lucide-react";
 import type { FleetSavedScope } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -60,8 +61,8 @@ export function SavedFleetRow({
       }}
       data-testid="fleet-saved-row"
       data-stale={isStale || undefined}
-      className="gap-3"
     >
+      <RadioTower data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       <span
         className={cn(
           "min-w-0 flex-1 truncate",
@@ -70,7 +71,7 @@ export function SavedFleetRow({
       >
         {scope.name}
       </span>
-      <span aria-hidden="true" className="ml-auto flex shrink-0 items-center gap-3">
+      <span aria-hidden="true" className="ml-3 flex shrink-0 items-center gap-3">
         {scope.kind === "predicate" && (
           <span className="text-2xs text-text-secondary">{describeRule(scope)}</span>
         )}

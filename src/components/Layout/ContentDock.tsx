@@ -3,7 +3,7 @@ import { useMemo, useRef, useCallback, useLayoutEffect, useSyncExternalStore } f
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndContext, useDroppable } from "@dnd-kit/core";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, PanelBottom } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -605,8 +605,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         />
         <ContextMenuSeparator />
         <ContextMenuSub>
-          {/* Inset into the launch rows' icon column above it. */}
-          <ContextMenuSubTrigger inset>Dock density</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger>
+            <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            Dock density
+          </ContextMenuSubTrigger>
           <ContextMenuSubContent>
             <ContextMenuRadioGroup value={density}>
               {DOCK_DENSITY_OPTIONS.map(({ value, label }) => (

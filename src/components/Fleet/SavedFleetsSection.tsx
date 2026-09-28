@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { Save, Settings2 } from "lucide-react";
 import {
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -70,10 +71,12 @@ export function SavedFleetsSection({
       )}
       {(hasSnapshots || rules.length > 0) && <DropdownMenuSeparator />}
       <DropdownMenuItem onSelect={onRequestSave} data-testid="fleet-save-open">
+        <Save data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         Save as fleet…
       </DropdownMenuItem>
       {(hasSnapshots || rules.length > 0) && (
         <DropdownMenuItem onSelect={onRequestManage} data-testid="fleet-saved-manage-open">
+          <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Manage saved fleets…
         </DropdownMenuItem>
       )}

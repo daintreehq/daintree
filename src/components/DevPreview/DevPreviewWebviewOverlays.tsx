@@ -3,7 +3,10 @@ import {
   Check,
   ChevronDown,
   Copy,
+  Download,
+  Eraser,
   ExternalLink,
+  RotateCcw,
   RotateCw,
   XCircle,
 } from "lucide-react";
@@ -168,15 +171,21 @@ export function DevPreviewWebviewOverlays({
                     sideOffset={4}
                     className="min-w-[14rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
                   >
-                    <DropdownMenuItem onSelect={onHardReload}>Reload preview</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={onHardReload}>
+                      <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Reload preview
+                    </DropdownMenuItem>
                     <DropdownMenuItem onSelect={onRestartDevServer}>
+                      <RotateCcw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart dev server
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={onRequestRestartAndClearCache}>
+                      <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart and clear cache
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={onRequestReinstallAndRestart}>
+                      <Download data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Reinstall dependencies
                     </DropdownMenuItem>
                   </DropdownMenuContent>

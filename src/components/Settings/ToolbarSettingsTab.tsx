@@ -32,7 +32,14 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronRight, Ellipsis, GripVertical } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeftRight,
+  ArrowUp,
+  ChevronRight,
+  Ellipsis,
+  GripVertical,
+} from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -168,12 +175,17 @@ function ToolbarButtonMoveMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[180px]">
         <DropdownMenuItem disabled={!moves.onMoveUp} onSelect={() => moves.onMoveUp?.()}>
+          <ArrowUp data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Move up
         </DropdownMenuItem>
         <DropdownMenuItem disabled={!moves.onMoveDown} onSelect={() => moves.onMoveDown?.()}>
+          <ArrowDown data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Move down
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={moves.onMoveAcross}>{moves.acrossLabel}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={moves.onMoveAcross}>
+          <ArrowLeftRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          {moves.acrossLabel}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

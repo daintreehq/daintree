@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Pin, Settings2 } from "lucide-react";
+import { Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import {
+  TOOLBAR_CUSTOMIZE_ICON,
   TOOLBAR_CUSTOMIZE_LABEL,
   TOOLBAR_PIN_LABEL,
   TOOLBAR_UNPIN_LABEL,
@@ -363,7 +364,7 @@ export function PluginTrayButton({
           Manage plugins
         </DropdownMenuActionItem>
         <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
-          <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          <TOOLBAR_CUSTOMIZE_ICON data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
       </DropdownMenuContent>

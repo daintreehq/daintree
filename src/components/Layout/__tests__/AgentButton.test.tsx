@@ -136,7 +136,7 @@ vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) => ({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
-    icon: () => null,
+    icon: () => <span data-testid="agent-icon" />,
     externalLinks: mockExternalLinks,
   }),
   getMergedPresets: (agentId: string) => mockMergedPresetsFn(agentId),
@@ -356,6 +356,10 @@ vi.mock("lucide-react", () => ({
   ExternalLink: () => <span data-testid="external-link-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
+  Bookmark: () => <span data-testid="bookmark-icon" />,
+  FolderGit2: () => <span data-testid="folder-git-icon" />,
+  PanelTop: () => <span data-testid="panel-top-icon" />,
+  Plug: () => <span data-testid="plug-icon" />,
   // Check / Circle render the preset-row gutter affordance (issue #10720):
   // Check marks the active default, Circle is the hover hint on other rows.
   // Queryable spans let the gutter-indicator tests assert which row is armed.
@@ -1950,5 +1954,47 @@ describe("AgentButton external links — issue #10350", () => {
     );
     expect(findLinkItem()).toBeUndefined();
     expect(screen.queryByTestId("external-link-icon")).toBeNull();
+  });
+});
+
+// Every mocked glyph above renders a `*-icon` test id, so "leads with an icon"
+// is readable without knowing which icon a row carries — the rule, not the pick.
+function rowsMissingLeadingIcon(content: HTMLElement): string[] {
+  return Array.from(content.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    .filter((row) => !row.firstElementChild?.getAttribute("data-testid")?.endsWith("-icon"))
+    .map((row) => row.textContent ?? "");
+}
+
+describe("AgentButton context menu — every actionable row leads with an icon", () => {
+  beforeEach(() => {
+    mockSettings = settingsWith({ claude: {} });
+    mockActiveWorktreeId = null;
+    mockCcrPresetsByAgent = {};
+    mockProjectPresetsByAgent = {};
+    mockCliDetails = {};
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockPanelIdsByWorktreeId = {};
+    mockWorktrees = [
+      { id: "wt-1", name: "Main", isMainWorktree: true },
+      { id: "wt-2", name: "feat/x", branch: "feat/x" },
+    ];
+    mockExternalLinks = [{ label: "View usage", url: "https://example.com/usage" }];
+  });
+
+  it("without presets", () => {
+    mockMergedPresetsFn = () => [];
+    render(<AgentButton type="claude" availability="ready" />);
+    const content = screen.getByTestId("context-menu-content");
+    expect(content.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(5);
+    expect(rowsMissingLeadingIcon(content)).toEqual([]);
+  });
+
+  it("with presets", () => {
+    mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }];
+    render(<AgentButton type="claude" availability="ready" />);
+    const content = screen.getByTestId("context-menu-content");
+    expect(content.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(5);
+    expect(rowsMissingLeadingIcon(content)).toEqual([]);
   });
 });

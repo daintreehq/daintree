@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Archive, ArrowDown, Bell, CheckCheck, Clock, Ellipsis, Moon, Trash2 } from "lucide-react";
+import {
+  Archive,
+  ArrowDown,
+  Bell,
+  CalendarClock,
+  CheckCheck,
+  Clock,
+  Ellipsis,
+  Moon,
+  Trash2,
+} from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import {
   useNotificationHistoryStore,
@@ -1173,13 +1183,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               <DropdownMenuContent align="end" className="min-w-[180px]">
                 <DropdownMenuLabel>Pause notifications</DropdownMenuLabel>
                 <DropdownMenuItem onSelect={() => handleMuteFor(60 * 60 * 1000)}>
+                  <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   For 1 hour
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={handleMuteUntilMorning}>
+                  <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   {morningLabel}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={openNotificationSettings}>
+                  <CalendarClock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Schedule quiet hours…
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -1215,6 +1228,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   aria-label="Notification settings"
                   onSelect={openNotificationSettings}
                 >
+                  <Bell data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Notification settings…
                 </DropdownMenuItem>
                 {entries.length > 0 && (

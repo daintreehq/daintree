@@ -1,4 +1,4 @@
-import { Play, Pin, Copy, Pencil, Trash2 } from "lucide-react";
+import { Play, Pin, PinOff, CopyPlus, Pencil, Trash2 } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -325,12 +325,12 @@ function RecipeContextMenu({
         </ContextMenuItem>
       )}
       <ContextMenuItem onSelect={() => onDuplicate(recipe.id)}>
-        <Copy className="h-3.5 w-3.5 mr-2" />
+        <CopyPlus className="h-3.5 w-3.5 mr-2" />
         Duplicate
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => (isPinned ? onUnpin : onPin)(recipe.id)}>
-        <Pin className="h-3.5 w-3.5 mr-2" />
+        {isPinned ? <PinOff className="h-3.5 w-3.5 mr-2" /> : <Pin className="h-3.5 w-3.5 mr-2" />}
         {isPinned ? "Unpin from canvas" : "Pin to canvas"}
       </ContextMenuItem>
       {!fromPlugin && (

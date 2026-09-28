@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Settings, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
+import { AlertTriangle, Plug, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -1286,7 +1286,7 @@ function TerminalPaneComponent({
           )
         }
       >
-        <Settings className="w-3.5 h-3.5 mr-2" />
+        <Plug className="w-3.5 h-3.5 mr-2" />
         {agentName} settings…
       </DropdownMenuItem>
     );

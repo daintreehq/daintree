@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/context-menu";
 import { actionService } from "@/services/ActionService";
 import { formatPath } from "@/utils/textParsing";
+import { fileManagerRevealLabel } from "@/lib/platform";
 import { SIDEBAR_HEADER_ACTION } from "./sidebarHeader";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
@@ -126,7 +127,7 @@ export function WorkspaceRootRow({
           </ContextMenuActionItem>
           <ContextMenuActionItem actionId="system.openPath" args={{ path: workspace.path }}>
             <FolderOpen className={ICON_CLASS} />
-            Reveal in Finder
+            {fileManagerRevealLabel()}
           </ContextMenuActionItem>
         </ContextMenuContent>
       </ContextMenu>

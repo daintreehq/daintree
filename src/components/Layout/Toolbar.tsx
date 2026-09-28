@@ -21,6 +21,7 @@ import {
   Pin,
   PinOff,
   Clipboard,
+  Settings,
   Square,
   X,
 } from "lucide-react";
@@ -2512,7 +2513,8 @@ export function Toolbar({
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                       <ContextMenuItem onSelect={handleOpenProjectSettings}>
-                        Project settings
+                        <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                        Project settings…
                       </ContextMenuItem>
                       {activeSearchableProject && activeSearchableProject.processCount > 0 && (
                         <ContextMenuItem

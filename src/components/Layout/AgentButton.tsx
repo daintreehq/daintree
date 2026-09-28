@@ -37,7 +37,17 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
-import { Check, ChevronDown, Circle, ExternalLink, PanelBottom, Settings2 } from "lucide-react";
+import {
+  Bookmark,
+  Check,
+  ChevronDown,
+  Circle,
+  ExternalLink,
+  FolderGit2,
+  PanelBottom,
+  Plug,
+  Settings2,
+} from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentExternalLink } from "@shared/config/agentRegistry";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
@@ -149,6 +159,7 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
               );
             }}
           >
+            <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span className="flex-1 truncate">{label}</span>
             <span
               role="presentation"
@@ -260,6 +271,12 @@ export function AgentButton({
 
   const config = getAgentConfig(type);
   if (!config) return null;
+  // The agent's own mark, as the launcher's agent rows draw it.
+  const agentMenuMark = (
+    <BrandMark brandColor={getBrandColorHex(type)} className="mr-2 h-3.5 w-3.5 shrink-0">
+      <config.icon />
+    </BrandMark>
+  );
 
   const isSessionActive = activeSession !== null;
   const attentionState = activeSession?.attentionState ?? null;
@@ -542,14 +559,19 @@ export function AgentButton({
           }}
         >
           <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
+            {agentMenuMark}
             Launch {config.name}
           </ContextMenuActionItem>
           <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
+            <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Launch {config.name} in dock
           </ContextMenuActionItem>
           {hasWorktrees && (
             <ContextMenuSub>
-              <ContextMenuSubTrigger>Launch in worktree</ContextMenuSubTrigger>
+              <ContextMenuSubTrigger>
+                <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Launch in worktree
+              </ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <WorktreeMenuItems agentType={type} />
               </ContextMenuSubContent>
@@ -561,12 +583,14 @@ export function AgentButton({
             actionId="app.settings.openTab"
             args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
           >
+            <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Manage {config.name} presets…
           </ContextMenuActionItem>
           <ContextMenuActionItem
             actionId="app.settings.openTab"
             args={{ tab: "agents", subtab: type }}
           >
+            <Plug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             {config.name} settings…
           </ContextMenuActionItem>
           <AgentExternalLinkItems links={config.externalLinks} />
@@ -788,14 +812,17 @@ export function AgentButton({
         }}
       >
         <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
+          {agentMenuMark}
           Launch {config.name}
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
+          <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Launch {config.name} in dock
         </ContextMenuActionItem>
         {hasPresets && (
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={!isLaunchable}>
+              <Bookmark data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               Launch with preset
             </ContextMenuSubTrigger>
             <ContextMenuSubContent
@@ -851,7 +878,10 @@ export function AgentButton({
         )}
         {hasWorktrees && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger>Launch in worktree</ContextMenuSubTrigger>
+            <ContextMenuSubTrigger>
+              <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              Launch in worktree
+            </ContextMenuSubTrigger>
             <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
               <WorktreeMenuItems agentType={type} />
             </ContextMenuSubContent>
@@ -863,12 +893,14 @@ export function AgentButton({
           actionId="app.settings.openTab"
           args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
         >
+          <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Manage {config.name} presets…
         </ContextMenuActionItem>
         <ContextMenuActionItem
           actionId="app.settings.openTab"
           args={{ tab: "agents", subtab: type }}
         >
+          <Plug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {config.name} settings…
         </ContextMenuActionItem>
         <AgentExternalLinkItems links={config.externalLinks} />

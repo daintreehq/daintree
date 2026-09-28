@@ -1,16 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import {
-  ChevronRight,
-  Keyboard,
-  Pin,
-  Plug,
-  Plus,
-  Settings2,
-  SlidersHorizontal,
-  SquareTerminal,
-} from "lucide-react";
+import { ChevronRight, Keyboard, Pin, Plug, Plus, Settings2, SquareTerminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -58,7 +49,11 @@ import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
 import { normalizeKeyForBinding } from "@/services/keybindingUtils";
 import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks";
-import { TOOLBAR_PIN_LABEL, TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
+import {
+  TOOLBAR_CUSTOMIZE_ICON,
+  TOOLBAR_PIN_LABEL,
+  TOOLBAR_UNPIN_LABEL,
+} from "./toolbarMenuStrings";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useLauncherDiscovery } from "./useLauncherDiscovery";
@@ -1842,17 +1837,15 @@ function DockLaunchOption({
  * recipe `Workflow` as its else — a cue added without a branch drew the wrong
  * icon silently, the presentation half of the routing bug #12218 fixed.
  *
- * `SlidersHorizontal` rather than the `Settings2` the plugin tray's Customize
- * entry carries: that glyph already belongs to Manage agents, the row directly
- * above this one under the same heading, and two neighbours sharing a gear read
- * as one destination listed twice. It is the toolbar's own settings glyph
- * (`ToolbarSettingsButton`), so the row still points where its label says.
+ * Customize toolbar takes the shared toolbar glyph every Customize entry
+ * carries (`TOOLBAR_CUSTOMIZE_ICON`), which also keeps it clear of Manage
+ * agents' `Settings2` in the row directly above.
  */
 const DOCK_LAUNCH_CUE_ICONS: Record<DockLaunchCueId, LucideIcon> = {
   "create-recipe": Workflow,
   "setup-agents": Plug,
   "manage-agents": Settings2,
-  "customize-toolbar": SlidersHorizontal,
+  "customize-toolbar": TOOLBAR_CUSTOMIZE_ICON,
 };
 
 function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {

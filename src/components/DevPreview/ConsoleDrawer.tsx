@@ -1,5 +1,13 @@
 import { Suspense, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import { ChevronUp, MoreHorizontal, RotateCw, CircleStop } from "lucide-react";
+import {
+  ChevronUp,
+  MoreHorizontal,
+  RotateCw,
+  CircleStop,
+  Download,
+  Eraser,
+  RotateCcw,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -305,8 +313,12 @@ export function ConsoleDrawer({
                     sideOffset={4}
                     className="min-w-[14rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
                   >
-                    <DropdownMenuItem onSelect={onReloadPreview}>Reload preview</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={onReloadPreview}>
+                      <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Reload preview
+                    </DropdownMenuItem>
                     <DropdownMenuItem onSelect={onRestartDevServer}>
+                      <RotateCcw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart dev server
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
@@ -314,12 +326,14 @@ export function ConsoleDrawer({
                       disabled={isRestarting || status === "installing"}
                       onSelect={onRequestRestartAndClearCache}
                     >
+                      <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart and clear cache
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       disabled={isRestarting || status === "installing"}
                       onSelect={onRequestReinstallAndRestart}
                     >
+                      <Download data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Reinstall dependencies
                     </DropdownMenuItem>
                   </DropdownMenuContent>

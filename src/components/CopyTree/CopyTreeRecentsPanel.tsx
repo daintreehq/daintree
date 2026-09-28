@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { FileCode, Folders } from "lucide-react";
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -193,6 +194,7 @@ function CopyTreeMenuItems({
         onSelect={onCopyFullContext}
         aria-keyshortcuts={comboToAriaKeyshortcuts(shortcut, isMac())}
       >
+        <Folders data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         Copy full context
         <DropdownMenuShortcut shortcut={shortcut} />
       </DropdownMenuItem>
@@ -231,7 +233,10 @@ function CopyTreeMenuItems({
       {/* Where the excludes, always-include lists and size budgets that shape
           every copy actually live. Without this the menu is a dead end for
           someone who opened it wanting to change what a copy contains. */}
-      <DropdownMenuItem onSelect={onOpenContextSettings}>Context settings</DropdownMenuItem>
+      <DropdownMenuItem onSelect={onOpenContextSettings}>
+        <FileCode data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+        Context settings
+      </DropdownMenuItem>
     </>
   );
 }
