@@ -4,6 +4,7 @@ import { act } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TabButton } from "../TabButton";
+import { inlineRenameFieldClassName } from "../inlineRenameField";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { GLYPH_SELECTOR } from "@/components/icons/__tests__/glyphBox";
 
@@ -247,7 +248,7 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={onRename} />);
 
       enterEditMode(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
 
       fireEvent.change(input, { target: { value: "   " } });
       fireEvent.keyDown(input, { key: "Enter" });
@@ -261,7 +262,7 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={onRename} />);
 
       enterEditMode(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
 
       // editValue starts as "Test Agent" — unchanged on first Enter must not
       // commit (an accidental Enter would otherwise lock a stale title).
@@ -276,7 +277,7 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={onRename} />);
 
       enterEditMode(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
 
       fireEvent.change(input, { target: { value: "Renamed" } });
       fireEvent.keyDown(input, { key: "Enter" });
@@ -290,7 +291,7 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={onRename} />);
 
       enterEditMode(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
 
       fireEvent.change(input, { target: { value: "Renamed" } });
       fireEvent.keyDown(input, { key: "Enter", isComposing: true });
@@ -304,7 +305,7 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={onRename} />);
 
       enterEditMode(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
 
       fireEvent.change(input, { target: { value: "Renamed" } });
       fireEvent.keyDown(input, { key: "Escape" });
@@ -318,7 +319,7 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={onRename} />);
 
       enterEditMode(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
 
       fireEvent.change(input, { target: { value: "" } });
       fireEvent.blur(input);
@@ -333,7 +334,7 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={onRename} />);
 
       enterEditMode(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
 
       fireEvent.change(input, { target: { value: "Renamed" } });
       fireEvent.blur(input);
@@ -372,7 +373,7 @@ describe("TabButton", () => {
         );
       });
 
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
       fireEvent.change(input, { target: { value: "FromContextMenu" } });
       fireEvent.blur(input);
 
@@ -397,7 +398,7 @@ describe("TabButton", () => {
     it("uses a transparent border and subtle background lift instead of chrome", () => {
       render(<TabButton {...defaultProps} onRename={vi.fn()} />);
       fireEvent.doubleClick(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
       expect(input.className).toContain("border-transparent");
       expect(input.className).toContain("bg-overlay-soft");
       expect(input.className).not.toContain("border-border-strong");
@@ -407,7 +408,7 @@ describe("TabButton", () => {
     it("does not use the accent color for any focus indicator", () => {
       render(<TabButton {...defaultProps} onRename={vi.fn()} />);
       fireEvent.doubleClick(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
       expect(input.className).not.toMatch(
         /(?:outline|ring|border)-(?:daintree-accent|accent-primary)(?![\w-])/
       );
@@ -650,6 +651,58 @@ describe("TabButton", () => {
       fireEvent.keyDown(input, { key });
       await new Promise((r) => requestAnimationFrame(() => r(null)));
       expect(document.activeElement).toBe(screen.getByRole("tab"));
+    });
+
+    it("opens from F2 on the focused tab without activating it, and ends back on the tab", async () => {
+      const onClick = vi.fn();
+      const sensor = vi.fn();
+      render(
+        <TabButton
+          {...defaultProps}
+          onClick={onClick}
+          onRename={vi.fn()}
+          sortableListeners={{ onKeyDown: sensor }}
+        />
+      );
+      const tab = screen.getByRole("tab");
+      tab.focus();
+      const notCancelled = fireEvent.keyDown(tab, { key: "F2" });
+      expect(notCancelled).toBe(false);
+      const input = screen.getByTestId<HTMLInputElement>("motion-input");
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe("Test Agent");
+      expect(onClick).not.toHaveBeenCalled();
+      expect(sensor).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(input, { key: "Escape" });
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      expect(screen.queryByTestId("motion-input")).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("tab"));
+    });
+
+    it("leaves F2 alone on a tab that cannot be renamed", () => {
+      render(<TabButton {...defaultProps} />);
+      const tab = screen.getByRole("tab");
+      expect(fireEvent.keyDown(tab, { key: "F2" })).toBe(true);
+      expect(screen.queryByTestId("motion-input")).toBeNull();
+      expect(tab.getAttribute("aria-keyshortcuts")?.split(" ")).not.toContain("F2");
+    });
+
+    it("advertises F2 only where it works", () => {
+      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
+      expect(screen.getByRole("tab").getAttribute("aria-keyshortcuts")?.split(" ")).toContain("F2");
+    });
+
+    it("wears the shared inline rename look and treats the name as an identifier", () => {
+      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
+      fireEvent.doubleClick(screen.getByText("Test Agent"));
+      const input = screen.getByTestId("motion-input");
+      const classes = input.className.split(/\s+/);
+      for (const token of inlineRenameFieldClassName.split(/\s+/)) {
+        expect(classes).toContain(token);
+      }
+      expect(input.getAttribute("spellcheck")).toBe("false");
+      expect(input.getAttribute("autocomplete")).toBe("off");
     });
 
     it("sits beside the tab rather than inside it", () => {

@@ -53,6 +53,7 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
+import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
 import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
@@ -185,6 +186,8 @@ export interface PanelHeaderProps {
   isEditingTitle: boolean;
   editingValue: string;
   titleInputRef: React.RefObject<HTMLInputElement | null>;
+  /** The static title, so a keyboard rename can hand focus back to it. */
+  titleRef?: React.Ref<HTMLSpanElement>;
   onEditingValueChange: (value: string) => void;
   onTitleDoubleClick: (e: React.MouseEvent) => void;
   onTitleKeyDown: (e: React.KeyboardEvent) => void;
@@ -277,6 +280,7 @@ function PanelHeaderComponent({
   isEditingTitle,
   editingValue,
   titleInputRef,
+  titleRef,
   onEditingValueChange,
   onTitleDoubleClick,
   onTitleKeyDown,
@@ -1277,7 +1281,7 @@ function PanelHeaderComponent({
                 <input
                   data-no-dnd
                   ref={titleInputRef}
-                  type="text"
+                  {...inlineRenameFieldInputProps}
                   size={1}
                   value={editingValue}
                   onChange={(e) => onEditingValueChange(e.target.value)}
@@ -1285,7 +1289,10 @@ function PanelHeaderComponent({
                   onBlur={onTitleSave}
                   // Focus is shown by the field itself, without accent (#7926):
                   // the wash deepens and its edge appears while it has focus.
-                  className="col-start-1 row-start-1 -mx-1 h-6 w-[calc(100%+0.5rem)] rounded-sm border border-transparent bg-overlay-soft px-1 text-xs font-medium leading-6 text-text-primary select-text transition-colors focus:outline-hidden focus-visible:border-divider focus-visible:bg-overlay-medium"
+                  className={cn(
+                    inlineRenameFieldClassName,
+                    "col-start-1 row-start-1 -mx-1 h-6 w-[calc(100%+0.5rem)] leading-6"
+                  )}
                   aria-label={getAriaLabel()}
                 />
               </div>
@@ -1294,6 +1301,7 @@ function PanelHeaderComponent({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span
+                      ref={titleRef}
                       className={cn(
                         // min-w-[6ch]: the title is the last thing to yield —
                         // a badge or a queue count never squeezes it to nothing.
@@ -1312,6 +1320,7 @@ function PanelHeaderComponent({
                       onKeyDown={onTitleKeyDown}
                       tabIndex={onTitleChange ? 0 : undefined}
                       role={onTitleChange ? "button" : undefined}
+                      aria-keyshortcuts={onTitleChange ? "F2" : undefined}
                       aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
                       data-fleet-gesture-passthrough=""
                     >

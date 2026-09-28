@@ -26,6 +26,7 @@ import {
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { DURATION_100 } from "@/lib/animationUtils";
+import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
 
 export interface TabInfo {
   id: string;
@@ -174,16 +175,20 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
       )
     : {};
 
+  const startEditing = useCallback(() => {
+    if (!onRename) return false;
+    setEditValue(title);
+    setIsEditing(true);
+    didCommitOrCancelRef.current = false;
+    return true;
+  }, [onRename, title]);
+
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (onRename) {
-        setEditValue(title);
-        setIsEditing(true);
-        didCommitOrCancelRef.current = false;
-      }
+      startEditing();
     },
-    [onRename, title]
+    [startEditing]
   );
 
   const handleInputKeyDown = useCallback(
@@ -285,6 +290,11 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // F2, not Enter: Enter and Space belong to tab activation.
+      if (e.key === "F2") {
+        if (startEditing()) e.preventDefault();
+        return;
+      }
       if (e.key === "Enter" || e.key === " ") {
         if (isActive && sortableKeyDown) {
           sortableKeyDown(e);
@@ -294,7 +304,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
         onClick();
       }
     },
-    [isActive, onClick, sortableKeyDown]
+    [isActive, onClick, sortableKeyDown, startEditing]
   );
 
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
@@ -310,7 +320,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             role="tab"
             aria-selected={isActive}
             aria-controls={tabPanelId}
-            aria-keyshortcuts="Delete"
+            aria-keyshortcuts={onRename ? "F2 Delete" : "Delete"}
             data-document-tab=""
             data-tab-parked={parked || undefined}
             tabIndex={isActive ? 0 : -1}
@@ -428,13 +438,13 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           </div>
         </TooltipTrigger>
         <TooltipContent side="bottom">
-          {onRename ? `${fullTitle ?? title} — Double-click to rename` : (fullTitle ?? title)}
+          {onRename ? `${fullTitle ?? title} — Double-click or F2 to rename` : (fullTitle ?? title)}
         </TooltipContent>
       </Tooltip>
       {isEditing && editBox && (
         <m.input
           ref={inputRef}
-          type="text"
+          {...inlineRenameFieldInputProps}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={handleInputKeyDown}
@@ -445,9 +455,9 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           onTouchStart={handleInputTouchStart}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.1 }}
+          transition={{ duration: DURATION_100 / 1000 }}
           style={editBox}
-          className="absolute text-xs font-medium bg-overlay-soft border border-transparent px-1 text-text-primary select-text focus:outline-hidden"
+          className={cn(inlineRenameFieldClassName, "absolute")}
           aria-label={`Rename tab ${title}`}
         />
       )}
