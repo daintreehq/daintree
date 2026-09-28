@@ -328,7 +328,7 @@ export const SEL = {
     terminalTitle: (i: number) => `#terminal-title-${i}`,
     terminalCommand: (i: number) => `#terminal-command-${i}`,
     terminalExitBehavior: (i: number) => `#terminal-exit-behavior-${i}`,
-    addTerminalButton: 'button:has-text("+ Add terminal")',
+    addTerminalButton: 'button:has-text("Add terminal")',
     createButton: 'button:has-text("Create recipe")',
     updateButton: 'button:has-text("Update recipe")',
     cancelButton: 'button:has-text("Cancel")',
@@ -567,8 +567,8 @@ export const SEL = {
     importDialog: '[role="dialog"]:has-text("Import recipe")',
     importTextarea: '[data-testid="recipe-import-textarea"]',
     // Scope this with the importDialog locator in specs — the import dialog's
-    // footer has only "Cancel" and "Import", so a bare text match is unambiguous.
-    importConfirmButton: 'button:has-text("Import")',
+    // footer has only "Cancel" and "Import recipe".
+    importConfirmButton: 'button[data-confirm-role="confirm"]:has-text("Import recipe")',
     overriddenBadge: 'text="Overridden by team recipe"',
     moreButton: (name: string) => `[aria-label="More actions for recipe ${name}"]`,
     copyJsonItem: '[role="menuitem"]:has-text("Copy as JSON")',
@@ -576,8 +576,9 @@ export const SEL = {
   },
   recipeConflict: {
     dialog: '[role="dialog"]:has-text("changed on disk")',
-    reloadButton: '[data-testid="recipe-conflict-reload"]',
-    overwriteButton: '[data-testid="recipe-conflict-overwrite"]',
+    reloadButton:
+      '[role="dialog"] button[data-confirm-role="confirm"]:has-text("Reload from disk")',
+    overwriteButton: '[role="dialog"] button[data-confirm-role="leading"]:has-text("Overwrite")',
   },
   recipeRunner: {
     emptyState: '[data-testid="recipe-runner-empty"]',

@@ -26,6 +26,12 @@ function park(overrides: Partial<RecipeConflictRequest> = {}) {
   return () => resolution;
 }
 
+function footerButton(role: "leading" | "cancel" | "confirm"): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(`[data-confirm-role="${role}"]`);
+  if (!button) throw new Error(`no ${role} footer action`);
+  return button;
+}
+
 afterEach(() => {
   act(() => {
     if (useRecipeConflictStore.getState().pendingConflict) {
@@ -50,7 +56,7 @@ describe("RecipeConflictDialog", () => {
 
       const dialog = screen.getByRole("dialog");
       await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
-      expect(document.activeElement).not.toBe(screen.getByTestId("recipe-conflict-overwrite"));
+      expect(document.activeElement).not.toBe(footerButton("leading"));
     }
   );
 
@@ -62,7 +68,7 @@ describe("RecipeConflictDialog", () => {
     expect(text).toContain("changed on disk");
     expect(text).toContain("git pull");
     expect(text).not.toContain("can't represent");
-    expect(screen.getByTestId("recipe-conflict-overwrite").textContent).toBe("Overwrite recipe");
+    expect(footerButton("leading").textContent).toBe("Overwrite recipe");
     expect(document.querySelector('[data-testid="recipe-conflict-detail"]')).toBeNull();
   });
 
@@ -84,9 +90,7 @@ describe("RecipeConflictDialog", () => {
     );
     // Overwrite is relabelled, because here it discards content rather than
     // just losing a race.
-    expect(screen.getByTestId("recipe-conflict-overwrite").textContent).toBe(
-      "Overwrite and discard"
-    );
+    expect(footerButton("leading").textContent).toBe("Overwrite and discard");
   });
 
   it("omits the detail block when the main process sent none", () => {
@@ -102,7 +106,7 @@ describe("RecipeConflictDialog", () => {
       render(<RecipeConflictDialog />);
 
       act(() => {
-        screen.getByTestId("recipe-conflict-overwrite").click();
+        footerButton("leading").click();
       });
       await act(async () => {
         await Promise.resolve();
@@ -117,11 +121,38 @@ describe("RecipeConflictDialog", () => {
     render(<RecipeConflictDialog />);
 
     act(() => {
-      screen.getByTestId("recipe-conflict-reload").click();
+      footerButton("confirm").click();
     });
     await act(async () => {
       await Promise.resolve();
     });
     expect(read()).toBe("reload");
+  });
+
+  it("resolves as cancel from the footer's Cancel", async () => {
+    const read = park({ reason: "stale" });
+    render(<RecipeConflictDialog />);
+
+    act(() => {
+      footerButton("cancel").click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(read()).toBe("cancel");
+  });
+
+  // The destructive answer sits on the footer's leading edge, apart from the
+  // Cancel / primary pair, and is never the dialog's one filled button.
+  it("keeps the overwrite off the primary slot and away from it", () => {
+    park({ reason: "stale" });
+    render(<RecipeConflictDialog />);
+
+    const buttons = [...document.querySelectorAll<HTMLElement>("[data-confirm-role]")].map(
+      (el) => el.dataset.confirmRole
+    );
+    expect(buttons).toEqual(["leading", "cancel", "confirm"]);
+    expect(footerButton("leading").textContent).toContain("Overwrite");
+    expect(footerButton("confirm").textContent).toBe("Reload from disk");
   });
 });

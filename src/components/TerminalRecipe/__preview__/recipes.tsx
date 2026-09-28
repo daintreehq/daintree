@@ -13,7 +13,10 @@ import type { Project, RecipeTerminal, RunCommand, TerminalRecipe } from "@/type
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { RecipeManager } from "../RecipeManager";
 import { RecipeEditor } from "../RecipeEditor";
+import { RecipeConflictDialog } from "../RecipeConflictDialog";
+import { RecipesTab } from "@/components/Project/RecipesTab";
 import { RecipeRunner } from "@/components/Terminal/RecipeRunner/RecipeRunner";
+import { useRecipeConflictStore } from "@/store/recipeConflictStore";
 import "@/index.css";
 
 /**
@@ -29,7 +32,13 @@ import "@/index.css";
  *
  * Query parameters (the screenshot spec drives these):
  *   ?theme=daintree|bondi|…   built-in theme id
- *   ?view=manager|runner      which surface to mount (default manager)
+ *   ?view=manager|runner|tab|conflict
+ *                             which surface to mount (default manager); `tab`
+ *                             is the project settings Recipes tab, `conflict`
+ *                             the refused-write dialog
+ *   ?create=project|global    open the editor on a new recipe instead
+ *   ?save=fail|hang           make the editor's save reject, or never settle
+ *   ?reason=stale|forward-compat  the conflict dialog's refusal reason
  *   ?fixture=…                inventory, see MANAGER_FIXTURES / RUNNER_FIXTURES
  *   ?edit=<recipe id>         open the editor on that recipe instead
  *   ?prompt=…                 replace the edited recipe's first agent prompt, see PROMPT_FIXTURES
@@ -39,7 +48,12 @@ import "@/index.css";
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
-const view = params.get("view") === "runner" ? "runner" : "manager";
+const VIEWS = ["manager", "runner", "tab", "conflict"] as const;
+type View = (typeof VIEWS)[number];
+const view: View = VIEWS.find((v) => v === params.get("view")) ?? "manager";
+const createScope = params.get("create");
+const saveMode = params.get("save");
+const conflictReason = params.get("reason") === "forward-compat" ? "forward-compat" : "stale";
 const fixture = params.get("fixture") ?? "populated";
 const editId = params.get("edit");
 const promptFixture = params.get("prompt");
@@ -307,6 +321,19 @@ function seedStores(): void {
 
 seedStores();
 
+// The tab loads recipes on open; through the shim that would empty the seed.
+if (view === "tab") useRecipeStore.setState({ loadRecipes: async () => {} });
+
+if (saveMode === "fail" || saveMode === "hang") {
+  const settle = (): Promise<void> =>
+    saveMode === "hang"
+      ? new Promise(() => {})
+      : Promise.reject(
+          new Error("EACCES: permission denied, open '.daintree/recipes/full-stack.json'")
+        );
+  useRecipeStore.setState({ updateRecipe: settle, createRecipe: settle });
+}
+
 // The editor reads the per-view worktree store and throws without a provider.
 const worktreeStore = createWorktreeStore();
 setCurrentViewStore(worktreeStore);
@@ -326,6 +353,16 @@ function ManagerView() {
   const [editing, setEditing] = useState<TerminalRecipe | undefined>(() =>
     editId ? editedRecipe() : undefined
   );
+  const [creating, setCreating] = useState(createScope !== null);
+  if (creating) {
+    return (
+      <RecipeEditor
+        defaultScope={createScope === "global" ? "global" : "project"}
+        isOpen
+        onClose={() => setCreating(false)}
+      />
+    );
+  }
   return (
     <>
       <RecipeManager
@@ -344,6 +381,46 @@ function ManagerView() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * Requested after mount: StrictMode's effect replay runs the dialog's unmount
+ * cleanup, which cancels a conflict that was already pending.
+ */
+function ConflictView() {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void useRecipeConflictStore.getState().requestConflict({
+        recipeId: "inrepo-full-stack",
+        recipeName: "Full stack",
+        updates: {},
+        reason: conflictReason,
+        detail:
+          conflictReason === "forward-compat"
+            ? 'full-stack.json: terminal 2 has type "browser"; field "layout" is unknown'
+            : undefined,
+      });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, []);
+  return <RecipeConflictDialog />;
+}
+
+/** The Recipes tab as the project settings dialog hosts it, at its content width. */
+function TabView() {
+  return (
+    <div className="min-h-screen bg-surface-panel p-8">
+      <div data-preview-tab="" className="mx-auto max-w-[44rem]">
+        <RecipesTab
+          projectId={PROJECT_ID}
+          defaultWorktreeRecipeId="recipe-1"
+          onDefaultWorktreeRecipeIdChange={() => {}}
+          worktreeMap={new Map()}
+          isOpen
+        />
+      </div>
+    </div>
   );
 }
 
@@ -385,7 +462,15 @@ function App() {
   return (
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={worktreeStore}>
-        {view === "runner" ? <RunnerView /> : <ManagerView />}
+        {view === "runner" ? (
+          <RunnerView />
+        ) : view === "tab" ? (
+          <TabView />
+        ) : view === "conflict" ? (
+          <ConflictView />
+        ) : (
+          <ManagerView />
+        )}
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );

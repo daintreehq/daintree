@@ -512,7 +512,7 @@ async function captureValidation(page: Page): Promise<void> {
     await p.getByRole("button", { name: "Import recipe" }).click();
     const importDialog = page.locator('[role="dialog"]:has-text("Paste the JSON")').last();
     await importDialog.locator("textarea").fill('{"name": "Broken", "terminals": [');
-    await importDialog.getByRole("button", { name: "Import", exact: true }).click();
+    await importDialog.getByRole("button", { name: "Import recipe", exact: true }).click();
     await captureOverlay(
       page,
       "validation",

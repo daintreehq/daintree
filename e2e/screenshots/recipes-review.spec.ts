@@ -16,7 +16,7 @@
  *   DAINTREE_SHOT_RECIPES  required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR      required — an ABSOLUTE output directory outside the repo
  *   DAINTREE_SHOT_THEMES   themes for the rest-state sweep (default daintree,bondi,namib)
- *   DAINTREE_SHOT_ONLY     manager|runner|variables — capture one group only
+ *   DAINTREE_SHOT_ONLY     manager|runner|variables|editor|dialogs — capture one group only
  *
  * Never writes a PNG it has not verified, and counts the files itself at the end.
  */
@@ -43,6 +43,7 @@ test.use({ deviceScaleFactor: 2 });
 
 const DIALOG = '[role="dialog"]:visible';
 const CANVAS = "[data-preview-canvas]";
+const TAB = "[data-preview-tab]";
 
 const FREEZE_CSS = `
   ::-webkit-scrollbar { display: none !important; }
@@ -81,10 +82,13 @@ test.afterAll(async () => {
 });
 
 interface OpenOptions {
-  view: "manager" | "runner";
+  view: "manager" | "runner" | "tab" | "conflict";
   theme?: string;
   fixture?: string;
   edit?: string;
+  create?: "project" | "global";
+  save?: "fail" | "hang";
+  reason?: "stale" | "forward-compat";
   prompt?: string;
   worktree?: string;
   width?: number;
@@ -96,12 +100,20 @@ async function open(page: Page, opts: OpenOptions): Promise<void> {
   await page.setViewportSize({ width: opts.width ?? 1280, height: opts.height ?? 900 });
   const query = new URLSearchParams({ view, theme, fixture });
   if (opts.edit) query.set("edit", opts.edit);
+  if (opts.create) query.set("create", opts.create);
+  if (opts.save) query.set("save", opts.save);
+  if (opts.reason) query.set("reason", opts.reason);
   if (opts.prompt) query.set("prompt", opts.prompt);
   if (opts.worktree) query.set("worktree", opts.worktree);
   await page.goto(`${server!.baseURL}/recipes-preview.html?${query}`, { waitUntil: "load" });
   await page.addStyleTag({ content: FREEZE_CSS });
-  if (view === "manager") {
+  if (view === "manager" || view === "conflict") {
     await page.locator(DIALOG).first().waitFor({ state: "visible", timeout: 20_000 });
+  } else if (view === "tab") {
+    await page.locator(TAB).waitFor({ state: "visible", timeout: 20_000 });
+    await expect(page.locator(TAB).getByText("Design review", { exact: true })).toBeVisible({
+      timeout: 8000,
+    });
   } else {
     await page.locator(CANVAS).waitFor({ state: "visible", timeout: 20_000 });
     await expect
@@ -164,7 +176,7 @@ test("recipes review", async ({ page }) => {
     description: "DAINTREE_SHOT_RECIPES is required for the recipes capture",
   });
   test.skip(!ENABLED, "Set DAINTREE_SHOT_RECIPES to run the recipes capture");
-  test.setTimeout(300_000);
+  test.setTimeout(600_000);
   await stubViteHmrClient(page);
   page.on("pageerror", (err) => failures.push(`pageerror: ${err.message.split("\n")[0]}`));
 
@@ -322,6 +334,104 @@ test("recipes review", async ({ page }) => {
       await settle(page, 200);
       await page.screenshot({ path: path.join(OUT_DIR, "18-runner-context-menu.png") });
     });
+  }
+
+  // ── The editor itself: all three terminal kinds, create, validation, save ──
+  if (wants("editor")) {
+    // "Full stack" (a team recipe) holds a dev server, a shell and an agent — one card of each.
+    for (const theme of THEMES) {
+      await step(`editor-full-${theme}`, async () => {
+        await open(page, { view: "manager", theme, edit: "inrepo-full-stack", height: 1600 });
+        await snap(page, DIALOG, `30-editor-full-${theme}.png`);
+      });
+    }
+
+    await step("editor-scrolled", async () => {
+      await open(page, { view: "manager", edit: "inrepo-full-stack" });
+      await page
+        .locator("#terminal-type-2")
+        .evaluate((el) => el.scrollIntoView({ block: "end" }), undefined, { timeout: 5000 });
+      await snap(page, DIALOG, "31-editor-scrolled-bottom.png");
+    });
+
+    await step("editor-create", async () => {
+      await open(page, { view: "manager", create: "project", height: 1000 });
+      await snap(page, DIALOG, "32-editor-create.png");
+    });
+
+    await step("editor-name-required", async () => {
+      await open(page, { view: "manager", create: "project", height: 1000 });
+      await page.locator(DIALOG).getByRole("button", { name: "Create recipe" }).click();
+      await snap(page, DIALOG, "33-editor-name-required.png");
+    });
+
+    await step("editor-save-failed", async () => {
+      await open(page, { view: "manager", edit: "inrepo-full-stack", save: "fail", height: 1600 });
+      await page.locator(DIALOG).getByRole("button", { name: "Update recipe" }).click();
+      await settle(page, 300);
+      await snap(page, DIALOG, "34-editor-save-failed.png");
+    });
+
+    await step("editor-saving", async () => {
+      await open(page, { view: "manager", edit: "inrepo-full-stack", save: "hang", height: 1600 });
+      await page.locator(DIALOG).getByRole("button", { name: "Update recipe" }).click();
+      await snap(page, DIALOG, "35-editor-saving.png");
+    });
+
+    await step("editor-card-focus", async () => {
+      await open(page, { view: "manager", edit: "inrepo-full-stack", height: 1600 });
+      await page.locator("#terminal-title-1").focus();
+      await snap(page, DIALOG, "36-editor-card-focus.png");
+    });
+
+    await step("editor-forced-colors", async () => {
+      await page.emulateMedia({ forcedColors: "active" });
+      await open(page, { view: "manager", edit: "inrepo-full-stack", height: 1600 });
+      await snap(page, DIALOG, "37-editor-forced-colors.png");
+      await page.emulateMedia({ forcedColors: "none" });
+    });
+  }
+
+  // ── The two import dialogs, the settings tab and the conflict dialog ──
+  if (wants("dialogs")) {
+    const BAD_JSON = '{"name": "Broken", "terminals": [';
+
+    await step("import-manager", async () => {
+      await open(page, { view: "manager" });
+      await page.getByRole("button", { name: "Import", exact: true }).click();
+      await page.getByRole("menuitem", { name: /Import from clipboard/ }).click();
+      const dialog = page.locator(DIALOG).filter({ hasText: "Import recipe" });
+      await dialog.waitFor({ state: "visible", timeout: 5000 });
+      await snap(page, `${DIALOG}:has-text("Import recipe")`, "40-import-manager-empty.png");
+      await dialog.locator("textarea").fill(BAD_JSON);
+      await dialog.getByRole("button", { name: "Import recipe", exact: true }).click();
+      await snap(page, `${DIALOG}:has-text("Import recipe")`, "41-import-manager-error.png");
+    });
+
+    for (const theme of THEMES) {
+      await step(`tab-${theme}`, async () => {
+        await open(page, { view: "tab", theme, height: 1000 });
+        await snap(page, TAB, `42-tab-${theme}.png`);
+      });
+    }
+
+    await step("import-tab", async () => {
+      await open(page, { view: "tab" });
+      await page.getByRole("button", { name: "Import recipe" }).click();
+      const dialog = page.locator(DIALOG).filter({ hasText: "Import recipe" });
+      await dialog.waitFor({ state: "visible", timeout: 5000 });
+      await snap(page, `${DIALOG}:has-text("Import recipe")`, "43-import-tab-empty.png");
+      await dialog.locator("textarea").fill(BAD_JSON);
+      await dialog.getByRole("button", { name: "Import recipe", exact: true }).click();
+      await snap(page, `${DIALOG}:has-text("Import recipe")`, "44-import-tab-error.png");
+    });
+
+    for (const reason of ["stale", "forward-compat"] as const) {
+      await step(`conflict-${reason}`, async () => {
+        await open(page, { view: "conflict", reason });
+        await snap(page, DIALOG, `45-conflict-${reason}.png`);
+      });
+    }
   }
 
   // ── Initial-prompt variable preview, inside the real editor ──

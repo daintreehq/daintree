@@ -34,7 +34,6 @@ const ALLOWED: Record<string, string> = {
     "copy-tree toolbar button waits on a Doherty gate before its spinner; toolbar lane",
   "src/components/Project/ProjectSwitcher.tsx:spinner":
     "trigger shows list loading, not an action in flight",
-  "src/components/TerminalRecipe/RecipeEditor.tsx:label": "recipe editor form lane",
   "src/components/Layout/LocalCommitsDropdown.tsx:label":
     "load-more keeps the 5s 'Still working…' copy the loading rules require",
   "plugins/builtin/github/renderer/components/GitHubResourceList.tsx:label":

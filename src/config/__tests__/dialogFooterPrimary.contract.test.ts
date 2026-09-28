@@ -52,10 +52,12 @@ const ACCENT_FILL_VARIANTS = new Set(["default", "glow", "vibrant"]);
 // refactor stopped matching and the contract went blind. Lower them deliberately, in the
 // same commit that removes the footers.
 const MIN_FOOTERS_INSPECTED = 24;
-// 49, down from 53: the file close guard, the create-folder, update-cwd and
-// command picker error dialogs moved onto the footer's action props, which this
-// walk doesn't count as hand-written buttons.
-const MIN_BUTTONS_INSPECTED = 49;
+// 41, down from 53: the file close guard, the create-folder, update-cwd and
+// command picker error dialogs, then the recipe editor, the recipe conflict
+// dialog and the shared recipe import dialog (which replaced two copies) moved
+// onto the footer's action props, which this walk doesn't count as hand-written
+// buttons.
+const MIN_BUTTONS_INSPECTED = 41;
 
 function tsxFiles(dir: string, found: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -141,15 +143,6 @@ function variantOf(element: ts.JsxOpeningLikeElement): VariantInfo {
   return { kind: "absent" };
 }
 
-// Recipe dialogs still disable footer actions natively. The recipe editor and
-// manager are being reworked as their own piece of work, which takes these
-// with it; remove each entry as it lands. Shrink-only.
-const NATIVE_DISABLED_PENDING = new Set([
-  "src/components/TerminalRecipe/RecipeEditor.tsx",
-  "src/components/TerminalRecipe/RecipeManager.tsx",
-  "src/components/Project/RecipesTab.tsx",
-]);
-
 function hasAttribute(element: ts.JsxOpeningLikeElement, name: string): boolean {
   return element.attributes.properties.some(
     (attribute) => ts.isJsxAttribute(attribute) && attribute.name.getText() === name
@@ -214,7 +207,7 @@ function scan(filePath: string): ScanResult {
       // An unavailable footer action stays focusable and says so with
       // `aria-disabled`, vetoing its own activation — native `disabled` drops it
       // out of the tab order, so Tab skips the very action the hint explains.
-      if (hasAttribute(node, "disabled") && !NATIVE_DISABLED_PENDING.has(relative)) {
+      if (hasAttribute(node, "disabled")) {
         result.violations.push({ file: relative, line, reason: "native disabled" });
       }
     }

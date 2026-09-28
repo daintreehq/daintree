@@ -1,19 +1,22 @@
-import { useState, useEffect, useId, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Plus, Trash2, Edit3, Download, FileDown, Check, Pin, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsEmptyRow, SettingsGroup } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsEmptyRow,
+  SettingsGroup,
+  SettingsInlineError,
+} from "@/components/Settings/SettingsGroup";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useRecipeStore } from "@/store/recipeStore";
 import { actionService } from "@/services/ActionService";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
+import { RecipeImportDialog } from "@/components/TerminalRecipe/RecipeImportDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { AppDialog } from "@/components/ui/AppDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
 import { logError } from "@/utils/logger";
@@ -40,14 +43,12 @@ export function RecipesTab({
     recipes,
     loadRecipes,
     exportRecipe,
-    importRecipe,
     isLoading: recipesLoading,
   } = useRecipeStore(
     useShallow((s) => ({
       recipes: s.recipes,
       loadRecipes: s.loadRecipes,
       exportRecipe: s.exportRecipe,
-      importRecipe: s.importRecipe,
       isLoading: s.isLoading,
     }))
   );
@@ -56,16 +57,12 @@ export function RecipesTab({
   const [editingRecipe, setEditingRecipe] = useState<TerminalRecipe | undefined>(undefined);
   const [recipeToDelete, setRecipeToDelete] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [importJson, setImportJson] = useState("");
-  const [importError, setImportError] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
-  const importLabelId = useId();
   // "Clear default" removes the warning it sits in, so focus goes to the next
   // thing a user would do: add or pin another recipe.
   const addRecipeRef = useRef<HTMLButtonElement>(null);
-  const importErrorId = useId();
   const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasLoadedRecipes = useRef(false);
 
@@ -85,8 +82,6 @@ export function RecipesTab({
       setRecipeToDelete(null);
       setDeleteError(null);
       setShowImportDialog(false);
-      setImportJson("");
-      setImportError(null);
       setExportError(null);
       setExportFeedback(null);
       if (exportTimeoutRef.current) {
@@ -163,29 +158,6 @@ export function RecipesTab({
         logError("Failed to copy to clipboard", err);
         setExportError(formatErrorMessage(err, "Failed to copy to clipboard"));
       }
-    }
-  };
-
-  const handleImportRecipe = async () => {
-    setImportError(null);
-    if (!projectId) {
-      setImportError("No project selected");
-      return;
-    }
-    try {
-      JSON.parse(importJson);
-    } catch (err) {
-      // The engine's own message carries the position ("at position 35 (line 1
-      // column 36)"), which is what the user needs to find the mistake.
-      setImportError(`That isn't valid JSON: ${formatErrorMessage(err, "parse failed")}`);
-      return;
-    }
-    try {
-      await importRecipe(projectId, importJson);
-      setShowImportDialog(false);
-      setImportJson("");
-    } catch (err) {
-      setImportError(formatErrorMessage(err, "Failed to import recipe"));
     }
   };
 
@@ -280,7 +252,7 @@ export function RecipesTab({
                 // toast for an action that was never possible (#11860).
                 const fromPlugin = isPluginRecipe(recipe);
                 return (
-                  <div key={recipe.id} className={cn("px-4 py-3", isShadowed && "opacity-60")}>
+                  <div key={recipe.id} className="px-4 py-3">
                     <div className="flex items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
@@ -300,7 +272,7 @@ export function RecipesTab({
                             {recipe.terminals.length} terminal
                             {recipe.terminals.length !== 1 ? "s" : ""}
                           </Badge>
-                          {isShadowed && <Badge size="xs">Overridden</Badge>}
+                          {isShadowed && <Badge size="xs">Overridden by team recipe</Badge>}
                           {isDefault && <Badge size="xs">Default</Badge>}
                           {recipe.showInEmptyState && <Badge size="xs">On empty grid</Badge>}
                         </div>
@@ -402,11 +374,7 @@ export function RecipesTab({
               })}
             </SettingsGroup>
           )}
-          {exportError && (
-            <p className="text-xs text-status-error" role="alert">
-              {exportError}
-            </p>
-          )}
+          {exportError && <SettingsInlineError role="alert">{exportError}</SettingsInlineError>}
         </div>
       </SettingsSection>
 
@@ -438,62 +406,11 @@ export function RecipesTab({
         }}
       />
 
-      <AppDialog
+      <RecipeImportDialog
         isOpen={showImportDialog}
-        onClose={() => {
-          setShowImportDialog(false);
-          setImportJson("");
-          setImportError(null);
-        }}
-        size="md"
-      >
-        <AppDialog.Header>
-          <AppDialog.Title>Import recipe</AppDialog.Title>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-
-        <AppDialog.Body>
-          <p id={importLabelId} className="text-sm text-text-secondary mb-4">
-            Paste the JSON configuration for the recipe you want to import
-          </p>
-          <Textarea
-            value={importJson}
-            onChange={(e) => {
-              setImportJson(e.target.value);
-              setImportError(null);
-            }}
-            placeholder='{"name": "My Recipe", "terminals": [...]}'
-            variant="code"
-            resize="none"
-            className="h-64"
-            spellCheck={false}
-            aria-labelledby={importLabelId}
-            invalid={!!importError}
-            aria-describedby={importError ? importErrorId : undefined}
-          />
-          {importError && (
-            <p id={importErrorId} role="alert" className="mt-2 text-xs text-status-error">
-              {importError}
-            </p>
-          )}
-        </AppDialog.Body>
-
-        <AppDialog.Footer>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setShowImportDialog(false);
-              setImportJson("");
-              setImportError(null);
-            }}
-          >
-            Cancel
-          </Button>
-          <Button variant="contrast" onClick={handleImportRecipe} disabled={!importJson.trim()}>
-            Import
-          </Button>
-        </AppDialog.Footer>
-      </AppDialog>
+        onClose={() => setShowImportDialog(false)}
+        projectId={projectId}
+      />
     </>
   );
 }
