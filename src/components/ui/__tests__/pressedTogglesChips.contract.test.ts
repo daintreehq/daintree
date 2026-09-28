@@ -81,10 +81,20 @@ function jsxSites(): JsxSite[] {
 const sites = jsxSites();
 const where = (s: JsxSite) => `${s.file}:${s.line}`;
 
-function containsConditional(node: ts.Node | undefined): boolean {
+function identifiers(node: ts.Node | undefined, out = new Set<string>()): Set<string> {
+  if (!node) return out;
+  if (ts.isIdentifier(node)) out.add(node.text);
+  ts.forEachChild(node, (child) => void identifiers(child, out));
+  return out;
+}
+
+/** True when `node` branches on any identifier the pressed state is read from. */
+function branchesOn(node: ts.Node | undefined, state: Set<string>): boolean {
   if (!node) return false;
-  if (ts.isConditionalExpression(node)) return true;
-  return ts.forEachChild(node, (child) => containsConditional(child) || undefined) ?? false;
+  if (ts.isConditionalExpression(node)) {
+    if ([...identifiers(node.condition)].some((id) => state.has(id))) return true;
+  }
+  return ts.forEachChild(node, (child) => branchesOn(child, state) || undefined) ?? false;
 }
 
 describe("pressed toggles and filter chips", () => {
@@ -103,11 +113,18 @@ describe("pressed toggles and filter chips", () => {
     expect(Object.keys(RAW_ARIA_PRESSED).filter((file) => !live.has(file))).toEqual([]);
   });
 
-  // A toggle's name stays put; `pressed` is what announces the change.
+  // A toggle's name stays put; `pressed` (or a raw `aria-pressed`) is what
+  // announces the change, so a flipped name reads twice: "Close X, pressed".
   it("a pressed toggle never flips its accessible name with its state", () => {
     const offenders = sites
-      .filter((s) => s.tag === "Button" && s.attrs.has("pressed"))
-      .filter((s) => containsConditional(s.attrs.get("aria-label")?.initializer))
+      .filter((s) => s.tag === "Button" && (s.attrs.has("pressed") || s.attrs.has("aria-pressed")))
+      .filter((s) => {
+        const pressed = s.attrs.get("pressed") ?? s.attrs.get("aria-pressed");
+        return branchesOn(
+          s.attrs.get("aria-label")?.initializer,
+          identifiers(pressed?.initializer)
+        );
+      })
       .map(where);
     expect(offenders).toEqual([]);
   });

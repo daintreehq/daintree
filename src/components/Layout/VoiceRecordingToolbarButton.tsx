@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
+import { useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
@@ -51,7 +51,6 @@ export function VoiceRecordingToolbarButton({
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const shortcut = useEffectiveCombo("voiceInput.toggle");
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
-  const ariaShortcut = useAriaKeyshortcuts("voiceInput.toggle");
   const hover = useShortcutHintHover("voiceInput.toggle");
 
   const isArming = status === "arming";
@@ -244,7 +243,6 @@ export function VoiceRecordingToolbarButton({
                   "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
                 )}
                 aria-label={tooltipTitle}
-                aria-keyshortcuts={ariaShortcut}
               >
                 <Mic className="h-4 w-4" />
                 {/* Arming ring — static accent border painted during the
@@ -334,10 +332,11 @@ export function VoiceRecordingToolbarButton({
               <div className="flex flex-col gap-0.5">
                 <span className="font-medium">{tooltipTitle}</span>
                 {elapsedLabel && <span className="text-text-secondary">{elapsedLabel}</span>}
-                {actionCombo ? (
-                  createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)
-                ) : (
-                  <span className="text-text-secondary">Click to jump to panel</span>
+                <span className="text-text-secondary">Click to jump to panel</span>
+                {actionCombo && (
+                  <span className="text-text-secondary">
+                    {createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)}
+                  </span>
                 )}
               </div>
             </TooltipContent>

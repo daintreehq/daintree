@@ -137,7 +137,7 @@ test.describe.serial("Core: Toolbar Overflow", () => {
     // reachability from the toolbar surface.
     await expectToolbarActionReachable(window, "Open settings");
     await expectToolbarActionReachable(window, "Open terminal");
-    await expect(toolbarButton(window, "Toggle Sidebar")).toBeVisible({ timeout: T_SHORT });
+    await expect(toolbarButton(window, "Toggle sidebar")).toBeVisible({ timeout: T_SHORT });
   });
 
   test("toolbar overflow triggers at narrow widths", async () => {
@@ -147,7 +147,7 @@ test.describe.serial("Core: Toolbar Overflow", () => {
     const aside = window.locator('aside[aria-label="Sidebar"]');
     const ariaHidden = await aside.getAttribute("aria-hidden");
     if (ariaHidden !== "true") {
-      await toolbarButton(window, "Toggle Sidebar").click();
+      await toolbarButton(window, "Toggle sidebar").click();
       await expect(aside).toHaveAttribute("aria-hidden", "true", { timeout: T_SHORT });
     }
 
@@ -167,7 +167,7 @@ test.describe.serial("Core: Toolbar Overflow", () => {
     await expect(toolbarItemWrapper(window, "copy-tree")).toHaveAttribute("aria-hidden", "true", {
       timeout: T_SHORT,
     });
-    await expect(toolbarButton(window, "Toggle Sidebar")).toBeVisible({ timeout: T_SHORT });
+    await expect(toolbarButton(window, "Toggle sidebar")).toBeVisible({ timeout: T_SHORT });
 
     // Opening the trigger must reveal the evicted priority-5 Settings item,
     // proving it routed into the real overflow dropdown.
@@ -228,14 +228,14 @@ test.describe.serial("Core: Toolbar Overflow", () => {
       }
     });
 
-    // The Toggle Sidebar control is fixed and always present; poll it visible
+    // The Toggle sidebar control is fixed and always present; poll it visible
     // so the restore reflow has actually landed before touching the sidebar.
-    await expect(toolbarButton(window, "Toggle Sidebar")).toBeVisible({ timeout: T_MEDIUM });
+    await expect(toolbarButton(window, "Toggle sidebar")).toBeVisible({ timeout: T_MEDIUM });
 
     // Re-open sidebar
     const sidebar = window.locator('aside[aria-label="Sidebar"]');
     if (!(await sidebar.isVisible())) {
-      await toolbarButton(window, "Toggle Sidebar").click();
+      await toolbarButton(window, "Toggle sidebar").click();
       await expect(sidebar).toBeVisible({ timeout: T_SHORT });
     }
 

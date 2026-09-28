@@ -199,6 +199,19 @@ describe("groupPluginToolbarButtons", () => {
 });
 
 describe("PluginTrayButton", () => {
+  it("keeps a row's full label reachable when it is too long for the menu", () => {
+    const label = "Audit every dependency licence across the monorepo workspaces";
+    const { getByTestId } = render(
+      <PluginTrayButton configs={configMap(config({ id: "acme.a", label }))} />
+    );
+    const row = getByTestId("plugin-tray-row-acme.a");
+    const labelEl = Array.from(row.querySelectorAll("span")).find((el) => el.textContent === label);
+    expect(labelEl).toBeDefined();
+    // Truncation is visual only: the text node stays whole, and the clipped
+    // label says the rest on hover.
+    expect(labelEl!.getAttribute("title")).toBe(label);
+  });
+
   it("renders nothing when no plugin contributes a toolbar button", () => {
     const { container } = render(<PluginTrayButton configs={new Map()} />);
     expect(container.innerHTML).toBe("");

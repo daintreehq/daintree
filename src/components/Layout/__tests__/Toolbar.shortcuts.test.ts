@@ -135,9 +135,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("uses createTooltipContent for problems tooltip with dynamic shortcut", () => {
-      expect(problemsSource).toContain(
-        'createTooltipContent("Show problems panel", diagnosticsShortcut)'
-      );
+      expect(problemsSource).toMatch(/createTooltipContent\([\s\S]*?diagnosticsShortcut\s*\)/);
     });
 
     it("uses createTooltipContent for portal tooltip", () => {

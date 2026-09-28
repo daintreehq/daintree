@@ -593,7 +593,7 @@ test("CLI agents settings review — roster, scope editor, presets, install and 
     }, CUSTOM_PRESETS);
     await page.reload({ waitUntil: "domcontentloaded" });
     await page
-      .locator('[aria-label="Toggle Sidebar"]')
+      .locator('[aria-label="Toggle sidebar"]')
       .waitFor({ state: "visible", timeout: 30_000 });
     if (THEME) await setAppTheme(page, THEME);
     await page.addStyleTag({ content: POLISH_CSS });

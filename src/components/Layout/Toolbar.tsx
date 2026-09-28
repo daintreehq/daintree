@@ -1271,7 +1271,7 @@ export function Toolbar({
                   toolbarIconButtonClass,
                   "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                 )}
-                aria-label="Toggle Sidebar"
+                aria-label="Toggle sidebar"
                 aria-pressed={!isFocusMode}
                 aria-keyshortcuts={sidebarAriaShortcut}
               >
