@@ -12,6 +12,7 @@ import {
   CircleCheck,
   ListChecks,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { FolderGit2 } from "@/components/icons";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
 } from "@/components/ui/dropdown-menu";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -338,24 +340,27 @@ export function GitHubListItem({
             </span>
             {/* Checkbox: hidden by default, visible on hover or when selection active.
                 Pointer convenience only — the same command is a named item in the
-                row's actions menu, so entering selection never depends on hover. */}
-            <span
+                row's actions menu, so entering selection never depends on hover.
+                The shared primitive, not a hand-drawn box: its square corner and
+                secondary-ink edge are what stop a 16px mark reading as a radio
+                and fading under the 3:1 a control boundary needs. Hidden from
+                assistive tech because the row's `aria-selected` already says it. */}
+            <Checkbox
               aria-hidden="true"
+              tabIndex={-1}
+              checked={isSelected}
+              // Keeps DOM focus in the search input, as every control in the row does.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={(e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 onToggleSelect(e);
               }}
               className={cn(
-                "absolute inset-0 rounded border flex items-center justify-center cursor-pointer",
-                "transition-colors duration-150 ease-out",
-                isSelected
-                  ? "bg-text-primary border-text-primary"
-                  : "border-border-default hover:border-daintree-text/60",
+                "absolute inset-0 cursor-pointer",
                 isSelectionActive || isSelected ? "flex" : "hidden group-hover/icon:flex"
               )}
-            >
-              {isSelected && <Check className="w-3 h-3 text-text-inverse" />}
-            </span>
+            />
           </span>
         ) : (
           <span
@@ -498,7 +503,7 @@ export function GitHubListItem({
                       // opacity wash: 55% put it under the 3:1 floor a
                       // graphical control has to clear.
                       RESOURCE_RAIL_SLOT.menu.box,
-                      "rounded text-text-secondary",
+                      "rounded-lg text-text-secondary",
                       "hover:bg-overlay-medium hover:text-text-primary",
                       "transition-[background-color,color] duration-150 ease-out",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
@@ -539,18 +544,26 @@ export function GitHubListItem({
                     <DropdownMenuItem onSelect={() => onSwitchToWorktree(primaryAction.worktreeId)}>
                       <FolderGit2 className="h-3.5 w-3.5 mr-2" />
                       Switch to worktree
+                      <DropdownMenuShortcut shortcut="Enter" />
                     </DropdownMenuItem>
                   )}
                   {primaryAction.kind === "create" && onCreateWorktree && (
                     <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
                       <FolderGit2 className="h-3.5 w-3.5 mr-2" />
                       Create worktree
+                      <DropdownMenuShortcut shortcut="Enter" />
                     </DropdownMenuItem>
                   )}
 
                   <DropdownMenuItem onSelect={() => handleOpenExternal()}>
                     <ExternalLink className="h-3.5 w-3.5 mr-2" />
                     Open on GitHub
+                    {/* The keys the search field answers to for this row, so the
+                        menu teaches them. Enter opens the forge only when the
+                        row has nothing local to do. */}
+                    <DropdownMenuShortcut
+                      shortcut={primaryAction.kind === "open" ? "Enter" : "Cmd+Enter"}
+                    />
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => void handleCopyNumber()}>
                     <Copy className="h-3.5 w-3.5 mr-2" />
@@ -572,6 +585,7 @@ export function GitHubListItem({
                       <DropdownMenuItem onSelect={() => onToggleSelect({ shiftKey: false })}>
                         <ListChecks className="h-3.5 w-3.5 mr-2" />
                         {isSelected ? "Deselect" : "Select"}
+                        <DropdownMenuShortcut shortcut="Shift+Space" />
                       </DropdownMenuItem>
                     </>
                   )}
@@ -584,18 +598,25 @@ export function GitHubListItem({
               forge's own trail. Local state comes early on purpose — it changes
               what activating the row does, so it must not be the thing that
               falls off the clipped end. */}
-          <div className="flex items-center gap-1.5 mt-1 text-xs text-text-secondary flex-nowrap overflow-hidden">
+          <div className="flex items-center gap-1.5 mt-1 text-xs text-text-secondary flex-nowrap overflow-x-clip">
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   tabIndex={-1}
+                  // Same reason as the title: a pressed native button takes
+                  // focus even at tabIndex -1, and the grid's keys live on the
+                  // search input.
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => {
                     e.stopPropagation();
                     void handleCopyNumber();
                   }}
                   className={cn(
-                    "shrink-0 inline-flex items-center tabular-nums rounded cursor-pointer",
+                    // A 24px-tall hit area without growing the 16px metadata
+                    // line, whose height the fixed row depends on.
+                    "relative after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']",
+                    "shrink-0 inline-flex items-center tabular-nums rounded-lg cursor-pointer",
                     "hover:text-text-primary transition-colors duration-150 ease-out",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
                     copied && "text-text-primary"
@@ -667,11 +688,20 @@ export function GitHubListItem({
             {/* Separator kept inside the element it belongs to. Every middot
                 used to be independently `shrink-0`, so an author name squeezed
                 to nothing left its middot behind as a dangling dot. */}
-            <span className="inline-flex items-center gap-1.5 min-w-0">
+            {/* Whose it is outranks which branch it came from: the head ref
+                usually restates the title, so it is the field that yields.
+                The author keeps its width up to a cap instead of shrinking in
+                step with the ref, which cut every PR author to "gre…". */}
+            <span className="inline-flex items-center gap-1.5 shrink-0 max-w-[120px]">
               <span className="shrink-0" aria-hidden="true">
                 &middot;
               </span>
-              <span className="truncate max-w-[110px]">{item.author?.login ?? "unknown"}</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="truncate">{item.author?.login ?? "unknown"}</span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{item.author?.login ?? "unknown"}</TooltipContent>
+              </Tooltip>
             </span>
 
             <span className="shrink-0" aria-hidden="true">
@@ -746,12 +776,13 @@ export function GitHubListItem({
                     <button
                       type="button"
                       tabIndex={-1}
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleOpenLinkedPR();
                       }}
                       className={cn(
-                        "shrink-0 inline-flex items-center gap-0.5 tabular-nums rounded cursor-pointer",
+                        "shrink-0 inline-flex items-center gap-0.5 tabular-nums rounded-lg cursor-pointer",
                         "hover:text-text-primary transition-colors duration-150 ease-out",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                       )}

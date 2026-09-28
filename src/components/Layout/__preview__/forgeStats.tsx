@@ -15,6 +15,14 @@ import type { Project } from "@shared/types";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import type { ForgeRepositoryStats, ForgeRepoCountsUpdatedPayload } from "@shared/types/ipc/forge";
 import { commitsFixture, listCommitsFrom, listPushCommitsFrom } from "./localCommitsFixtures";
+import {
+  failNextListRead,
+  forgeWorktrees,
+  listFixture,
+  listFrom,
+  listWithMore,
+} from "./forgeListFixtures";
+import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import "@/index.css";
 
 /**
@@ -36,6 +44,8 @@ import "@/index.css";
  *   ?forge=github     register the GitHub plugin's real stats-dropdown view, so a
  *                     provider fixture opens the forge-mode lists instead of the
  *                     local fallback
+ *   ?list=<name>      what the issue and PR lists read (`forgeListFixtures.ts`);
+ *                     with `?forge=github` and no `?list`, the lists stay inert
  *
  * `window.__forgePreviewPushCounts(issues, prs)` replays a background poll with
  * higher counts, which is the only road to the "new since last view" chips.
@@ -145,6 +155,7 @@ if (!baseFixture) {
 }
 const commits = commitsFixture(params.get("commits"));
 const forgeView = params.get("forge") === "github";
+const lists = listFixture(params.get("list"));
 const fixture: Fixture =
   commits?.commitCount !== undefined && baseFixture.stats !== "pending"
     ? { ...baseFixture, stats: { ...baseFixture.stats, commitCount: commits.commitCount } }
@@ -233,6 +244,18 @@ installPreviewShims({
         : Promise.resolve(fullStats(fixture.stats)),
     getRepoUrl: async () => "https://github.com/daintreehq/daintree",
     getFirstPageCache: async () => null,
+    ...(lists
+      ? {
+          listIssues:
+            lists.hasMore && Array.isArray(lists.issues)
+              ? listWithMore(lists.issues)
+              : listFrom(lists.issues),
+          listPRs: listFrom(lists.prs),
+          getCredentialStatus: async () => ({ hasCredential: lists.hasToken !== false }),
+          getIssueUrl: async ({ issueNumber }: { issueNumber: number }) =>
+            `https://github.com/daintreehq/daintree/issues/${issueNumber}`,
+        }
+      : {}),
     onRepoCountsUpdated: (cb: (payload: ForgeRepoCountsUpdatedPayload) => void) => {
       countsListener = cb;
       return () => {
@@ -241,6 +264,15 @@ installPreviewShims({
     },
   }),
 });
+
+Reflect.set(window, "__forgePreviewFailNextList", (message: string) => failNextListRead(message));
+Reflect.set(window, "__forgePreviewRateLimit", (minutes: number) =>
+  useForgeProviderHealthStore.getState().applyRateLimit(PROVIDER_ID, {
+    blocked: true,
+    kind: "primary",
+    resetAt: Date.now() + minutes * minute,
+  })
+);
 
 Reflect.set(window, "__forgePreviewPushCounts", (issueCount: number, prCount: number) => {
   if (!countsListener || fixture.stats === "pending") return false;
@@ -271,11 +303,22 @@ try {
   // private mode — defaults apply
 }
 const worktreeStore = createWorktreeStore();
-worktreeStore.setState({ worktrees: new Map([[WORKTREE.id, WORKTREE]]) });
+worktreeStore.setState({
+  worktrees: new Map(
+    [WORKTREE, ...(lists ? forgeWorktrees(PROJECT_PATH) : [])].map((wt) => [wt.id, wt])
+  ),
+});
 setCurrentViewStore(worktreeStore);
 useWorktreeSelectionStore.setState({ activeWorktreeId: WORKTREE.id });
 useProjectStore.setState({ currentProject: PROJECT });
 usePRCircuitBreakerStore.setState({ tripped: !!fixture.prPaused });
+if (lists?.rateLimited) {
+  useForgeProviderHealthStore.getState().applyRateLimit(PROVIDER_ID, {
+    blocked: true,
+    kind: "primary",
+    resetAt: Date.now() + 14 * minute,
+  });
+}
 
 /**
  * A slice of the right toolbar group so the control is judged at the weight it

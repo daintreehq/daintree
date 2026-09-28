@@ -71,7 +71,7 @@ export function BulkActionBar({
          between its controls, and these are two ordinary tab stops. */
       role="group"
       aria-label="Bulk actions"
-      className="px-2 py-1.5 border-t border-[var(--border-divider)] flex items-center gap-2 shrink-0"
+      className="px-2 h-10 border-t border-[var(--border-divider)] flex items-center gap-2 shrink-0"
     >
       <span className="ps-2 text-xs text-text-secondary tabular-nums truncate">
         {/* Neutral count. A `status-info` chip on a multi-select membership

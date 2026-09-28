@@ -37,6 +37,7 @@ import { classifyGitError, getGitRecoveryHint } from "@shared/utils/gitOperation
 import { logError } from "@/utils/logger";
 import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { FORGE_DROPDOWN_PANEL_SIZE } from "./forgeStatsDropdownContract";
 
 // The commits pill's list (issue #10414). Commit history is local git data, not
 // forge data, so the host renders it when no forge provider supplies a stats
@@ -152,7 +153,11 @@ type PushStatus =
  */
 function describeReadError(error: unknown, fallback: string): string {
   const reason = classifyGitError(error);
-  if (reason === "not-a-repository") return "This folder isn't a Git repository";
+  // Name the fix, so the Retry beside it is the step after it rather than a
+  // button that can only fail the same way again.
+  if (reason === "not-a-repository") {
+    return "This folder isn't a Git repository. Run git init here, then retry.";
+  }
   const hint = reason === "unknown" ? undefined : getGitRecoveryHint(reason);
   if (hint) return hint;
   const cleaned = formatErrorMessage(error, fallback)
@@ -255,7 +260,7 @@ export function reflowCommitBody(body: string): string {
 
 function LocalCommitsSkeleton({ count }: { count: number | null | undefined }) {
   return (
-    <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
+    <div aria-hidden="true">
       {Array.from({ length: skeletonRowCount(count) }).map((_, i) => (
         <div
           key={i}
@@ -413,6 +418,8 @@ function LocalCommitRow({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={handleCopyHash}
                   className={cn(
+                    // 24px tall to the pointer without growing the metadata line.
+                    "relative after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']",
                     "ml-auto shrink-0 flex items-center gap-1 px-1 font-mono text-xs text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]",
                     isCopied && "text-text-primary"
                   )}
@@ -819,6 +826,10 @@ export function LocalCommitsDropdown({
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
+      // An IME owns the keys while it composes: the Enter that commits a
+      // candidate must not also expand or copy a row. The keyCode check covers
+      // WebKit's first keydown, before `isComposing` is set.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -883,7 +894,7 @@ export function LocalCommitsDropdown({
         case "Escape":
           // A query is SearchField's to clear; only an empty field closes the
           // dropdown.
-          if (searchQuery || e.nativeEvent.isComposing) break;
+          if (searchQuery) break;
           e.preventDefault();
           e.stopPropagation();
           onClose?.();
@@ -943,10 +954,13 @@ export function LocalCommitsDropdown({
   const loadMoreRowIndex = data.length + 1;
 
   return (
-    <div className="relative w-[450px] flex flex-col h-[500px]">
+    <div className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}>
       <div className="p-3 border-b border-[var(--border-divider)] shrink-0">
         <SearchField
           size="compact"
+          // The dropdown header's 32px, text-sm field, the same as the issue
+          // and pull request lists beside it.
+          fieldClassName="h-8 text-sm"
           icon={
             showRefreshing ? (
               <SpinningIcon
@@ -1042,9 +1056,11 @@ export function LocalCommitsDropdown({
                 className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
               >
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span className="text-xs truncate">
+                {/* Wraps rather than clipping the cause, like the forge lists'
+                    saved-results banners. */}
+                <p className="min-w-0 flex-1 text-xs">
                   Couldn&apos;t refresh commits &middot; {error}
-                </span>
+                </p>
                 <Button
                   variant="outline"
                   size="xs"
@@ -1061,7 +1077,7 @@ export function LocalCommitsDropdown({
               {bottomShadow}
               <div ref={scrollShadowRef} className="h-full overflow-y-auto overscroll-contain">
                 <div>
-                  <div className="divide-y divide-[var(--border-divider)]">
+                  <div>
                     {data.map((commit, index) => (
                       <LocalCommitRow
                         key={commit.hash}
@@ -1085,7 +1101,7 @@ export function LocalCommitsDropdown({
                       aria-rowindex={loadMoreRowIndex}
                       data-active={isLoadMoreActive ? "true" : undefined}
                       className={cn(
-                        "forge-row relative scroll-my-8 border-t border-[var(--border-divider)] p-2",
+                        "forge-row relative scroll-my-8 p-2",
                         "transition-colors duration-150 ease-out",
                         // The same highlight as a commit row: this is where the
                         // cursor lands last.
@@ -1185,7 +1201,7 @@ export function LocalCommitsDropdown({
         copyFailed ||
         activeCommit ||
         footerAction) && (
-        <div className="px-3 h-9 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
+        <div className="px-3 h-10 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
           <div className="flex-1 min-w-0 flex items-center gap-2">
             {pushLine ? (
               <PushSummary line={pushLine} />
@@ -1216,7 +1232,9 @@ export function LocalCommitsDropdown({
               className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap"
               aria-hidden="true"
             >
-              <KbdChord shortcut="Shift+Enter" />
+              {/* The key that copies this row's hash: Shift+Enter where Enter
+                  opens a message, plain Enter where there is none to open. */}
+              <KbdChord shortcut={activeCommit.body?.trim() ? "Shift+Enter" : "Enter"} />
               Copy hash
             </span>
           ) : null}
