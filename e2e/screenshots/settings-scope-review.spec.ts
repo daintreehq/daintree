@@ -566,10 +566,38 @@ const STATES: ScopeState[] = [
     arrange: async (page) => {
       await page.locator(SEARCH).fill("terminal");
       await page.waitForTimeout(500);
-      await page.keyboard.press("ArrowDown");
+      // Results open on the first row, so one press lands on the second.
       await page.keyboard.press("ArrowDown");
     },
     expectText: ["result"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    // Typed, no arrow press yet: the row Enter will open is the one that is lit.
+    slug: "22b-search-typed",
+    target: { tab: "general" },
+    sweep: true,
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("font");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["result"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    // Enter straight after typing opens the first result, the same as every palette.
+    slug: "22c-search-enter",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("font");
+      await page.waitForTimeout(500);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(700);
+    },
     restore: async (page) => {
       await page.locator(SEARCH).fill("");
     },

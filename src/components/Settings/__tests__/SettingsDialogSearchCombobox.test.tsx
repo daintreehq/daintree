@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { act, render, renderHook } from "@testing-library/react";
 import {
   SEARCH_RESULTS_LISTBOX_ID,
   SearchResults,
   settingsSearchComboboxAria,
+  settingsSearchKeyAction,
+  useSearchResultCursor,
 } from "../SettingsDialog";
 import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
 import { filterSettings } from "../settingsSearchUtils";
@@ -101,6 +103,94 @@ describe("settings search combobox", () => {
       expect(aria["aria-expanded"]).toBe(false);
       expect(aria["aria-controls"]).toBeUndefined();
       expect(aria["aria-activedescendant"]).toBeUndefined();
+    }
+  });
+});
+
+/**
+ * The results header promises "Enter open". That only holds if a row is lit the
+ * moment results appear, before any arrow press.
+ */
+describe("settings search keyboard", () => {
+  it("starts every query on its first result", () => {
+    const { result, rerender } = renderHook(({ query }) => useSearchResultCursor(query), {
+      initialProps: { query: "f" },
+    });
+    expect(result.current[0]).toBe(0);
+
+    act(() => result.current[1](2));
+    expect(result.current[0]).toBe(2);
+
+    rerender({ query: "fo" });
+    expect(result.current[0]).toBe(0);
+  });
+
+  it("opens the active row on Enter, including the untouched first row", () => {
+    expect(settingsSearchKeyAction("Enter", 0, RESULTS.length)).toEqual({
+      type: "open",
+      index: 0,
+    });
+    expect(settingsSearchKeyAction("Enter", 2, RESULTS.length)).toEqual({
+      type: "open",
+      index: 2,
+    });
+  });
+
+  it("leaves Enter alone when there is nothing to open", () => {
+    expect(settingsSearchKeyAction("Enter", 0, 0)).toBeNull();
+    expect(settingsSearchKeyAction("Enter", 3, 3)).toBeNull();
+  });
+
+  it("wraps the arrow keys at both ends", () => {
+    const last = RESULTS.length - 1;
+    expect(settingsSearchKeyAction("ArrowDown", 0, RESULTS.length)).toEqual({
+      type: "move",
+      index: 1,
+    });
+    expect(settingsSearchKeyAction("ArrowDown", last, RESULTS.length)).toEqual({
+      type: "move",
+      index: 0,
+    });
+    expect(settingsSearchKeyAction("ArrowUp", 0, RESULTS.length)).toEqual({
+      type: "move",
+      index: last,
+    });
+  });
+
+  it("leaves Home and End to the field's caret", () => {
+    expect(settingsSearchKeyAction("Home", 2, RESULTS.length)).toBeNull();
+    expect(settingsSearchKeyAction("End", 0, RESULTS.length)).toBeNull();
+  });
+
+  it("points aria-activedescendant at the first row before any arrow press", () => {
+    const container = renderResults(0);
+    const aria = settingsSearchComboboxAria(RESULTS, 0, true);
+    const first = container.querySelectorAll('[role="option"]')[0];
+
+    expect(first?.getAttribute("aria-selected")).toBe("true");
+    expect(aria["aria-activedescendant"]).toBe(first?.getAttribute("id"));
+  });
+
+  it("reveals the first row when a new query keeps it active", () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const props = {
+        results: RESULTS,
+        cleanQuery: "theme",
+        onResultClick: () => {},
+        activeIndex: 0,
+        activeScope: "global" as const,
+        projectLabel: null,
+      };
+      const { rerender } = render(<SearchResults {...props} query="them" />);
+      scrollIntoView.mockClear();
+
+      rerender(<SearchResults {...props} query="theme" />);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = original;
     }
   });
 });

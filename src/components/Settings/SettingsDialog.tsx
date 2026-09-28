@@ -567,11 +567,7 @@ function SettingsDialogInner({
     });
   };
 
-  const [activeResultIndex, setActiveResultIndex] = useState(-1);
-
-  useEffect(() => {
-    setActiveResultIndex(-1);
-  }, [searchQuery]);
+  const [activeResultIndex, setActiveResultIndex] = useSearchResultCursor(searchQuery);
 
   const searchComboboxAria = settingsSearchComboboxAria(
     searchResults,
@@ -583,23 +579,22 @@ function SettingsDialogInner({
     // SearchField clears a query on Escape; an empty field gives up focus.
     if (e.key === "Escape") {
       if (!searchQuery) searchInputRef.current?.blur();
-    } else if (isSearching && searchResults.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setActiveResultIndex((prev) => (prev < searchResults.length - 1 ? prev + 1 : 0));
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setActiveResultIndex((prev) => (prev > 0 ? prev - 1 : searchResults.length - 1));
-      } else if (e.key === "Enter" && activeResultIndex >= 0) {
-        e.preventDefault();
-        const result = searchResults[activeResultIndex];
-        if (result) {
-          handleResultClick(
-            { tab: result.tab, subtab: result.subtab, sectionId: result.id },
-            result.requiresEnabled
-          );
-        }
-      }
+      return;
+    }
+    if (!isSearching) return;
+    const action = settingsSearchKeyAction(e.key, activeResultIndex, searchResults.length);
+    if (!action) return;
+    e.preventDefault();
+    if (action.type === "move") {
+      setActiveResultIndex(action.index);
+      return;
+    }
+    const result = searchResults[action.index];
+    if (result) {
+      handleResultClick(
+        { tab: result.tab, subtab: result.subtab, sectionId: result.id },
+        result.requiresEnabled
+      );
     }
   };
 
@@ -1826,6 +1821,41 @@ export function settingsSearchComboboxAria(
   };
 }
 
+/**
+ * The active result, keyed to the query it was set under: every new query
+ * starts on its first result in the keystroke's own render, so the row the
+ * Enter hint promises to open is the one that is lit.
+ */
+export function useSearchResultCursor(query: string) {
+  const [cursor, setCursor] = useState({ query, index: 0 });
+  const index = cursor.query === query ? cursor.index : 0;
+  const setIndex = (next: number) => setCursor({ query, index: next });
+  return [index, setIndex] as const;
+}
+
+/**
+ * What a key in the search field does to the results list. Up/Down wrap, Enter
+ * opens the active row; everything else — Home/End included — belongs to the
+ * field's caret, as the APG combobox leaves it.
+ */
+export function settingsSearchKeyAction(
+  key: string,
+  activeIndex: number,
+  count: number
+): { type: "move" | "open"; index: number } | null {
+  if (count === 0) return null;
+  if (key === "ArrowDown") {
+    return { type: "move", index: activeIndex < count - 1 ? activeIndex + 1 : 0 };
+  }
+  if (key === "ArrowUp") {
+    return { type: "move", index: activeIndex > 0 ? activeIndex - 1 : count - 1 };
+  }
+  if (key === "Enter" && activeIndex >= 0 && activeIndex < count) {
+    return { type: "open", index: activeIndex };
+  }
+  return null;
+}
+
 interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
@@ -1860,7 +1890,9 @@ export function SearchResults({
     // scroll a half-visible row out from under the pointer.
     if (isPointerClaimed(activeRef.current)) return;
     activeRef.current?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex]);
+    // A new query re-lights row 0 without moving the index, and the pane may
+    // still be scrolled from the page or the previous results.
+  }, [activeIndex, query]);
 
   if (results.length === 0) {
     return cleanQuery ? (
