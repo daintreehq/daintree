@@ -197,13 +197,6 @@ const EXCEPTIONS: {
       "An 8x8px status mark: rounded-full would make it a circle and any scale step would round it past recognition",
   },
   {
-    file: "src/components/Worktree/NewWorktreeDialog.tsx",
-    match: "rounded-[4px]",
-    count: 1,
-    reason:
-      "Deliberately off the scale — a 16px box at the theme radius reads as a radio button rather than a checkbox (see the comment at the call site)",
-  },
-  {
     file: "src/index.css",
     match: "border-radius: 3px",
     count: 1,

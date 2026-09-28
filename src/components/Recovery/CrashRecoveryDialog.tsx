@@ -15,6 +15,7 @@ import {
 import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Textarea } from "../ui/textarea";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { SettingsSwitch } from "../Settings/SettingsSwitch";
@@ -683,11 +684,9 @@ function PanelRow({
       className="flex items-center gap-3 px-3 py-2 hover:bg-overlay-soft cursor-pointer transition-colors"
       data-testid={`panel-row-${panel.id}`}
     >
-      <input
-        type="checkbox"
+      <Checkbox
         checked={selected}
-        onChange={() => onToggle(panel.id)}
-        className="h-3.5 w-3.5 shrink-0"
+        onCheckedChange={() => onToggle(panel.id)}
         data-testid={`panel-checkbox-${panel.id}`}
       />
       <span className="text-text-secondary shrink-0">{getPanelIcon(panel.kind)}</span>

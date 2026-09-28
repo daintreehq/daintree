@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { KBD_CLASS } from "@/components/ui/Kbd";
 import { Button } from "@/components/ui/button";
-import { checkboxVariants } from "@/components/ui/checkbox";
+import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
 import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
@@ -165,15 +164,8 @@ export function PluginQuickPickDialog() {
         >
           {canSelectMany && (
             // Presentational: the option already owns the checked state, and a
-            // real checkbox (a <button>) cannot nest inside it. Same classes as
-            // the shared control so the two cannot drift apart.
-            <span
-              aria-hidden="true"
-              data-state={isChecked ? "checked" : "unchecked"}
-              className={cn(checkboxVariants({ size: "md" }), "mt-0.5 text-text-inverse")}
-            >
-              {isChecked && <Check />}
-            </span>
+            // real checkbox (a <button>) cannot nest inside it.
+            <CheckboxGlyph checked={isChecked} className="mt-0.5" />
           )}
           {/* Everything here is the plugin's, and a plugin label is often the
               only thing telling two rows apart (two pipeline files sharing a

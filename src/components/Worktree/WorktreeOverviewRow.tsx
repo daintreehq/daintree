@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
-  Check,
   ChevronRight,
   CircleDot,
   GitBranch,
@@ -11,6 +10,7 @@ import {
 import type { AgentState, WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { cn } from "@/lib/utils";
+import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
@@ -424,19 +424,19 @@ export function WorktreeOverviewRow({
                       onToggleSelect(worktree.id, e);
                     }}
                     className={cn(
-                      "absolute inset-0 items-center justify-center rounded-[var(--radius-xs)] border",
+                      // The shared checkbox glyph in the icon's slot, with a 24px
+                      // pointer target around it (WCAG 2.5.8).
+                      "absolute inset-0 items-center justify-center cursor-pointer",
+                      "before:absolute before:-inset-1 before:content-['']",
                       isSelecting || isSelected || !TypeIcon
                         ? "flex"
                         : cn(
                             "hidden group-hover/row:flex",
                             isCursor && "group-focus/overview-grid:flex"
-                          ),
-                      isSelected
-                        ? "border-border-interactive bg-overlay-emphasis text-text-primary"
-                        : "border-border-default text-transparent hover:border-border-interactive"
+                          )
                     )}
                   >
-                    <Check className="h-3 w-3" strokeWidth={3} />
+                    <CheckboxGlyph checked={isSelected} />
                   </span>
                 </span>
                 <TruncatedTooltip content={isBranchTitled ? branchLabel : title}>

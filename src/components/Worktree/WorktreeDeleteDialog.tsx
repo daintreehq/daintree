@@ -1,9 +1,9 @@
 import { Fragment, useState, useEffect, useRef } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 import { TitleEntity } from "@/components/ui/TitleEntity";
 import { AlertTriangle, Trash2 } from "lucide-react";
-import { FolderGit2 } from "@/components/icons";
 import { PathText } from "@/components/Worktree/PathText";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
@@ -1220,12 +1220,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               <legend className={SECTION_LABEL_CLASS}>Options</legend>
 
               <label className="flex items-start gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={force}
-                  onChange={(e) => setForce(e.target.checked)}
+                  onCheckedChange={(checked) => setForce(checked === true)}
                   disabled={isDeleting}
-                  className={CHECKBOX_CLASSES}
+                  className="mt-0.5"
                 />
                 <span className="text-sm text-text-primary">
                   {/* Constant by rule — a toggle label never changes with state
@@ -1258,12 +1257,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
               {hasTerminals && (
                 <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={closeTerminals}
-                    onChange={(e) => setCloseTerminals(e.target.checked)}
+                    onCheckedChange={(checked) => setCloseTerminals(checked === true)}
                     disabled={isDeleting}
-                    className={CHECKBOX_CLASSES}
+                    className="mt-0.5"
                   />
                   <span className="text-sm text-text-primary">
                     Close all terminals
@@ -1276,16 +1274,15 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
               {canDeleteBranch && (
                 <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={deleteBranch}
-                    onChange={(e) => setDeleteBranch(e.target.checked)}
+                    onCheckedChange={(checked) => setDeleteBranch(checked === true)}
                     disabled={isDeleting}
-                    className={CHECKBOX_CLASSES}
+                    className="mt-0.5"
                   />
-                  <span className="flex items-center gap-1.5 text-sm text-text-primary">
-                    <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                    {/* No branch chip: the entity summary directly above names
+                  <span className="text-sm text-text-primary">
+                    {/* No branch icon either: it pushed this label off the
+                      column the other options start on. No branch chip: the entity summary directly above names
                       the branch, and so does the title. A third copy bought
                       nothing and, on a long branch, forced this label to wrap
                       while the chip took the whole remaining width. */}
@@ -1396,9 +1393,6 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 }
 
 const SUBMIT_CHECK_LABEL = "Checking current work before deleting";
-
-const CHECKBOX_CLASSES =
-  "checkbox-neutral mt-0.5 rounded-[var(--radius-xs)] border-border-strong bg-surface-canvas disabled:opacity-50";
 
 const TEARDOWN_COMMAND_LIMIT = 4;
 

@@ -1,6 +1,5 @@
 import { useCallback, useMemo, type ReactElement } from "react";
-import * as Checkbox from "@radix-ui/react-checkbox";
-import { CheckIcon, MinusIcon } from "lucide-react";
+import { Checkbox, CheckboxGlyph } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -548,15 +547,19 @@ function TerminalRow({
         onClick={handleClick}
         data-testid={`${testIdPrefix}-row-${terminal.id}`}
       >
-        <PickerCheckbox
-          checked={checked}
-          onCheckedChange={handleCheckedChange}
-          ariaLabel={`Select ${terminal.title}`}
-          enableShiftBubble
-          tabIndex={-1}
-        />
+        {/* The box and the title line share one 24px line box, so the box sits
+            on the title whether or not a state badge makes that line taller. */}
+        <span className="flex h-6 shrink-0 items-center">
+          <PickerCheckbox
+            checked={checked}
+            onCheckedChange={handleCheckedChange}
+            ariaLabel={`Select ${terminal.title}`}
+            enableShiftBubble
+            tabIndex={-1}
+          />
+        </span>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex min-h-6 items-center gap-2">
             <span className="truncate">{terminal.title}</span>
             {disambiguator && (
               <span className="shrink-0 font-mono text-2xs text-text-secondary">
@@ -649,31 +652,6 @@ interface PickerCheckboxProps {
   presentational?: boolean;
 }
 
-/** Shape, fill and border — shared so the glyph and the real control cannot drift apart. */
-const CHECKBOX_CLASS = cn(
-  // `rounded-xs`, never the repo's bare `rounded` — that resolves to the
-  // 10px `--radius-lg` value, which on a 16px box is a full circle and
-  // told every user this multi-select list was single-select.
-  "relative flex shrink-0 w-4 h-4 rounded-xs border transition-colors duration-150",
-  // `border-text-secondary`, not `border-border-strong`: the unchecked
-  // ring measured ~1.4:1 against the row, under the 3:1 non-text floor,
-  // so the un-picked rows — the ones the user has to act on — were the
-  // hardest things on the surface to find.
-  "bg-surface-canvas border-text-secondary",
-  "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
-  "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary",
-  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-);
-
-function CheckGlyph({ checked }: { checked: boolean | "indeterminate" }): ReactElement | null {
-  if (checked === false) return null;
-  return checked === "indeterminate" ? (
-    <MinusIcon className="w-3 h-3" />
-  ) : (
-    <CheckIcon className="w-3 h-3" />
-  );
-}
-
 function PickerCheckbox({
   checked,
   onCheckedChange,
@@ -682,25 +660,15 @@ function PickerCheckbox({
   tabIndex,
   presentational = false,
 }: PickerCheckboxProps): ReactElement {
-  // A Radix `Checkbox.Root` renders a <button>, which cannot be nested inside
-  // the group header's own button. Where an ancestor already owns the checkbox
-  // semantics, emit a plain span carrying the same geometry instead.
+  // A Radix checkbox root is a <button>, which cannot be nested inside the group
+  // header's own button. Where an ancestor already owns the checkbox semantics,
+  // draw the same box as a glyph instead.
   if (presentational) {
-    return (
-      <span
-        aria-hidden="true"
-        data-state={
-          checked === "indeterminate" ? "indeterminate" : checked ? "checked" : "unchecked"
-        }
-        className={cn(CHECKBOX_CLASS, "items-center justify-center text-text-inverse")}
-      >
-        <CheckGlyph checked={checked} />
-      </span>
-    );
+    return <CheckboxGlyph checked={checked} />;
   }
 
   return (
-    <Checkbox.Root
+    <Checkbox
       checked={checked}
       onCheckedChange={onCheckedChange}
       aria-label={ariaLabel}
@@ -712,12 +680,7 @@ function PickerCheckbox({
           e.stopPropagation();
         }
       }}
-      className={CHECKBOX_CLASS}
-    >
-      <Checkbox.Indicator className="flex items-center justify-center w-full h-full text-text-inverse">
-        <CheckGlyph checked={checked} />
-      </Checkbox.Indicator>
-    </Checkbox.Root>
+    />
   );
 }
 

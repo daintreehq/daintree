@@ -422,7 +422,6 @@ export function DiagnosticsReviewDialog({
                   <div key={preset.id} className="flex items-center gap-2">
                     <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
                       <Checkbox
-                        size="sm"
                         checked={active}
                         onCheckedChange={() => togglePrebuilt(preset.id)}
                         aria-describedby={active ? countId : undefined}
@@ -545,7 +544,6 @@ export function DiagnosticsReviewDialog({
                   className="flex items-center gap-2 text-sm text-text-primary cursor-pointer"
                 >
                   <Checkbox
-                    size="sm"
                     checked={!!enabledSections[key]}
                     onCheckedChange={() => toggleSection(key)}
                   />

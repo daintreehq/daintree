@@ -1,6 +1,5 @@
 import { useId } from "react";
 import type { ReactNode } from "react";
-import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -16,6 +15,7 @@ import {
   SettingsRow,
   useSettingsGroup,
 } from "./SettingsGroup";
+import { SettingsResetButton } from "./SettingsResetButton";
 
 export interface SettingsSelectOption {
   value: string;
@@ -133,7 +133,11 @@ export function SettingsSelect({
   }
 
   return (
-    <div id={rowId} className="group grid grid-cols-subgrid gap-2 col-span-full">
+    <div
+      id={rowId}
+      className="group grid grid-cols-subgrid gap-2 col-span-full"
+      data-settings-reset-scope=""
+    >
       <div className="flex items-center gap-2">
         <label htmlFor={id} className="text-sm text-text-secondary">
           {label}
@@ -145,20 +149,11 @@ export function SettingsSelect({
             aria-hidden="true"
           />
         )}
-        {showReset && (
-          <button
-            type="button"
-            aria-label={resetAriaLabel ?? `Reset ${label} to default`}
-            className={cn(
-              "p-0.5 rounded-sm text-text-secondary hover:text-text-primary",
-              "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-              "transition-colors"
-            )}
-            onClick={onReset}
-          >
-            <RotateCcw className="w-3 h-3" />
-          </button>
+        {showReset && onReset && (
+          <SettingsResetButton
+            label={resetAriaLabel ?? `Reset ${label} to default`}
+            onReset={onReset}
+          />
         )}
       </div>
       <Select value={value} onValueChange={onValueChange} disabled={disabled} name={name}>

@@ -5,7 +5,7 @@ import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
 import { useProjectStore } from "@/store/projectStore";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { UserPlus } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 
 interface IssueLinkerViewProps {
@@ -17,7 +17,7 @@ interface IssueLinkerViewProps {
 
 /**
  * Control only — "Issue" lives on the form's label rail, and the assign-to-me
- * switch is a separate {@link AssignIssueToggle} the row hangs off its hint
+ * checkbox is a separate {@link AssignIssueToggle} the row hangs off its hint
  * slot, the same rail "Create from remote branch" rides.
  */
 export function IssueLinkerView({
@@ -69,31 +69,13 @@ export function AssignIssueToggle({
 }: AssignIssueToggleProps) {
   return (
     <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
-      <span className="relative inline-flex shrink-0">
-        <input
-          type="checkbox"
-          checked={assignWorktreeToSelf}
-          onChange={(e) => onSetAssignWorktreeToSelf(e.target.checked)}
-          disabled={disabled}
-          aria-label="Assign issue to me when creating worktree"
-          className={cn(
-            "h-4 w-7 appearance-none rounded-full border transition-colors duration-150 ease-out",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-            assignWorktreeToSelf
-              ? "border-text-primary bg-text-primary"
-              : "border-border-strong bg-surface-inset",
-            disabled && "cursor-not-allowed opacity-50"
-          )}
-        />
-        <span
-          className={cn(
-            "status-mark pointer-events-none absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full",
-            "transition-[left] duration-150 ease-out",
-            assignWorktreeToSelf ? "left-[0.875rem] bg-text-inverse" : "left-0.5 bg-text-secondary"
-          )}
-          aria-hidden="true"
-        />
-      </span>
+      {/* A checkbox, not a switch: the value is committed by Create with the rest
+          of the form, and Quick Create offers the same option the same way. */}
+      <Checkbox
+        checked={assignWorktreeToSelf}
+        onCheckedChange={(checked) => onSetAssignWorktreeToSelf(checked === true)}
+        disabled={disabled}
+      />
       {/* One 16px slot either way, so the label starts at the same x. */}
       {currentUser ? (
         <Avatar src={avatarUrlAtSize(currentUserAvatar, 32)} alt="" className="h-4 w-4" />

@@ -1,9 +1,9 @@
-import { RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { settingsRowFrameClass, useSettingsGroup } from "./SettingsGroup";
+import { SettingsResetButton } from "./SettingsResetButton";
 
 interface SettingsCheckboxProps {
   id?: string;
@@ -56,8 +56,11 @@ export function SettingsCheckbox({
         group ? settingsRowFrameClass(group.depth) : "grid grid-cols-subgrid col-span-full gap-2",
         showReset && "flex items-start gap-2"
       )}
+      data-settings-reset-scope=""
     >
-      {isModified && (
+      {/* The same modified mark every adapter uses in its layout: the row-edge bar
+          in a group, the dot beside the label in the grid. */}
+      {isModified && group && (
         <span
           className="status-mark absolute left-0 top-2.5 bottom-2.5 w-0.5 rounded-full bg-state-modified"
           aria-hidden="true"
@@ -80,21 +83,33 @@ export function SettingsCheckbox({
           disabled={isDisabled}
           aria-describedby={isDisabled ? group?.reasonId : undefined}
         />
-        <FieldLabel accessory={scopeBadge} tinted>
+        <FieldLabel
+          accessory={
+            (scopeBadge || (isModified && !group)) && (
+              <>
+                {scopeBadge}
+                {isModified && !group && (
+                  <span
+                    className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
+                    aria-hidden="true"
+                  />
+                )}
+              </>
+            )
+          }
+          tinted
+        >
           {label}
         </FieldLabel>
         <FieldDescription className="text-text-secondary">{description}</FieldDescription>
         {isError && <FieldError>{error}</FieldError>}
       </Field>
-      {showReset && (
-        <button
-          type="button"
-          aria-label={`Reset ${label} to default`}
-          className="ml-auto p-1 rounded-sm text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-          onClick={onReset}
-        >
-          <RotateCcw className="w-3 h-3" aria-hidden="true" />
-        </button>
+      {showReset && onReset && (
+        <SettingsResetButton
+          label={`Reset ${label} to default`}
+          onReset={onReset}
+          className="ml-auto"
+        />
       )}
     </div>
   );

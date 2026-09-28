@@ -11,7 +11,8 @@ import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import type { WorktreeDragData } from "../DragDrop/DndProvider";
 import { useDndPlaceholder, useIsWorktreeSortDragging } from "../DragDrop/dndPlaceholderContext";
 import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
-import { Check, GripVertical } from "lucide-react";
+import { GripVertical } from "lucide-react";
+import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
@@ -1194,27 +1195,19 @@ export function WorktreeCard({
                   : "opacity-0 group-hover/card:opacity-100 focus-within:opacity-100"
               )}
             >
+              {/* The button is the 24px target and carries the checkbox role; the
+                  box inside is the shared checkbox glyph, so a selected card is
+                  ticked exactly like every other checkbox in the app. */}
               <button
                 type="button"
                 role="checkbox"
                 aria-checked={isSelected}
-                aria-label={isSelected ? "Deselect worktree" : "Select worktree"}
+                aria-label="Select worktree"
                 tabIndex={-1}
                 onClick={handleCheckboxClick}
-                className={cn(
-                  "flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)]",
-                  "border transition-colors",
-                  isSelected
-                    ? "border-border-interactive bg-overlay-emphasis text-text-primary"
-                    : // Unchecked, the box is an empty outline on the card's own
-                      // plane. It used to fill with `bg-daintree-bg/80` — the
-                      // app canvas, which on dark themes is several steps below
-                      // the card — so on hover it read as a hole punched in the
-                      // corner rather than as a checkbox waiting to be ticked.
-                      "border-border-default bg-transparent text-transparent hover:bg-overlay-soft hover:border-border-interactive"
-                )}
+                className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-overlay-soft"
               >
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                <CheckboxGlyph checked={isSelected} />
               </button>
             </div>
           )}

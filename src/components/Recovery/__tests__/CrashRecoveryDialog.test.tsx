@@ -407,32 +407,32 @@ describe("CrashRecoveryDialog", () => {
 
     it("all panels are selected by default", () => {
       setup();
-      const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
-      const checkbox2 = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
-      expect(checkbox1.checked).toBe(true);
-      expect(checkbox2.checked).toBe(true);
+      const checkbox1 = screen.getByTestId("panel-checkbox-t1");
+      const checkbox2 = screen.getByTestId("panel-checkbox-t2");
+      expect(checkbox1.getAttribute("aria-checked")).toBe("true");
+      expect(checkbox2.getAttribute("aria-checked")).toBe("true");
     });
 
     it("pre-deselects suspect panels when crashCount is at least 1", () => {
       setup({ crash: { crashCount: 1 } });
-      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
-      const nonSuspect1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
-      const nonSuspect3 = screen.getByTestId("panel-checkbox-t3") as HTMLInputElement;
-      expect(suspect.checked).toBe(false);
-      expect(nonSuspect1.checked).toBe(true);
-      expect(nonSuspect3.checked).toBe(true);
+      const suspect = screen.getByTestId("panel-checkbox-t2");
+      const nonSuspect1 = screen.getByTestId("panel-checkbox-t1");
+      const nonSuspect3 = screen.getByTestId("panel-checkbox-t3");
+      expect(suspect.getAttribute("aria-checked")).toBe("false");
+      expect(nonSuspect1.getAttribute("aria-checked")).toBe("true");
+      expect(nonSuspect3.getAttribute("aria-checked")).toBe("true");
     });
 
     it("pre-deselects suspect panels when crashCount is in a crash loop", () => {
       setup({ crash: { crashCount: 3 } });
-      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
-      expect(suspect.checked).toBe(false);
+      const suspect = screen.getByTestId("panel-checkbox-t2");
+      expect(suspect.getAttribute("aria-checked")).toBe("false");
     });
 
     it("keeps suspect panels selected when crashCount is 0", () => {
       setup({ crash: { crashCount: 0 } });
-      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
-      expect(suspect.checked).toBe(true);
+      const suspect = screen.getByTestId("panel-checkbox-t2");
+      expect(suspect.getAttribute("aria-checked")).toBe("true");
     });
 
     it("restore-selected omits pre-deselected suspect panels by default when crashCount >= 1", async () => {
@@ -455,10 +455,10 @@ describe("CrashRecoveryDialog", () => {
 
     it("lets the user re-check a pre-deselected suspect and include it in restore", async () => {
       const { onResolve } = setup({ crash: { crashCount: 1 } });
-      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
-      expect(suspect.checked).toBe(false);
+      const suspect = screen.getByTestId("panel-checkbox-t2");
+      expect(suspect.getAttribute("aria-checked")).toBe("false");
       fireEvent.click(suspect);
-      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(true);
+      expect(screen.getByTestId("panel-checkbox-t2").getAttribute("aria-checked")).toBe("true");
       fireEvent.click(screen.getByTestId("restore-selected-button"));
       await waitFor(() =>
         expect(onResolve).toHaveBeenCalledWith({
@@ -479,9 +479,9 @@ describe("CrashRecoveryDialog", () => {
           ],
         },
       });
-      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(true);
-      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(false);
-      expect((screen.getByTestId("panel-checkbox-t3") as HTMLInputElement).checked).toBe(false);
+      expect(screen.getByTestId("panel-checkbox-t1").getAttribute("aria-checked")).toBe("true");
+      expect(screen.getByTestId("panel-checkbox-t2").getAttribute("aria-checked")).toBe("false");
+      expect(screen.getByTestId("panel-checkbox-t3").getAttribute("aria-checked")).toBe("false");
       expect(screen.getByText("1 of 3 selected")).toBeTruthy();
       const title = within(screen.getByTestId("suspect-warning")).getByTestId(
         "inline-status-banner-title"
@@ -499,14 +499,14 @@ describe("CrashRecoveryDialog", () => {
           ],
         },
       });
-      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(false);
-      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(false);
+      expect(screen.getByTestId("panel-checkbox-t1").getAttribute("aria-checked")).toBe("false");
+      expect(screen.getByTestId("panel-checkbox-t2").getAttribute("aria-checked")).toBe("false");
       const restoreBtn = screen.getByTestId("restore-selected-button") as HTMLButtonElement;
       expect(restoreBtn.disabled).toBe(true);
       // Toggle-all should still let the user opt back in
       fireEvent.click(screen.getByTestId("toggle-all-button"));
-      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(true);
-      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(true);
+      expect(screen.getByTestId("panel-checkbox-t1").getAttribute("aria-checked")).toBe("true");
+      expect(screen.getByTestId("panel-checkbox-t2").getAttribute("aria-checked")).toBe("true");
     });
 
     it("suspect banner description suggests deselecting when crashCount is 0", () => {
@@ -585,8 +585,8 @@ describe("CrashRecoveryDialog", () => {
     it("toggle all deselects when all are selected", () => {
       setup();
       fireEvent.click(screen.getByTestId("toggle-all-button"));
-      const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
-      expect(checkbox1.checked).toBe(false);
+      const checkbox1 = screen.getByTestId("panel-checkbox-t1");
+      expect(checkbox1.getAttribute("aria-checked")).toBe("false");
     });
 
     it("toggle all selects when none are selected", () => {
@@ -595,8 +595,8 @@ describe("CrashRecoveryDialog", () => {
       fireEvent.click(screen.getByTestId("toggle-all-button"));
       // Select all
       fireEvent.click(screen.getByTestId("toggle-all-button"));
-      const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
-      expect(checkbox1.checked).toBe(true);
+      const checkbox1 = screen.getByTestId("panel-checkbox-t1");
+      expect(checkbox1.getAttribute("aria-checked")).toBe("true");
     });
 
     it("restore selected button is disabled when no panels selected", () => {

@@ -14,6 +14,7 @@ import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import {
   DropdownMenu,
@@ -1110,13 +1111,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         variant="destructive"
         zIndex="nested"
       >
-        <label className="flex items-center gap-2 text-xs text-text-secondary select-none cursor-pointer">
-          <input
-            type="checkbox"
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
+          <Checkbox
             checked={pm.deleteSettings}
-            onChange={(e) => pm.setDeleteSettings(e.target.checked)}
+            onCheckedChange={(checked) => pm.setDeleteSettings(checked === true)}
             disabled={pm.isUninstalling}
-            className="size-3.5 rounded-sm border border-border-default bg-surface-canvas accent-daintree-text/70"
+            className="mt-0.5"
           />
           Also delete this plugin's saved settings
         </label>

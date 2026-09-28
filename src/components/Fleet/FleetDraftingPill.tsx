@@ -236,7 +236,13 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       data-skipped={isSkipped ? "true" : undefined}
       className={cn("rounded-[var(--radius-md)] px-2 py-1.5", excluded && "opacity-50")}
     >
-      <div className="flex items-center gap-2 text-2xs font-medium text-text-secondary">
+      {/* A label, so the title toggles its box like every other checkbox label. */}
+      <label
+        className={cn(
+          "flex items-center gap-2 text-2xs font-medium text-text-secondary",
+          !excluded && "cursor-pointer"
+        )}
+      >
         {/* An ineligible row keeps a disabled box so the column stays aligned
             and the row reads as "cannot include" rather than "no control". */}
         <Checkbox
@@ -265,7 +271,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
             Edited
           </span>
         )}
-      </div>
+      </label>
       <div
         className={cn(
           "mt-0.5 text-2xs leading-relaxed text-text-secondary wrap-anywhere",

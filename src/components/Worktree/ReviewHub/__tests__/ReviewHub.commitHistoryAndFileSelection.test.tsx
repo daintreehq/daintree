@@ -802,7 +802,7 @@ describe("ReviewHub", () => {
       // One per file (1 staged + 1 unstaged from makeStatus).
       expect(viewedCheckboxes).toHaveLength(2);
       for (const cb of viewedCheckboxes) {
-        expect((cb as HTMLInputElement).checked).toBe(false);
+        expect(cb.getAttribute("aria-checked")).toBe("false");
       }
     });
 
@@ -813,16 +813,16 @@ describe("ReviewHub", () => {
 
       const indexCheckbox = screen.getByRole("checkbox", {
         name: "Mark src/index.ts as viewed",
-      }) as HTMLInputElement;
-      expect(indexCheckbox.checked).toBe(false);
+      });
+      expect(indexCheckbox.getAttribute("aria-checked")).toBe("false");
 
       fireEvent.click(indexCheckbox);
 
-      // After being checked, the aria-label flips so we now look for the inverse.
+      // The accessible name is constant; the checked state carries the toggle.
       const stillThere = screen.getByRole("checkbox", {
-        name: "Mark src/index.ts as not viewed",
-      }) as HTMLInputElement;
-      expect(stillThere.checked).toBe(true);
+        name: "Mark src/index.ts as viewed",
+      });
+      expect(stillThere.getAttribute("aria-checked")).toBe("true");
     });
 
     it("does not open the diff panel when the Viewed checkbox is clicked", async () => {
@@ -857,7 +857,7 @@ describe("ReviewHub", () => {
 
       const checkboxes = screen.getAllByRole("checkbox", {
         name: "Mark src/dual.ts as viewed",
-      }) as HTMLInputElement[];
+      });
       // One in the staged section, one in the unstaged section.
       expect(checkboxes).toHaveLength(2);
       const firstCheckbox = checkboxes[0]!;
@@ -866,9 +866,12 @@ describe("ReviewHub", () => {
 
       // Only the clicked row flips to "viewed"; the sibling row stays unchecked.
       const checkedAfter = screen.getAllByRole("checkbox", {
-        name: /Mark src\/dual\.ts as (not viewed|viewed)/,
-      }) as HTMLInputElement[];
-      const viewedCount = checkedAfter.filter((cb) => cb.checked).length;
+        name: "Mark src/dual.ts as viewed",
+      });
+      expect(checkedAfter).toHaveLength(2);
+      const viewedCount = checkedAfter.filter(
+        (cb) => cb.getAttribute("aria-checked") === "true"
+      ).length;
       expect(viewedCount).toBe(1);
     });
 
@@ -890,9 +893,9 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       const reopened = screen.getByRole("checkbox", {
-        name: "Mark src/index.ts as not viewed",
-      }) as HTMLInputElement;
-      expect(reopened.checked).toBe(true);
+        name: "Mark src/index.ts as viewed",
+      });
+      expect(reopened.getAttribute("aria-checked")).toBe("true");
     });
   });
 

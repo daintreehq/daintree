@@ -1,7 +1,8 @@
 import { createContext, use, useId } from "react";
 import type { ReactNode } from "react";
-import { CircleAlert, Info, RotateCcw } from "lucide-react";
+import { CircleAlert, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SettingsResetButton } from "./SettingsResetButton";
 
 /**
  * The settings page grammar: a page is a stack of `SettingsSection`s, a section holds
@@ -233,23 +234,10 @@ export function SettingsRow({
     renderedControl !== null &&
     renderedControl !== false;
 
-  const resetButton = showReset ? (
-    <button
-      type="button"
-      aria-label={resetName}
-      data-testid={resetTestId}
-      className={cn(
-        "p-1 rounded-sm text-text-secondary hover:text-text-primary transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-      )}
-      onClick={(e) => {
-        e.stopPropagation();
-        onReset?.();
-      }}
-    >
-      <RotateCcw className="w-3 h-3" aria-hidden="true" />
-    </button>
-  ) : null;
+  const resetButton =
+    showReset && onReset ? (
+      <SettingsResetButton label={resetName} onReset={onReset} data-testid={resetTestId} />
+    ) : null;
 
   const text = (
     <div className="min-w-0 flex-1">
@@ -303,6 +291,7 @@ export function SettingsRow({
     <div
       id={id}
       data-settings-row={layout}
+      data-settings-reset-scope=""
       className={cn(
         "settings-row relative py-3 pr-4 scroll-mt-6",
         rowInset(depth),

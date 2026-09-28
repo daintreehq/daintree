@@ -726,10 +726,14 @@ describe("ReviewHub", () => {
       await renderHub();
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
 
-      expect(screen.getByLabelText("Mark src/index.ts as viewed")).toBeTruthy();
+      expect(
+        screen.getByLabelText("Mark src/index.ts as viewed").getAttribute("aria-checked")
+      ).toBe("false");
       act(() => void fireEvent.keyDown(document, { key: "v" }));
       await waitFor(() =>
-        expect(screen.getByLabelText("Mark src/index.ts as not viewed")).toBeTruthy()
+        expect(
+          screen.getByLabelText("Mark src/index.ts as viewed").getAttribute("aria-checked")
+        ).toBe("true")
       );
     });
 

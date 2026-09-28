@@ -828,7 +828,7 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
 
     await waitFor(() => {
       expect(
-        (screen.getByRole("checkbox", { name: /force delete/i }) as HTMLInputElement).disabled
+        (screen.getByRole("checkbox", { name: /force delete/i }) as HTMLButtonElement).disabled
       ).toBe(true);
     });
     expect((screen.getByTestId("delete-worktree-confirm-input") as HTMLInputElement).disabled).toBe(
@@ -1295,18 +1295,18 @@ describe("WorktreeDeleteDialog — state reset", () => {
 
     const closeTerminalsCheckbox = screen.getByRole("checkbox", {
       name: /close all terminals/i,
-    }) as HTMLInputElement;
-    expect(closeTerminalsCheckbox.checked).toBe(true);
+    });
+    expect(closeTerminalsCheckbox.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(closeTerminalsCheckbox);
-    expect(closeTerminalsCheckbox.checked).toBe(false);
+    expect(closeTerminalsCheckbox.getAttribute("aria-checked")).toBe("false");
 
     rerender(<WorktreeDeleteDialog isOpen={false} onClose={vi.fn()} worktree={worktree} />);
     rerender(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
     const reopened = screen.getByRole("checkbox", {
       name: /close all terminals/i,
-    }) as HTMLInputElement;
-    expect(reopened.checked).toBe(true);
+    });
+    expect(reopened.getAttribute("aria-checked")).toBe("true");
   });
 });
 
