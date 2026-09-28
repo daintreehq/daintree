@@ -4,7 +4,14 @@
 // the harness has.
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
 
-installPreviewShims();
+// Every docked agent pane mounts a subagent chip that asks its provider for a
+// list; the inert namespace answers `undefined`, which the lookup cannot read.
+// A lookup that never settles is what an agent with no children looks like.
+const quietSubagents = {
+  listSubagents: () => new Promise(() => {}),
+  readSubagentTranscript: () => new Promise(() => {}),
+};
+installPreviewShims({ codex: quietSubagents, claude: quietSubagents });
 
 /**
  * Freeze wall-clock time before anything reads it.

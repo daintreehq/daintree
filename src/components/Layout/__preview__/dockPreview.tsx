@@ -316,6 +316,28 @@ const FIXTURES: Record<string, Fixture> = {
       } as TabGroup,
     ],
   },
+  // The chip cues and the rail's scroll affordances — `dock-cues-review` flips
+  // `activityStatus`/`agentState` through `window.__dockPreview` to catch them
+  // mid-flight, and a narrow frame makes this rail overflow.
+  cues: {
+    what: "a plain command running beside a working agent, on a rail long enough to scroll",
+    panels: [
+      pane("c-build", "npm run build", { activityStatus: "working" }),
+      fromAgent(agent("c-agent", "claude", { agentState: "working" })),
+      filesChip,
+      pane("c-dev", "npm run dev", {}),
+      pane("c-test", "vitest --watch", {}),
+      pane("c-tsc", "tsc --watch", {}),
+      pane("c-log", "git log --oneline", {}),
+      fromAgent(agent("c-codex", "codex")),
+      pane("c-browser", "localhost:5173", {
+        kind: "browser",
+        hasPty: false,
+        browserUrl: "http://localhost:5173",
+      }),
+      shell,
+    ],
+  },
   "waiting-many": {
     what: "twelve waiting across four worktrees — the list scrolls",
     panels: Array.from({ length: 12 }, (_, i) =>
@@ -379,6 +401,9 @@ usePanelStore.setState({
   tabGroups: new Map((fixture.tabGroups ?? []).map((g) => [g.id, g])),
   ...(openPanelId ? { activeDockTerminalId: openPanelId } : {}),
 });
+
+// The cue harness drives live transitions through the real store.
+(window as unknown as { __dockPreview: unknown }).__dockPreview = { usePanelStore };
 
 /** Stand-in chrome, so the strip sits where it sits in the app. */
 function Frame() {

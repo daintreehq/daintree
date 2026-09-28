@@ -345,22 +345,13 @@ describe("ContentDock regression test", () => {
       expect(guard).toBeGreaterThan(clear);
     });
 
-    it("removes the scroll chevrons from the tab order", () => {
+    it("renders both scroll chevrons through DockScrollChevron", () => {
       const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
-      // Both decorative chevron buttons must carry tabIndex={-1} + aria-hidden.
-      const tabIndexCount = (content.match(/tabIndex=\{-1\}/g) ?? []).length;
-      expect(tabIndexCount).toBeGreaterThanOrEqual(2);
-
-      // Anchor each aria-hidden to its chevron's label so the assertion can't
-      // pass on an unrelated pre-existing aria-hidden elsewhere in the file.
-      const leftBtn = content.indexOf("onClick={scrollLeft}");
-      const leftLabel = content.indexOf('aria-label="Scroll left"', leftBtn);
-      expect(content.slice(leftBtn, leftLabel)).toContain('aria-hidden="true"');
-
-      const rightBtn = content.indexOf("onClick={scrollRight}");
-      const rightLabel = content.indexOf('aria-label="Scroll right"', rightBtn);
-      expect(content.slice(rightBtn, rightLabel)).toContain('aria-hidden="true"');
+      // Pointer-only semantics (aria-hidden, tabIndex -1) and the boundary fade
+      // live in DockScrollChevron and are pinned by its own render tests.
+      expect(content).toMatch(/<DockScrollChevron\s+side="left"[^>]*onClick=\{scrollLeft\}/);
+      expect(content).toMatch(/<DockScrollChevron\s+side="right"[^>]*onClick=\{scrollRight\}/);
     });
 
     it("applies scroll-padding so focused edge chips clear the gradient scrim", () => {
