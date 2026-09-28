@@ -731,7 +731,7 @@ export function WorktreeMenuItems({
         {(hasLivePanels || hasFleetTargets) && <C.Separator />}
 
         {/* Deletion, not repair: clearing history destroys journal records
-            permanently, so it sits with the other destructive rows rather than
+            permanently, so it sits with the destructive End all rather than
             beside renderer maintenance. No count — availability isn't cached, and
             opening a menu must not go and read the journal to find out. */}
         <C.Item destructive onSelect={onClearHistory}>
@@ -739,7 +739,6 @@ export function WorktreeMenuItems({
           Clear session history…
         </C.Item>
         <C.Item
-          destructive
           onSelect={onCloseAll}
           disabled={counts.active === 0}
           {...counted("Trash all sessions", counts.active)}

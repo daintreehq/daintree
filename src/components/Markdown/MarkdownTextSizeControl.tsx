@@ -217,8 +217,15 @@ export function MarkdownTextSizeMenuItems({
           }}
         >
           {MARKDOWN_FONT_SIZE_STEPS.map((step) => (
-            <DropdownMenuRadioItem key={step} value={step}>
-              {STEP_LABEL[step]} px{step === DEFAULT_MARKDOWN_FONT_SIZE ? " (default)" : ""}
+            <DropdownMenuRadioItem
+              key={step}
+              value={step}
+              aria-label={
+                step === DEFAULT_MARKDOWN_FONT_SIZE ? `${STEP_LABEL[step]} px, default` : undefined
+              }
+            >
+              {STEP_LABEL[step]} px
+              {step === DEFAULT_MARKDOWN_FONT_SIZE && <DropdownMenuMeta>Default</DropdownMenuMeta>}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
