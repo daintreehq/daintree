@@ -114,7 +114,7 @@ export function RefChip({
       size="sm"
       tone="outline"
       data-testid={testId}
-      className="items-baseline whitespace-normal break-words font-mono text-text-primary"
+      className="min-w-0 max-w-full shrink items-baseline whitespace-normal break-words font-mono text-text-primary"
     >
       {value}
     </Badge>

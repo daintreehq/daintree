@@ -25,7 +25,7 @@ export function BranchBadge({
       size="sm"
       tone="outline"
       data-testid={testId}
-      className={cn("min-w-0 max-w-[200px] font-mono", className)}
+      className={cn("min-w-0 max-w-[200px] shrink font-mono", className)}
     >
       <GitBranch aria-hidden="true" />
       <TruncatedTooltip content={branch}>

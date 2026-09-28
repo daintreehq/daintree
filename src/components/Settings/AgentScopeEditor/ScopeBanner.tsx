@@ -15,7 +15,7 @@ export function ScopeBadge({ scopeKind }: { scopeKind: ScopeKind }) {
         ? { label: "Project · read-only", testid: "preset-badge-project" }
         : { label: "CCR · read-only", testid: "preset-badge-auto" };
   return (
-    <Badge size="sm" data-testid={testid}>
+    <Badge size="xs" data-testid={testid}>
       {label}
     </Badge>
   );

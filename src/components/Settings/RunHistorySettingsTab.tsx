@@ -30,7 +30,7 @@ function plural(count: number, one: string, many: string = `${one}s`): string {
  */
 function CountPill({ label, failed = false }: { label: string; failed?: boolean }) {
   return (
-    <Badge size="sm">
+    <Badge size="xs">
       {failed && <SeverityMark severity="error" label="Failed" className="h-3 w-3" decorative />}
       {label}
     </Badge>
