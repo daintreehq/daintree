@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { FindBar } from "../FindBar";
 import type { FindInPageState } from "@/hooks/useFindInPage";
@@ -70,5 +70,21 @@ describe("FindBar accessibility", () => {
     render(<FindBar find={makeFindState({ toggleMatchCase: toggleFn })} />);
     screen.getByLabelText("Match case").click();
     expect(toggleFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FindBar keyboard", () => {
+  it("closes on Escape from a focused option, not only from the field", () => {
+    const close = vi.fn();
+    render(<FindBar find={makeFindState({ close })} />);
+    fireEvent.keyDown(screen.getByLabelText("Match case"), { key: "Escape" });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves Escape to an IME composition in progress", () => {
+    const close = vi.fn();
+    render(<FindBar find={makeFindState({ close, isComposingRef: { current: true } })} />);
+    fireEvent.keyDown(screen.getByLabelText("Find in page"), { key: "Escape" });
+    expect(close).not.toHaveBeenCalled();
   });
 });

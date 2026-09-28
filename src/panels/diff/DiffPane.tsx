@@ -14,7 +14,8 @@ import {
   Check,
   ExternalLink,
   FolderTree,
-  PanelLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   WrapText,
   XCircle,
@@ -1456,13 +1457,20 @@ export function DiffPane({
         >
           <div className="flex items-center gap-1 min-w-0">
             {isWorkspace && (
+              // A sidebar toggle like the file browser's: disclosure state and
+              // the icon swap carry it, not the armed chip.
               <FileViewerToolbar.IconButton
-                label="Show file list"
-                pressed={diffShowFileList}
+                label="Toggle file list"
+                expanded={diffShowFileList}
+                sidebarToggle
                 onClick={() => setDiffShowFileList(!diffShowFileList)}
                 tooltipSide="top"
               >
-                <PanelLeft className={TOOLBAR_ICON_CLASS} />
+                {diffShowFileList ? (
+                  <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
+                ) : (
+                  <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
+                )}
               </FileViewerToolbar.IconButton>
             )}
             {isWorkspace && (

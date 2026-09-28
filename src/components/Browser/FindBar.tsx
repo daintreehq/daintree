@@ -30,12 +30,11 @@ export function FindBar({ find }: FindBarProps) {
   } = find;
   const counterId = useId();
 
+  // Enter and Cmd/Ctrl+G belong to the field; Escape closes from anywhere in the
+  // bar, as in the terminal's find bar.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (isComposingRef.current) return;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      close();
-    } else if (e.key === "Enter") {
+    if (e.key === "Enter") {
       e.preventDefault();
       if (e.shiftKey) {
         goPrev();
@@ -63,7 +62,14 @@ export function FindBar({ find }: FindBarProps) {
   return (
     // `z-40`: above a dev preview tool drawer floating over the page (`z-30`),
     // which otherwise covers this corner while Find has the focus.
-    <div className={`absolute top-2 right-2 z-40 ${FIND_BAR_CLASS}`}>
+    <div
+      className={`absolute top-2 right-2 z-40 ${FIND_BAR_CLASS}`}
+      onKeyDown={(e) => {
+        if (isComposingRef.current || e.key !== "Escape") return;
+        e.preventDefault();
+        close();
+      }}
+    >
       <SearchField
         size="compact"
         fieldClassName="w-44"

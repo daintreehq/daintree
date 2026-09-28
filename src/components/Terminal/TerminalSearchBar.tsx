@@ -186,6 +186,9 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       // Enter and the history arrows belong to the field, as in the browser's
       // find bar; Enter on a focused option must press that option. Escape
       // closes from anywhere in the bar.
+      // Keys that commit an IME composition belong to the composition, as in
+      // the browser's find bar.
+      if (e.nativeEvent.isComposing) return;
       const inField = e.target === inputRef.current;
       if (
         inField &&

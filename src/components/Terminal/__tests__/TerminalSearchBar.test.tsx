@@ -231,6 +231,28 @@ describe("TerminalSearchBar", () => {
     expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves Enter to an IME composition in progress", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal");
+    await act(() => {
+      fireEvent.change(input, { target: { value: "hello" } });
+    });
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    mock.searchAddon.findNext.mockClear();
+
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    });
+    expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+  });
+
   it('announces "No matches" when search finds nothing', async () => {
     const mock = createMockManaged(false);
     vi.mocked(terminalInstanceService.get).mockReturnValue(

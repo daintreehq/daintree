@@ -582,17 +582,19 @@ async function captureDiffPane(run: Run, worktreeId: string): Promise<void> {
     await fileHeader.waitFor({ state: "visible", timeout: T_MEDIUM }).catch(() => {});
     await settle(page, 1200);
 
-    const listToggle = footer.getByRole("button", { name: "Show file list" });
+    const listToggle = footer.getByRole("button", { name: "Toggle file list" });
     const viewed = footer.getByRole("button", { name: "Viewed" });
     const prev = footer.getByRole("button", { name: "Previous file" });
     const position = footer.locator('[data-testid="diff-file-position-indicator"]');
 
     // A preference left on by an earlier pass would make "at rest" a lie.
-    for (const toggle of [listToggle, viewed]) {
-      if ((await toggle.getAttribute("aria-pressed")) === "true") {
-        await toggle.click();
-        await settle(page, 300);
-      }
+    if ((await listToggle.getAttribute("aria-expanded")) === "true") {
+      await listToggle.click();
+      await settle(page, 300);
+    }
+    if ((await viewed.getAttribute("aria-pressed")) === "true") {
+      await viewed.click();
+      await settle(page, 300);
     }
 
     await shoot(run, "diffpane-toolbar", async () => {
@@ -620,7 +622,7 @@ async function captureDiffPane(run: Run, worktreeId: string): Promise<void> {
       const match = /^1 of (\d+)$/.exec(text);
       if (!match || Number(match[1]) < 3) throw new Error(`position indicator reads "${text}"`);
       await expectAttr(prev, "aria-disabled", "true", "Previous file on the first file");
-      await expectAttr(listToggle, "aria-pressed", "false", "file list toggle");
+      await expectAttr(listToggle, "aria-expanded", "false", "file list toggle");
       await expectAttr(viewed, "aria-pressed", "false", "Viewed toggle");
       await snap(page, "diffpane-footer", theme, [footer]);
     });
@@ -632,7 +634,7 @@ async function captureDiffPane(run: Run, worktreeId: string): Promise<void> {
       await blur(page);
       await parkPointer(page);
       await settle(page, 500);
-      await expectAttr(listToggle, "aria-pressed", "true", "file list toggle");
+      await expectAttr(listToggle, "aria-expanded", "true", "file list toggle");
       await expectAttr(viewed, "aria-pressed", "true", "Viewed toggle");
       await snap(page, "diffpane-footer-pressed", theme, [footer]);
       await viewed.click();
