@@ -284,11 +284,25 @@ export function isStreamLocalRefusal(stderr: string): boolean {
   return STREAM_LOCAL_REFUSED.test(stderr);
 }
 
+/** Mirrors the host's `USER_DATA_DIR_FLAG` (electron/remote/host/hostLocation.ts). */
+const USER_DATA_DIR_FLAG = "--user-data-dir=";
+
+/**
+ * A part of a host's published launch command we will run: an absolute path,
+ * or the profile its Host mode keeps its socket in, as `--user-data-dir=<path>`.
+ */
+function isSafeLaunchPart(part: string, index: number): boolean {
+  if (index > 0 && part.startsWith(USER_DATA_DIR_FLAG)) {
+    return isSafeRemotePath(part.slice(USER_DATA_DIR_FLAG.length));
+  }
+  return isSafeRemotePath(part);
+}
+
 /** The remote command line that starts a host's attach bridge, from its discovery file. */
 export function attachCommandFor(info: HostDiscoveryInfo): string | null {
   const command = info.command;
   if (!command || command.length === 0) return null;
-  if (!command.every((part) => isSafeRemotePath(part))) return null;
+  if (!command.every((part, index) => isSafeLaunchPart(part, index))) return null;
   return [...command.map(shellQuote), ATTACH_STDIO_FLAG].join(" ");
 }
 

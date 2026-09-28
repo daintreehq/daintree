@@ -400,6 +400,23 @@ describe("when the ssh server refuses socket forwarding", () => {
     expect(attachCommandFor(info)).toBeNull();
     expect(attachCommandFor({ ...info, command: ["daintree"] })).toBeNull();
     expect(attachCommandFor({ ...info, command: ["/bin/x\nrm"] })).toBeNull();
+    // The profile a Host keeps its socket in rides along; nothing else may.
+    expect(
+      attachCommandFor({
+        ...info,
+        command: [
+          "/Applications/Daintree.app/Contents/MacOS/Daintree",
+          "--user-data-dir=/Users/g/Library/Application Support/Daintree",
+        ],
+      })
+    ).toBe(
+      "'/Applications/Daintree.app/Contents/MacOS/Daintree' '--user-data-dir=/Users/g/Library/Application Support/Daintree' --attach-stdio"
+    );
+    expect(
+      attachCommandFor({ ...info, command: ["/opt/d", "--user-data-dir=relative/dir"] })
+    ).toBeNull();
+    expect(attachCommandFor({ ...info, command: ["--user-data-dir=/x"] })).toBeNull();
+    expect(attachCommandFor({ ...info, command: ["/opt/d", "--inspect=9229"] })).toBeNull();
   });
 
   async function refusingHost(options: { publishCommand?: boolean; checkStderr?: string } = {}) {
