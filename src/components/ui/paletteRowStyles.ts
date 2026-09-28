@@ -25,7 +25,7 @@ export const PALETTE_ROW_CLASS = cn(
   // border holds every row's content box on the column the palette's other
   // families are drawn from. `relative` stays because rows position their own
   // absolutely placed children against it.
-  "palette-row relative border border-transparent transition-colors",
+  "palette-row relative border border-transparent transition-colors duration-150 ease-out",
   // A neutral fill and nothing else — the same `overlay-highlight` step the
   // Radix menu, context-menu and select rows use, so a highlighted row reads the
   // same in every list in the app. No accent (#11686) and no leading rail: see

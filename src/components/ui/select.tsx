@@ -349,7 +349,7 @@ const SelectItem = React.forwardRef<
     <Item
       ref={ref}
       className={cn(
-        "relative flex w-full cursor-pointer select-none items-start rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors",
+        "relative flex w-full cursor-pointer select-none items-start rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors duration-150 ease-out",
         "data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px]",
         "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
