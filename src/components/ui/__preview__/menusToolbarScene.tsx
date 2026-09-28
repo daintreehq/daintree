@@ -3,6 +3,7 @@ import type { AgentSettings, CliAvailability } from "@shared/types";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
+import type { CopyTreeHistoryRecord } from "@shared/types";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
@@ -12,6 +13,7 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { useCopyTreeHistoryStore } from "@/store/copyTreeHistoryStore";
 import { useProjectSwitcherPalette } from "@/hooks/useProjectSwitcherPalette";
 import { Toolbar } from "@/components/Layout/Toolbar";
 import { MENUS_PROJECT } from "./menusShims";
@@ -20,7 +22,9 @@ import { MENUS_PROJECT } from "./menusShims";
  * The real `Toolbar`, seeded for the two menus `toolbar-preview.html` cannot
  * reach: the project pill's "Stop all agents" row (only drawn while the project
  * has live processes) and the plugin tray (only drawn while plugins contribute
- * toolbar buttons — answered by the bridge shim in `menusShims.ts`).
+ * toolbar buttons — answered by the bridge shim in `menusShims.ts`). It also
+ * carries four worktrees, so an agent button's "Launch in worktree" submenu has
+ * rows, and a copy-tree history, so the copy-context menu lists recent runs.
  */
 
 const WORKTREES: WorktreeSnapshot[] = [
@@ -33,6 +37,56 @@ const WORKTREES: WorktreeSnapshot[] = [
     isCurrent: true,
     isMainWorktree: true,
   },
+  ...(
+    [
+      { name: "menus", branch: "design/menus-popovers" },
+      { name: "handback", branch: "feature/issue-12486-handback-marker" },
+      { name: "dock-drop", branch: "bugfix/issue-12593-dock-drop" },
+    ] as const
+  ).map(({ name, branch }) => ({
+    id: `wt-${name}`,
+    worktreeId: `wt-${name}`,
+    path: `/Users/greg/Projects/daintree-worktrees/${name}`,
+    name,
+    branch,
+    isCurrent: false,
+    isMainWorktree: false,
+  })),
+];
+
+const MIN = 60_000;
+const DAY = 24 * 60 * MIN;
+
+function copyRecord(
+  id: string,
+  name: string,
+  fileCount: number,
+  totalSize: number,
+  agoMs: number,
+  options: CopyTreeHistoryRecord["options"]
+): CopyTreeHistoryRecord {
+  const lastUsedAt = Date.now() - agoMs;
+  return {
+    id,
+    dedupeKey: `key-${id}`,
+    name,
+    options,
+    source: "toolbar",
+    worktreeId: "wt-main",
+    stats: { fileCount, totalSize, duration: 1200 },
+    createdAt: lastUsedAt - 7 * DAY,
+    lastUsedAt,
+    runCount: 3,
+  };
+}
+
+const COPY_TREE_RECENTS: CopyTreeHistoryRecord[] = [
+  copyRecord("f1", "src/components/Layout", 212, 840 * 1024, 20 * MIN, {
+    scopePaths: ["src/components/Layout"],
+  }),
+  copyRecord("f2", "Changed files only", 17, 96 * 1024, 180 * MIN, { modified: true }),
+  copyRecord("f3", "*.test.ts", 486, 4.1 * 1024 * 1024, 11 * DAY, { filter: ["**/*.test.ts"] }),
+  copyRecord("f4", "docs", 88, 410 * 1024, 26 * DAY, { scopePaths: ["docs"] }),
 ];
 
 const PINS: readonly BuiltInAgentId[] = ["claude", "codex"];
@@ -61,6 +115,8 @@ function seed(): void {
     } as ProjectStatusMap[string],
   };
   useProjectStatsStore.setState({ stats });
+  // The menu's own init pulls over the bridge; answer it from the fixture instead.
+  useCopyTreeHistoryStore.setState({ records: COPY_TREE_RECENTS, loading: false, init: () => {} });
 
   const availability: Record<string, AgentAvailabilityState> = {};
   for (const id of PINS) availability[id] = "ready";

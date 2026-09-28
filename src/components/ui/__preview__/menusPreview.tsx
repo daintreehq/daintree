@@ -21,7 +21,9 @@ import "@/index.css";
  *
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
- *   ?scene=<id>               toolbar | browser-toolbar | diff-notes |
+ *   ?scene=<id>               toolbar | grid | notifications | toaster |
+ *                             browser-toolbar | browser-more | devpreview-console |
+ *                             devpreview-refused | diff-notes |
  *                             file-browser-options | markdown-text-size |
  *                             worktree-resource
  */
@@ -44,11 +46,26 @@ async function loadScene(): Promise<ReactNode> {
     const { ToolbarScene } = await import("./menusToolbarScene");
     return <ToolbarScene />;
   }
+  if (sceneId === "grid") {
+    const { GridScene, seedGridScene } = await import("./menusGridScene");
+    seedGridScene();
+    return <GridScene />;
+  }
+  if (sceneId === "notifications" || sceneId === "toaster") {
+    const { NotificationsScene, seedNotificationsScene } =
+      await import("./menusNotificationsScene");
+    seedNotificationsScene(sceneId);
+    return (
+      <div className="p-4">
+        <NotificationsScene scene={sceneId} />
+      </div>
+    );
+  }
   const { GALLERY_SCENES, GallerySceneView, seedGalleryScene } = await import("./menusScenes");
   const scene = GALLERY_SCENES.find((s) => s === sceneId);
   if (!scene) {
     throw new Error(
-      `unknown scene "${sceneId}" — expected toolbar or one of ${GALLERY_SCENES.join(", ")}`
+      `unknown scene "${sceneId}" — expected toolbar, grid, notifications, toaster or one of ${GALLERY_SCENES.join(", ")}`
     );
   }
   seedGalleryScene(scene);

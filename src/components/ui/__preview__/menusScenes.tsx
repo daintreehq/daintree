@@ -10,6 +10,9 @@ import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsSt
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { BrowserToolbar } from "@/components/Browser/BrowserToolbar";
+import { ConsoleDrawer } from "@/components/DevPreview/ConsoleDrawer";
+import { DevPreviewWebviewOverlays } from "@/components/DevPreview/DevPreviewWebviewOverlays";
+import type { FindInPageState } from "@/hooks/useFindInPage";
 import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeControl";
 import { WorktreeCard } from "@/components/Worktree/WorktreeCard";
 import { DiffNotesSendMenu } from "@/panels/diff/DiffNotesSendMenu";
@@ -92,6 +95,123 @@ function BrowserScene() {
         onOpenExternal={noop}
       />
       <div className="flex-1 bg-surface-canvas" aria-hidden="true" />
+    </Pane>
+  );
+}
+
+/**
+ * The same toolbar in a pane narrower than its compact breakpoint, with zoom,
+ * devtools, promote and the console wired — so More carries every row it can:
+ * Copy URL and the console toggle (moved in by the narrow row), the zoom steps,
+ * and the page tools.
+ */
+function BrowserMoreScene() {
+  return (
+    <Pane width={560} height={420}>
+      <BrowserToolbar
+        terminalId="menus-browser-more"
+        url="http://localhost:5173/dashboard/projects/orchid-studio/settings"
+        canGoBack
+        canGoForward={false}
+        isLoading={false}
+        isWebviewReady
+        canOpenExternal
+        canToggleConsole
+        zoomFactor={1.25}
+        onNavigate={noop}
+        onBack={noop}
+        onForward={noop}
+        onReload={noop}
+        onOpenExternal={noop}
+        onZoomChange={noop}
+        onToggleConsole={noop}
+        onToggleDevTools={noop}
+        onPromoteToPortal={noop}
+      />
+      <div className="flex-1 bg-surface-canvas" aria-hidden="true" />
+    </Pane>
+  );
+}
+
+// ---- dev preview: restart options --------------------------------------------------
+
+/** The dev preview pane's bottom drawer, closed: its header carries the restart split button. */
+function DevPreviewConsoleScene() {
+  return (
+    <Pane width={640} height={420}>
+      <div className="flex-1 bg-surface-canvas" aria-hidden="true" />
+      <ConsoleDrawer
+        terminalId="menus-dev-server"
+        paneId="menus-dev-preview"
+        status="running"
+        isOpen={false}
+        onReloadPreview={noop}
+        onRestartDevServer={noop}
+        onRequestRestartAndClearCache={noop}
+        onRequestReinstallAndRestart={noop}
+        onStop={noop}
+      />
+    </Pane>
+  );
+}
+
+const CLOSED_FIND: FindInPageState = {
+  isOpen: false,
+  query: "",
+  activeMatch: 0,
+  matchCount: 0,
+  matchCase: false,
+  inputRef: { current: null },
+  isComposingRef: { current: false },
+  open: noop,
+  close: noop,
+  setQuery: noop,
+  goNext: noop,
+  goPrev: noop,
+  toggleMatchCase: noop,
+};
+
+/** The webview's connection-refused overlay, whose Restart split button has its own menu. */
+function DevPreviewRefusedScene() {
+  return (
+    <Pane width={640} height={420}>
+      <div className="relative flex-1">
+        <DevPreviewWebviewOverlays
+          reconnectAttempt={0}
+          webviewLoadError={{
+            code: "connection_refused",
+            message: "Nothing is listening on localhost:5173. The dev server may have stopped.",
+          }}
+          certCopied={false}
+          onCopyMkcert={noop}
+          isRestarting={false}
+          onRestartDevServer={noop}
+          onHardReload={noop}
+          onRequestRestartAndClearCache={noop}
+          onRequestReinstallAndRestart={noop}
+          onRetryWebviewLoad={noop}
+          currentUrl="http://localhost:5173/"
+          onOpenExternal={noop}
+          blockedNav={null}
+          panelId="menus-dev-preview"
+          webviewElement={null}
+          onDispatchBlockedNav={noop}
+          crashState="none"
+          crashDetails={null}
+          onCloseCrash={noop}
+          onCloseUnresponsive={noop}
+          isLoading={false}
+          onCancelLoad={noop}
+          showRecoverySpinner={false}
+          isRecoveringFromEviction={false}
+          isDragging={false}
+          findInPage={CLOSED_FIND}
+          currentDialog={null}
+          onDialogRespond={noop}
+        >
+          <div className="h-full w-full bg-surface-canvas" aria-hidden="true" />
+        </DevPreviewWebviewOverlays>
+      </div>
     </Pane>
   );
 }
@@ -286,6 +406,9 @@ function WorktreeResourceScene() {
 
 export type GalleryScene =
   | "browser-toolbar"
+  | "browser-more"
+  | "devpreview-console"
+  | "devpreview-refused"
   | "diff-notes"
   | "file-browser-options"
   | "markdown-text-size"
@@ -293,6 +416,9 @@ export type GalleryScene =
 
 export const GALLERY_SCENES: readonly GalleryScene[] = [
   "browser-toolbar",
+  "browser-more",
+  "devpreview-console",
+  "devpreview-refused",
   "diff-notes",
   "file-browser-options",
   "markdown-text-size",
@@ -310,6 +436,12 @@ export function GallerySceneView({ scene }: { scene: GalleryScene }) {
   switch (scene) {
     case "browser-toolbar":
       return <BrowserScene />;
+    case "browser-more":
+      return <BrowserMoreScene />;
+    case "devpreview-console":
+      return <DevPreviewConsoleScene />;
+    case "devpreview-refused":
+      return <DevPreviewRefusedScene />;
     case "diff-notes":
       return <DiffNotesScene />;
     case "file-browser-options":
