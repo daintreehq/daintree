@@ -80,6 +80,7 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -429,27 +430,47 @@ function OverflowMenu({
                 <DropdownMenuItem
                   key="forge-issues"
                   onClick={() => forgeStatsRef.current?.openIssues()}
+                  aria-label={
+                    repoStats?.issueCount != null
+                      ? `Issues, ${formatCountExact(repoStats.issueCount)}`
+                      : undefined
+                  }
                 >
                   <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
-                  Issues{" "}
-                  {repoStats?.issueCount != null
-                    ? `(${formatCountExact(repoStats.issueCount)})`
-                    : ""}
+                  Issues
+                  {repoStats?.issueCount != null && (
+                    <DropdownMenuMeta>{formatCountExact(repoStats.issueCount)}</DropdownMenuMeta>
+                  )}
                 </DropdownMenuItem>
-                <DropdownMenuItem key="forge-prs" onClick={() => forgeStatsRef.current?.openPrs()}>
+                <DropdownMenuItem
+                  key="forge-prs"
+                  onClick={() => forgeStatsRef.current?.openPrs()}
+                  aria-label={
+                    repoStats?.prCount != null
+                      ? `Pull requests, ${formatCountExact(repoStats.prCount)}`
+                      : undefined
+                  }
+                >
                   <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
-                  Pull Requests{" "}
-                  {repoStats?.prCount != null ? `(${formatCountExact(repoStats.prCount)})` : ""}
+                  Pull requests
+                  {repoStats?.prCount != null && (
+                    <DropdownMenuMeta>{formatCountExact(repoStats.prCount)}</DropdownMenuMeta>
+                  )}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   key="forge-commits"
                   onClick={() => forgeStatsRef.current?.openCommits()}
+                  aria-label={
+                    repoStats?.commitCount != null
+                      ? `Commits, ${formatCountExact(repoStats.commitCount)}`
+                      : undefined
+                  }
                 >
                   <GitCommit className="mr-2 h-3.5 w-3.5" />
-                  Commits{" "}
-                  {repoStats?.commitCount != null
-                    ? `(${formatCountExact(repoStats.commitCount)})`
-                    : ""}
+                  Commits
+                  {repoStats?.commitCount != null && (
+                    <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
+                  )}
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
               ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
@@ -2247,13 +2268,14 @@ export function Toolbar({
   const handlePillContextMenuCloseAutoFocus = useCallback(
     (event: Event) => {
       suppressPillTooltipForFocusRestore();
-      event.preventDefault();
       const pendingProjectId = pendingIdentityEditRef.current;
       pendingIdentityEditRef.current = null;
       // A project swapped in during the exit animation is a different project
       // than the one the user right-clicked; drop the request rather than
-      // opening the editor over it.
+      // opening the editor over it. Every other close keeps the shared
+      // restore policy, so a keyboard dismissal lands back on the pill.
       if (pendingProjectId === null || pendingProjectId !== currentProject?.id) return;
+      event.preventDefault();
       setIdentityEditorProjectId(pendingProjectId);
     },
     [currentProject?.id, suppressPillTooltipForFocusRestore]
@@ -2463,24 +2485,24 @@ export function Toolbar({
                         row's "Move or rename project…", which relocates the
                         folder on disk. */}
                       <ContextMenuItem onSelect={handleEditProjectIdentity}>
-                        <Pencil className="mr-2 h-3.5 w-3.5" />
+                        <Pencil data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Edit name and icon…
                       </ContextMenuItem>
                       <ContextMenuItem onSelect={handlePillTogglePin}>
                         {activeSearchableProject?.isPinned ? (
                           <>
-                            <PinOff className="mr-2 h-3.5 w-3.5" />
+                            <PinOff data-menu-icon className="mr-2 h-3.5 w-3.5" />
                             Unpin project
                           </>
                         ) : (
                           <>
-                            <Pin className="mr-2 h-3.5 w-3.5" />
+                            <Pin data-menu-icon className="mr-2 h-3.5 w-3.5" />
                             Pin project
                           </>
                         )}
                       </ContextMenuItem>
                       <ContextMenuItem onSelect={handleCopyProjectPath}>
-                        <Clipboard className="mr-2 h-3.5 w-3.5" />
+                        <Clipboard data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Copy path
                       </ContextMenuItem>
                       <ContextMenuSeparator />
@@ -2488,16 +2510,19 @@ export function Toolbar({
                         Project settings
                       </ContextMenuItem>
                       {activeSearchableProject && activeSearchableProject.processCount > 0 && (
-                        <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
-                          <Square className="mr-2 h-3.5 w-3.5" />
+                        <ContextMenuItem
+                          destructive
+                          onSelect={() => handleStopProject(currentProject.id)}
+                        >
+                          <Square data-menu-icon className="mr-2 h-3.5 w-3.5" />
                           Stop all agents
                         </ContextMenuItem>
                       )}
                       <ContextMenuItem
+                        destructive
                         onSelect={() => handleCloseProject(currentProject.id)}
-                        className="text-status-error focus:text-status-error"
                       >
-                        <X className="mr-2 h-3.5 w-3.5" />
+                        <X data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Close project
                       </ContextMenuItem>
                     </ContextMenuContent>

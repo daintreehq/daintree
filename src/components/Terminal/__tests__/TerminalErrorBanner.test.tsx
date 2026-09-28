@@ -11,6 +11,32 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 // Render the overflow popover open so the demoted trash button is queryable.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({
+    children,
+    asChild,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button {...props}>{children}</button>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="overflow-content">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    destructive: _destructive,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    onSelect?: (event: Event) => void;
+    destructive?: boolean;
+  }) => (
+    <button type="button" onClick={() => onSelect?.(new Event("select"))} {...props}>
+      {children}
+    </button>
+  ),
+}));
+
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,

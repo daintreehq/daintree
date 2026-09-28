@@ -1,6 +1,4 @@
-import { Menu, session } from "electron";
-import { getAppWebContents } from "../../window/webContentsRegistry.js";
-import { CHANNELS } from "../channels.js";
+import { session } from "electron";
 import { defineIpcNamespace, op } from "../define.js";
 import { PORTAL_METHOD_CHANNELS } from "./portal.preload.js";
 import { isDevPreviewPartition } from "../../../shared/utils/partitionUtils.js";
@@ -11,8 +9,6 @@ import type {
   PortalCloseTabPayload,
   PortalNavigatePayload,
   PortalBounds,
-  PortalShowNewTabMenuPayload,
-  PortalNewTabMenuAction,
 } from "../../../shared/types/portal.js";
 
 function isValidBounds(bounds: unknown): bounds is PortalBounds {
@@ -31,16 +27,6 @@ function isValidBounds(bounds: unknown): bounds is PortalBounds {
 }
 
 export function registerPortalHandlers(deps: HandlerDependencies): () => void {
-  const sendMenuAction = (win: Electron.BrowserWindow, actionId: string, args?: unknown) => {
-    try {
-      const appWebContents = getAppWebContents(win);
-      if (appWebContents.isDestroyed()) return;
-      appWebContents.send(CHANNELS.MENU_ACTION, { actionId, args });
-    } catch (error) {
-      console.warn("[PortalHandler] Failed to send portal menu action:", error);
-    }
-  };
-
   const namespace = defineIpcNamespace({
     name: "portal",
     ops: {
@@ -145,84 +131,6 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
         if (typeof tabId !== "string") return;
         deps.portalManager.reload(tabId);
       }),
-      showNewTabMenu: op(
-        PORTAL_METHOD_CHANNELS.showNewTabMenu,
-        async (ctx, payload: PortalShowNewTabMenuPayload): Promise<void> => {
-          if (!payload || typeof payload !== "object") return;
-          if (!Array.isArray(payload.links)) return;
-
-          const x = Number.isFinite(payload.x) ? Math.round(payload.x) : 0;
-          const y = Number.isFinite(payload.y) ? Math.round(payload.y) : 0;
-          const defaultNewTabUrl =
-            payload.defaultNewTabUrl === null ||
-            (typeof payload.defaultNewTabUrl === "string" && payload.defaultNewTabUrl.trim())
-              ? payload.defaultNewTabUrl
-              : null;
-
-          const links = payload.links
-            .filter(
-              (l): l is { title: string; url: string } =>
-                !!l &&
-                typeof l === "object" &&
-                typeof (l as { title?: unknown }).title === "string" &&
-                typeof (l as { url?: unknown }).url === "string" &&
-                (l as { title: string }).title.trim() !== "" &&
-                (l as { url: string }).url.trim() !== ""
-            )
-            .map((l) => ({ title: l.title.trim(), url: l.url.trim() }));
-
-          const win = ctx.senderWindow;
-          if (!win || win.isDestroyed()) return;
-
-          const sendAction = (action: PortalNewTabMenuAction) => {
-            if (ctx.event.sender.isDestroyed()) return;
-            ctx.event.sender.send(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, action);
-          };
-
-          const menu = Menu.buildFromTemplate([
-            ...links.map((link) => ({
-              label: link.title,
-              click: () => sendAction({ type: "open-url", url: link.url, title: link.title }),
-            })),
-            ...(links.length > 0 ? [{ type: "separator" as const }] : []),
-            {
-              label: "Launchpad (Pick provider...)",
-              click: () => sendAction({ type: "open-launchpad" }),
-            },
-            { type: "separator" as const },
-            {
-              label: "Default New Tab",
-              submenu: [
-                {
-                  label: "Launchpad",
-                  type: "radio" as const,
-                  checked: defaultNewTabUrl === null,
-                  click: () => sendAction({ type: "set-default-new-tab-url", url: null }),
-                },
-                ...(links.length > 0 ? [{ type: "separator" as const }] : []),
-                ...links.map((link) => ({
-                  label: link.title,
-                  type: "radio" as const,
-                  checked: defaultNewTabUrl === link.url,
-                  click: () => sendAction({ type: "set-default-new-tab-url", url: link.url }),
-                })),
-                ...(links.length > 0 ? [{ type: "separator" as const }] : []),
-                {
-                  label: "Manage Portal Settings...",
-                  click: () => sendMenuAction(win, "app.settings.openTab", { tab: "portal" }),
-                },
-              ],
-            },
-            {
-              label: "Manage Portal Settings...",
-              click: () => sendMenuAction(win, "app.settings.openTab", { tab: "portal" }),
-            },
-          ]);
-
-          menu.popup({ window: win, x, y });
-        },
-        { withContext: true }
-      ),
     },
   });
 

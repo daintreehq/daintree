@@ -230,7 +230,6 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
         </PopoverTrigger>
         <PopoverContent
           align="end"
-          sideOffset={6}
           className="flex max-h-[60vh] w-80 flex-col p-0"
           onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, traceInputRef.current, clearTraceId)}
         >

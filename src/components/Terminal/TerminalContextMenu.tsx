@@ -1181,7 +1181,7 @@ export function TerminalContextMenu({
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
             Trash dev preview
           </ContextMenuItem>
-          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+          <ContextMenuItem onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Stop dev server
           </ContextMenuItem>
@@ -1448,7 +1448,7 @@ export function TerminalContextMenu({
                 Arm all in this worktree
               </ContextMenuItem>
               {isArmed && fleetSize >= 2 && (
-                <ContextMenuItem destructive onSelect={() => handleAction("fleet-clear")}>
+                <ContextMenuItem onSelect={() => handleAction("fleet-clear")}>
                   <Radio className={ICON_CLASS} aria-hidden="true" />
                   Clear fleet
                 </ContextMenuItem>

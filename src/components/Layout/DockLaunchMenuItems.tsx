@@ -118,11 +118,9 @@ export function DockLaunchMenuItems({
   };
 
   const renderPanelItem = (item: DockLaunchPanelItem) => {
-    // The menu has no qualifier column of its own, so this is a new slot rather
-    // than a filled one. It follows the recipe row below — trailing, dimmed,
-    // shrink-proof — except on the colour: that row is on `text-muted`, which
-    // has no dark-theme contrast floor here, and provenance is not decoration.
-    // `role="menuitem"` takes its accessible name from its text content, so the
+    // Trailing, dimmed and shrink-proof like the recipe row below, and on
+    // `text-secondary` rather than `text-muted`, which has no dark-theme
+    // contrast floor. `role="menuitem"` takes its accessible name from its text content, so the
     // marker reaches a screen reader by being rendered; an `aria-label` would
     // only be a second copy to keep in sync.
     const originLabel = PANEL_KIND_ORIGIN_LABELS[item.origin];
@@ -145,7 +143,7 @@ export function DockLaunchMenuItems({
     >
       <Workflow className="w-3.5 h-3.5 mr-2 shrink-0" />
       <span className="truncate">{item.name}</span>
-      <span className="ml-auto pl-2 text-2xs text-text-muted shrink-0">
+      <span className="ml-auto pl-2 text-2xs text-text-secondary shrink-0">
         {item.isShadowed ? `${item.scopeLabel} · Overridden by Team` : item.scopeLabel}
       </span>
     </C.Item>

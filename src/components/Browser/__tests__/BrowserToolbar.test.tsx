@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useState } from "react";
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
 import { normalizeBrowserUrl } from "../browserUtils";
 import type { ViewportPresetId } from "@shared/types/panel";
@@ -1259,5 +1259,49 @@ describe("BrowserToolbar device picker keyboard", () => {
         target.getAttribute("data-viewport-preset-id")
       )
     );
+  });
+});
+
+describe("BrowserToolbar back/forward history menu", () => {
+  beforeAll(async () => {
+    const { primeRadix } = await import("@/components/ui/radix-loader");
+    await primeRadix();
+  });
+
+  const navSnapshot = {
+    entries: [
+      { index: 0, url: "http://localhost:5173/", title: "Home" },
+      { index: 1, url: "http://localhost:5173/dashboard", title: "Dashboard" },
+      { index: 2, url: "http://localhost:5173/pricing", title: "Pricing" },
+    ],
+    activeIndex: 2,
+    canGoBack: true,
+    canGoForward: false,
+  };
+
+  it("opens as a menu from a right-click and jumps to the chosen entry", async () => {
+    const onGoToHistoryIndex = vi.fn();
+    const onBack = vi.fn();
+    const { getByTestId, findByRole } = renderToolbar({
+      canGoBack: true,
+      onBack,
+      onGoToHistoryIndex,
+      navSnapshot,
+    });
+    fireEvent.contextMenu(getByTestId("browser-back"));
+
+    const menu = await findByRole("menu");
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    expect(items.map((item) => item.firstElementChild?.textContent)).toEqual(["Dashboard", "Home"]);
+    fireEvent.click(items[1]!);
+    expect(onGoToHistoryIndex).toHaveBeenCalledWith(0);
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it("leaves the native menu alone when there is no history in that direction", () => {
+    const { getByTestId, queryByRole } = renderToolbar({ canGoForward: false, navSnapshot });
+    const event = fireEvent.contextMenu(getByTestId("browser-forward"));
+    expect(event).toBe(true);
+    expect(queryByRole("menu")).toBeNull();
   });
 });

@@ -1112,15 +1112,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onImported(callback: () => void): () => void;
   };
   // create / show / hide / resize / navigate / goBack / goForward / reload /
-  // closeTab / showNewTabMenu come from GeneratedElectronAPI; the rest are
+  // closeTab come from GeneratedElectronAPI; the rest are
   // renderer-only subscriptions.
   portal: GeneratedElectronAPI["portal"] & {
     onNavEvent(callback: (data: import("../portal.js").PortalNavEvent) => void): () => void;
     onFocus(callback: () => void): () => void;
     onBlur(callback: () => void): () => void;
-    onNewTabMenuAction(
-      callback: (action: import("../portal.js").PortalNewTabMenuAction) => void
-    ): () => void;
     onTabEvicted(callback: (data: { tabId: string }) => void): () => void;
     onTabsEvicted(callback: (payload: { tabIds: string[] }) => void): () => void;
   };

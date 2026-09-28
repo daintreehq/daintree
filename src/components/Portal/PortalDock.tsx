@@ -5,6 +5,7 @@ import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { PortalToolbar } from "./PortalToolbar";
 import { PORTAL_TAB_PANEL_ID, portalTabDomId } from "./portalTabIds";
+import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 import { PortalLaunchpad } from "./PortalLaunchpad";
 import { DevServerDashboard } from "./DevServerDashboard";
 import { PortalTabSkeleton } from "./PortalTabSkeleton";
@@ -23,15 +24,10 @@ import { logError } from "@/utils/logger";
 import {
   ContextMenu,
   ContextMenuActionItem,
-  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import { getElementBoundsAsDip } from "@/lib/portalBounds";
 import { debounce } from "@/utils/debounce";
 
@@ -164,42 +160,6 @@ export function PortalDock() {
     },
     [isSwitching]
   );
-
-  useEffect(() => {
-    if (!window.electron.portal.onNewTabMenuAction) return;
-
-    const cleanup = window.electron.portal.onNewTabMenuAction((action) => {
-      if (!action || typeof action !== "object" || typeof action.type !== "string") return;
-
-      switch (action.type) {
-        case "open-url":
-          if (typeof action.url !== "string" || typeof action.title !== "string") return;
-          void actionService.dispatch(
-            "portal.openUrl",
-            { url: action.url, title: action.title },
-            { source: "menu" }
-          );
-          return;
-
-        case "open-launchpad":
-          void actionService.dispatch("portal.openLaunchpad", undefined, { source: "menu" });
-          return;
-
-        case "set-default-new-tab-url":
-          void actionService.dispatch(
-            "portal.setDefaultNewTab",
-            { url: action.url },
-            { source: "menu" }
-          );
-          return;
-
-        default:
-          return;
-      }
-    });
-
-    return cleanup;
-  }, []);
 
   const handleNewTab = useCallback(() => {
     if (isSwitching) return;
@@ -562,49 +522,7 @@ export function PortalDock() {
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="portal.resetWidth">Reset width</ContextMenuActionItem>
         <ContextMenuSeparator />
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>Default new tab</ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            <MenuActionSourceContext.Consumer>
-              {(source) => (
-                <ContextMenuCheckboxItem
-                  checked={defaultNewTabUrl === null}
-                  onSelect={() =>
-                    void actionService.dispatch(
-                      "portal.setDefaultNewTab",
-                      { url: null },
-                      { source: source ?? "user" }
-                    )
-                  }
-                >
-                  Launchpad
-                </ContextMenuCheckboxItem>
-              )}
-            </MenuActionSourceContext.Consumer>
-            {enabledLinks.length > 0 && <ContextMenuSeparator />}
-            <MenuActionSourceContext.Consumer>
-              {(source) => (
-                <>
-                  {enabledLinks.map((link) => (
-                    <ContextMenuCheckboxItem
-                      key={link.url}
-                      checked={defaultNewTabUrl === link.url}
-                      onSelect={() =>
-                        void actionService.dispatch(
-                          "portal.setDefaultNewTab",
-                          { url: link.url },
-                          { source: source ?? "user" }
-                        )
-                      }
-                    >
-                      {link.title}
-                    </ContextMenuCheckboxItem>
-                  ))}
-                </>
-              )}
-            </MenuActionSourceContext.Consumer>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
+        <PortalDefaultNewTabSubmenu links={enabledLinks} defaultNewTabUrl={defaultNewTabUrl} />
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "portal" }}>
           Portal settings…

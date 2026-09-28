@@ -11,6 +11,9 @@ import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
 // Radix's open/close choreography. Same shape as the mock in
 // FileBrowserViewer.test.tsx, where these assertions used to live.
 vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenuMeta: ({ children }: { children: ReactNode }) => (
+    <span aria-hidden="true">{children}</span>
+  ),
   DropdownMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,

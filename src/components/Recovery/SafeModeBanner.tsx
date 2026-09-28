@@ -139,11 +139,7 @@ export function SafeModeBanner() {
           Show details
         </Button>
       </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        sideOffset={8}
-        className="p-3 text-xs max-w-sm space-y-2 text-text-primary"
-      >
+      <PopoverContent align="end" className="p-3 text-xs max-w-sm space-y-2 text-text-primary">
         {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
         {hasQuarantineList ? (
           <>

@@ -5,6 +5,32 @@ import { render, screen } from "@testing-library/react";
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "../DevPreviewBanners";
 import type { UseDevServerReturn } from "@/hooks/useDevServer";
 
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({
+    children,
+    asChild,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button {...props}>{children}</button>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="overflow-content">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    destructive: _destructive,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    onSelect?: (event: Event) => void;
+    destructive?: boolean;
+  }) => (
+    <button type="button" onClick={() => onSelect?.(new Event("select"))} {...props}>
+      {children}
+    </button>
+  ),
+}));
+
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverTrigger: ({

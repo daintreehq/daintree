@@ -271,7 +271,6 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
           className="w-96 p-0"
           side="top"
           align="end"
-          sideOffset={8}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
           onPointerDownOutside={(e) => {

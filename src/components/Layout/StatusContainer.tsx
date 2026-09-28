@@ -118,7 +118,6 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
           className="w-96 p-0"
           side="top"
           align="end"
-          sideOffset={8}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
         >

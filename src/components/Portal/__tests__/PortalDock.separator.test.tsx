@@ -56,7 +56,6 @@ describe("PortalDock — resize separator", () => {
       value: {
         portal: {
           onNavEvent: vi.fn(() => vi.fn()),
-          onNewTabMenuAction: vi.fn(() => vi.fn()),
           onFocus: vi.fn(() => vi.fn()),
           onBlur: vi.fn(() => vi.fn()),
           resize: vi.fn(),

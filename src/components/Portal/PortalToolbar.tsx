@@ -38,7 +38,6 @@ import { PortalIcon } from "./PortalIcon";
 import { PORTAL_TAB_PANEL_ID, portalTabDomId } from "./portalTabIds";
 import { useAriaKeyshortcuts, useEffectiveCombo, useOverlayClaim } from "@/hooks";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,6 +47,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   ContextMenu,
+  ContextMenuActionItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
@@ -57,6 +57,7 @@ import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
+import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 
 const noopTabAction = (_tabId: string) => {};
 
@@ -120,9 +121,13 @@ function SortableTab({
   const hasUrl = !!tab.url;
   const hasTabsToRight = tabIndex < tabCount - 1;
   const hasOtherTabs = tabCount > 1;
+  // The page is a native view drawn over the DOM, so the menu has to hide it
+  // while open or it paints underneath.
+  const [menuOpen, setMenuOpen] = useState(false);
+  useOverlayClaim(`portal-tab-menu-${tab.id}`, menuOpen);
 
   return (
-    <ContextMenu modal={false}>
+    <ContextMenu modal={false} onOpenChange={setMenuOpen}>
       <Tooltip autoDismiss={false}>
         <ContextMenuTrigger asChild disabled={isDragging}>
           <TooltipTrigger asChild>
@@ -422,6 +427,8 @@ export function PortalToolbar({
   // The page is a native view drawn over the DOM; claiming an overlay hides it
   // so the menu isn't painted underneath.
   useOverlayClaim("portal-all-tabs", allTabsOpen && isOverflowing);
+  const [newTabMenuOpen, setNewTabMenuOpen] = useState(false);
+  useOverlayClaim("portal-new-tab-menu", newTabMenuOpen);
 
   // With no tab selected (the launchpad over existing tabs) the first tab is
   // the strip's entry point, so the tablist never drops out of the Tab order.
@@ -684,39 +691,53 @@ export function PortalToolbar({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onNewTab}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  safeFireAndForget(
-                    window.electron.portal.showNewTabMenu({
-                      x: e.screenX,
-                      y: e.screenY,
-                      links: enabledLinks.map((link) => ({
-                        title: link.title,
-                        url: link.url,
-                      })),
-                      defaultNewTabUrl,
-                    }),
-                    { context: "Opening portal new-tab menu" }
-                  );
-                }}
-                className={iconButtonClass}
-                aria-label="New Tab"
-                aria-keyshortcuts={newTabAriaShortcut}
-                aria-haspopup="menu"
-              >
-                <Plus className={PANE_TOOLBAR_ICON_CLASS} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipContent("New Tab", newTabShortcut)}
-            </TooltipContent>
-          </Tooltip>
+          <ContextMenu modal={false} onOpenChange={setNewTabMenuOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <ContextMenuTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={onNewTab}
+                    // The dock's own context menu wraps this button; the "+"
+                    // menu replaces it here rather than stacking on top of it.
+                    onContextMenu={(e) => e.stopPropagation()}
+                    className={iconButtonClass}
+                    aria-label="New Tab"
+                    aria-keyshortcuts={newTabAriaShortcut}
+                  >
+                    <Plus className={PANE_TOOLBAR_ICON_CLASS} />
+                  </button>
+                </ContextMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipContent("New Tab", newTabShortcut)}
+              </TooltipContent>
+            </Tooltip>
+            <ContextMenuContent>
+              {enabledLinks.map((link) => (
+                <ContextMenuActionItem
+                  key={link.url}
+                  actionId="portal.openUrl"
+                  args={{ url: link.url, title: link.title }}
+                >
+                  {link.title}
+                </ContextMenuActionItem>
+              ))}
+              {enabledLinks.length > 0 && <ContextMenuSeparator />}
+              <ContextMenuActionItem actionId="portal.openLaunchpad">
+                Open launchpad
+              </ContextMenuActionItem>
+              <ContextMenuSeparator />
+              <PortalDefaultNewTabSubmenu
+                links={enabledLinks}
+                defaultNewTabUrl={defaultNewTabUrl}
+              />
+              <ContextMenuSeparator />
+              <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "portal" }}>
+                Portal settings…
+              </ContextMenuActionItem>
+            </ContextMenuContent>
+          </ContextMenu>
         </div>
       )}
     </div>

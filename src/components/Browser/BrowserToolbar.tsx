@@ -173,7 +173,10 @@ export function BrowserToolbar({
   const [longPressDir, setLongPressDir] = useState<"back" | "forward" | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTargetRef = useRef<"back" | "forward" | null>(null);
-  const longPressDropdownRef = useRef<HTMLDivElement>(null);
+  const navButtonRefs = useRef<Record<"back" | "forward", HTMLButtonElement | null>>({
+    back: null,
+    forward: null,
+  });
 
   const clearLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
@@ -210,17 +213,6 @@ export function BrowserToolbar({
     },
     [longPressDir, clearLongPress, onBack, onForward]
   );
-
-  // Close dropdown on click outside
-  useEffect(() => {
-    if (!longPressDir) return;
-    const handleClick = (e: MouseEvent) => {
-      if (longPressDropdownRef.current?.contains(e.target as Node)) return;
-      setLongPressDir(null);
-    };
-    document.addEventListener("mousedown", handleClick, true);
-    return () => document.removeEventListener("mousedown", handleClick, true);
-  }, [longPressDir]);
 
   // Every timer this component schedules has to die with it: a feedback reset
   // that outlives the mount sets state on a gone tree, and under vitest it can
@@ -565,30 +557,44 @@ export function BrowserToolbar({
     </button>
   );
 
+  // Chrome's history list: long-press or right-click the button. Right-click
+  // is also the keyboard path, through the context-menu key and Shift+F10.
   const historyMenu = (dir: "back" | "forward") => {
     const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
-    if (longPressDir !== dir || entries.length === 0) return null;
+    if (entries.length === 0) return null;
     return (
-      <div
-        ref={longPressDropdownRef}
-        className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
+      <DropdownMenu
+        open={longPressDir === dir}
+        onOpenChange={(open) => {
+          if (!open) setLongPressDir(null);
+        }}
       >
-        {entries.map((entry) => (
-          <button
-            key={entry.index}
-            type="button"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              setLongPressDir(null);
-              onGoToHistoryIndex?.(entry.index);
-            }}
-            className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
-          >
-            <span className="text-xs text-text-primary truncate">{entry.title || entry.url}</span>
-            <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
-          </button>
-        ))}
-      </div>
+        {/* The button itself keeps plain click and Enter as navigation, so the
+            menu hangs off an inert stand-in over it instead of taking it over. */}
+        <DropdownMenuTrigger asChild>
+          <span aria-hidden="true" tabIndex={-1} className="pointer-events-none absolute inset-0" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          className="min-w-[220px] max-w-[28rem]"
+          aria-label={dir === "back" ? "Back history" : "Forward history"}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            navButtonRefs.current[dir]?.focus({ preventScroll: true });
+          }}
+        >
+          {entries.map((entry) => (
+            <DropdownMenuItem
+              key={entry.index}
+              className="flex-col items-start gap-0.5"
+              onSelect={() => onGoToHistoryIndex?.(entry.index)}
+            >
+              <span className="w-full truncate">{entry.title || entry.url}</span>
+              <span className="w-full truncate text-2xs text-text-secondary">{entry.url}</span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     );
   };
 
@@ -602,7 +608,17 @@ export function BrowserToolbar({
             <span className="inline-flex">
               <button
                 type="button"
+                ref={(el) => {
+                  navButtonRefs.current[dir] = el;
+                }}
                 onPointerDown={(e) => handlePointerDown(dir, e)}
+                onContextMenu={(e) => {
+                  const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
+                  if (entries.length === 0) return;
+                  e.preventDefault();
+                  clearLongPress();
+                  setLongPressDir(dir);
+                }}
                 onPointerUp={(e) => handlePointerUp(dir, e)}
                 onPointerLeave={clearLongPress}
                 onPointerCancel={clearLongPress}
@@ -897,7 +913,7 @@ export function BrowserToolbar({
               ref={dropdownRef}
               id={listboxId}
               role="listbox"
-              className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
+              className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden p-1"
             >
               {suggestions.map((entry, index) => {
                 const entryAddress = addressOf(entry.url);
@@ -921,7 +937,7 @@ export function BrowserToolbar({
                     }}
                     className={cn(
                       PALETTE_ROW_CLASS,
-                      "group/row w-full text-left px-2.5 py-1.5 flex items-center gap-2 cursor-pointer"
+                      "group/row w-full text-left rounded-[var(--radius-sm)] px-2.5 py-1.5 flex items-center gap-2 cursor-pointer"
                     )}
                   >
                     {entry.favicon ? (

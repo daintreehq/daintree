@@ -166,7 +166,6 @@ function ReadinessOverflow({
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        sideOffset={8}
         aria-label="Other readiness conditions"
         className="p-1 min-w-64 max-w-sm text-xs"
       >

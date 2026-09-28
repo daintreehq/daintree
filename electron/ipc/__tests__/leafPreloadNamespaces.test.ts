@@ -122,7 +122,6 @@ describe("leaf preload namespace bindings", () => {
       expect(PORTAL_METHOD_CHANNELS.goBack).toBe(CHANNELS.PORTAL_GO_BACK);
       expect(PORTAL_METHOD_CHANNELS.goForward).toBe(CHANNELS.PORTAL_GO_FORWARD);
       expect(PORTAL_METHOD_CHANNELS.reload).toBe(CHANNELS.PORTAL_RELOAD);
-      expect(PORTAL_METHOD_CHANNELS.showNewTabMenu).toBe(CHANNELS.PORTAL_SHOW_NEW_TAB_MENU);
     });
 
     it("devPreview matches", () => {

@@ -176,7 +176,6 @@ import type {
 } from "../shared/types/pty-host.js";
 
 type SpawnResultPayload = SpawnResult;
-import type { PortalNewTabMenuAction } from "../shared/types/portal.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
 import type {
   PluginActionDescriptor,
@@ -2346,9 +2345,6 @@ function buildElectronApi(): ElectronAPI {
       onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
 
       onBlur: (callback: () => void) => _typedOn(CHANNELS.PORTAL_BLUR, callback),
-
-      onNewTabMenuAction: (callback: (action: PortalNewTabMenuAction) => void) =>
-        _typedOn(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, callback),
 
       onTabEvicted: (callback: (data: { tabId: string }) => void) =>
         _typedOn(CHANNELS.PORTAL_TAB_EVICTED, callback),

@@ -217,7 +217,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         ref={ref}
         data-autocomplete-menu=""
         className={cn(
-          "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-tint/10 bg-surface shadow-[var(--theme-shadow-floating)]",
+          "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay",
           "z-50 origin-bottom",
           // Reduced motion keeps the fade and drops the rise. The hook, not a
           // `motion-reduce:` class: it also answers the app's own "Reduce UI

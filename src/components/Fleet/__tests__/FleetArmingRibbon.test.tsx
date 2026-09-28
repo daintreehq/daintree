@@ -37,6 +37,9 @@ vi.stubGlobal(
 );
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenuMeta: ({ children }: { children: React.ReactNode }) => (
+    <span aria-hidden="true">{children}</span>
+  ),
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
     <>{children}</>

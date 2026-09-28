@@ -1147,7 +1147,7 @@ export function useContentGridContext({
       />
       <ContextMenuSeparator />
       <ContextMenuSub>
-        <ContextMenuSubTrigger>Grid Layout</ContextMenuSubTrigger>
+        <ContextMenuSubTrigger>Grid layout</ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <MenuActionSourceContext.Consumer>
             {(menuSource) => (
@@ -1174,7 +1174,7 @@ export function useContentGridContext({
                     )
                   }
                 >
-                  Fixed Columns
+                  Fixed columns
                 </ContextMenuCheckboxItem>
                 <ContextMenuCheckboxItem
                   checked={layoutConfig.strategy === "fixed-rows"}
@@ -1186,7 +1186,7 @@ export function useContentGridContext({
                     )
                   }
                 >
-                  Fixed Rows
+                  Fixed rows
                 </ContextMenuCheckboxItem>
               </>
             )}
@@ -1195,7 +1195,7 @@ export function useContentGridContext({
       </ContextMenuSub>
       <ContextMenuSeparator />
       <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "terminal" }}>
-        Terminal Settings...
+        Terminal settings…
       </ContextMenuActionItem>
     </ContextMenuContent>
   );

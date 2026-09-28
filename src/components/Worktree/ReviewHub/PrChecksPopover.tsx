@@ -211,8 +211,6 @@ export function PrChecksPopover({
         <PopoverContent
           ref={contentRef}
           align="start"
-          sideOffset={8}
-          collisionPadding={8}
           aria-label={`CI checks for pull request #${prNumber}`}
           data-testid="pr-checks-popover"
           // A fixed width, not a content-sized one: the footer actions must not

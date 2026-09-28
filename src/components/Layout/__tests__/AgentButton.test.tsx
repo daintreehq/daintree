@@ -351,6 +351,7 @@ vi.mock("@/components/ui/context-menu", () => ({
 }));
 
 vi.mock("lucide-react", () => ({
+  Settings2: () => <span data-testid="settings-icon" />,
   ChevronDown: () => <span data-testid="chevron-icon" />,
   ExternalLink: () => <span data-testid="external-link-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
@@ -1445,7 +1446,7 @@ describe("AgentButton preset UX", () => {
 
   describe("manage presets dropdown footer", () => {
     it("dropdown footer dispatches deep-link to the preset editor with source 'user'", () => {
-      // The chevron dropdown carries a footer "Manage Presets..." item that
+      // The chevron dropdown carries a footer "Manage presets…" item that
       // mirrors the right-click menu's agent-named entry but uses the
       // shorter label since the agent identity is implicit (the user just
       // clicked this agent's chevron). Source is "user" because it's a
@@ -1457,7 +1458,7 @@ describe("AgentButton preset UX", () => {
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
       const items = getAllByTestId("preset-item") as HTMLElement[];
-      const manage = items.find((el) => el.textContent === "Manage Presets...")!;
+      const manage = items.find((el) => el.textContent === "Manage presets…")!;
       fireEvent.click(manage);
 
       expect(dispatchMock).toHaveBeenCalledWith(
@@ -1476,7 +1477,7 @@ describe("AgentButton preset UX", () => {
       const { getByText } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      fireEvent.click(getByText("Manage Claude Presets..."));
+      fireEvent.click(getByText("Manage Claude presets…"));
 
       expect(dispatchMock).toHaveBeenCalledWith(
         "app.settings.openTab",
@@ -1492,7 +1493,7 @@ describe("AgentButton preset UX", () => {
       const { getByText } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      fireEvent.click(getByText("Manage Claude Presets..."));
+      fireEvent.click(getByText("Manage Claude presets…"));
 
       expect(dispatchMock).toHaveBeenCalledWith(
         "app.settings.openTab",
@@ -1567,7 +1568,7 @@ describe("AgentButton preset UX", () => {
       ]);
     });
 
-    it("hides the Launch in Worktree submenu when no worktrees exist", () => {
+    it("hides the Launch in worktree submenu when no worktrees exist", () => {
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [];
       mockWorktrees = [];
@@ -1575,7 +1576,7 @@ describe("AgentButton preset UX", () => {
       const { queryByText } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      expect(queryByText("Launch in Worktree")).toBeNull();
+      expect(queryByText("Launch in worktree")).toBeNull();
     });
   });
 

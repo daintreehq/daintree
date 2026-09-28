@@ -130,32 +130,6 @@ export interface PortalNavigatePayload {
   url: string;
 }
 
-export interface PortalNewTabMenuLink {
-  title: string;
-  url: string;
-}
-
-export interface PortalShowNewTabMenuPayload {
-  x: number;
-  y: number;
-  links: PortalNewTabMenuLink[];
-  defaultNewTabUrl: string | null;
-}
-
-export type PortalNewTabMenuAction =
-  | {
-      type: "open-url";
-      url: string;
-      title: string;
-    }
-  | {
-      type: "open-launchpad";
-    }
-  | {
-      type: "set-default-new-tab-url";
-      url: string | null;
-    };
-
 export const DEFAULT_PORTAL_TABS: PortalTab[] = [];
 
 export const PORTAL_MIN_WIDTH = 320;

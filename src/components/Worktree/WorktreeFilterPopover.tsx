@@ -611,7 +611,6 @@ export function WorktreeFilterPopover({
       <PopoverContent
         ref={contentRef}
         align="start"
-        sideOffset={8}
         className="flex w-72 max-h-[70vh] flex-col p-0"
         data-testid="worktree-filter-popover"
         onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, searchInputRef.current, clearQuery)}

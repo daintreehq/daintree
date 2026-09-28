@@ -1763,7 +1763,6 @@ export interface IpcEventMap {
   "portal:nav-event": import("../portal.js").PortalNavEvent;
   "portal:focus": void;
   "portal:blur": void;
-  "portal:new-tab-menu-action": import("../portal.js").PortalNewTabMenuAction;
   "portal:tab-evicted": { tabId: string };
 
   // System Sleep events

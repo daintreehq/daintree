@@ -778,9 +778,6 @@ export interface GeneratedElectronAPI {
     show(
       ...args: IpcInvokeMap["portal:show"]["args"]
     ): Promise<IpcInvokeMap["portal:show"]["result"]>;
-    showNewTabMenu(
-      ...args: IpcInvokeMap["portal:show-new-tab-menu"]["args"]
-    ): Promise<IpcInvokeMap["portal:show-new-tab-menu"]["result"]>;
   };
   privacy: {
     clearCache(

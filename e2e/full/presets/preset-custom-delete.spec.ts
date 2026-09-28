@@ -134,7 +134,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     await chevron.click();
     const presetItems = ctx.window
       .locator('[role="menu"] [role="menuitem"]')
-      .filter({ hasNotText: "Manage Presets..." });
+      .filter({ hasNotText: "Manage presets…" });
     await expect(presetItems.first()).toBeVisible({ timeout: T_MEDIUM });
     const countBefore = await presetItems.count();
     expect(countBefore).toBeGreaterThan(1);
