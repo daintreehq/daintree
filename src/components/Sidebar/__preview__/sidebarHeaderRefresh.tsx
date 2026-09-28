@@ -64,26 +64,27 @@ const LIVE: WorktreeSnapshot[] = [
   })),
 ];
 
-const FIXTURES = {
+const FIXTURES: Record<string, { query?: string; groupByType?: boolean }> = {
   /** Nothing disables reorder. */
   rest: {},
   /** A query: reorder off while searching. */
   search: { query: "issue" },
   /** Grouped by type: reorder off while grouped. */
   grouped: { groupByType: true },
-} as const;
-type FixtureName = keyof typeof FIXTURES;
+};
 
 export const FIXTURE_NAMES = Object.keys(FIXTURES);
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 const width = Number(params.get("width") ?? "350");
-const fixtureName = (params.get("fixture") ?? "rest") as FixtureName;
-const fixture: { query?: string; groupByType?: boolean } = FIXTURES[fixtureName];
-if (!fixture) {
-  throw new Error(`unknown fixture "${fixtureName}" — one of ${FIXTURE_NAMES.join(", ")}`);
+const fixtureName = params.get("fixture") ?? "rest";
+function resolveFixture(name: string): { query?: string; groupByType?: boolean } {
+  const found = FIXTURES[name];
+  if (!found) throw new Error(`unknown fixture "${name}" — one of ${FIXTURE_NAMES.join(", ")}`);
+  return found;
 }
+const fixture = resolveFixture(fixtureName);
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";

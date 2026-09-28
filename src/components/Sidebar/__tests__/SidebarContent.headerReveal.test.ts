@@ -85,6 +85,36 @@ describe("SidebarContent header reveal — issue #6964", () => {
     expect(reveal).not.toMatch(/motion-reduce:/);
   });
 
+  it("keeps the cluster on screen, and clickable, while the refresh icon is turning", () => {
+    // Keyed off SpinningIcon's own data-spinning rather than isRefreshing, so
+    // the cluster fades back only after the finishing turn, not mid-rotation.
+    const reveal = source.match(/className="([^"]*group-hover\/header:visible[^"]*)"/)?.[1];
+    expect(reveal).toBeTruthy();
+    for (const state of ["visible", "opacity-100", "pointer-events-auto"]) {
+      expect(reveal).toContain(`has-[[data-spinning]]:${state}`);
+    }
+    expect(reveal).not.toMatch(/isRefreshing/);
+    // The refresh button must sit inside that reveal for :has() to see it.
+    const header = headerSlice(source);
+    const revealAt = header.indexOf("has-[[data-spinning]]");
+    const spinnerAt = header.search(/<SpinningIcon\b[^>]*icon=\{RefreshCw\}/);
+    const createAt = header.indexOf('aria-label="Create new worktree"');
+    expect(revealAt).toBeGreaterThan(-1);
+    expect(spinnerAt).toBeGreaterThan(revealAt);
+    expect(spinnerAt).toBeLessThan(createAt);
+  });
+
+  it("counts refreshes dispatched from outside the button as in flight", () => {
+    // The palette, a rebound shortcut and the sidebar context menu dispatch
+    // worktree.refresh directly and never enter the button's transition.
+    expect(source).toMatch(
+      /const \[isRefreshPending, startRefreshTransition\] = useTransition\(\);/
+    );
+    // The counting itself is behaviour-tested in useDispatchedSidebarRefresh.test.
+    expect(source).toMatch(/const isRefreshDispatched = useDispatchedSidebarRefresh\(\);/);
+    expect(source).toMatch(/const isRefreshing = isRefreshPending \|\| isRefreshDispatched;/);
+  });
+
   it("delegates the refresh spin to SpinningIcon driven by the raw refresh flag (#11323)", () => {
     // The refresh spin is owned by the shared SpinningIcon primitive, which
     // finishes the current rotation before stopping instead of snapping back.

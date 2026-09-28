@@ -23,6 +23,7 @@ interface SidebarWorktreeRowProps {
   homeDir: string | undefined;
   dragStartOrder: string[];
   isSortDisabled: boolean;
+  dragDisabledReason: string | null;
   isPinned: boolean;
   rowIndex: number;
   ariaRowIndex: number;
@@ -41,6 +42,7 @@ function SidebarWorktreeRow({
   homeDir,
   dragStartOrder,
   isSortDisabled,
+  dragDisabledReason,
   isPinned,
   rowIndex,
   ariaRowIndex,
@@ -139,6 +141,7 @@ function SidebarWorktreeRow({
             dragHandleActivatorRef={showDragHandle ? dragHandleActivatorRef : undefined}
             isDraggingSort={isDraggingSort}
             isDragHandleDisabled={showDragHandle && isSortDisabled}
+            dragDisabledReason={dragDisabledReason}
             onMoveUp={moveUpHandler}
             onMoveDown={moveDownHandler}
             canMoveUp={canMoveUp}

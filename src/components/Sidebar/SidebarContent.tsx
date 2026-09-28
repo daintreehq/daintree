@@ -49,6 +49,7 @@ import { WorktreesReconnectingBadge } from "./WorktreesReconnectingBadge";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Button } from "@/components/ui/button";
 import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
+import { useDispatchedSidebarRefresh } from "./useDispatchedSidebarRefresh";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndMonitor } from "@dnd-kit/core";
@@ -239,6 +240,7 @@ interface SidebarVirtuosoContext {
   homeDir: string | undefined;
   dragStartOrder: string[];
   isSortDisabled: boolean;
+  dragDisabledReason: string | null;
 }
 
 const SidebarVirtuosoScroller = forwardRef<
@@ -367,6 +369,7 @@ function renderSidebarFlatItem(
       homeDir={context.homeDir}
       dragStartOrder={context.dragStartOrder}
       isSortDisabled={context.isSortDisabled}
+      dragDisabledReason={context.dragDisabledReason}
       isPinned={item.isPinned}
       rowIndex={item.rowIndex}
       ariaRowIndex={item.ariaRowIndex}
@@ -535,7 +538,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     reconnectingAt !== null &&
     Date.now() - reconnectingAt >= RECONNECT_ESCALATE_MS;
   const deferredWorktrees = useDeferredValue(worktrees);
-  const [isRefreshing, startRefreshTransition] = useTransition();
+  const [isRefreshPending, startRefreshTransition] = useTransition();
+  // A refresh dispatched from anywhere but the button (palette, shortcut, the
+  // sidebar's context menu) never enters the transition above.
+  const isRefreshDispatched = useDispatchedSidebarRefresh();
+  const isRefreshing = isRefreshPending || isRefreshDispatched;
   // Gate the "Reconnecting…" indicator behind the Doherty threshold so routine
   // sub-400ms port replacements don't flash the spinner. A real host crash
   // takes 2–4s to recover, well past the threshold.
@@ -1557,6 +1564,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       homeDir,
       dragStartOrder,
       isSortDisabled,
+      dragDisabledReason,
     }),
     [
       activeWorktreeId,
@@ -1570,6 +1578,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       homeDir,
       dragStartOrder,
       isSortDisabled,
+      dragDisabledReason,
     ]
   );
 
@@ -1847,8 +1856,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         {/* gap-0.5, not gap-1: the four 24px buttons already carry their own
             inset, so a 4px gap on top spent width the 200px minimum does not
             have — the cluster crowded the "Worktrees" landmark it sits beside. */}
+        {/* The cluster also stays up while the refresh icon is turning, so a
+            refresh the pointer has left, or one started from the palette, still
+            shows — and it fades back only once SpinningIcon finishes its turn. */}
         <div className="flex shrink-0 items-center gap-0.5">
-          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 flex items-center gap-0.5">
+          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 has-[[data-spinning]]:visible has-[[data-spinning]]:opacity-100 has-[[data-spinning]]:pointer-events-auto flex items-center gap-0.5">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1884,7 +1896,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               <TooltipTrigger asChild>
                 {/* aria-disabled, not disabled: a disabled button drops keyboard
                     focus mid-refresh. The handler already ignores a press while
-                    a refresh is in flight. */}
+                    a refresh is in flight. Busy, not unavailable, so no dim:
+                    the spinner is the whole signal and must not be faded. */}
                 <Button
                   variant="ghost"
                   size="icon-xs"
@@ -1892,7 +1905,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   aria-disabled={isRefreshing || undefined}
                   className={cn(
                     SIDEBAR_HEADER_ACTION,
-                    "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary"
+                    "aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary"
                   )}
                   aria-label="Refresh sidebar"
                   aria-keyshortcuts={refreshAriaShortcut}

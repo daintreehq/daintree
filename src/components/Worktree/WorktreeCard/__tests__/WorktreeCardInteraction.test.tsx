@@ -257,8 +257,13 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     expect(cardSource).not.toContain('aria-label="Manual reorder paused while filter is active"');
   });
 
-  it("shows the disabled explanation in a TooltipContent", () => {
-    expect(cardSource).toContain("Manual reorder paused while filter is active");
+  it("shows the caller's disabled reason in the grip's TooltipContent", () => {
+    // Only search and group-by-type disable reorder; status filters do not, so
+    // a generic "filter is active" line was wrong under exactly those filters.
+    expect(cardSource).not.toContain("Manual reorder paused while filter is active");
+    expect(cardSource).toMatch(
+      /isDragHandleDisabled\s*\?\s*\(\s*<Tooltip>[\s\S]*?<TooltipContent[^>]*>\s*\{dragDisabledReason\b[\s\S]*?<\/TooltipContent>/
+    );
   });
 
   it("wraps the disabled grip in a Tooltip with TooltipTrigger asChild", () => {

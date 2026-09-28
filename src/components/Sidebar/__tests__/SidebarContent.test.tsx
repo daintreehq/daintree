@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
+import { readFileSync } from "fs";
 import path from "path";
 
 const SIDEBAR_CONTENT_PATH = path.resolve(__dirname, "../SidebarContent.tsx");
@@ -90,6 +91,15 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     // it is a standing explanation, not news, so it no longer outranks the
     // scope and the filter identities by consuming the line alongside them.
     expect(source).toMatch(/scopeText \?\? dragDisabledReason/);
+  });
+
+  it("hands the same drag reason to each row's grip tooltip", () => {
+    // One sentence, one source: the grip tooltip and the status line must
+    // not be able to disagree about why reorder is off.
+    const rowSource = readFileSync(path.resolve(__dirname, "../SidebarWorktreeRow.tsx"), "utf-8");
+    expect(source).toMatch(/dragDisabledReason=\{context\.dragDisabledReason\}/);
+    expect(source).toMatch(/isSortDisabled,\s*dragDisabledReason,\s*\}\)/);
+    expect(rowSource).toMatch(/dragDisabledReason=\{dragDisabledReason\}/);
   });
 
   it("derives drag-disabled reason with query taking priority over group-by-type", () => {
