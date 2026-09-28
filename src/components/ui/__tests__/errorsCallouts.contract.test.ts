@@ -58,13 +58,6 @@ const MIGRATED_FILES = [
  * reason the error and callout contract does not reach.
  */
 const EXEMPT: Record<string, string[]> = {
-  // Uppercase state badges ("Invalid", "Blocked") — badge vocabulary, not a message.
-  "src/components/Plugin/ProjectPluginSection.tsx": [
-    "inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide",
-  ],
-  "src/components/Plugin/PluginDetailPane.tsx": [
-    "inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide",
-  ],
   // A requirement tile's one-word verdict ("Missing", "Outdated") beside its mark.
   "src/components/Setup/SystemRequirementsSection.tsx": [
     "flex items-center gap-1.5 ml-auto text-2xs text-status-error",
@@ -81,8 +74,6 @@ const EXEMPT: Record<string, string[]> = {
   ],
   // Raw setup output behind a "Show details" disclosure: a log, not a callout.
   "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": [
-    // The approval row's Review button: a button's ink, not a message.
-    "shrink-0 px-2 text-xs text-status-warning hover:text-status-warning focus-visible:text-status-warning",
     "mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text",
   ],
 };
