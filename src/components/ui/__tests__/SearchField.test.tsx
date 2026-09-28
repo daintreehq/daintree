@@ -133,6 +133,7 @@ describe("SearchField Escape", () => {
   it("does not clear again after a dismissable layer already cleared the query", () => {
     const onLayerClear = vi.fn();
     const { onClear, input } = renderField("abc");
+    if (!(input instanceof HTMLInputElement)) throw new Error("expected an input");
     const layer = (e: KeyboardEvent) => clearSearchBeforeDismiss(e, input, onLayerClear);
     input.focus();
     document.addEventListener("keydown", layer, true);
