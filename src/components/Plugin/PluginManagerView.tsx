@@ -1081,10 +1081,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               onSelect={setSelectedPluginId}
               onClearSearch={clearSearch}
             />
-          ) : pm.loading || pm.error ? // couldn't. // Not known to be empty yet: the list is still reading, or says why it
-          null : (
+          ) : pm.loading || pm.error ? null : (
             // No plugins at all — a roomy centered prompt rather than an empty
-            // catalog shell; the master column owns the install CTAs.
+            // catalog shell; the master column owns the install CTAs. Held
+            // back while the list is still reading or says why it couldn't.
             <div className="h-full flex items-center justify-center">
               <EmptyState
                 variant="zero-data"
