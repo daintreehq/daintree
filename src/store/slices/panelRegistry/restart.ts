@@ -55,6 +55,7 @@ import {
   type AgentRuntimeSettingsResolution,
 } from "@/utils/agentRuntimeSettings";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientAppError } from "@/utils/clientAppError";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import {
@@ -912,6 +913,10 @@ export const createRestartActions = (
       unmarkTerminalRestarting(id);
       set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
     } catch (error) {
+      // Decoding an encoded AppError from main strips its wire prefix in place,
+      // so the phase checks below read the plain message and the person reads
+      // its userMessage.
+      const appError = isClientAppError(error) ? error : null;
       const errorMessage = formatErrorMessage(error, "Failed to restart terminal");
       const errorCode = (error as { code?: string })?.code;
 
@@ -927,7 +932,7 @@ export const createRestartActions = (
       }
 
       const restartError = {
-        message: errorMessage,
+        message: appError?.userMessage ?? errorMessage,
         code: errorCode,
         timestamp: Date.now(),
         recoverable: errorCode === "ENOENT" || phase === "frontend-readiness",
@@ -1501,7 +1506,9 @@ export const createRestartActions = (
       set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
       return { success: true };
     } catch (error) {
-      const errorMessage = formatErrorMessage(error, "Failed to restart terminal");
+      const appError = isClientAppError(error) ? error : null;
+      const errorMessage =
+        appError?.userMessage ?? formatErrorMessage(error, "Failed to restart terminal");
       unmarkTerminalRestarting(id);
       set((state) =>
         updateTerminal(state, id, (t) => ({

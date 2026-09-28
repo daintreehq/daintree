@@ -1051,6 +1051,30 @@ describe("restartTerminal captured live-session resume", () => {
     // retry to resume the same conversation.
     expect(after?.agentSessionId).toBe("live-123");
   });
+
+  it("shows a refusal from main by its user message and keeps the spawn phase", async () => {
+    mockGracefulKill.mockResolvedValue(null);
+    mockSpawn.mockRejectedValueOnce(
+      new Error(
+        `[AppError|DRIVEN_ELSEWHERE|${encodeURIComponent(
+          "This project is being driven from studio-01. Take it over to make changes."
+        )}] terminal:spawn changes a project another window drives`
+      )
+    );
+    usePanelStore.setState({
+      panelsById: { [agentPanelBase.id]: { ...agentPanelBase, agentState: "exited" as const } },
+      panelIds: [agentPanelBase.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.restartError?.message).toBe(
+      "This project is being driven from studio-01. Take it over to make changes."
+    );
+    expect(after?.restartError?.message).not.toContain("[AppError");
+    expect(after?.restartError?.context?.phase).toBe("pty-spawn");
+  });
 });
 
 describe("restartTerminal stale flow state cleared (#9899)", () => {

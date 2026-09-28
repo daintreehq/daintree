@@ -397,6 +397,35 @@ describe("optimistic panel spawn (#5789)", () => {
     expect(terminalClient.spawn).not.toHaveBeenCalled();
   });
 
+  it("shows a refusal from main by its user message, never the encoded wire prefix", async () => {
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    terminalClient.spawn.mockImplementationOnce(async () => {
+      throw new Error(
+        `[AppError|DRIVEN_ELSEWHERE|${encodeURIComponent(
+          "This project is being driven from studio-01. Take it over to make changes."
+        )}] terminal:spawn changes a project another window drives`
+      );
+    });
+
+    const id = await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "refused-spawn",
+      cwd: "/",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    const failed = usePanelStore.getState().panelsById[id!] as PtyPanelData | undefined;
+    expect(failed?.spawnStatus).toBe("failed");
+    // Not a spawn errno, so the banner's generic copy, with the person's sentence.
+    expect(failed?.spawnError?.code).toBe("UNKNOWN");
+    expect(failed?.spawnError?.message).toBe(
+      "This project is being driven from studio-01. Take it over to make changes."
+    );
+  });
+
   it("does not remove a replacement panel when a stale spawn rejects", async () => {
     // Edge case: user closes spawning panel A (id X), a reconnect path reuses
     // id X with spawnStatus already "ready", then A's original spawn rejects.
