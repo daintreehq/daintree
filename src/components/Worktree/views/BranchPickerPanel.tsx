@@ -244,12 +244,14 @@ function BranchPickerRowItem({
           // Inline rather than a tooltip: the cursor row is never DOM-focused, so
           // a keyboard user could not reach one. A linked worktree is usually
           // named after its branch, and repeating the row's own name says
-          // nothing, so the holder appears only when it differs.
+          // nothing to the eye, so the holder is drawn only when it differs —
+          // but it is always spoken, so the relationship is never left implied.
           <span data-in-use className="flex min-w-0 items-center gap-1">
-            <span className="text-status-warning">in use</span>
-            {row.inUseWorktree.name !== row.name && (
+            <span className="text-status-warning">in use</span>{" "}
+            {row.inUseWorktree.name === row.name ? (
+              <span className="sr-only">by worktree {row.inUseWorktree.name}</span>
+            ) : (
               <>
-                {" "}
                 <span aria-hidden="true">·</span>
                 <span className="sr-only">by worktree</span>{" "}
                 {/* Clamped rather than `truncate`: a nowrap ellipsis still

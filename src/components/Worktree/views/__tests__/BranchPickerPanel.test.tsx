@@ -166,10 +166,19 @@ describe("BranchPickerPanel row metadata", () => {
     );
   });
 
-  it("does not repeat the branch when the holder is named after it", () => {
+  it("does not draw the holder again when it is named after the branch", () => {
     renderPanel([inUseRow("feature/x", { id: "/wt/x", name: "feature/x" })]);
-    const meta = options()[0]!.querySelector("[data-branch-meta]")!;
-    expect(meta.textContent).toBe("in use");
+    const visible = [...options()[0]!.querySelectorAll("[data-in-use] span")].filter(
+      (el) => !el.classList.contains("sr-only")
+    );
+    expect(visible.map((el) => el.textContent)).toEqual(["in use"]);
+  });
+
+  it("still speaks a holder named after the branch", () => {
+    renderPanel([inUseRow("feature/x", { id: "/wt/x", name: "feature/x" })]);
+    expect(screen.getByRole("option", { name: /in use by worktree feature\/x/ })).toBe(
+      options()[0]
+    );
   });
 
   it("marks no worktree on a branch nobody holds", () => {
