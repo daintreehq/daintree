@@ -337,11 +337,16 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
   );
 }
 
-/** A suggested folder, named by its basename; the full path shows once the name is clipped. */
+/**
+ * A suggested folder, named by its basename. The name is an abbreviation of the path —
+ * two suggestions can share it — so the full path is revealed whenever the chip shows
+ * less than the whole path, not only once the name itself clips.
+ */
 function SuggestionChip({ path, onChoose }: { path: string; onChoose: (path: string) => void }) {
   const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
+  const name = basename(path) || path;
   return (
-    <TruncatedTooltip content={path} isTruncated={isNameTruncated}>
+    <TruncatedTooltip content={path} isTruncated={isNameTruncated || name !== path}>
       <Button
         variant="subtle"
         size="xs"
@@ -350,7 +355,7 @@ function SuggestionChip({ path, onChoose }: { path: string; onChoose: (path: str
         onClick={() => onChoose(path)}
       >
         <span ref={nameRef} className="truncate">
-          {basename(path) || path}
+          {name}
         </span>
       </Button>
     </TruncatedTooltip>
