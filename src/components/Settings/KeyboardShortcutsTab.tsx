@@ -647,9 +647,9 @@ export function KeyboardShortcutsTab() {
 
       <ConfirmDialog
         isOpen={isResetDialogOpen}
-        onClose={isResetting ? undefined : handleCancelReset}
+        onClose={handleCancelReset}
         title="Reset keyboard shortcuts?"
-        description={`${overrideCount} customized ${overrideCount === 1 ? "shortcut goes" : "shortcuts go"} back to ${overrideCount === 1 ? "its default" : "their defaults"}. This can't be undone, but you can export a profile first.`}
+        description={`${overrideCount} customized ${overrideCount === 1 ? "shortcut goes" : "shortcuts go"} back to ${overrideCount === 1 ? "its default" : "their defaults"}. Export a profile first to keep a copy you can import later.`}
         confirmLabel="Reset shortcuts"
         cancelLabel="Cancel"
         onConfirm={handleConfirmReset}

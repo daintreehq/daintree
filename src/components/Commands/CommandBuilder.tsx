@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import type {
@@ -580,6 +581,14 @@ export function CommandBuilder({
                 <fieldset
                   ref={formRef}
                   disabled={isExecuting}
+                  // Enter in a single-line field presses the footer's primary —
+                  // Next, or the submit on the last step — so it runs the same
+                  // validation a click does.
+                  onKeyDown={(event) => {
+                    if (!isEnterToSubmit(event)) return;
+                    event.preventDefault();
+                    primaryRef.current?.click();
+                  }}
                   className="m-0 min-w-0 border-0 p-0 [&_:disabled]:opacity-100!"
                 >
                   <FormGrid>
@@ -624,7 +633,14 @@ export function CommandBuilder({
         }
       >
         {showSuccessState || hasEmptySteps ? (
-          <Button ref={closeRef} variant="contrast" onClick={onCancel}>
+          // A dismissal, so the ghost Close every info dialog uses — nothing
+          // here is waiting on a decision.
+          <Button
+            ref={closeRef}
+            variant="ghost"
+            onClick={onCancel}
+            className="text-text-secondary hover:text-text-primary"
+          >
             Close
           </Button>
         ) : (

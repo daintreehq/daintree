@@ -132,7 +132,7 @@ export function PluginArchiveInstallConfirmDialog() {
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={isInstalling ? undefined : () => dismiss(current.intentId)}
+      onClose={() => dismiss(current.intentId)}
       // min-w-0 + break-words: the heading is a flex row, so an unbroken
       // attacker-controlled run would otherwise refuse to shrink and clip
       // against the dialog edge; the clamp above bounds the wrapped height.

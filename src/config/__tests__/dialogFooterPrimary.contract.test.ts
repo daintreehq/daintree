@@ -52,7 +52,10 @@ const ACCENT_FILL_VARIANTS = new Set(["default", "glow", "vibrant"]);
 // refactor stopped matching and the contract went blind. Lower them deliberately, in the
 // same commit that removes the footers.
 const MIN_FOOTERS_INSPECTED = 24;
-const MIN_BUTTONS_INSPECTED = 53;
+// 51, down from 53: the file close guard, the create-folder dialog and the command
+// picker's error dialog moved onto the footer's action props, which this walk
+// doesn't count as hand-written buttons.
+const MIN_BUTTONS_INSPECTED = 51;
 
 function tsxFiles(dir: string, found: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -138,6 +141,16 @@ function variantOf(element: ts.JsxOpeningLikeElement): VariantInfo {
   return { kind: "absent" };
 }
 
+/** The `size` attribute's source text, or null when the button takes the default size. */
+function sizeOf(element: ts.JsxOpeningLikeElement): string | null {
+  for (const attribute of element.attributes.properties) {
+    if (!ts.isJsxAttribute(attribute)) continue;
+    if (attribute.name.getText() !== "size") continue;
+    return attribute.initializer ? attribute.initializer.getText() : "{true}";
+  }
+  return null;
+}
+
 type Violation = { file: string; line: number; reason: string };
 type ScanResult = { violations: Violation[]; footers: number; buttons: number };
 
@@ -176,6 +189,13 @@ function scan(filePath: string): ScanResult {
           result.violations.push({ file: relative, line, reason: `variant="${value}"` });
         }
       }
+      // Every footer action is the default h-8 button. A footer that shrank its buttons
+      // made that dialog's footer shorter than every other, and changed height mid-flow
+      // when one state of the same dialog used the default and another did not.
+      const size = sizeOf(node);
+      if (size !== null) {
+        result.violations.push({ file: relative, line, reason: `size=${size}` });
+      }
     }
     ts.forEachChild(node, inspectButtons);
   };
@@ -198,7 +218,7 @@ function scan(filePath: string): ScanResult {
   return result;
 }
 
-describe("dialog footers never inherit the accent CTA (#11963)", () => {
+describe("dialog footers never inherit the accent CTA (#11963) and keep the default size", () => {
   const results = SCAN_ROOTS.flatMap((root) => tsxFiles(root))
     .filter((file) => fs.readFileSync(file, "utf8").includes(`.${FOOTER_MEMBER}`))
     .map((file) => scan(file));
@@ -360,6 +380,27 @@ describe("dialog footers never inherit the accent CTA (#11963)", () => {
         expect(result.footers).toBe(1);
         expect(result.violations.map((v) => v.reason)).toEqual([
           "no variant (inherits the accent CTA)",
+        ]);
+      }
+    );
+  });
+
+  it("rejects a footer button that shrinks below the default size", () => {
+    withFixture(
+      [
+        'import { AppDialog } from "@/components/ui/AppDialog";',
+        "export const D = () => (",
+        "  <AppDialog.Footer>",
+        '    <Button variant="ghost" size="sm" onClick={cancel}>Cancel</Button>',
+        '    <Button variant="contrast" size={compact ? "sm" : "default"}>OK</Button>',
+        '    <Button variant="contrast" onClick={ok}>Fine</Button>',
+        "  </AppDialog.Footer>",
+        ");",
+      ],
+      (result) => {
+        expect(result.violations.map((v) => v.reason)).toEqual([
+          'size="sm"',
+          'size={compact ? "sm" : "default"}',
         ]);
       }
     );

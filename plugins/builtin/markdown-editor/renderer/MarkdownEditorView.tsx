@@ -450,9 +450,9 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
         onClose={() => setConfirmLoadDisk(false)}
         variant="destructive"
         zIndex="nested"
-        title={`Discard the draft of '${props.fileName}'?`}
-        description="The disk version replaces your unsaved edits. This can't be undone."
-        confirmLabel="Discard draft"
+        title={`Discard changes to '${props.fileName}'?`}
+        description="The version on disk replaces your unsaved edits, and the draft isn't kept."
+        confirmLabel="Discard changes"
         onConfirm={handleLoadDisk}
       />
 

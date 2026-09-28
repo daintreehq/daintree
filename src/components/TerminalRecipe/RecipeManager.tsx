@@ -526,12 +526,7 @@ export function RecipeManager({
     <>
       <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
         <AppDialog.Header>
-          <AppDialog.Title>
-            <span className="flex items-center gap-2">
-              <Workflow className="h-5 w-5" />
-              Recipe manager
-            </span>
-          </AppDialog.Title>
+          <AppDialog.Title icon={<Workflow />}>Recipe manager</AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
 

@@ -315,3 +315,38 @@ describe("CommandBuilder recovery", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Do it" }));
   });
 });
+
+describe("CommandBuilder Enter-to-submit", () => {
+  it("submits from a single-line field, as every form dialog does", async () => {
+    const { onExecute } = renderBuilder();
+    const title = screen.getByLabelText("Issue title");
+    fireEvent.change(title, { target: { value: "Crash on open" } });
+    fireEvent.keyDown(title, { key: "Enter" });
+
+    await screen.findByText("Done");
+    expect(onExecute).toHaveBeenCalledTimes(1);
+    expect(onExecute.mock.calls[0]?.[0]).toMatchObject({ title: "Crash on open" });
+  });
+
+  it("keeps Enter a newline in a textarea, and never submits mid-composition", () => {
+    const { onExecute } = renderBuilder();
+    fireEvent.keyDown(screen.getByLabelText("Description"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByLabelText("Issue title"), { key: "Enter", isComposing: true });
+    fireEvent.keyDown(screen.getByLabelText("Issue title"), { key: "Enter", shiftKey: true });
+    expect(onExecute).not.toHaveBeenCalled();
+  });
+
+  it("advances a step rather than skipping to the submit, with the same validation", () => {
+    const { onExecute } = renderBuilder({ steps: twoSteps });
+    const count = screen.getByLabelText("Count");
+
+    fireEvent.change(count, { target: { value: "1.5" } });
+    fireEvent.keyDown(count, { key: "Enter" });
+    expect(screen.getByText("Whole numbers only")).toBeTruthy();
+
+    fireEvent.change(count, { target: { value: "2" } });
+    fireEvent.keyDown(count, { key: "Enter" });
+    expect(screen.getByLabelText("Note")).toBeTruthy();
+    expect(onExecute).not.toHaveBeenCalled();
+  });
+});

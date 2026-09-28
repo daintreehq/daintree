@@ -5,7 +5,6 @@ import { useCommandStore } from "@/store/commandStore";
 import { CommandPicker } from "./CommandPicker";
 import { CommandBuilder } from "./CommandBuilder";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import type { CommandManifestEntry, CommandContext, CommandResult } from "@shared/types/commands";
@@ -162,11 +161,9 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
               className="rounded-[var(--radius-md)]"
             />
           </AppDialog.Body>
-          <AppDialog.Footer>
-            <Button variant="contrast" onClick={handleBuilderCancel}>
-              Close
-            </Button>
-          </AppDialog.Footer>
+          {/* A dismissal: the recovery is the banner's Retry, and a filled Close
+              would outweigh it. */}
+          <AppDialog.Footer secondaryAction={{ label: "Close", onClick: handleBuilderCancel }} />
         </AppDialog>
       )}
 

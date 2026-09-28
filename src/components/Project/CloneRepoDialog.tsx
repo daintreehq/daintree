@@ -607,13 +607,13 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       dismissible={!isCloning && !canFinalize}
       initialFocus="none"
     >
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
         <AppDialog.Title icon={<FolderGit2 className="h-4 w-4 text-text-secondary" />}>
           Clone repository
         </AppDialog.Title>
-        {!isCloning && !canFinalize && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
@@ -883,13 +883,12 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
           </Button>
         ) : error ? (
           <div className="flex shrink-0 items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={onCancel}>
+            <Button variant="ghost" onClick={onCancel}>
               Close
             </Button>
             <Button
               ref={footerActionRef}
               variant="contrast"
-              size="sm"
               onClick={() => void startClone()}
               disabled={isCloning || !canClone}
             >
@@ -898,17 +897,11 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={isCloning ? stopClone : onCancel}
-              loading={isStopping}
-            >
+            <Button variant="ghost" onClick={isCloning ? stopClone : onCancel} loading={isStopping}>
               {isCloning ? "Stop clone" : "Cancel"}
             </Button>
             <Button
               variant="contrast"
-              size="sm"
               onClick={() => void startClone()}
               disabled={!canClone}
               loading={isCloning}

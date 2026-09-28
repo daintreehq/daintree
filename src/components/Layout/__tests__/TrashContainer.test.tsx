@@ -706,7 +706,7 @@ describe("TrashContainer", () => {
       // and the mock only remembers whichever rendered last.
       const title = () =>
         container.querySelector('[data-testid="confirm-dialog-title"]')?.textContent ?? "";
-      expect(title()).toMatch(/Remove Terminal 1/);
+      expect(title()).toMatch(/Remove 'Terminal 1'/);
 
       // The panel it names is gone; the dialog is now describing a future
       // removal of something that no longer exists, over rows that can still

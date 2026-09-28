@@ -1843,3 +1843,91 @@ describe("AppDialog scrollbar gutter", () => {
     expect(publishScrollbarGutter).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("AppDialog — shared chrome contract", () => {
+  const dialogRoot = () => document.querySelector<HTMLElement>('[aria-modal="true"]')!;
+
+  it("points aria-describedby only at a description that is mounted", () => {
+    const { rerender } = render(
+      <AppDialog isOpen onClose={() => {}}>
+        <AppDialog.Header>
+          <AppDialog.Title>Clone repository</AppDialog.Title>
+        </AppDialog.Header>
+        <AppDialog.Body>Form</AppDialog.Body>
+      </AppDialog>
+    );
+    expect(dialogRoot().getAttribute("aria-describedby")).toBeNull();
+
+    rerender(
+      <AppDialog isOpen onClose={() => {}}>
+        <AppDialog.Header>
+          <AppDialog.Title>Clone repository</AppDialog.Title>
+        </AppDialog.Header>
+        <AppDialog.Body>
+          <AppDialog.Description>Copies the repository to this machine.</AppDialog.Description>
+        </AppDialog.Body>
+      </AppDialog>
+    );
+    const id = dialogRoot().getAttribute("aria-describedby");
+    expect(id && document.getElementById(id)?.textContent).toBe(
+      "Copies the repository to this machine."
+    );
+  });
+
+  it("owns the title glyph's size, and lets a status colour through", () => {
+    render(
+      <AppDialog isOpen onClose={() => {}}>
+        <AppDialog.Header>
+          <AppDialog.Title icon={<svg className="w-5 h-5 text-status-warning" />}>
+            Recover
+          </AppDialog.Title>
+        </AppDialog.Header>
+      </AppDialog>
+    );
+    const svg = screen.getByRole("heading", { name: "Recover" }).querySelector("svg")!;
+    const slot = svg.parentElement!;
+    // Whatever the caller passes, the glyph renders inside the one slot every
+    // dialog title shares; its own status colour is left on the glyph.
+    expect(slot.hasAttribute("data-dialog-title-icon")).toBe(true);
+    expect(slot.getAttribute("aria-hidden")).toBe("true");
+    expect(svg.getAttribute("class")).toContain("text-status-warning");
+  });
+
+  it("keeps a leading action apart from Cancel and the primary, and off initial focus", async () => {
+    const onDiscard = vi.fn();
+    render(
+      <AppDialog isOpen onClose={() => {}} initialFocus="cancel">
+        <AppDialog.Header>
+          <AppDialog.Title>Save changes to 'notes.md'?</AppDialog.Title>
+        </AppDialog.Header>
+        <AppDialog.Footer
+          leadingAction={{ label: "Discard changes", onClick: onDiscard, intent: "destructive" }}
+          secondaryAction={{ label: "Cancel", onClick: () => {} }}
+          primaryAction={{ label: "Save", onClick: () => {} }}
+        />
+      </AppDialog>
+    );
+    const buttons = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(buttons.slice(-3)).toEqual(["Discard changes", "Cancel", "Save"]);
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Cancel"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(onDiscard).toHaveBeenCalledTimes(1);
+  });
+
+  it("vetoes a disabled leading action", () => {
+    const onDiscard = vi.fn();
+    render(
+      <AppDialog isOpen onClose={() => {}}>
+        <AppDialog.Footer
+          leadingAction={{ label: "Discard changes", onClick: onDiscard, disabled: true }}
+          primaryAction={{ label: "Save", onClick: () => {} }}
+        />
+      </AppDialog>
+    );
+    const discard = screen.getByRole("button", { name: "Discard changes" });
+    expect(discard.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(discard);
+    expect(onDiscard).not.toHaveBeenCalled();
+  });
+});

@@ -15,6 +15,7 @@ import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projec
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { FormGrid, FormRow, FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
 import { EMOJI_SLOT_CLASS, SlottedInputField, PathCaption } from "./projectDialogFields";
 import {
@@ -359,6 +360,15 @@ export function GitInitDialog({
   const configDisabled = isInitializing;
   const canStart = !isNameMissing && !isCommitMessageMissing;
 
+  // Enter answers the form the way the primary button does, and only when it
+  // would: the same guards, so a missing name or message is never submitted.
+  const handleFieldKeyDown = (event: React.KeyboardEvent) => {
+    if (!isEnterToSubmit(event)) return;
+    event.preventDefault();
+    if (isInitializing || !canStart) return;
+    void startInitialization();
+  };
+
   // AppDialog's default `initialFocus="first"` lands on the header close
   // button, which spends this focus region's one accent signal on the dismiss
   // control while the field the user came here to check sits unmarked.
@@ -431,13 +441,13 @@ export function GitInitDialog({
       initialFocus="none"
       data-testid="git-init-dialog"
     >
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
         <AppDialog.Title icon={<FolderGit2 className="h-4 w-4 text-text-secondary" />}>
           Set up repository
         </AppDialog.Title>
-        {!isInitializing && !isComplete && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
@@ -636,6 +646,7 @@ export function GitInitDialog({
                   disabled={configDisabled}
                   invalid={isNameMissing}
                   aria-describedby={isNameMissing ? nameErrorId : undefined}
+                  onKeyDown={handleFieldKeyDown}
                   autoComplete="off"
                   placeholder="My project"
                   leading={
@@ -710,6 +721,7 @@ export function GitInitDialog({
                     type="text"
                     value={initialCommitMessage}
                     onChange={(e) => setInitialCommitMessage(e.target.value)}
+                    onKeyDown={handleFieldKeyDown}
                     disabled={configDisabled}
                     aria-invalid={isCommitMessageMissing}
                     aria-describedby={isCommitMessageMissing ? commitMessageErrorId : undefined}
@@ -760,18 +772,17 @@ export function GitInitDialog({
           // part-way, so the only honest footer is the escape hatch, visibly
           // unavailable — rather than a primary button wearing a spinner over
           // its own label.
-          <Button variant="ghost" size="sm" data-testid="git-init-cancel" disabled>
+          <Button variant="ghost" data-testid="git-init-cancel" disabled>
             Cancel
           </Button>
         ) : error ? (
           <div className="flex shrink-0 items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={onCancel}>
+            <Button variant="ghost" onClick={onCancel}>
               Cancel
             </Button>
             <Button
               ref={footerActionRef}
               variant="contrast"
-              size="sm"
               data-testid="git-init-retry"
               onClick={() => void startInitialization()}
               disabled={isInitializing || !canStart}
@@ -781,12 +792,11 @@ export function GitInitDialog({
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={onCancel} disabled={isInitializing}>
+            <Button variant="ghost" onClick={onCancel} disabled={isInitializing}>
               Cancel
             </Button>
             <Button
               variant="contrast"
-              size="sm"
               data-testid="git-init-start"
               onClick={() => void startInitialization()}
               disabled={isInitializing || !canStart}

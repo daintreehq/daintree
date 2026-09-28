@@ -2740,17 +2740,17 @@ function DeleteScratchConfirmDialog({
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={isDeleting ? undefined : onDismiss}
+      onClose={onDismiss}
       title={`Delete '${target.name}'?`}
       zIndex="nested"
       confirmLabel="Delete scratch"
       cancelLabel="Cancel"
       onConfirm={onConfirm}
-      // Split on purpose: the button locks the instant it is pressed, but its
-      // spinner waits out the Doherty gate, so a scratch that deletes in 80ms
-      // never flashes one. Gating the lock too would leave a window where a
-      // second press still went through.
-      confirmDisabled={isDeleting}
+      // Split on purpose: the dialog locks the instant Delete is pressed, but
+      // the spinner waits out the Doherty gate, so a scratch that deletes in
+      // 80ms never flashes one. Gating the lock too would leave a window where
+      // a second press, or a dismissal, still went through.
+      isBusy={isDeleting}
       isConfirmLoading={isDeleting && progress.isVisible}
       variant="destructive"
       // The row that opened this is gone by the time it closes, so the default
@@ -2958,7 +2958,7 @@ export function ProjectSwitcherPalette({
       {removeConfirmProject && onRemoveConfirmClose && onConfirmRemove && (
         <ConfirmDialog
           isOpen={true}
-          onClose={isRemovingProject ? undefined : onRemoveConfirmClose}
+          onClose={onRemoveConfirmClose}
           title={removeConfirmProject.isActive ? "Close project?" : "Remove project from list?"}
           zIndex="nested"
           confirmLabel={removeConfirmProject.isActive ? "Close project" : "Remove project"}
@@ -3020,7 +3020,7 @@ export function ProjectSwitcherPalette({
       {sleepConfirmProject && onSleepConfirmClose && onConfirmSleep && (
         <ConfirmDialog
           isOpen={true}
-          onClose={isSleepingProject ? undefined : onSleepConfirmClose}
+          onClose={onSleepConfirmClose}
           title={`Sleep '${sleepConfirmProject.name}'?`}
           zIndex="nested"
           confirmLabel="Sleep project"
@@ -3080,7 +3080,7 @@ export function ProjectSwitcherPalette({
         onConfirmDeleteAllScratches && (
           <ConfirmDialog
             isOpen={true}
-            onClose={isDeletingAllScratches ? undefined : onDismissDeleteAllScratchesConfirm}
+            onClose={onDismissDeleteAllScratchesConfirm}
             // Counted off the frozen snapshot, never the live list: the rows
             // disappear as the run lands, and the dialog must keep naming the
             // number the user actually agreed to.
@@ -3146,7 +3146,7 @@ export function ProjectSwitcherPalette({
       {saveAsProjectConfirm && onDismissSaveAsProjectConfirm && onConfirmDeleteOriginalScratch && (
         <ConfirmDialog
           isOpen={true}
-          onClose={isDeletingOriginalScratch ? undefined : onDismissSaveAsProjectConfirm}
+          onClose={onDismissSaveAsProjectConfirm}
           title={`Delete '${saveAsProjectConfirm.scratch.name}'?`}
           zIndex="nested"
           confirmLabel="Delete scratch"

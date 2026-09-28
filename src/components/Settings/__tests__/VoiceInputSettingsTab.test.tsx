@@ -79,6 +79,10 @@ vi.mock("@/hooks/useAudioDevices", () => ({
   SYSTEM_DEFAULT_VALUE: "__system_default__",
 }));
 
+// The dialog frame reaches for hooks this suite's `@/hooks` mock doesn't carry;
+// the key-removal confirm is exercised in the states suite with the real one.
+vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
+
 vi.mock("@/hooks", async () => {
   const { useEffect } = await vi.importActual<typeof import("react")>("react");
   return {

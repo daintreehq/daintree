@@ -1114,7 +1114,7 @@ export function McpServerSettingsTab() {
 
       <ConfirmDialog
         isOpen={showDisableConfirm}
-        onClose={isDisabling ? undefined : handleCancelDisable}
+        onClose={handleCancelDisable}
         title="Stop MCP server?"
         description={
           disableClients.length === 1
@@ -1148,7 +1148,7 @@ export function McpServerSettingsTab() {
 
       <ConfirmDialog
         isOpen={showRotateConfirm}
-        onClose={isRotating ? undefined : handleCancelRotate}
+        onClose={handleCancelRotate}
         title="Rotate API key?"
         description="The current key will be invalidated immediately. External clients using this key will need to update their configuration."
         confirmLabel="Rotate key"
@@ -1162,7 +1162,7 @@ export function McpServerSettingsTab() {
 
       <ConfirmDialog
         isOpen={showClearConfirm}
-        onClose={isClearing ? undefined : handleCancelClear}
+        onClose={handleCancelClear}
         title="Clear audit log?"
         description={`This permanently deletes ${auditRecords.length === 1 ? "1 audit record" : `${auditRecords.length} audit records`} on this machine. Turn outcomes aren't affected.${auditEnabled ? " New tool calls will still be recorded." : ""}`}
         confirmLabel="Clear audit log"

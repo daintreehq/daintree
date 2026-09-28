@@ -235,6 +235,22 @@ describe("GitInitDialog", () => {
     expect(initGitGuidedMock).not.toHaveBeenCalled();
   });
 
+  it("submits on Enter in its fields, behind the same guards as the button", async () => {
+    renderDialog();
+    const message = screen.getByLabelText(/^message$/i);
+
+    fireEvent.change(message, { target: { value: "   " } });
+    fireEvent.keyDown(message, { key: "Enter" });
+    expect(initGitGuidedMock).not.toHaveBeenCalled();
+
+    fireEvent.change(message, { target: { value: "feat: init" } });
+    fireEvent.keyDown(message, { key: "Enter", isComposing: true });
+    expect(initGitGuidedMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(message, { key: "Enter" });
+    await waitFor(() => expect(initGitGuidedMock).toHaveBeenCalledTimes(1));
+  });
+
   it("resets the commit message and template to the defaults when reopened", () => {
     const onSuccess = vi.fn();
     const onCancel = vi.fn();
@@ -986,10 +1002,11 @@ describe("GitInitDialog", () => {
 
       await waitFor(() => expect(screen.getByTestId("git-init-success")).toBeTruthy());
       // Escape, the backdrop and the header X all route to the same handler,
-      // and in this mode that handler OPENS the project. So the dialog must not
-      // offer them: the mode has one action and it is labelled.
+      // and in this mode that handler OPENS the project. So the dialog is not
+      // dismissible: the mode has one action and it is labelled. The X stays in
+      // the header and disables itself from `dismissible`, as on every locked
+      // dialog (pinned in AppDialog's own suite).
       expect(screen.getByTestId("app-dialog").getAttribute("data-dismissible")).toBe("false");
-      expect(screen.queryByRole("button", { name: /^close$/i })).toBeNull();
       expect(onCancel).not.toHaveBeenCalled();
     });
 

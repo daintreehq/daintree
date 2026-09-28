@@ -1594,7 +1594,7 @@ export function DaintreeAssistantSettingsTab() {
 
       <ConfirmDialog
         isOpen={showClearAuditConfirm}
-        onClose={isClearingAudit ? undefined : handleCancelClearAudit}
+        onClose={handleCancelClearAudit}
         title="Clear audit log?"
         description="All recorded tool dispatches will be permanently deleted — including those from external MCP clients."
         confirmLabel={clearAuditError ? "Try again" : "Clear audit log"}
@@ -1609,7 +1609,7 @@ export function DaintreeAssistantSettingsTab() {
 
       <ConfirmDialog
         isOpen={showRotateConfirm}
-        onClose={isRotating ? undefined : handleCancelRotate}
+        onClose={handleCancelRotate}
         title="Rotate API key?"
         description="The current key will be invalidated immediately. External clients using this key will need to update their configuration."
         confirmLabel={rotateError ? "Try again" : "Rotate key"}

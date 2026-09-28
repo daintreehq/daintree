@@ -1467,3 +1467,75 @@ describe("ConfirmDialog activation guards while the confirm is running", () => {
     expect(findConfirm().hasAttribute("aria-disabled")).toBe(false);
   });
 });
+
+describe("ConfirmDialog — close button while the confirm runs", () => {
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const closeButton = () => screen.getByRole("button", { name: "Close dialog" });
+
+  function renderConfirm(props: { isConfirmLoading?: boolean; isBusy?: boolean }) {
+    const onClose = vi.fn();
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={onClose}
+        title="Delete 'notes.md'?"
+        description="The file is removed from the worktree."
+        confirmLabel="Delete file"
+        onConfirm={onConfirm}
+        variant="destructive"
+        {...props}
+      />
+    );
+    return { onClose, onConfirm };
+  }
+
+  // Every locked state keeps the X in the header and makes it unavailable, so
+  // the header never changes shape the moment the primary is pressed.
+  it.each([
+    ["at rest", {}, false],
+    ["while the confirm's spinner shows", { isConfirmLoading: true }, true],
+    ["while busy before the spinner gate", { isBusy: true }, true],
+  ] as const)("keeps the X %s, disabled only while locked", (_state, props, locked) => {
+    const { onClose } = renderConfirm(props);
+    expect(closeButton().hasAttribute("disabled")).toBe(locked);
+
+    // The X and Escape each answer once at rest — the mock never unmounts it.
+    fireEvent.click(closeButton());
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(locked ? 0 : 2);
+  });
+
+  it("refuses the confirm and Cancel while busy, without a spinner", () => {
+    const { onClose, onConfirm } = renderConfirm({ isBusy: true });
+    const confirm = screen.getByRole("button", { name: "Delete file" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    expect(confirm.getAttribute("aria-busy")).toBeNull();
+    fireEvent.click(confirm);
+    fireEvent.click(cancel);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("shows a disabled X on a confirm that has no way to be dismissed", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        title="Restart Daintree?"
+        confirmLabel="Restart now"
+        onConfirm={() => {}}
+        variant="default"
+      />
+    );
+    expect(closeButton().hasAttribute("disabled")).toBe(true);
+  });
+});

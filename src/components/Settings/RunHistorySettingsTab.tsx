@@ -268,7 +268,7 @@ export function RunHistorySettingsTab() {
         isOpen={showClearConfirm}
         variant="destructive"
         onConfirm={() => void confirmClear()}
-        onClose={isClearing ? undefined : () => setShowClearConfirm(false)}
+        onClose={() => setShowClearConfirm(false)}
         isConfirmLoading={isClearing}
         title="Clear run history?"
         description={`This permanently deletes ${plural(records.length, "recorded run")} on this machine. New runs will still be recorded.`}

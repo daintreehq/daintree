@@ -635,22 +635,21 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         onConfirm={handleResetAllData}
         onClose={() => setShowResetConfirm(false)}
         title="Reset all app data?"
-        description="This permanently deletes every setting, API key, recorded session and log on this machine. Daintree then restarts with factory defaults. It can't be undone."
+        description="Deletes every setting, API key, recorded session and log Daintree keeps on this machine, then restarts with factory defaults. Your repositories and their .daintree folders aren't touched."
         confirmLabel="Reset and restart"
+        // D3: nothing survives this and nothing restores it, so it takes the
+        // same typed attestation as the other catastrophic actions.
+        typedNameTarget="Daintree"
       />
 
       <ConfirmDialog
         isOpen={pendingSessionRetention !== null}
         variant="destructive"
         onConfirm={() => void confirmShortenRetention()}
-        onClose={
-          shortenPending
-            ? undefined
-            : () => {
-                setPendingSessionRetention(null);
-                setShortenError(null);
-              }
-        }
+        onClose={() => {
+          setPendingSessionRetention(null);
+          setShortenError(null);
+        }}
         isConfirmLoading={shortenPending}
         hint={shortenError ?? undefined}
         title="Shorten session history?"
@@ -666,14 +665,10 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         isOpen={showClearHistoryConfirm}
         variant="destructive"
         onConfirm={() => void handleClearSessionHistory()}
-        onClose={
-          clearHistoryPending
-            ? undefined
-            : () => {
-                setShowClearHistoryConfirm(false);
-                setClearHistoryError(null);
-              }
-        }
+        onClose={() => {
+          setShowClearHistoryConfirm(false);
+          setClearHistoryError(null);
+        }}
         isConfirmLoading={clearHistoryPending}
         hint={clearHistoryError ?? undefined}
         title="Clear all session history?"

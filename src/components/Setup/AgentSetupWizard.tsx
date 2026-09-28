@@ -865,7 +865,7 @@ export function AgentSetupWizard({
         <div className="flex items-center gap-3 min-w-0">
           {/* Neutral, not accent: the header glyph is decoration, and the
               footer's primary action is this dialog's one load-bearing signal. */}
-          <AppDialog.Title icon={<Plug className="w-5 h-5 text-text-secondary" />}>
+          <AppDialog.Title icon={<Plug />}>
             {isFirstRun ? "Set up Daintree" : "Agent setup"}
           </AppDialog.Title>
           <span

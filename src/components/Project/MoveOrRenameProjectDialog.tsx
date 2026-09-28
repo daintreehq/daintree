@@ -408,7 +408,7 @@ function MoveOrRenameProjectDialogInner({
       hasPreview={true}
       zIndex="nested"
     >
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
         <AppDialog.Title
@@ -422,7 +422,7 @@ function MoveOrRenameProjectDialogInner({
         >
           {title}
         </AppDialog.Title>
-        {!isApplying && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       {/* A failure lands as a banner at the top of the body; after a long

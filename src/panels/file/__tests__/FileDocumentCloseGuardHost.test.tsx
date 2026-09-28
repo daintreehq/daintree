@@ -83,9 +83,9 @@ describe("FileDocumentCloseGuardHost (#12323)", () => {
     await waitFor(() => expect(screen.queryByTestId("file-pane-close-prompt")).toBeNull());
 
     verdict = consultPanelCloseGuards(["p1"]);
-    await screen.findByTestId("file-pane-close-save");
+    await screen.findByRole("button", { name: "Save" });
     await act(async () => {
-      fireEvent.click(screen.getByTestId("file-pane-close-save"));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
     });
     await expect(verdict).resolves.toBe(true);
     expect(save).toHaveBeenCalledTimes(1);
@@ -107,16 +107,16 @@ describe("FileDocumentCloseGuardHost (#12323)", () => {
       })
     );
     let verdict = consultPanelCloseGuards(["p1"]);
-    await screen.findByTestId("file-pane-close-save");
+    await screen.findByRole("button", { name: "Save" });
     await act(async () => {
-      fireEvent.click(screen.getByTestId("file-pane-close-save"));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
     });
     await expect(verdict).resolves.toBe(false);
 
     verdict = consultPanelCloseGuards(["p1"]);
-    await screen.findByTestId("file-pane-close-discard");
+    await screen.findByRole("button", { name: "Discard changes" });
     await act(async () => {
-      fireEvent.click(screen.getByTestId("file-pane-close-discard"));
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
     });
     await expect(verdict).resolves.toBe(false);
   });
@@ -133,9 +133,9 @@ describe("FileDocumentCloseGuardHost (#12323)", () => {
     });
     publish("p1", projection({ discard }));
     const verdict = consultPanelCloseGuards(["p1"]);
-    await screen.findByTestId("file-pane-close-discard");
+    await screen.findByRole("button", { name: "Discard changes" });
     await act(async () => {
-      fireEvent.click(screen.getByTestId("file-pane-close-discard"));
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
     });
     await expect(verdict).resolves.toBe(true);
     expect(discard).toHaveBeenCalledTimes(1);

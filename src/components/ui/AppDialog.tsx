@@ -83,6 +83,8 @@ interface AppDialogContextValue {
   variant: DialogVariant;
   /** Mirrors the dialog's `dismissible`, so the close button can say it's unavailable. */
   dismissible: boolean;
+  /** `AppDialog.Description` announces itself, so the dialog never points at a missing id. */
+  registerDescription: () => () => void;
 }
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
@@ -170,6 +172,13 @@ export function AppDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const descriptionId = useId();
+  // Counted rather than a flag: a dialog that swaps one description for another
+  // mounts the new one before the old one unmounts.
+  const [descriptionCount, setDescriptionCount] = useState(0);
+  const registerDescription = useCallback(() => {
+    setDescriptionCount((count) => count + 1);
+    return () => setDescriptionCount((count) => count - 1);
+  }, []);
 
   const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
@@ -494,7 +503,14 @@ export function AppDialog({
 
   return createPortal(
     <AppDialogContext.Provider
-      value={{ onClose: handleClose, titleId, descriptionId, variant, dismissible }}
+      value={{
+        onClose: handleClose,
+        titleId,
+        descriptionId,
+        variant,
+        dismissible,
+        registerDescription,
+      }}
     >
       <div
         className={cn(
@@ -517,7 +533,9 @@ export function AppDialog({
         role={variant === "destructive" && !hasPreview ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleId}
-        aria-describedby={descriptionId}
+        // Only while a description is mounted: an id that resolves to nothing
+        // gives assistive technology an empty description.
+        aria-describedby={descriptionCount > 0 ? descriptionId : undefined}
         // Marks the surface as one a Radix layer underneath can hand Escape to
         // — see `ESCAPE_BACKSTOP_DIALOG_ATTR`. Tracks the backstop registration
         // (`isOpen`), not merely being mounted: a dialog mid-exit has already
@@ -621,10 +639,25 @@ interface AppDialogTitleProps {
   as?: "h2" | "h3";
 }
 
+/**
+ * Every dialog's title glyph is the same 16px mark in the secondary text colour.
+ * The slot owns the size, so a caller's `w-5 h-5` (or a brand mark's `size`
+ * attribute) can't make one dialog's header louder than the rest. Colour is only
+ * a default: a caller whose glyph carries meaning — a destructive `Trash2`, a
+ * warning triangle — names its status colour on the icon, and that wins.
+ */
+const DIALOG_TITLE_ICON_SLOT =
+  "inline-flex shrink-0 items-center text-text-secondary [&>svg]:size-4 [&>svg]:shrink-0";
+
 AppDialog.Title = function AppDialogTitle({ children, icon, className, as }: AppDialogTitleProps) {
   const context = useContext(AppDialogContext);
+  const slot = icon ? (
+    <span className={DIALOG_TITLE_ICON_SLOT} aria-hidden="true" data-dialog-title-icon="">
+      {icon}
+    </span>
+  ) : undefined;
   return (
-    <SurfaceHeaderTitle as={as} id={context?.titleId} icon={icon} className={className}>
+    <SurfaceHeaderTitle as={as} id={context?.titleId} icon={slot} className={className}>
       {children}
     </SurfaceHeaderTitle>
   );
@@ -747,6 +780,14 @@ interface AppDialogFooterProps {
   className?: string;
   primaryAction?: DialogAction;
   secondaryAction?: DialogAction;
+  /**
+   * A third answer that is neither the safe dismissal nor the primary — "Discard
+   * changes" beside Cancel and Save. It sits on the leading edge, apart from the
+   * Cancel / primary pair, so the destructive choice is never adjacent to the one
+   * the user reaches for. Destructive intent renders it `ghost-danger`: the
+   * primary keeps the dialog's single filled button.
+   */
+  leadingAction?: DialogAction;
   hint?: React.ReactNode;
 }
 
@@ -755,6 +796,7 @@ AppDialog.Footer = function AppDialogFooter({
   className,
   primaryAction,
   secondaryAction,
+  leadingAction,
   hint,
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
@@ -782,10 +824,29 @@ AppDialog.Footer = function AppDialogFooter({
       className={cn(
         DIALOG_INSET,
         "py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
-        hint ? "justify-between" : "justify-end",
+        hint || leadingAction ? "justify-between" : "justify-end",
         className
       )}
     >
+      {leadingAction && (
+        <Button
+          variant={leadingAction.intent === "destructive" ? "ghost-danger" : "ghost"}
+          onClick={(event) => {
+            if (leadingAction.disabled) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+            leadingAction.onClick();
+          }}
+          aria-disabled={leadingAction.disabled || undefined}
+          loading={leadingAction.loading}
+          className={cn("shrink-0", leadingAction.disabled && ARIA_DISABLED_CLASSES)}
+          data-confirm-role="leading"
+        >
+          {leadingAction.label}
+        </Button>
+      )}
       {/* min-w-0 so a long hint can shrink and truncate rather than squeezing the
           action row: as a flex child its default min-width:auto floor is its own
           content, so without this it pushes the buttons past the card edge and
@@ -862,6 +923,8 @@ AppDialog.Description = function AppDialogDescription({
   className,
 }: AppDialogDescriptionProps) {
   const context = useContext(AppDialogContext);
+  const register = context?.registerDescription;
+  useLayoutEffect(() => register?.(), [register]);
   return (
     <p id={context?.descriptionId} className={cn("text-sm text-text-secondary", className)}>
       {children}

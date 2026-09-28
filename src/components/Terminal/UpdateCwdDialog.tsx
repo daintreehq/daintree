@@ -232,9 +232,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. Same
             glyph as the banner's "Change directory" that opens this. */}
-        <AppDialog.Title icon={<FolderPen className="w-5 h-5 text-text-secondary" />}>
-          Change working directory
-        </AppDialog.Title>
+        <AppDialog.Title icon={<FolderPen />}>Change working directory</AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
