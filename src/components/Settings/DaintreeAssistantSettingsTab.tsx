@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
@@ -11,7 +12,12 @@ import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "./SettingsGroup";
 import { SettingsChoicebox } from "./SettingsChoicebox";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsInput } from "./SettingsInput";
@@ -1897,23 +1903,23 @@ function NativeGrantsSection({
       <div className="flex flex-wrap items-end gap-2 pt-0.5">
         <label className="grid min-w-0 flex-1 basis-56 gap-1 text-xs text-text-secondary">
           Tools to approve
-          <input
+          <Input
             type="text"
             value={toolsInput}
             onChange={(e) => setToolsInput(e.target.value)}
             placeholder="worktree.deleteOwned recipe.run"
-            className="min-w-0 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs font-mono text-text-primary placeholder:text-text-placeholder focus-visible:outline-2 focus-visible:outline-accent-primary"
+            className="min-w-0 font-mono"
           />
         </label>
         <label className="grid gap-1 text-xs text-text-secondary">
           Maximum uses
-          <input
+          <Input
             type="number"
             min={1}
             max={100}
             value={usesInput}
             onChange={(e) => setUsesInput(e.target.value)}
-            className="w-20 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs tabular-nums text-text-primary focus-visible:outline-2 focus-visible:outline-accent-primary"
+            className={cn(SETTINGS_CONTROL_WIDTH.number, "tabular-nums")}
           />
         </label>
         <Button variant="outline" size="sm" onClick={approve} disabled={issuing}>

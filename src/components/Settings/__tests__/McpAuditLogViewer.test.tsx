@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { McpAuditLogViewer } from "../McpAuditLogViewer";
 import type { AssistantTurnRecord, McpLogRecord } from "@shared/types";
 
+// Driven as a value and a change event, not as a Radix popup.
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 function dispatch(id: string, toolId: string, result = "success"): McpLogRecord {
   return {
     id,

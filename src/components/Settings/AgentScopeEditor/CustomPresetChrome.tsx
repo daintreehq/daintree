@@ -64,8 +64,11 @@ export function CustomPresetChrome({
               ariaLabel="Preset color"
             />
             {isEditing ? (
-              <input
-                className="flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded-[var(--radius-sm)] px-2 py-0.5 focus:outline-hidden focus-visible:border-accent-primary"
+              <Input
+                density="compact"
+                // The title's own weight and size, so the row reads as the same
+                // name in edit mode; compact keeps the label row from jumping.
+                className="w-auto min-w-0 flex-1 text-sm font-medium"
                 value={editName}
                 onChange={(e) => onEditNameChange(e.target.value)}
                 onBlur={() => void onCommitEdit()}

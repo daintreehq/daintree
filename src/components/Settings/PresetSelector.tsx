@@ -2,6 +2,7 @@ import { useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { selectTriggerVariants } from "@/components/ui/select";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { AgentPreset } from "@/config/agents";
 
@@ -197,13 +198,10 @@ export function PresetSelector({
           // The row label names the control; the value span says what it is set to.
           aria-labelledby={ariaLabelledBy ? `${ariaLabelledBy} ${valueId}` : undefined}
           aria-describedby={ariaDescribedBy}
-          className={cn(
-            "flex items-center gap-2 w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)]",
-            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
-            // Radix hands focus back to the trigger when the list closes, so a `focus:`
-            // indicator stayed lit after every pick — accent only for keyboard focus.
-            "focus:outline-hidden focus-visible:border-accent-primary"
-          )}
+          // A select's field chrome, focus-visible ring included: Radix hands focus
+          // back to the trigger when the list closes, so a `focus:` indicator
+          // would stay lit after every pick.
+          className={selectTriggerVariants()}
           data-testid="preset-selector-trigger"
         >
           <span

@@ -4,6 +4,9 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { AddPresetDialog } from "../AddPresetDialog";
 import type { AgentPreset } from "@/config/agents";
 
+// Driven as a value and a change event, not as a Radix popup.
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logWarn: vi.fn(),

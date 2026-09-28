@@ -334,7 +334,7 @@ function FieldDescription({ className, ...props }: FieldDescriptionProps) {
   const { descriptionId } = useFieldContext("FieldDescription");
   return (
     <p
-      className={cn("text-xs text-text-muted select-text", className)}
+      className={cn("text-xs text-text-secondary select-text", className)}
       {...props}
       // After the spread: the id is what the control's association points at and
       // the slot marker is what places this in the row's second column, so

@@ -5,6 +5,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { PluginActionAuditLogViewer } from "../PluginActionAuditLogViewer";
 import { PLUGIN_AUDIT_SCHEMA_VERSION, type PluginActionAuditRecord } from "@shared/types";
 
+// Driven as a value and a change event, not as a Radix popup.
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 function record(overrides: Partial<PluginActionAuditRecord> = {}): PluginActionAuditRecord {
   return {
     id: overrides.id ?? Math.random().toString(36).slice(2),

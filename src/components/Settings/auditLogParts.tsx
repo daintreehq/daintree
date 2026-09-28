@@ -2,6 +2,13 @@ import type { ReactNode } from "react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { Button } from "@/components/ui/button";
 import { SearchField } from "@/components/ui/SearchField";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SettingsEmptyRow } from "./SettingsGroup";
 
 /**
@@ -24,13 +31,6 @@ const TIME_RANGE_OPTIONS: { value: AuditTimeRange; label: string }[] = [
   { value: "1h", label: "Last hour" },
   { value: "24h", label: "Last 24 hours" },
 ];
-
-function isTimeRange(value: string): value is AuditTimeRange {
-  return TIME_RANGE_OPTIONS.some((o) => o.value === value);
-}
-
-const FIELD_CLASS =
-  "h-7 min-w-0 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
 /** The filter row at the top of an audit log group. */
 export function AuditFilterBar({ label, children }: { label: string; children: ReactNode }) {
@@ -83,21 +83,27 @@ export function AuditFilterSelect<T extends string>({
   ariaLabel: string;
 }) {
   return (
-    <select
+    <Select
       value={value}
-      onChange={(e) => {
-        const next = options.find((o) => o.value === e.target.value);
-        if (next) onChange(next.value);
+      onValueChange={(next) => {
+        const match = options.find((o) => o.value === next);
+        if (match) onChange(match.value);
       }}
-      aria-label={ariaLabel}
-      className={FIELD_CLASS}
     >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+      {/* A fixed width: a native select sized itself to its longest option, but
+          a trigger sizes to the current value and would shift the bar on every
+          pick. */}
+      <SelectTrigger density="compact" aria-label={ariaLabel} className="w-40">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -109,20 +115,12 @@ export function AuditTimeRangeSelect({
   onChange: (value: AuditTimeRange) => void;
 }) {
   return (
-    <select
+    <AuditFilterSelect
       value={value}
-      onChange={(e) => {
-        if (isTimeRange(e.target.value)) onChange(e.target.value);
-      }}
-      aria-label="Filter audit by time range"
-      className={FIELD_CLASS}
-    >
-      {TIME_RANGE_OPTIONS.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+      onChange={onChange}
+      options={TIME_RANGE_OPTIONS}
+      ariaLabel="Filter audit by time range"
+    />
   );
 }
 

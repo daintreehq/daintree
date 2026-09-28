@@ -119,7 +119,7 @@ export function SettingsSelect({
               aria-invalid={isError ? true : undefined}
               className={cn(
                 layout === "inline" && SETTINGS_CONTROL_WIDTH[controlWidth],
-                isError && "border-status-error focus:border-status-error",
+                isError && "border-status-error",
                 className
               )}
             >
@@ -166,7 +166,7 @@ export function SettingsSelect({
           id={id}
           aria-describedby={describedBy}
           aria-invalid={isError ? true : undefined}
-          className={cn(isError && "border-status-error focus:border-status-error", className)}
+          className={cn(isError && "border-status-error", className)}
         >
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>

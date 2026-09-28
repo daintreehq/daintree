@@ -4,6 +4,7 @@ import { HexColorInput, HexColorPicker } from "react-colorful";
 import { contrastRatio } from "@shared/theme";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { inputVariants } from "@/components/ui/input";
 
 /**
  * Preset color picker — inline HSV picker with a curated palette.
@@ -165,7 +166,7 @@ export function PresetColorPicker({
             color={draftColor}
             onChange={setDraftColor}
             prefixed
-            className="w-20 rounded-[var(--radius-sm)] border border-border-default/60 bg-surface-canvas px-1.5 py-0.5 text-2xs font-mono uppercase text-text-primary focus:outline-hidden focus:border-accent-primary"
+            className={cn(inputVariants({ density: "compact" }), "w-20 font-mono uppercase")}
             aria-label="Hex color"
             data-testid="preset-color-hex-input"
           />
