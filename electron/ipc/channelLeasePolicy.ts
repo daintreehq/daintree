@@ -633,7 +633,8 @@ export type LeaseArgPath = readonly [index: number, ...keys: string[]];
  *
  * - `caller`: the project the calling view is bound to, for a handler that acts
  *   on exactly that (`ctx.projectId`).
- * - `every-project`: host-wide, so it changes every project anyone drives here.
+ * - `every-project`: host-wide, so it changes every project anyone drives here;
+ *   with `when`, only for a call whose argument at `when.at` is `when.equals`.
  * - `optional: true` skips an argument that is absent; `optional: "caller"`
  *   falls back to the caller's project instead, and `"current-project"` to
  *   this Host's current project, for a handler that falls back to it.
@@ -643,7 +644,10 @@ export type LeaseArgPath = readonly [index: number, ...keys: string[]];
  */
 export type LeaseTargetSource =
   | { readonly from: "caller" }
-  | { readonly from: "every-project" }
+  | {
+      readonly from: "every-project";
+      readonly when?: { readonly at: LeaseArgPath; readonly equals: string };
+    }
   | {
       readonly from: "project" | "worktree" | "terminal";
       readonly at: LeaseArgPath;
@@ -738,7 +742,11 @@ export const CHANNEL_LEASE_TARGETS = {
   "mcp-server:stop-pane-notices": TERMINAL_ARG,
   "operations:cancel": [{ from: "operation", at: [0, "opId"] }],
   "plugin:project-activate-staged": CALLER,
-  "plugin-agent-mcp:set-plugin-access": CALLER,
+  // A level set for every project changes the projects other Shells drive too.
+  "plugin-agent-mcp:set-plugin-access": [
+    { from: "caller" },
+    { from: "every-project", when: { at: [0, "scope"], equals: "all-projects" } },
+  ],
   "plugin:project-reload": CALLER,
   "plugin:project-set-muted": CALLER,
   "plugin:project-set-trust": CALLER,
