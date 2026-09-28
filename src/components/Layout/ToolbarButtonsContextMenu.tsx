@@ -1,5 +1,6 @@
 import { cloneElement, useState } from "react";
 import type React from "react";
+import { Settings2 } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuActionItem,
@@ -109,7 +110,10 @@ export function ToolbarButtonsContextMenu({
             <ContextMenuGroup aria-label="Right side">{rows.right.map(renderRow)}</ContextMenuGroup>
           )}
           {(hasLeft || hasRight) && <ContextMenuSeparator />}
+          {/* Inset past the check column, so its icon and label share the
+              toggle rows' icon and label columns. */}
           <ContextMenuActionItem inset actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+            <Settings2 className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             {TOOLBAR_CUSTOMIZE_LABEL}
           </ContextMenuActionItem>
         </ContextMenuContent>

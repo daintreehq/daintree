@@ -54,10 +54,11 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { CliAvailability } from "@shared/types";
 import {
   ContextMenuActionItem,
-  ContextMenuContent,
   ContextMenuCheckboxItem,
+  ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuMeta,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
@@ -98,6 +99,7 @@ const EMPTY_TAB_GROUPS: TabGroup[] = [];
 const GRID_CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
   Item: ContextMenuItem,
   Label: ContextMenuLabel,
+  Meta: ContextMenuMeta,
   Separator: ContextMenuSeparator,
 };
 

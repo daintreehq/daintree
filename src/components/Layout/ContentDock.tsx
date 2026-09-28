@@ -50,6 +50,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuMeta,
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
   ContextMenuSeparator,
@@ -72,6 +73,7 @@ const DOCK_DENSITY_OPTIONS = [
 const CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
   Item: ContextMenuItem,
   Label: ContextMenuLabel,
+  Meta: ContextMenuMeta,
   Separator: ContextMenuSeparator,
 };
 
