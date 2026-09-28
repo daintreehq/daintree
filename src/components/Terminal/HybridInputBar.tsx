@@ -1032,7 +1032,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
                 "focus-within:border-[var(--ib-border-focus)] focus-within:ring-1 focus-within:ring-[var(--ib-focus-ring)] focus-within:bg-[var(--ib-focus-bg)]",
               ],
-              disabled && "opacity-60"
+              // The one dim for an unavailable composer. Its controls take
+              // `disabled` and add no opacity of their own: a second dim inside
+              // this one compounds (60% × 50% left the paperclip at 30% beside a
+              // picker at 60%), so the row stops reading as one family.
+              disabled && "opacity-50"
             )}
             data-voice-active={isVoiceActiveForPanel ? "true" : undefined}
             data-fleet-armed={isFleetPrimary ? "true" : undefined}
@@ -1116,8 +1120,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   // Colour comes from the shell's own palette, like every
                   // control in it — see `composerControlStyles.ts`.
                   className={cn(
-                    "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-[var(--radius-sm)] font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
+                    "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-full font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
                     COMPOSER_CONTROL_TEXT_CLASS,
+                    COMPOSER_CONTROL_HOVER_BG_CLASS,
                     COMPOSER_CONTROL_FOCUS_CLASS
                   )}
                   aria-label="Open command picker"
@@ -1204,15 +1209,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
                         COMPOSER_CONTROL_TEXT_CLASS,
                         COMPOSER_CONTROL_HOVER_BG_CLASS,
-                        COMPOSER_CONTROL_FOCUS_CLASS,
-                        "disabled:pointer-events-none disabled:opacity-50"
+                        COMPOSER_CONTROL_FOCUS_CLASS
                       )}
                       aria-label="Attach files"
                     >
                       <Paperclip className="h-3.5 w-3.5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">Attach files</TooltipContent>
+                  <TooltipContent side="top">Attach files</TooltipContent>
                 </Tooltip>
                 {hasStash && (
                   <Tooltip>
@@ -1220,6 +1224,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       <button
                         type="button"
                         onClick={handlePopStash}
+                        disabled={disabled}
                         // 24px to clear the WCAG 2.5.8 floor. The spacing
                         // exception cannot rescue a smaller one here — its circle
                         // overlaps the attach and mic targets either side.
@@ -1234,7 +1239,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         <Archive className="h-3.5 w-3.5" />
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">
+                    <TooltipContent side="top">
                       {createTooltipContent("Restore stashed input", popStashShortcut)}
                     </TooltipContent>
                   </Tooltip>
