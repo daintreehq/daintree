@@ -20,6 +20,7 @@ import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { describeExitStatus } from "./exitStatus";
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -231,6 +232,7 @@ export function TerminalHeaderContent({
   );
 
   // Show command pill only for plain terminals (not agent terminals)
+  const exitStatus = isExited ? describeExitStatus(exitCode) : null;
   const isPlainTerminal = kind == null || kind === "terminal";
   const showCommandPill =
     isPlainTerminal && !agentState && activityStatus === "working" && !!lastCommand;
@@ -291,9 +293,16 @@ export function TerminalHeaderContent({
           polite live region. The global announcer in useAccessibilityAnnouncements
           routes the transition once with a pane-title prefix, avoiding competing
           live regions across a multi-pane fleet (#9204). */}
-      {isExited && (
-        <span className="text-xs font-mono text-status-error" role="status" aria-live="off">
-          [exit {exitCode}]
+      {exitStatus && (
+        <span
+          className={cn(
+            "text-xs font-mono tabular-nums",
+            exitStatus.failed ? "text-status-error" : "text-text-secondary"
+          )}
+          role="status"
+          aria-live="off"
+        >
+          {exitStatus.badge}
         </span>
       )}
 

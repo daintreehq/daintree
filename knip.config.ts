@@ -110,6 +110,7 @@ const baseConfig: KnipConfig = {
     "src/components/Terminal/__preview__/autocompleteMenu.tsx",
     "src/components/Terminal/__preview__/sendToAgent.tsx",
     "src/components/Terminal/__preview__/subagentChip.tsx",
+    "src/components/Terminal/__preview__/agentIndicator.tsx",
     "src/components/Terminal/__preview__/hybridInput.tsx",
     "src/components/Terminal/__preview__/artifactOverlay.tsx",
     "src/components/Terminal/__preview__/banners.tsx",

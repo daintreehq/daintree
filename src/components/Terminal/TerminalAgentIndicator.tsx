@@ -20,6 +20,7 @@ import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTokenCount } from "@/utils/formatTokenCount";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { describeExitStatus } from "./exitStatus";
 
 const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
   input: "Input",
@@ -123,6 +124,7 @@ export function TerminalAgentIndicator({
   const headline = activity?.headline?.trim() || `Agent ${agentState}`;
   const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
   const stateLabel = getEffectiveStateLabel(agentState);
+  const exitStatus = isExited ? describeExitStatus(exitCode) : null;
   const showStateDuration =
     (agentState === "working" || agentState === "waiting" || agentState === "directing") &&
     lastStateChange != null &&
@@ -143,6 +145,7 @@ export function TerminalAgentIndicator({
           <div
             className={cn(
               "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
+              "transition-[background-color,border-color,color] duration-150 ease-out reduce-motion:transition-none",
               chipStyle,
               effectiveColor
             )}
@@ -172,8 +175,15 @@ export function TerminalAgentIndicator({
             {headline}
             {startedAt != null && <> · {formatElapsedDuration(now - startedAt)}</>}
           </span>
-          {isExited && exitCode != null && (
-            <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
+          {exitStatus && (
+            <span
+              className={cn(
+                "tabular-nums",
+                exitStatus.failed ? "text-status-error" : "text-text-secondary"
+              )}
+            >
+              {exitStatus.detail}
+            </span>
           )}
           <span>
             State: {stateLabel}
