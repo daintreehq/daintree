@@ -140,6 +140,10 @@ export const theme: BuiltInThemeSource = {
     // owes AA: 4.88:1 on the terminal background, still 2.7x quieter than the
     // foreground's 13.01:1. Split from `activity.idle`, which is a quiet dot.
     "terminal-bright-black": "#878981",
+    // Settled completion is demoted, not green (status-success-policy.md). This
+    // paints the project switcher's review tone; slate matches the agent's own
+    // completed check (`text-category-slate`).
+    "activity-completed": "#7B8C96",
     // Forge metadata re-cut off GitHub's brand hexes into this palette. All four
     // sit at 5.4-5.8:1 on `surface-panel`, below `text-secondary` (6.62:1), so a
     // forge chip is never louder than the prose it annotates.
