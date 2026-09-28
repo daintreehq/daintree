@@ -45,6 +45,10 @@ export function WorktreePathPicker({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="/path/to/worktree"
+        spellCheck={false}
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
         className="font-mono text-xs"
         disabled={isPending}
         invalid={hasError}

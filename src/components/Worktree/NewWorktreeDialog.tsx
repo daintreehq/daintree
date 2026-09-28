@@ -679,8 +679,14 @@ export function NewWorktreeDialog({
     });
 
     if (!result.valid) {
-      setValidationError(result.error!.message, result.error!.field);
+      const { message, field } = result.error!;
+      setValidationError(message, field);
       isCreatingRef.current = false;
+      // The error lands under its field, so the cursor goes there too: a
+      // failed Create from the button or Cmd/Ctrl+Enter otherwise leaves focus
+      // somewhere the message is not. Each error field is named by its
+      // control's id.
+      if (field) document.getElementById(field)?.focus();
       return;
     }
 
