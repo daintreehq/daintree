@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, CircleCheck, Loader2, RotateCw, CircleX } from "lucide-react";
 import { m, useReducedMotion } from "framer-motion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -30,6 +30,17 @@ export function SystemRequirementsSection({
   if (allDone && shownFatal !== hasFatalFailure) setShownFatal(hasFatalFailure);
 
   const isExpanded = userExpanded || shownFatal;
+
+  // A re-check that clears the failure folds the panel and removes "Check
+  // again" with focus still on it. Hand focus to the disclosure that replaces
+  // it. Removal fires no blur, so the flag is still set when the swap lands.
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const checkAgainFocusedRef = useRef(false);
+  useEffect(() => {
+    if (shownFatal || !checkAgainFocusedRef.current) return;
+    checkAgainFocusedRef.current = false;
+    toggleRef.current?.focus();
+  }, [shownFatal]);
 
   useEffect(() => {
     onFatalFailureChange(hasFatalFailure);
@@ -117,6 +128,7 @@ export function SystemRequirementsSection({
         <div className="flex items-center gap-2.5 w-full px-3 py-2.5">{headerSummary}</div>
       ) : (
         <button
+          ref={toggleRef}
           type="button"
           onClick={() => setUserExpanded((v) => !v)}
           aria-expanded={isExpanded}
@@ -209,6 +221,12 @@ export function SystemRequirementsSection({
                 size="xs"
                 onClick={() => {
                   if (!isChecking) void runCheck();
+                }}
+                onFocus={() => {
+                  checkAgainFocusedRef.current = true;
+                }}
+                onBlur={() => {
+                  checkAgainFocusedRef.current = false;
                 }}
                 // Busy, not unavailable: the rotating glyph says so, and the
                 // button keeps keyboard focus rather than dropping it to <body>.

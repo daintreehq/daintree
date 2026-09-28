@@ -43,13 +43,6 @@ const ALLOWED: Record<string, string> = {
     "a toast action morphs spinner → check → success label in place; the sequence is the signal",
 };
 
-// Sites a parallel change already fixes. Exempt from the stale check so the two
-// changes can land in either order; delete each once both have merged.
-const PENDING_ELSEWHERE: Record<string, string> = {
-  "src/components/Project/CreateProjectFolderDialog.tsx:label":
-    "dialog footer moves to AppDialog's `loading` in the dialogs change",
-};
-
 function tsxFiles(dir: string, found: string[] = []): string[] {
   if (!fs.existsSync(dir)) return found;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -144,7 +137,7 @@ describe("Button state contract", () => {
 
   it("shows busy and the icon gap through Button, never by hand", () => {
     const offenders = [...hits.entries()]
-      .filter(([key]) => !(key in ALLOWED) && !(key in PENDING_ELSEWHERE))
+      .filter(([key]) => !(key in ALLOWED))
       .map(([key, lines]) => `${key} @ ${lines.join(",")}`);
     expect(offenders).toEqual([]);
   });

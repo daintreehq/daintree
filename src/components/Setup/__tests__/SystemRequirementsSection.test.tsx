@@ -184,4 +184,23 @@ describe("SystemRequirementsSection collapsed panel inert", () => {
       Object.assign(healthCheckState, saved);
     }
   });
+
+  it("hands focus to the disclosure when a re-check clears the failure", () => {
+    const saved = { ...healthCheckState };
+    Object.assign(healthCheckState, { hasFatalFailure: true, allDone: true, isChecking: false });
+    try {
+      const { container, rerender } = renderSection();
+      const checkAgain = document.querySelector<HTMLButtonElement>('[role="alert"] button')!;
+      act(() => checkAgain.focus());
+      expect(document.activeElement).toBe(checkAgain);
+
+      Object.assign(healthCheckState, { hasFatalFailure: false, allDone: true, isChecking: false });
+      rerender(
+        <SystemRequirementsSection onFatalFailureChange={vi.fn()} onCheckingChange={vi.fn()} />
+      );
+      expect(document.activeElement).toBe(getToggle(container));
+    } finally {
+      Object.assign(healthCheckState, saved);
+    }
+  });
 });

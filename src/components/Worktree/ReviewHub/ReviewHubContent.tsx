@@ -1943,6 +1943,7 @@ export function ReviewHubContent({
                 }}
                 // Not `disabled`: pressing it would drop keyboard focus to the page.
                 aria-disabled={loading || undefined}
+                aria-busy={loading || isBackgroundRefreshing || undefined}
                 className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                 aria-label="Refresh"
               >

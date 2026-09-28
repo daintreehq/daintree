@@ -231,6 +231,11 @@ export function AgentCliStep({
     installableIds.length === 1
       ? `Install ${AGENT_REGISTRY[installableIds[0]!]?.name ?? "agent"}`
       : "Install selected agents";
+  // The label chosen when the batch started, held until it ends: the installable
+  // set shrinks as agents finish, and a busy button keeps its accessible name.
+  const [batchLabel, setBatchLabel] = useState<string | null>(null);
+  if (isBatchRunning && batchLabel === null) setBatchLabel(installAllLabel);
+  if (!isBatchRunning && batchLabel !== null) setBatchLabel(null);
 
   const updateAgent = useAgentSettingsStore((s) => s.updateAgent);
   const agentSettings = useAgentSettingsStore((s) => s.settings?.agents);
@@ -427,7 +432,7 @@ export function AgentCliStep({
           data-testid="agent-cli-install-primary"
         >
           <Download aria-hidden="true" />
-          {installAllLabel}
+          {batchLabel ?? installAllLabel}
         </Button>
       )}
 
