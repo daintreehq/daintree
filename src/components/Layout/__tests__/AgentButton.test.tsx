@@ -210,17 +210,20 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     onClick,
+    onKeyDown,
     className,
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
     onClick?: (e: React.MouseEvent) => void;
+    onKeyDown?: (e: React.KeyboardEvent) => void;
     className?: string;
   }) => (
     <div
       role="menuitem"
       data-testid="preset-item"
       className={className}
+      onKeyDown={onKeyDown}
       onClick={(e) => {
         onSelect?.(e as unknown as Event);
         onClick?.(e);
@@ -352,7 +355,7 @@ vi.mock("@/components/ui/context-menu", () => ({
 
 vi.mock("lucide-react", () => ({
   Settings2: () => <span data-testid="settings-icon" />,
-  ChevronDown: () => <span data-testid="chevron-icon" />,
+  ChevronDown: (props: Record<string, unknown>) => <span data-testid="chevron-icon" {...props} />,
   ExternalLink: () => <span data-testid="external-link-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
@@ -855,6 +858,99 @@ describe("AgentButton preset UX", () => {
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
       expect(dispatchMock).not.toHaveBeenCalled();
     });
+
+    // Keyboard twin of the gutter, mirroring the plugin tray's P-to-pin: D on a
+    // row sets the default without launching; Enter/Space keep launching.
+    function pressD(row: HTMLElement, init: Partial<KeyboardEventInit> = {}) {
+      return fireEvent.keyDown(row, { key: "d", ...init });
+    }
+
+    it("D on a preset row persists the worktree default without launching or closing", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      act(() => dropdownOnOpenChange!(true));
+      // fireEvent returns false when the handler preventDefaults, which is what
+      // keeps Radix's typeahead from also acting on the key.
+      expect(pressD(rowByText(getAllByTestId, "Beta"), { key: "D" })).toBe(false);
+
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-beta");
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(dropdownOpenState).toBe(true);
+    });
+
+    it("D on Agent default clears both scopes, same as its gutter", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: { presetId: "user-alpha", worktreePresets: { "wt-A": "user-alpha" } },
+      });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      pressD(rowByText(getAllByTestId, "Agent default"));
+
+      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", undefined);
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves other keys and modified D presses to their own handlers", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      const row = rowByText(getAllByTestId, "Alpha");
+      for (const init of [
+        { key: "Enter" },
+        { key: " " },
+        { key: "f" },
+        { key: "d", metaKey: true },
+        { key: "d", ctrlKey: true },
+        { key: "d", altKey: true },
+      ]) {
+        expect(fireEvent.keyDown(row, init), JSON.stringify(init)).toBe(true);
+      }
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+      expect(updateAgentMock).not.toHaveBeenCalled();
+    });
+
+    it("announces the default on exactly the checked row and the D hint on every other", () => {
+      const hintsFor = (settings: Record<string, unknown>) => {
+        mockActiveWorktreeId = "wt-A";
+        mockSettings = settingsWith({ claude: settings });
+        mockMergedPresetsFn = () => [
+          { id: "user-alpha", name: "Alpha" },
+          { id: "user-beta", name: "Beta" },
+        ];
+        const { getAllByTestId, unmount } = render(
+          <AgentButton type="claude" availability="ready" />
+        );
+        const rows = (getAllByTestId("preset-item") as HTMLElement[]).filter((r) =>
+          r.querySelector('[data-zone="gutter"]')
+        );
+        const result = rows.map((r) => ({
+          checked: !!r.querySelector('[data-zone="gutter"] [data-testid="check-icon"]'),
+          hint: r.querySelector(":scope > .sr-only")?.textContent ?? null,
+        }));
+        unmount();
+        return result;
+      };
+
+      for (const settings of [{}, { worktreePresets: { "wt-A": "user-beta" } }]) {
+        const rows = hintsFor(settings);
+        expect(rows).toHaveLength(3);
+        const announcedDefault = rows.filter((r) => /current default/i.test(r.hint ?? ""));
+        expect(announcedDefault).toHaveLength(1);
+        expect(announcedDefault[0]!.checked).toBe(true);
+        for (const r of rows.filter((r) => !r.checked)) expect(r.hint).toMatch(/press d/i);
+      }
+    });
   });
 
   describe("tooltip surfaces active preset", () => {
@@ -1341,6 +1437,29 @@ describe("AgentButton preset UX", () => {
       const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary?.getAttribute("aria-label")).toBe("Start Claude");
+    });
+  });
+
+  describe("disclosure chevron", () => {
+    // The trigger's data-state belongs to the wrapping TooltipTrigger, so the
+    // turn has to key off aria-expanded on the chevron's own button, and it has
+    // to carry the marker the global reduced-motion rule targets.
+    it("turns only on its own trigger's aria-expanded and is reachable by reduced motion", () => {
+      mockMergedPresetsFn = () => [{ id: "only", name: "Only" }];
+      const { getByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      const chevron = getByTestId("chevron-icon");
+      expect(chevron.hasAttribute("data-animated-chevron")).toBe(true);
+      expect(chevron.getAttribute("aria-hidden")).toBe("true");
+
+      const tokens = (chevron.getAttribute("class") ?? "").split(/\s+/);
+      const turns = tokens.filter((t) => /(^|:)rotate-/.test(t));
+      expect(turns.length).toBeGreaterThan(0);
+      const trigger = chevron.closest("button")!;
+      for (const turn of turns) {
+        const group = /^group-aria-expanded\/([\w-]+):rotate-/.exec(turn);
+        expect(group, turn).not.toBeNull();
+        expect(trigger.classList.contains(`group/${group![1]}`), turn).toBe(true);
+      }
     });
   });
 
