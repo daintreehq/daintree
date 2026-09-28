@@ -1003,18 +1003,23 @@ export function EnvVarEditor({
                     <TooltipContent side="bottom">Revert to inherited value</TooltipContent>
                   </Tooltip>
                 ) : (
-                  <button
-                    type="button"
-                    className={cn(
-                      ENV_CELL_ACTION,
-                      "text-status-error hover:text-status-error hover:bg-status-error/10"
-                    )}
-                    aria-label={`Delete ${trimmedKey || "unnamed variable"} (row ${rowIndex + 1})`}
-                    onClick={() => handleRemove(row.rowId)}
-                    data-testid="env-editor-remove"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className={cn(
+                          ENV_CELL_ACTION,
+                          "text-status-error hover:text-status-error hover:bg-status-error/10"
+                        )}
+                        aria-label={`Delete ${trimmedKey || "unnamed variable"} (row ${rowIndex + 1})`}
+                        onClick={() => handleRemove(row.rowId)}
+                        data-testid="env-editor-remove"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Delete variable</TooltipContent>
+                  </Tooltip>
                 )}
               </div>
             </div>

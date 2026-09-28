@@ -439,20 +439,25 @@ export function GeneralTab({
               control={({ labelId, descriptionId }) => (
                 <div className="flex items-center gap-3">
                   <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
-                    <PopoverTrigger asChild>
-                      <button
-                        type="button"
-                        aria-label="Change project emoji"
-                        className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-border-strong cursor-pointer group"
-                        style={{
-                          background: getProjectGradient(color),
-                        }}
-                      >
-                        <span className="text-2xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
-                          {emoji}
-                        </span>
-                      </button>
-                    </PopoverTrigger>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label="Change project emoji"
+                            className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-border-strong cursor-pointer group"
+                            style={{
+                              background: getProjectGradient(color),
+                            }}
+                          >
+                            <span className="text-2xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
+                              {emoji}
+                            </span>
+                          </button>
+                        </PopoverTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Change project emoji</TooltipContent>
+                    </Tooltip>
                     <PopoverContent className="w-auto p-0">
                       <EmojiPicker
                         currentEmoji={emoji}
