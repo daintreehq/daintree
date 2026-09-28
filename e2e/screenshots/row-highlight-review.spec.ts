@@ -171,8 +171,11 @@ test.beforeAll(async () => {
   if (outReal === repoRoot || outReal.startsWith(repoRoot + path.sep)) {
     throw new Error(`DAINTREE_SHOT_DIR must be outside the repo (${OUT_DIR})`);
   }
+  // Only this harness's own frames and sidecars — a shared review directory can
+  // hold other captures that must survive a re-run.
+  const owned = new RegExp(`^(?:${SURFACES.map((s) => s.slug).join("|")})--.+\\.(?:png|json)$`);
   for (const file of readdirSync(OUT_DIR)) {
-    if (file.endsWith(".png") || file.endsWith(".json")) rmSync(path.join(OUT_DIR, file));
+    if (owned.test(file)) rmSync(path.join(OUT_DIR, file));
   }
   server = await startPreviewServer();
 });
@@ -375,7 +378,9 @@ test("highlighted-row language — every list family", async ({ page }) => {
     await page.emulateMedia({ contrast: null, forcedColors: null });
   }
 
-  const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
+  const onDisk = readdirSync(OUT_DIR).filter(
+    (f) => f.endsWith(".png") && surfaces.some((s) => f.startsWith(`${s.slug}--`))
+  );
   expect(written.length).toBe(planned);
   expect(onDisk.length).toBe(planned);
   console.log(`[row-highlight] ${onDisk.length} PNGs in ${OUT_DIR}`);
