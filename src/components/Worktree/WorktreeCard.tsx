@@ -1205,7 +1205,10 @@ export function WorktreeCard({
                 aria-label="Select worktree"
                 tabIndex={-1}
                 onClick={handleCheckboxClick}
-                className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-overlay-soft"
+                className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-overlay-soft",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                )}
               >
                 <CheckboxGlyph checked={isSelected} />
               </button>

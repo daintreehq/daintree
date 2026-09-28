@@ -64,7 +64,7 @@ function containsGlyph(node: ts.Node): boolean {
 
 interface Violation {
   file: string;
-  kind: "native" | "hand-rolled" | "radix-import";
+  kind: "native" | "hand-rolled" | "radix-import" | "variants";
   line: number;
 }
 
@@ -92,12 +92,20 @@ function scan(): Violation[] {
         }
         // A button may carry the role when a whole target needs it, as long as
         // the box it draws is the shared glyph.
-        if (/^[a-z]/.test(tag) && attrText(node, "role") === "checkbox") {
+        // An element that names itself a checkbox slot (`data-overview-checkbox`)
+        // is drawing one, whatever role it carries.
+        const namesCheckbox = node.attributes.properties.some(
+          (p) => ts.isJsxAttribute(p) && /^data-[\w-]*checkbox/.test(p.name.getText())
+        );
+        if (/^[a-z]/.test(tag) && (attrText(node, "role") === "checkbox" || namesCheckbox)) {
           const element = ts.isJsxOpeningElement(node) ? node.parent : node;
           if (!containsGlyph(element)) {
             violations.push({ file, kind: "hand-rolled", line: lineOf(node) });
           }
         }
+      }
+      if (ts.isIdentifier(node) && node.text === "checkboxVariants") {
+        violations.push({ file, kind: "variants", line: lineOf(node) });
       }
       ts.forEachChild(node, visit);
     };
@@ -125,6 +133,13 @@ describe("checkbox primitive contract", () => {
   it("hand-rolls no checkbox box", () => {
     const offenders = violations
       .filter((v) => v.kind === "hand-rolled")
+      .map((v) => `${v.file}:${v.line}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it("draws a presentational box only through CheckboxGlyph, never the raw variants", () => {
+    const offenders = violations
+      .filter((v) => v.kind === "variants")
       .map((v) => `${v.file}:${v.line}`);
     expect(offenders).toEqual([]);
   });
