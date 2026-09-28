@@ -356,6 +356,13 @@ test("motion — surfaces mid-flight, full and reduced motion", async () => {
     await settle(page, 2000);
     await dismissBlockingPalette(page);
 
+    // Load the lazy Theme browser chunk once, so its captured entrance is the
+    // sheet moving rather than an empty wrapper waiting on Suspense.
+    await dispatch(page, "app.theme.browser.open");
+    await settle(page, 1500);
+    await closeOverlays(page);
+    await settle(page, 500);
+
     await runPass(page, "full");
 
     await dispatch(page, "preferences.reduceAnimations.set", { value: true });
