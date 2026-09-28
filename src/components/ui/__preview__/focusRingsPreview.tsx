@@ -19,6 +19,7 @@ import {
   listPushCommitsFrom,
 } from "@/components/Layout/__preview__/localCommitsFixtures";
 import { QuickRunToggle } from "@/components/Project/QuickRun";
+import { DockPopoverResizeHandle } from "@/components/Layout/DockPopoverResizeHandle";
 import "@/index.css";
 
 /**
@@ -641,6 +642,26 @@ const loadControls: Loader = async () => {
         </Shot>
         <Shot id="segmented" surface="panel">
           <Segmented />
+        </Shot>
+        <Shot id="dock-resize-handle" surface="panel">
+          <div className="relative h-24 w-72 overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated">
+            <DockPopoverResizeHandle
+              isResizing={false}
+              handleProps={{
+                role: "separator",
+                "aria-orientation": "horizontal",
+                "aria-label": "Resize terminal popover",
+                "aria-valuenow": 320,
+                "aria-valuemin": 200,
+                "aria-valuemax": 600,
+                tabIndex: 0,
+                "data-testid": "dock-popover-resize-handle",
+                onMouseDown: () => {},
+                onKeyDown: () => {},
+                onDoubleClick: () => {},
+              }}
+            />
+          </div>
         </Shot>
         <Shot id="quick-run-toggle" surface="panel">
           <div className="flex h-7 w-72 items-stretch overflow-hidden border-t border-border-default">

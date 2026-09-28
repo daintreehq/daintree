@@ -227,6 +227,15 @@ const TARGETS: Target[] = [
     locate: (_p, shot) => shot.getByRole("radio", { name: "Light" }),
   },
   {
+    id: "dock-resize-handle",
+    fixture: "controls",
+    source: [
+      "src/components/Layout/DockPopoverResizeHandle.tsx",
+      "focus-visible:-outline-offset-2",
+    ],
+    locate: (_p, shot) => shot.getByTestId("dock-popover-resize-handle"),
+  },
+  {
     id: "quick-run-toggle",
     fixture: "controls",
     source: ["src/components/Project/QuickRun.tsx", 'data-quick-run-toggle=""'],
