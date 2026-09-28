@@ -137,7 +137,7 @@ export function EnvVarRow({
               onClick={onToggleReveal}
               className="absolute right-1 top-1/2 -translate-y-1/2 [&_svg]:size-4"
               aria-pressed={revealed}
-              aria-label={`${revealed ? "Hide" : "Show"} value${name ? ` of ${name}` : ""}`}
+              aria-label={`Show value${name ? ` of ${name}` : ""}`}
             >
               {revealed ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
             </Button>

@@ -928,7 +928,7 @@ export function EnvVarEditor({
                           type="button"
                           onClick={() => toggleReveal(row.rowId)}
                           aria-pressed={isRevealed}
-                          aria-label={`${isRevealed ? "Hide" : "Show"} value${trimmedKey ? ` of ${trimmedKey}` : ""}`}
+                          aria-label={`Show value${trimmedKey ? ` of ${trimmedKey}` : ""}`}
                           className={cn(
                             ENV_CELL_ACTION,
                             "absolute right-1.5 top-1/2 -translate-y-1/2"
