@@ -101,7 +101,6 @@ export function MarkdownEditorStatusBar({
         <Button
           variant="ghost"
           size="xs"
-          className="text-xs"
           onClick={onSave}
           // `saving` is deliberately absent from `disabled` and carried by
           // `loading` instead: the primitive blocks activation through ARIA
