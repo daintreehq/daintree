@@ -234,8 +234,11 @@ export function AgentCliStep({
   // The label chosen when the batch started, held until it ends: the installable
   // set shrinks as agents finish, and a busy button keeps its accessible name.
   const [batchLabel, setBatchLabel] = useState<string | null>(null);
-  if (isBatchRunning && batchLabel === null) setBatchLabel(installAllLabel);
-  if (!isBatchRunning && batchLabel !== null) setBatchLabel(null);
+  const [wasBatchRunning, setWasBatchRunning] = useState(isBatchRunning);
+  if (wasBatchRunning !== isBatchRunning) {
+    setWasBatchRunning(isBatchRunning);
+    if (!isBatchRunning) setBatchLabel(null);
+  }
 
   const updateAgent = useAgentSettingsStore((s) => s.updateAgent);
   const agentSettings = useAgentSettingsStore((s) => s.settings?.agents);
@@ -427,7 +430,12 @@ export function AgentCliStep({
         <Button
           variant={hasUsableSelection ? "outline" : "contrast"}
           loading={isBatchRunning}
-          onClick={() => void handleInstallAll(installableIds)}
+          onClick={() => {
+            // Taken at the press: the handler starts marking agents installing
+            // before the next render could read the label.
+            setBatchLabel(installAllLabel);
+            void handleInstallAll(installableIds);
+          }}
           className="w-full"
           data-testid="agent-cli-install-primary"
         >
