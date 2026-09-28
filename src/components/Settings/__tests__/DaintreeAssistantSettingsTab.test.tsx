@@ -1392,7 +1392,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(screen.getByLabelText("Model")).toBeTruthy();
 
     // The select stub wraps its row in a <label>, which renames nested buttons; find by text.
-    fireEvent.click(screen.getByText("Retry", { selector: "button" }));
+    fireEvent.click(screen.getByText("Retry").closest("button")!);
 
     await waitFor(() => expect(getResolvedModelList).toHaveBeenCalledTimes(2));
     await waitFor(() =>

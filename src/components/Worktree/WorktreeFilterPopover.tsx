@@ -125,8 +125,8 @@ function FilterSection({
           </button>
         </TruncatedTooltip>
         {showClear && (
-          <button
-            type="button"
+          <Button
+            variant="link"
             onClick={(e) => {
               e.stopPropagation();
               // The Clear button hides itself once activeCount hits 0, so move
@@ -140,10 +140,10 @@ function FilterSection({
             // Underlined rather than a bare colour step: at rest this sat at
             // the same tone as the heading beside it, so nothing marked it as
             // a control rather than a second label.
-            className="absolute inset-y-0 right-8.5 my-auto flex h-6 items-center rounded-[var(--radius-sm)] px-1 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            className="absolute inset-y-0 right-8.5 my-auto h-6 px-1 text-2xs focus-visible:-outline-offset-2"
           >
             Clear
-          </button>
+          </Button>
         )}
       </div>
       {/* Animated reveal so the body honors what the rotating chevron
@@ -320,18 +320,18 @@ function ChipGrid<T extends string>({
         />
       ))}
       {hiddenCount > 0 && (
-        <button
-          type="button"
+        <Button
+          variant="link"
           onClick={() => setShowAll((v) => !v)}
           aria-expanded={showAll}
-          className="inline-flex items-center self-center rounded-[var(--radius-sm)] py-0.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+          className="self-center py-0.5 text-2xs"
         >
           {showAll
             ? "Show fewer"
             : hiddenAllDead
               ? `${hiddenCount} with no matches`
               : `${hiddenCount} more`}
-        </button>
+        </Button>
       )}
     </>
   );

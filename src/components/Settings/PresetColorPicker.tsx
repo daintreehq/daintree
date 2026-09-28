@@ -5,6 +5,7 @@ import { contrastRatio } from "@shared/theme";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { inputVariants } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 /**
  * Preset color picker — inline HSV picker with a curated palette.
@@ -171,24 +172,26 @@ export function PresetColorPicker({
             data-testid="preset-color-hex-input"
           />
           <div className="flex-1" />
-          <button
-            type="button"
-            className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors"
+          <Button
+            variant="ghost"
+            size="xs"
+            className="px-1.5 text-2xs"
             onClick={handleClear}
             data-testid="preset-color-clear"
           >
-            <X size={11} />
+            <X aria-hidden="true" />
             Clear
-          </button>
-          <button
-            type="button"
-            className="text-2xs font-medium text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            className="px-1.5 text-2xs"
             onClick={handleDone}
             disabled={!isValidHex(draftColor)}
             data-testid="preset-color-done"
           >
             Done
-          </button>
+          </Button>
         </div>
       </PopoverContent>
     </Popover>

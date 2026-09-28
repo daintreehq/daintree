@@ -19,6 +19,7 @@ import {
   GitMerge,
   WifiOff,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import {
   SegmentedRadioGroup,
@@ -545,13 +546,15 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <div className="flex items-center gap-2 text-text-primary" role="alert">
             <AlertCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
             <span className="text-xs">{error}</span>
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={handleRefresh}
-              className="pulse-control ml-auto rounded-md p-1 text-text-secondary transition-colors hover:text-text-primary"
+              className="pulse-control ml-auto"
               aria-label="Retry now"
             >
-              <RefreshCw className="w-3 h-3" aria-hidden="true" />
-            </button>
+              <RefreshCw aria-hidden="true" />
+            </Button>
           </div>
           {isRetrying && (
             <div
@@ -625,17 +628,19 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             onChange={(next) => handleRangeChange(RANGE_DAYS[next])}
           />
 
-          <button
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={() => {
               if (!isLoading) handleRefresh();
             }}
             // Not `disabled`: pressing it would drop keyboard focus to the page.
             aria-disabled={isLoading}
-            className="pulse-control rounded-md p-1.5 text-text-secondary transition-colors hover:text-text-primary aria-disabled:opacity-50"
+            className="pulse-control aria-disabled:opacity-50"
             aria-label="Refresh"
           >
             <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -679,16 +684,17 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <div className="border-t border-border-default pt-3">
           <PulseSummary pulse={pulse} />
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control mt-2 inline-flex items-center text-2xs text-text-secondary transition-colors hover:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
+            className="pulse-control mt-2 -ml-2.5 text-2xs"
             aria-label={`Refresh — last updated ${updatedLabel}`}
             data-testid="pulse-last-updated"
           >
             <span>Updated {updatedLabel}</span>
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -894,16 +894,13 @@ Performance:
                 <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
                   Retry
                 </Button>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="xs"
                   aria-expanded={showErrorDetail}
                   aria-controls={errorDetailId}
                   onClick={() => setShowErrorDetail((value) => !value)}
-                  className={cn(
-                    "flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-1 text-xs text-text-secondary",
-                    "transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-                  )}
+                  className="px-1.5 text-xs"
                 >
                   <ChevronRight
                     aria-hidden="true"
@@ -914,7 +911,7 @@ Performance:
                     )}
                   />
                   Technical details
-                </button>
+                </Button>
               </div>
               <p
                 id={errorDetailId}

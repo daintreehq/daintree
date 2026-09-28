@@ -6,6 +6,7 @@ import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { Button } from "@/components/ui/button";
 
 interface SystemRequirementsSectionProps {
   onFatalFailureChange: (hasFatal: boolean) => void;
@@ -114,7 +115,7 @@ export function SystemRequirementsSection({
           onClick={() => setUserExpanded((v) => !v)}
           aria-expanded={isExpanded}
           aria-controls="system-requirements-panel"
-          className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left"
+          className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left cursor-pointer rounded-[var(--radius-md)] transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <ChevronDown
             className={`w-3.5 h-3.5 text-text-secondary shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
@@ -197,28 +198,30 @@ export function SystemRequirementsSection({
                   );
                 })}
               </div>
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="xs"
                 onClick={() => void runCheck()}
                 disabled={isChecking}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 py-1 text-xs text-text-primary ring-1 ring-border-strong bg-surface-panel-elevated transition-colors hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                className="shrink-0 gap-1.5 text-xs"
               >
                 <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
                 {isChecking ? "Checking…" : "Check again"}
-              </button>
+              </Button>
             </div>
           )}
 
           {!(allDone && hasFatalFailure) && (
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="xs"
               onClick={() => void runCheck()}
               disabled={isChecking}
-              className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              className="gap-1.5 text-xs"
             >
               <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
               {isChecking ? "Checking…" : "Re-check"}
-            </button>
+            </Button>
           )}
         </div>
       </m.div>

@@ -1307,9 +1307,9 @@ function PrivacyStep({
       />
       {/* Underlined at rest: previously this read as a third line of body
           copy and only became identifiable as a control on hover. */}
-      <button
-        type="button"
-        className="text-xs text-text-link underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-xs"
+      <Button
+        variant="link"
+        className="text-xs"
         onClick={() =>
           void actionService.dispatch(
             "telemetry.togglePreview",
@@ -1319,7 +1319,7 @@ function PrivacyStep({
         }
       >
         Preview what would be sent
-      </button>
+      </Button>
     </section>
   );
 }

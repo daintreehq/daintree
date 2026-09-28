@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { cn } from "@/lib/utils";
 import {
   keybindingService,
   type KeyScope,
@@ -159,16 +158,12 @@ function ShortcutRow({
         control={
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <Button
                 ref={editRef}
-                type="button"
+                variant="subtle"
+                size="xs"
                 onClick={onEdit}
-                className={cn(
-                  "inline-flex items-center h-6 px-2 rounded-[var(--radius-sm)]",
-                  "ring-1 ring-border-strong text-text-secondary",
-                  "hover:bg-overlay-soft hover:text-text-primary",
-                  "transition-colors duration-150 ease-out"
-                )}
+                className="px-2 font-normal bg-transparent hover:bg-overlay-hover"
               >
                 {binding.effectiveCombo ? (
                   <>
@@ -191,7 +186,7 @@ function ShortcutRow({
                     Add shortcut<span className="sr-only"> for {name}</span>
                   </span>
                 )}
-              </button>
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
               {binding.effectiveCombo ? "Change shortcut" : "Add shortcut"}

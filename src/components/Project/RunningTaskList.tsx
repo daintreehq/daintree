@@ -243,7 +243,7 @@ function TaskOverflow({
         aria-label={`Show ${tasks.length} earlier ${tasks.length === 1 ? "task" : "tasks"}`}
         className={cn(
           "flex w-full min-h-6 items-center gap-0.5 px-2 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
-          "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]",
+          "text-text-secondary hover:text-text-primary hover:bg-overlay-subtle cursor-pointer",
           "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
@@ -308,7 +308,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       data-task-row={terminal.id}
       className={cn(
         "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono group",
-        "hover:bg-tint/[0.04] transition-colors"
+        "hover:bg-overlay-subtle transition-colors"
       )}
     >
       {/* Status indicator */}
@@ -319,7 +319,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
         type="button"
         data-task-focus=""
         onClick={() => onFocus(terminal.id)}
-        className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
+        className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0 rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         title={command}
       >
         {command}

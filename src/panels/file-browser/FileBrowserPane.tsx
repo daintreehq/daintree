@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
@@ -1533,13 +1534,9 @@ export function FileBrowserPane({
             }
             action={
               canRevealDotfiles ? (
-                <button
-                  type="button"
-                  onClick={handleShowDotfiles}
-                  className="text-xs underline underline-offset-2"
-                >
+                <Button variant="subtle" size="sm" onClick={handleShowDotfiles}>
                   Show dotfiles
-                </button>
+                </Button>
               ) : undefined
             }
           />

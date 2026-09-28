@@ -165,7 +165,7 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
                   { source }
                 );
               }}
-              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-emphasis hover:text-text-primary group-data-[highlighted]/wt-row:opacity-100"
+              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-hover hover:text-text-primary group-data-[highlighted]/wt-row:opacity-100"
             >
               <PanelBottom className="h-3 w-3" />
             </span>

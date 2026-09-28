@@ -580,13 +580,9 @@ export function VoiceInputSettingsTab() {
                     ? "Detecting devices…"
                     : "The microphone dictation records from"}
                   {" · "}
-                  <button
-                    type="button"
-                    onClick={refreshDevices}
-                    className="text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors"
-                  >
+                  <Button variant="link" onClick={refreshDevices}>
                     Refresh list
-                  </button>
+                  </Button>
                 </>
               }
               error={devicesError ?? undefined}
@@ -942,18 +938,15 @@ function ApiKeyRow({
                   spellCheck={false}
                   disabled={disabled || busy}
                 />
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={() => setShowKey((v) => !v)}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary hover:text-text-primary transition-colors"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 [&_svg]:size-3.5"
                   aria-label={showKey ? "Hide API key" : "Show API key"}
                 >
-                  {showKey ? (
-                    <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-                  ) : (
-                    <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-                  )}
-                </button>
+                  {showKey ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </Button>
               </div>
               <Button
                 onClick={() => void handleSave()}

@@ -240,7 +240,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                       aria-label={title}
                       aria-describedby={`qa-desc-${id}`}
                       className={cn(
-                        "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1800px]/welcome:p-4",
+                        "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left cursor-pointer @min-[1800px]/welcome:p-4",
                         // Room for the secondary action pinned in the corner.
                         secondary && "h-full w-full pr-10 @min-[1800px]/welcome:pr-11",
                         "transition-colors duration-150",
@@ -278,18 +278,15 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                       {card}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <button
-                            type="button"
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
                             onClick={secondary.onClick}
                             aria-label={secondary.label}
-                            className={cn(
-                              "absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary",
-                              "transition-colors duration-150 hover:bg-overlay-medium hover:text-text-primary",
-                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                            )}
+                            className="absolute right-2 top-2 [&_svg]:size-4"
                           >
                             <AppWindow className="h-4 w-4" aria-hidden="true" />
-                          </button>
+                          </Button>
                         </TooltipTrigger>
                         <TooltipContent side="bottom">{secondary.label}</TooltipContent>
                       </Tooltip>
@@ -334,17 +331,19 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
             {/* The way back into setup once the banner is gone — declined or
                 finished, a user can always reach it again from here. */}
             {onboardingLoaded && setupBannerDismissed && (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => openAgentSetup(false)}
-                className="flex items-center gap-1.5 rounded-[var(--radius-xs)] hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                className="gap-1.5 text-xs"
               >
                 <Sparkles className="h-3 w-3" aria-hidden="true" />
                 Set up agents
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => {
                 const promise = window.electron?.system?.openExternal(
                   "https://daintree.org/newsletter"
@@ -353,12 +352,12 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   safeFireAndForget(promise, { context: "Opening newsletter link" });
                 }
               }}
-              className="flex items-center gap-1.5 rounded-[var(--radius-xs)] hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="gap-1.5 text-xs"
             >
               <Newspaper className="h-3 w-3" aria-hidden="true" />
               Newsletter
               <ExternalLink className="h-2.5 w-2.5" />
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -464,7 +463,7 @@ function TopProjects({
             type="button"
             onClick={() => void onSelect(project.id)}
             className={cn(
-              "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left transition-colors @min-[1800px]/welcome:px-4 @min-[1800px]/welcome:py-3",
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left cursor-pointer transition-colors @min-[1800px]/welcome:px-4 @min-[1800px]/welcome:py-3",
               "hover:bg-overlay-soft",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             )}
@@ -555,13 +554,14 @@ function AgentSetupBannerCard() {
                 <Sparkles className="h-3.5 w-3.5" />
                 Set up agents
               </Button>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={handleDismiss}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors @min-[1920px]/welcome:text-sm"
+                className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
               >
                 Not now
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -674,13 +674,14 @@ function AgentWelcomeCard() {
                 <Pin className="h-3.5 w-3.5" />
                 Pin all to toolbar
               </Button>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={handleDismiss}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors @min-[1920px]/welcome:text-sm"
+                className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
               >
                 Not now
-              </button>
+              </Button>
             </div>
             {pinError && (
               <p

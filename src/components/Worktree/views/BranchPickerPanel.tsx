@@ -1,6 +1,7 @@
 import { PopoverContent } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
@@ -123,13 +124,9 @@ export function BranchPickerPanel({
               scale="popover"
               title={`No matches for "${trimmedQuery}"`}
               action={
-                <button
-                  type="button"
-                  onClick={() => setQuery("")}
-                  className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
-                >
+                <Button variant="subtle" size="sm" onClick={() => setQuery("")}>
                   Clear search
-                </button>
+                </Button>
               }
             />
           ) : (

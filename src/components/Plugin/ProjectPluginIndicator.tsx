@@ -118,7 +118,7 @@ export function ProjectPluginIndicator() {
           // Same row as the resource readout at the foot of the footer: identical
           // height, dot and type. The footer owns the surface and the divider,
           // so this row carries neither and reads as part of that one unit.
-          className="px-4 py-1.5 min-h-7 flex items-center shrink-0 w-full hover:bg-overlay-soft transition-colors cursor-pointer"
+          className="px-4 py-1.5 min-h-7 flex items-center shrink-0 w-full hover:bg-overlay-subtle transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <div className="flex items-center gap-2 min-w-0">
             {/* Hollow, matching the footer's idle mark: staged plugins are a
@@ -266,16 +266,16 @@ export function ProjectPluginIndicator() {
 
             {error && <p className="text-3xs text-status-danger leading-tight">{error}</p>}
 
-            <button
-              type="button"
+            <Button
+              variant="link"
               onClick={() => {
                 setOpen(false);
                 usePluginManagerStore.getState().open();
               }}
-              className="text-2xs text-text-secondary hover:text-text-primary underline underline-offset-2 rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="text-2xs"
             >
               Open plugin manager
-            </button>
+            </Button>
           </div>
         </div>
       </PopoverContent>

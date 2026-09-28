@@ -11,6 +11,7 @@ import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -75,18 +76,6 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
-
-/**
- * The panel's one small-button shape: Resume, Manage, and the divider's mark
- * read. Bordered because bare text at the end of a line of text didn't read
- * as a control, and ringed because nothing in the app supplies a focus ring
- * for an element that doesn't declare one.
- */
-const SMALL_BUTTON_CLASS = cn(
-  "inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-border-strong px-1.5 py-0.5",
-  "text-2xs font-medium text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary",
-  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-);
 
 /**
  * Whether a kind ships switched on, so that it being off is the user's doing.
@@ -1321,26 +1310,33 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             ))}
           </div>
           {isSessionMuted && (
-            <button
-              type="button"
+            <Button
+              variant="subtle"
+              size="xs"
               onClick={handleResumeNotifications}
               aria-label="Resume notifications"
-              // A border, because without one this was bare text sitting at the
+              // Bordered, because without one this was bare text sitting at the
               // end of a line of bare text. It only read as a control under
               // `forced-colors: active`, where the UA supplies the border this
-              // was missing — which is the tell that it was missing. Matches the
-              // secondary row action, so the panel has one button shape.
-              className={SMALL_BUTTON_CLASS}
+              // was missing — which is the tell that it was missing. Resume,
+              // Manage and both mark-read actions share this one small-button
+              // shape, so the panel has one.
+              className="shrink-0 px-1.5 text-2xs focus-visible:-outline-offset-2"
             >
               Resume
-            </button>
+            </Button>
           )}
           {/* Quiet hours too: they explained the silence and then left the way
               to change them two menus away. */}
           {!isSessionMuted && (hasSilences || isScheduledMuted) && (
-            <button type="button" onClick={openNotificationSettings} className={SMALL_BUTTON_CLASS}>
+            <Button
+              variant="subtle"
+              size="xs"
+              onClick={openNotificationSettings}
+              className="shrink-0 px-1.5 text-2xs focus-visible:-outline-offset-2"
+            >
               Manage
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -2061,16 +2057,14 @@ function ContextSectionHeader({
           )}
         </span>
         {hasUnread && (
-          <button
-            type="button"
+          <Button
+            variant="subtle"
+            size="xs"
             onClick={onMarkRead}
-            className={cn(
-              "shrink-0 inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-text-secondary hover:text-text-primary hover:bg-overlay-medium transition-colors",
-              PALETTE_ROW_FOCUS_CLASS
-            )}
+            className="shrink-0 px-1.5 text-2xs focus-visible:-outline-offset-2"
           >
             Mark read
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -2095,16 +2089,17 @@ function NewSinceLastLookedDivider({
     >
       <span>New since you last looked</span>
       {unreadCount > 0 && (
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="xs"
           onClick={onMarkRead}
-          // Bordered like Resume and the secondary row action — the panel's one
-          // small-button shape. Bare, it was the same grey and size as the
-          // label beside it and read as more of the label.
-          className={cn(SMALL_BUTTON_CLASS, "ml-auto normal-case tracking-normal")}
+          // Bordered like Resume — the panel's one small-button shape. Bare, it
+          // was the same grey and size as the label beside it and read as more
+          // of the label.
+          className="ml-auto shrink-0 px-1.5 text-2xs normal-case tracking-normal focus-visible:-outline-offset-2"
         >
           {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
-        </button>
+        </Button>
       )}
     </div>
   );

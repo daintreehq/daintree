@@ -138,14 +138,14 @@ export function HelpPanelVersionGate({
           {/* The registry only knows some install routes. Someone who used another
               one gets the agent's own docs rather than a dead end. */}
           {docsUrl && (
-            <button
-              type="button"
+            <Button
+              variant="link"
               onClick={() => void systemClient.openExternal(docsUrl)}
-              className="inline-flex items-center gap-1 text-xs text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]"
+              className="text-xs"
             >
               Installed another way? {agentName} docs
-              <ExternalLink className="w-3 h-3" aria-hidden="true" />
-            </button>
+              <ExternalLink aria-hidden="true" />
+            </Button>
           )}
         </div>
 

@@ -616,15 +616,14 @@ function PluginIdentityDescription({
         </span>
       )}
       {long && (
-        <button
-          type="button"
+        <Button
+          variant="link"
           aria-expanded={expanded}
           aria-controls={textId}
           onClick={() => setExpanded((v) => !v)}
-          className="text-text-primary underline-offset-2 hover:underline rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
         >
           {expanded ? "Show less" : "Show more"}
-        </button>
+        </Button>
       )}
       {id !== title && <span className="mt-1 block font-mono break-all">{id}</span>}
     </>

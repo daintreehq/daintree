@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { resolveSavedScopeIds } from "@/services/actions/definitions/fleetActions";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -56,9 +56,10 @@ export function SavedFleetQuickRecall({
         {mode === "append" ? "Add a saved fleet" : "Arm a saved fleet"}
       </span>
       {offers.map(({ scope, count }) => (
-        <button
+        <Button
           key={scope.id}
-          type="button"
+          variant="subtle"
+          size="xs"
           aria-label={
             mode === "append"
               ? `Add ${count} pane${count === 1 ? "" : "s"} from ${scope.name}`
@@ -81,30 +82,23 @@ export function SavedFleetQuickRecall({
             onRecalled();
           }}
           data-testid="fleet-picker-saved-fleet"
-          className={cn(
-            "inline-flex h-6 max-w-[14rem] items-center gap-1.5 rounded-[var(--radius-md)] bg-tint/[0.06] px-2 text-xs text-text-primary",
-            "hover:bg-tint/[0.12] transition-colors duration-150 ease-out",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-          )}
+          className="max-w-[14rem] gap-1.5 px-2 text-xs text-text-primary"
         >
           <span className="min-w-0 truncate">{scope.name}</span>
           <span className="shrink-0 text-2xs tabular-nums text-text-secondary">
             {mode === "append" ? `+${count}` : formatSavedFleetCount(scope, count)}
           </span>
-        </button>
+        </Button>
       ))}
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={onManage}
         data-testid="fleet-picker-saved-manage"
-        className={cn(
-          "inline-flex h-6 items-center rounded-[var(--radius-md)] px-2 text-xs text-text-secondary",
-          "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150 ease-out",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-        )}
+        className="px-2 text-xs"
       >
         Manage…
-      </button>
+      </Button>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import { KbdChord } from "@/components/ui/Kbd";
+import { Button } from "@/components/ui/button";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -253,8 +254,8 @@ export function RotatingTip() {
           Tip: <LiveTipMessage tip={tip} />
         </p>
         {tip.actionId && tip.actionLabel && (
-          <button
-            type="button"
+          <Button
+            variant="link"
             onClick={() =>
               void actionService.dispatch(tip.actionId!, undefined, { source: "user" })
             }
@@ -270,10 +271,10 @@ export function RotatingTip() {
             // centred text at the same size and colour as the sentence above
             // it, the only control that names the user's actual goal read as a
             // second sentence — an affordance nobody could see was there.
-            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-text-primary hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)] px-1"
+            className="tip-action text-xs"
           >
             {tip.actionLabel}
-          </button>
+          </Button>
         )}
       </div>
     );

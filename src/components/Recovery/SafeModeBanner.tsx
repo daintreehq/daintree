@@ -202,15 +202,15 @@ export function SafeModeBanner() {
         onConfirm={handleRestart}
         isConfirmLoading={isRestarting}
       >
-        <button
-          type="button"
+        <Button
+          variant="link"
           onClick={() => {
             void actionService.dispatch("logs.openFile", undefined, { source: "user" });
           }}
-          className="text-xs text-text-secondary hover:text-text-primary transition-colors underline decoration-daintree-text/30 underline-offset-2"
+          className="text-xs"
         >
           View logs
-        </button>
+        </Button>
       </ConfirmDialog>
     </>
   );

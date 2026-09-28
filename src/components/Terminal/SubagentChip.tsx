@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -71,16 +72,9 @@ function TranscriptBody({
         <p className="text-xs text-text-secondary">
           {subagentUnavailableMessage(transcript.reason, SUBAGENT_PROVIDERS[provider].label)}
         </p>
-        <button
-          type="button"
-          onClick={onRetry}
-          className={cn(
-            "rounded-sm text-xs text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors",
-            CHIP_FOCUS_CLASS
-          )}
-        >
+        <Button variant="link" onClick={onRetry} className="text-xs">
           Retry
-        </button>
+        </Button>
       </div>
     );
   }
@@ -385,16 +379,9 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
             <p className="flex-1 min-w-0 text-2xs text-text-secondary">
               Couldn't refresh: {refreshErrorMessage}. Showing the last list.
             </p>
-            <button
-              type="button"
-              onClick={retryRefresh}
-              className={cn(
-                "shrink-0 rounded-sm text-2xs text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors",
-                CHIP_FOCUS_CLASS
-              )}
-            >
+            <Button variant="link" onClick={retryRefresh} className="shrink-0 text-2xs">
               Retry
-            </button>
+            </Button>
           </div>
         )}
         <ScrollShadow compact className="max-h-80">

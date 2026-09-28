@@ -317,13 +317,14 @@ function CommandRow({
     <div data-testid="command-row">
       <SettingsRow
         label={
-          <button
+          <Button
             ref={disclosureRef}
-            type="button"
+            variant="ghost"
+            size="xs"
             onClick={onToggleExpanded}
             aria-expanded={isExpanded}
             aria-controls={panelId}
-            className="inline-flex items-center gap-1.5 -ml-1 pl-1 pr-1.5 rounded-[var(--radius-sm)] font-mono hover:bg-overlay-soft transition-colors duration-150 ease-out"
+            className="-ml-1 pl-1 pr-1.5 gap-1.5 font-mono text-sm text-text-primary [&_svg]:size-3.5"
           >
             <ChevronRight
               data-animated-chevron
@@ -334,7 +335,7 @@ function CommandRow({
               aria-hidden="true"
             />
             {command.id}
-          </button>
+          </Button>
         }
         labelText={command.id}
         accessory={status && <Badge size="xs">{status}</Badge>}

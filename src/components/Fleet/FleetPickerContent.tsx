@@ -3,6 +3,7 @@ import * as Checkbox from "@radix-ui/react-checkbox";
 import { CheckIcon, MinusIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { KbdChord } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
@@ -191,18 +192,14 @@ export function FleetPickerContent({
             scale="popover"
             title="No terminals match"
             action={
-              <button
-                type="button"
+              <Button
+                variant="subtle"
+                size="sm"
                 onClick={clearSearch}
                 data-testid={`${testIdPrefix}-clear-search`}
-                className={cn(
-                  "rounded-sm px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
-                  "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                )}
               >
                 Clear search
-              </button>
+              </Button>
             }
             className="h-full min-h-[120px]"
           />

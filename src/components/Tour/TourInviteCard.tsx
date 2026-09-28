@@ -144,13 +144,9 @@ export function TourInviteCard({ className }: { className?: string }) {
                 <CirclePlay className="h-3.5 w-3.5" />
                 {resuming ? "Resume tour" : "Start tour"}
               </Button>
-              <button
-                type="button"
-                onClick={dismiss}
-                className="text-xs text-text-secondary transition-colors hover:text-text-primary"
-              >
+              <Button size="sm" variant="ghost" onClick={dismiss}>
                 Not now
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -169,14 +165,10 @@ export function TourWelcomeLink({ enabled }: { enabled: boolean }) {
   const [state] = useTourOffer();
   if (!enabled || state.kind === "hidden" || state.kind === "dismissed-note") return null;
   return (
-    <button
-      type="button"
-      onClick={openDaintreeTour}
-      className="text-xs text-text-secondary underline-offset-4 transition-colors hover:text-text-primary hover:underline"
-    >
+    <Button variant="link" onClick={openDaintreeTour} className="text-xs">
       {state.kind === "resume"
         ? "Pick up where you left off in the Daintree Tour"
         : `New here? Take the ${daintreeSummary().minutes}-minute tour`}
-    </button>
+    </Button>
   );
 }

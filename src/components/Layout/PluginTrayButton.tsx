@@ -191,7 +191,7 @@ function PluginTrayRow({
           onTogglePin(config);
         }}
         className={cn(
-          "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 transition-opacity hover:bg-overlay-emphasis hover:text-text-primary",
+          "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 transition-opacity hover:bg-overlay-hover hover:text-text-primary",
           promoted ? "opacity-100" : "opacity-0 group-data-[highlighted]:opacity-100"
         )}
       >

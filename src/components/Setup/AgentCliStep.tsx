@@ -289,14 +289,14 @@ export function AgentCliStep({
                   {config.install?.docsUrl && (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="text-text-secondary hover:text-text-primary transition-colors p-0.5 cursor-pointer"
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={() => systemClient.openExternal(config.install!.docsUrl!)}
                           aria-label="Open documentation"
                         >
                           <ExternalLink className="w-3 h-3" />
-                        </button>
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent>View documentation</TooltipContent>
                     </Tooltip>
@@ -327,14 +327,15 @@ export function AgentCliStep({
                     </span>
                   )}
                   {canInstall && !isBatchRunning && !singleAgent && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={() => handleInstall(agentId)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-2xs font-medium text-text-primary hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                      className="text-2xs px-2"
                     >
                       <Download className="w-3 h-3" />
                       Install
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -349,7 +350,7 @@ export function AgentCliStep({
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
+                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -372,12 +373,13 @@ export function AgentCliStep({
                 <div className="pl-14 pt-1.5 pb-1 space-y-1">
                   {errorLog && (
                     <>
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         onClick={() => toggleErrorExpanded(agentId)}
                         aria-expanded={isErrorExpanded ?? false}
                         aria-controls={`error-log-${agentId}`}
-                        className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors"
+                        className="text-2xs"
                       >
                         {isErrorExpanded ? (
                           <ChevronDown className="w-3 h-3" />
@@ -385,7 +387,7 @@ export function AgentCliStep({
                           <ChevronRight className="w-3 h-3" />
                         )}
                         Show error log
-                      </button>
+                      </Button>
                       <pre
                         id={`error-log-${agentId}`}
                         hidden={!isErrorExpanded}

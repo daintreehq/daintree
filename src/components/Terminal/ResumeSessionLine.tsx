@@ -8,6 +8,7 @@ import { useAgentSessionRecords } from "@/hooks/useAgentSessionRecords";
 import { buildResumeSessionItems } from "@/services/resumeSessionItems";
 import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 
 /**
  * First-run-quiet resume affordance for the launcher: one line for the single
@@ -68,7 +69,7 @@ export function ResumeSessionLine() {
             // and risk breaking Label in Name. Below the narrow breakpoint the
             // description is dropped from the row entirely, and the tooltip is
             // then the only place it survives.
-            className="group flex min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+            className="group flex min-w-0 cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           >
             <History className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
             <span className="shrink-0">
@@ -101,10 +102,11 @@ export function ResumeSessionLine() {
         </TooltipContent>
       </Tooltip>
       {extraCount > 0 && (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={openLauncher}
-          className="shrink-0 rounded-[var(--radius-md)] px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+          className="shrink-0 px-2"
           // Opens with the visible string verbatim, `+` included. WCAG 2.2
           // SC 2.5.3 (Label in Name) wants what is on the control to appear in
           // its accessible name, so a speech-input user can say what they read;
@@ -115,7 +117,7 @@ export function ResumeSessionLine() {
           }`}
         >
           +{extraCount} more
-        </button>
+        </Button>
       )}
     </div>
   );

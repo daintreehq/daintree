@@ -1152,13 +1152,9 @@ export function DaintreeAssistantSettingsTab() {
                   <>
                     Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed
                     ·{" "}
-                    <button
-                      type="button"
-                      onClick={() => setModelCatalogAttempt((n) => n + 1)}
-                      className="text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors"
-                    >
+                    <Button variant="link" onClick={() => setModelCatalogAttempt((n) => n + 1)}>
                       Retry
-                    </button>
+                    </Button>
                   </>
                 ) : (
                   "A --model flag in Custom CLI args overrides this"
@@ -1376,8 +1372,9 @@ export function DaintreeAssistantSettingsTab() {
               onClick={() => setAdvancedDiagnosticsOpen((v) => !v)}
               aria-expanded={advancedDiagnosticsOpen}
               className={cn(
-                "w-full flex items-center gap-2 px-4 py-3 text-sm font-medium",
-                "text-text-primary transition-colors"
+                "w-full flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium",
+                "text-text-primary hover:bg-overlay-soft transition-colors",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               )}
             >
               <ChevronRight
@@ -1730,8 +1727,9 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
         onClick={onToggle}
         aria-expanded={isOpen}
         className={cn(
-          "w-full flex items-center justify-between gap-3 px-4 py-2.5 text-xs",
-          "text-text-secondary hover:text-text-primary transition-colors"
+          "w-full flex cursor-pointer items-center justify-between gap-3 px-4 py-2.5 text-xs",
+          "text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         )}
       >
         <span className="flex items-center gap-2">
