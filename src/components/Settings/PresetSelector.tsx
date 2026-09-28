@@ -213,9 +213,11 @@ export function PresetSelector({
             {selectedItem.label}
           </span>
           <ChevronDown
+            data-animated-chevron
             size={14}
+            aria-hidden="true"
             className={cn(
-              "shrink-0 text-text-secondary transition-transform",
+              "shrink-0 text-text-secondary transition-transform duration-150 ease-out",
               open && "rotate-180"
             )}
           />

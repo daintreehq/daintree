@@ -108,8 +108,9 @@ export function FleetDraftingPill(): ReactElement | null {
             )}
             {hasVariables && (
               <ChevronDown
+                data-animated-chevron
                 className={cn(
-                  "h-3 w-3 shrink-0 transition-transform duration-150",
+                  "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
                   open && "rotate-180"
                 )}
                 aria-hidden="true"

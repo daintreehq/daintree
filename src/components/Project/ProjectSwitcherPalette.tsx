@@ -5,7 +5,6 @@ import type { JSX } from "react";
 import {
   Check,
   BellOff,
-  ChevronDown,
   ChevronRight,
   Download,
   FileText,
@@ -1063,7 +1062,6 @@ function BandCollapseToggle({
   testId: string;
   onToggle: () => void;
 }) {
-  const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
     <button
       type="button"
@@ -1075,7 +1073,14 @@ function BandCollapseToggle({
       aria-controls={controlsId}
       className="flex items-center gap-1.5 min-w-0 hover:text-text-secondary transition-colors"
     >
-      <Chevron className="w-3 h-3 shrink-0" aria-hidden="true" />
+      <ChevronRight
+        data-animated-chevron
+        className={cn(
+          "w-3 h-3 shrink-0 transition-transform duration-150 ease-out",
+          !collapsed && "rotate-90"
+        )}
+        aria-hidden="true"
+      />
       <BandLabel label={label} labelId={labelId} />
     </button>
   );
@@ -1803,11 +1808,14 @@ function ScratchSection({
             aria-controls="scratch-section-list"
           >
             <span className="flex items-center gap-1.5">
-              {collapsed ? (
-                <ChevronRight className="w-3 h-3 shrink-0" aria-hidden="true" />
-              ) : (
-                <ChevronDown className="w-3 h-3 shrink-0" aria-hidden="true" />
-              )}
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "w-3 h-3 shrink-0 transition-transform duration-150 ease-out",
+                  !collapsed && "rotate-90"
+                )}
+                aria-hidden="true"
+              />
               Scratch
             </span>
             {scratches.length > 0 && <BandCollapsedCount count={scratches.length} />}

@@ -1556,6 +1556,7 @@ export function SettingsScopeMenu({
           >
             <span className="truncate">{SCOPE_TITLES[scope]}</span>
             <ChevronDown
+              data-animated-chevron
               className="w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out group-data-[state=open]:rotate-180"
               aria-hidden="true"
             />

@@ -476,6 +476,7 @@ function ArtifactItem({
         className="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out"
       >
         <ChevronRight
+          data-animated-chevron
           aria-hidden="true"
           className={cn(
             "size-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",

@@ -102,7 +102,8 @@ export function PrStatusChip({
               </>
             )}
             <ChevronDown
-              className="w-3 h-3 shrink-0 -mr-0.5 text-text-secondary transition-transform group-data-[state=open]/pr-checks:rotate-180"
+              data-animated-chevron
+              className="w-3 h-3 shrink-0 -mr-0.5 text-text-secondary transition-transform duration-150 ease-out group-data-[state=open]/pr-checks:rotate-180"
               aria-hidden="true"
             />
           </Badge>

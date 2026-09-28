@@ -712,6 +712,7 @@ export function ConflictPanel({
               data-testid="conflict-resolved-toggle"
             >
               <ChevronRight
+                data-animated-chevron
                 className={cn(
                   "w-3 h-3 transition-transform duration-150 ease-out",
                   showResolved && "rotate-90"

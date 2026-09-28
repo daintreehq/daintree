@@ -141,6 +141,7 @@ export function PushErrorBanner({
         )}
       >
         <ChevronRight
+          data-animated-chevron
           className={cn(
             "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
             showPushDetails && "rotate-90"

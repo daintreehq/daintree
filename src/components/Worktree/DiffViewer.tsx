@@ -1578,7 +1578,9 @@ function FileDiff({
           className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <ChevronRight
-            className={`h-3 w-3 shrink-0 transition-transform duration-150 ${isCollapsed ? "" : "rotate-90"}`}
+            data-animated-chevron
+            aria-hidden="true"
+            className={`h-3 w-3 shrink-0 transition-transform duration-150 ease-out ${isCollapsed ? "" : "rotate-90"}`}
           />
           <span className="text-left">
             {collapseDecision.reason === "generated"
