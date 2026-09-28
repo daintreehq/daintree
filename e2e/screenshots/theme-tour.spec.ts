@@ -870,7 +870,9 @@ test("theme tour — interactive", async () => {
       // ordered so `working` runs before `waiting` and can hand off its panel.
       for (let i = 0; i < SCENES.length; i++) await runScene(i, true);
       if (tourFailures.length > 0) {
-        throw new Error(`[tour] ${tourFailures.length} scene(s) unusable:\n${tourFailures.join("\n")}`);
+        throw new Error(
+          `[tour] ${tourFailures.length} scene(s) unusable:\n${tourFailures.join("\n")}`
+        );
       }
       console.log(`\n[tour] captured ${SCENES.length} scenes to ${SHOT_DIR}\n`);
       return;
