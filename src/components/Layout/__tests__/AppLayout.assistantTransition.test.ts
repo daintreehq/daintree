@@ -95,9 +95,9 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
 
   it("gates both the spacer width and wrapper transform transitions during drag-resize", () => {
     // Both animated properties must be suppressed while isAssistantResizing so a
-    // drag tracks the cursor 1:1 (#7642/#7627). Each gated block pairs the
-    // reduce-animations and resizing guards.
-    const gatedBlocks = source.match(/!reduceAnimations &&\s*\n\s*!isAssistantResizing &&/g);
+    // drag tracks the cursor 1:1 (#7642/#7627). Reduced motion is carried by
+    // the app-aware `motion-reduce:` variant on the same class strings.
+    const gatedBlocks = source.match(/!isAssistantResizing &&\s*\n\s*\(showAssistant/g);
     expect(gatedBlocks).not.toBeNull();
     expect(gatedBlocks!.length).toBeGreaterThanOrEqual(2);
   });
@@ -111,7 +111,7 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
   // ease-panel-minimize) — switched on showAssistant, not a symmetric 250ms.
   it("uses asymmetric panel-motion-tier timing switched on showAssistant", () => {
     // Anchor to the assistant region (first aria-hidden = the spacer) so the
-    // sidebar's legitimate symmetric 250ms width transition isn't captured.
+    // sidebar width transition isn't captured.
     const region = source.match(
       /aria-hidden[\s\S]*?onTransitionEnd=\{handleAssistantTransitionEnd\}/
     );

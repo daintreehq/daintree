@@ -52,6 +52,33 @@ import type {
 import { logError } from "@/utils/logger";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  getUiTransitionDuration,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
+
+/**
+ * The URL suggestions and the error callout drop from the address field the way
+ * a toolbar dropdown does: 4px down and up from 97% while fading, on the entry
+ * tier, from `@starting-style` in the first painted frame. The suggestions also
+ * reverse on the exit tier (`data-visible="false"`); the error callout leaves at
+ * once, because the corrected address it answered is already in the field.
+ * Reduced motion keeps the fade.
+ */
+const ANCHORED_MOTION_CLASS =
+  "origin-top transition-[opacity,translate,scale] starting:opacity-0 starting:-translate-y-1 starting:scale-[0.97] data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0 data-[visible=false]:-translate-y-1 data-[visible=false]:scale-[0.97] motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none data-[visible=false]:motion-reduce:translate-none data-[visible=false]:motion-reduce:scale-none";
+const ANCHORED_ENTER_STYLE = {
+  transitionDuration: `${UI_ENTER_DURATION}ms`,
+  transitionTimingFunction: UI_ENTER_EASING,
+};
+const ANCHORED_EXIT_STYLE = {
+  transitionDuration: `${UI_EXIT_DURATION}ms`,
+  transitionTimingFunction: UI_EXIT_EASING,
+};
 
 const LONG_PRESS_MS = 400;
 const COMPACT_ROW_WIDTH = 640;
@@ -296,6 +323,19 @@ export function BrowserToolbar({
       return [entry];
     });
   }, [isEditing, projectId, projectEntries, inputValue, toAddress]);
+
+  // The list fades out on the exit tier after it closes, showing the rows it
+  // last had. Retiring, it is inert and hidden from assistive tech, so its rows
+  // take no pointer and no longer read as options.
+  const listOpen = isDropdownOpen && suggestions.length > 0;
+  const [shownSuggestions, setShownSuggestions] = useState(suggestions);
+  if (listOpen && suggestions !== shownSuggestions) setShownSuggestions(suggestions);
+  const { isVisible: listVisible, shouldRender: listRendered } = useAnimatedPresence({
+    isOpen: listOpen,
+    animationDuration: getUiTransitionDuration("exit"),
+    syncEnter: true,
+  });
+  const listRows = listOpen ? suggestions : shownSuggestions;
   const addressOf = useCallback(
     (target: string) => getDisplayUrl(toAddress ? toAddress(target) : target),
     [toAddress]
@@ -922,21 +962,32 @@ export function BrowserToolbar({
               <div
                 id={errorId}
                 role="alert"
-                className="absolute left-0 mt-1 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10"
+                className={cn(
+                  "absolute left-0 mt-1 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10",
+                  ANCHORED_MOTION_CLASS
+                )}
+                style={ANCHORED_ENTER_STYLE}
               >
                 {error}
               </div>
             )}
           </form>
 
-          {isDropdownOpen && suggestions.length > 0 && (
+          {listRendered && (
             <div
-              ref={dropdownRef}
-              id={listboxId}
-              role="listbox"
-              className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden p-1"
+              ref={listOpen ? dropdownRef : undefined}
+              id={listOpen ? listboxId : undefined}
+              role={listOpen ? "listbox" : undefined}
+              inert={!listOpen || undefined}
+              aria-hidden={listOpen ? undefined : true}
+              data-visible={listVisible}
+              className={cn(
+                "absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden p-1",
+                ANCHORED_MOTION_CLASS
+              )}
+              style={listVisible ? ANCHORED_ENTER_STYLE : ANCHORED_EXIT_STYLE}
             >
-              {suggestions.map((entry, index) => {
+              {listRows.map((entry, index) => {
                 const entryAddress = addressOf(entry.url);
                 return (
                   <div

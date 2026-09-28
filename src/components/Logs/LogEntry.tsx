@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -107,7 +107,13 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
 
       {hasContext && (
         <span className="text-text-secondary shrink-0" aria-hidden>
-          {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "w-3 h-3 transition-transform duration-150 ease-out",
+              isExpanded && "rotate-90"
+            )}
+          />
         </span>
       )}
     </>

@@ -32,6 +32,15 @@ import { useProjectStore } from "@/store/projectStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  getPerformanceModeFloor,
+  PANEL_MINIMIZE_DURATION,
+  PANEL_MINIMIZE_EASING,
+  PANEL_RESTORE_DURATION,
+  PANEL_RESTORE_EASING,
+  UI_SCRIM_EASING,
+} from "@/lib/animationUtils";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
 import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
 import { useDiagnosticsAutoOpen } from "@/hooks/useDiagnosticsAutoOpen";
@@ -165,7 +174,7 @@ export function AppLayout({
   useDockPopoverLayerSync();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // Issue #7627: track active drag-resize per panel so AppLayout can suppress
-  // the 250ms ease-out-expo width transition during the drag (the transition
+  // the panel-tier width transition during the drag (the transition
   // restarts on every mousemove, which makes the rendered edge lag the cursor).
   // Toggling these flags via flushSync at drag start guarantees the class
   // gate disappears synchronously before the first mousemove frame; the
@@ -199,6 +208,18 @@ export function AppLayout({
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
   const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
+  // The sheet moves like the Help panel beside it (200ms decelerating in, 120ms
+  // accelerating out) and stays painted, inert, through its exit.
+  const { isVisible: themeBrowserVisible, shouldRender: themeBrowserRendered } =
+    useAnimatedPresence({
+      isOpen: themeBrowserOpen,
+      animationDuration: getPerformanceModeFloor(PANEL_MINIMIZE_DURATION),
+      syncEnter: true,
+    });
+  const themeBrowserMotion = {
+    duration: themeBrowserVisible ? PANEL_RESTORE_DURATION : PANEL_MINIMIZE_DURATION,
+    easing: themeBrowserVisible ? PANEL_RESTORE_EASING : PANEL_MINIMIZE_EASING,
+  };
   // The plugin manager (#9558) is a full-screen overlay; while it owns the
   // viewport its claim marks the app chrome inert, same as the theme browser.
   // The view itself is mounted in App.tsx (it carries deep-link props), so
@@ -927,11 +948,16 @@ export function AppLayout({
           <div
             className={cn(
               "relative h-full shrink-0 overflow-clip",
-              !reduceAnimations &&
-                !isSidebarResizing &&
+              // Reduced motion (either preference) never interpolates the width.
+              // Opening snaps it and dissolves the panel in; closing fades the
+              // panel out first, then snaps the width once the fade is done
+              // (a 0s width transition delayed by the exit tier).
+              !isSidebarResizing &&
                 !isSidebarWidthHydrating &&
-                "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
-              !showSidebar && "pointer-events-none"
+                (showSidebar
+                  ? "transition-[width] duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-opacity"
+                  : "transition-[width] duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:[transition-property:opacity,width] motion-reduce:[transition-duration:var(--duration-120),0s] motion-reduce:[transition-delay:0s,var(--duration-120)]"),
+              !showSidebar && "pointer-events-none motion-reduce:opacity-0"
             )}
             onTransitionEnd={handleSidebarTransitionEnd}
             style={{
@@ -1000,12 +1026,13 @@ export function AppLayout({
             <div
               className={cn(
                 "absolute top-0 right-0 h-full overflow-hidden",
-                !reduceAnimations &&
-                  !isAssistantResizing &&
+                // Reduced motion never slides it: like the sidebar, it dissolves
+                // in, and on close fades out before it snaps off-canvas.
+                !isAssistantResizing &&
                   (showAssistant
-                    ? "transition-transform duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
-                    : "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-none"),
-                !showAssistant && "pointer-events-none"
+                    ? "transition-transform duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-opacity"
+                    : "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:[transition-property:opacity,transform] motion-reduce:[transition-duration:var(--duration-120),0s] motion-reduce:[transition-delay:0s,var(--duration-120)]"),
+                !showAssistant && "pointer-events-none motion-reduce:opacity-0"
               )}
               style={{
                 width: layout.helpPanelWidth,
@@ -1047,7 +1074,7 @@ export function AppLayout({
       <ChordIndicator />
 
       <AllClearOverlay />
-      {themeBrowserOpen &&
+      {themeBrowserRendered &&
         createPortal(
           <>
             {/* Interaction shield. At rest it is tint-only so the live theme
@@ -1064,7 +1091,13 @@ export function AppLayout({
             <div
               aria-hidden="true"
               onClick={() => useThemeBrowserStore.getState().close()}
-              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-colors duration-150 hover:bg-scrim-soft/45 hover:backdrop-blur-[2px]"
+              data-visible={themeBrowserVisible}
+              className="fixed inset-0 z-30 bg-scrim-soft/30 hover:bg-scrim-soft/45 hover:backdrop-blur-[2px] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+              style={{
+                transitionProperty: "background-color, opacity",
+                transitionDuration: `var(--duration-150), ${themeBrowserMotion.duration}ms`,
+                transitionTimingFunction: `ease-out, ${UI_SCRIM_EASING}`,
+              }}
             />
             <ErrorBoundary
               variant="section"
@@ -1077,11 +1110,17 @@ export function AppLayout({
                   behind it. OVERLAY_TOP_OFFSET adds the measured global-banner
                   height on top of the toolbar's h-12, because a banner pushes the
                   toolbar further down (#11893). */}
+              {/* Slides in from the window edge like the Help panel; reduced
+                  motion keeps only the fade. */}
               <div
-                className="fixed bottom-0 z-40 pointer-events-auto"
+                inert={!themeBrowserOpen || undefined}
+                data-visible={themeBrowserVisible}
+                className="fixed bottom-0 z-40 pointer-events-auto transition-[translate,opacity] starting:translate-x-[100%] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:translate-x-[100%] data-[visible=false]:opacity-0 motion-reduce:transition-opacity motion-reduce:translate-none data-[visible=false]:motion-reduce:translate-none"
                 style={{
                   top: OVERLAY_TOP_OFFSET,
                   right: "var(--right-obstruction-offset, 0px)",
+                  transitionDuration: `${themeBrowserMotion.duration}ms`,
+                  transitionTimingFunction: themeBrowserMotion.easing,
                 }}
               >
                 <Suspense fallback={null}>

@@ -403,7 +403,11 @@ function ChecksList({
               )}
             >
               <ChevronRight
-                className={cn("w-3.5 h-3.5 shrink-0", showSettled && "rotate-90")}
+                data-animated-chevron
+                className={cn(
+                  "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
+                  showSettled && "rotate-90"
+                )}
                 aria-hidden="true"
               />
               {showSettled ? "Hide" : "Show"} {summary.settledLabel}

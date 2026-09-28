@@ -2345,7 +2345,7 @@ export function Toolbar({
                 <div
                   data-fullscreen={isFullscreen ? "true" : undefined}
                   className={cn(
-                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120 motion-reduce:transition-none",
                     // A zero-width flex item still owns a gap on each side;
                     // the negative margin folds the group's gap back in so
                     // fullscreen's first button lands at the same inset a
@@ -2599,7 +2599,7 @@ export function Toolbar({
                   aria-hidden="true"
                   data-fullscreen={isFullscreen ? "true" : undefined}
                   className={cn(
-                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120 motion-reduce:transition-none",
                     isFullscreen && "w-0 -ml-1.5"
                   )}
                   style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}

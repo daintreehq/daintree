@@ -217,8 +217,9 @@ function ErrorOverflow({
           >
             {errors.length} more {errors.length === 1 ? "error" : "errors"}
             <ChevronDown
+              data-animated-chevron
               aria-hidden="true"
-              className={cn("transition-transform duration-150", open && "rotate-180")}
+              className={cn("transition-transform duration-150 ease-out", open && "rotate-180")}
             />
           </Button>
         </PopoverTrigger>

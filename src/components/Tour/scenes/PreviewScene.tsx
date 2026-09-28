@@ -61,7 +61,7 @@ function MockPage({ withSearch }: { withSearch: boolean }) {
           data-tour-anchor="dev-search"
           className={cn(
             "flex h-4 w-24 items-center gap-1 rounded-full border border-border-strong px-1.5",
-            "transition-[opacity,scale] duration-300 ease-out reduce-motion:scale-100",
+            "transition-[opacity,scale] duration-300 ease-out motion-reduce:scale-100",
             withSearch ? "scale-100 opacity-100" : "scale-90 opacity-0"
           )}
         >

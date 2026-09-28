@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type MouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, RefreshCw } from "lucide-react";
 import { Network } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -164,8 +164,6 @@ function SubagentRow({
     rowRef.current?.focus({ preventScroll: true, focusVisible: event.detail === 0 });
   }, []);
 
-  const Chevron = isOpen ? ChevronDown : ChevronRight;
-
   return (
     <li className="border-b border-divider last:border-b-0">
       <button
@@ -179,7 +177,14 @@ function SubagentRow({
           PALETTE_ROW_FOCUS_CLASS
         )}
       >
-        <Chevron className="w-3 h-3 mt-0.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        <ChevronRight
+          data-animated-chevron
+          className={cn(
+            "w-3 h-3 mt-0.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+            isOpen && "rotate-90"
+          )}
+          aria-hidden="true"
+        />
         {/* Two lines, two columns: what the child is on the left, what state
             it is in and when on the right, so the status sits in one column
             the eye can run down whatever each name's length. */}

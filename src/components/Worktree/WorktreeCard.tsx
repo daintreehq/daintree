@@ -1238,7 +1238,7 @@ export function WorktreeCard({
                     // tier and the plate the 150ms one, and a Tailwind
                     // `duration-*` utility cannot give two properties two
                     // durations.
-                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none motion-reduce:transition-none",
+                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none",
                     isDraggingSort
                       ? "bg-overlay-emphasis text-text-primary"
                       : // Card hover brightens the glyph only. The backplate

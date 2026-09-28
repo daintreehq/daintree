@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useId } from "react";
-import { ChevronDown, ChevronRight, OctagonX } from "lucide-react";
+import { ChevronRight, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -438,7 +438,7 @@ function WaitingSingleItem({
             button on hover/focus, so no row reserves an empty action column. */}
         <span
           id={ageId}
-          className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out motion-reduce:transition-none group-hover/row:opacity-0 group-focus-within/row:opacity-0"
+          className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out group-hover/row:opacity-0 group-focus-within/row:opacity-0"
         >
           {terminal.lastStateChange != null && (
             <LiveTimeAgo
@@ -450,7 +450,7 @@ function WaitingSingleItem({
         </span>
       </button>
 
-      <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
+      <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -493,7 +493,6 @@ function WaitingGroupItem({
   const groupWorktreeId = group.worktreeId ?? waitingTerminals[0]?.worktreeId;
   const groupWorktreeName =
     showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
-  const Chevron = isExpanded ? ChevronDown : ChevronRight;
   const headerId = useId();
 
   return (
@@ -507,7 +506,14 @@ function WaitingGroupItem({
           aria-expanded={isExpanded}
           aria-controls={`waiting-group-${group.id}`}
         >
-          <Chevron className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "h-3 w-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+              isExpanded && "rotate-90"
+            )}
+            aria-hidden="true"
+          />
           <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
             <span className="shrink-0 text-xs font-medium text-text-secondary">
               {`Tab group (${tabCount} waiting)`}

@@ -54,17 +54,33 @@ describe("ContentFadeIn", () => {
   });
 });
 
-describe("content-fade-in CSS contract", () => {
-  // Read the source CSS once. Build pipeline transforms (Tailwind, autoprefixer)
-  // shouldn't matter — we're asserting authored intent in src/index.css.
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+describe("ContentFadeIn under reduced motion", () => {
+  // A fade is not motion (WCAG 2.3.3), so reduced motion keeps it: nothing may
+  // gate the fade behind a motion variant, and no reduce-motion rule may strip it.
+  it("does not gate its fade on a motion variant", () => {
+    const { container } = render(<ContentFadeIn>x</ContentFadeIn>);
+    const classes = container.firstElementChild?.className.split(/\s+/) ?? [];
+    expect(classes.some((c) => /fade-in/.test(c))).toBe(true);
+    expect(classes.filter((c) => /^motion-(safe|reduce):/.test(c))).toEqual([]);
+  });
 
-  it("declares the reduce-motion override for .content-fade-in (OS + app toggle)", () => {
-    const block = css.match(
-      /@variant\s+reduce-motion\s*\{[\s\S]*?\.content-fade-in\s*\{[^}]*\}/
-    )?.[0];
-    expect(block).toBeTruthy();
-    expect(block).toMatch(/animation:\s*none/);
-    expect(block).toMatch(/opacity:\s*1/);
+  it("sets its duration on the animation, not as a bare transition duration", () => {
+    const { container } = render(<ContentFadeIn>x</ContentFadeIn>);
+    const classes = container.firstElementChild?.className.split(/\s+/) ?? [];
+    expect(classes.filter((c) => /^duration-/.test(c))).toEqual([]);
+  });
+
+  it("has no reduce-motion rule stripping the keyframe", () => {
+    const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+    const classes = new Set(
+      (render(<ContentFadeIn>x</ContentFadeIn>).container.firstElementChild?.className ?? "")
+        .split(/\s+/)
+        .filter(Boolean)
+    );
+    for (const block of css.match(/@variant\s+reduce-motion\s*\{[\s\S]*?\n\}/g) ?? []) {
+      for (const cls of classes) {
+        expect(block.includes(`.${cls} {`) || block.includes(`.${cls},`)).toBe(false);
+      }
+    }
   });
 });

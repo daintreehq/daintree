@@ -414,13 +414,14 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
         // over the title bar even with nothing showing (#12347).
         "app-no-drag",
         "pointer-events-auto relative w-full min-w-[240px] max-w-[360px]",
-        "transition-[transform,opacity]",
-        "motion-reduce:transition-none motion-reduce:duration-0",
-        isVisible ? "opacity-100" : "opacity-0"
+        // Tailwind v4 translate-* emits the individual `translate` property, so
+        // it is listed by name. Reduced motion keeps the fade and drops the slide.
+        "transition-[translate,opacity]",
+        "motion-reduce:transition-opacity motion-reduce:translate-none",
+        isVisible ? "opacity-100 translate-x-0" : "opacity-0 translate-x-8"
       )}
       style={
         {
-          transform: `translateX(${isVisible ? "0px" : "2rem"})`,
           transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
           transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
         } as CSSProperties

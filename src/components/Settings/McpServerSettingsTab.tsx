@@ -707,7 +707,7 @@ export function McpServerSettingsTab() {
                 data-animated-chevron
                 aria-hidden="true"
                 className={cn(
-                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
                   bearersExpanded && "rotate-90"
                 )}
               />
@@ -757,7 +757,7 @@ export function McpServerSettingsTab() {
                 data-animated-chevron
                 aria-hidden="true"
                 className={cn(
-                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
                   helpBearersExpanded && "rotate-90"
                 )}
               />

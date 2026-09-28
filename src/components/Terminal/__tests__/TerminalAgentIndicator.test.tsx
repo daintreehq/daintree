@@ -419,7 +419,7 @@ describe("TerminalAgentIndicator — elapsed-state-duration suffix", () => {
     const tooltips = screen.getAllByTestId("tooltip-content");
     const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: working"));
     expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.querySelector(".motion-safe\\:animate-in")).toBeNull();
+    expect(agentTooltip!.querySelector(".animate-in")).toBeNull();
   });
 
   it("renders the duration suffix in an animated span past the 10-second threshold", () => {
@@ -432,12 +432,13 @@ describe("TerminalAgentIndicator — elapsed-state-duration suffix", () => {
     const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: working"));
     expect(agentTooltip).toBeTruthy();
 
-    const animatedSpan = agentTooltip!.querySelector(".motion-safe\\:animate-in");
+    const animatedSpan = agentTooltip!.querySelector(".animate-in");
     expect(animatedSpan).toBeTruthy();
     const cls = animatedSpan!.getAttribute("class")!;
-    expect(cls).toContain("motion-safe:animate-in");
-    expect(cls).toContain("motion-safe:fade-in");
-    expect(cls).toContain("motion-safe:duration-150");
+    expect(cls).toContain("animate-in");
+    expect(cls).toContain("fade-in");
+    // A fade is not motion, so it is never gated on a motion variant.
+    expect(cls).not.toMatch(/motion-(safe|reduce):/);
     expect(cls).not.toMatch(/\bopacity-/);
     expect(animatedSpan!.textContent).toContain("·");
     expect(animatedSpan!.textContent).toContain("30s");

@@ -314,24 +314,17 @@ export function InlineStatusBanner({
   const reportSeverity = useTitleBarSurface();
   const isTitleBarSurface = reportSeverity !== null;
 
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    // `matchMedia` is guarded separately from `window`: the SSR check above only
-    // covers `window` being absent entirely, but a jsdom environment has a
-    // `window` with no `matchMedia` implementation. Calling it there threw and
-    // took the whole banner subtree down with it — which, for a component this
-    // widely mounted, turns one missing test-env stub into an unrelated-looking
-    // render failure somewhere else on the page.
-    ((typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches) ||
-      (typeof document !== "undefined" &&
-        (document.body.getAttribute("data-reduce-animations") === "true" ||
-          document.body.getAttribute("data-performance-mode") === "true")));
+  // Reduced motion keeps the entrance's fade and drops only its slide (the
+  // `motion-reduce:` utilities below), so only performance mode, which
+  // suppresses every transition, skips the entrance outright.
+  const performanceMode =
+    typeof document !== "undefined" &&
+    document.body.getAttribute("data-performance-mode") === "true";
   // The title-bar surface never slides in: main tints the native caption strip
   // the instant the severity is reported, and a banner easing in under an
   // already-tinted strip reads as two surfaces disagreeing. Inline banners
   // keep their entrance.
-  const shouldAnimate = animated && !prefersReducedMotion && !isTitleBarSurface;
+  const shouldAnimate = animated && !performanceMode && !isTitleBarSurface;
 
   const [isVisible, setIsVisible] = useState(!shouldAnimate);
   const rafRef = useRef<number | null>(null);
@@ -635,8 +628,10 @@ export function InlineStatusBanner({
         // Scoped, not bare: `transition` carries box-shadow, every colour
         // property and filter along with it, and this banner's entry is an
         // opacity-and-slide. 250ms is BANNER_ENTER_DURATION from the motion
-        // scale, which is what generates this utility.
-        shouldAnimate && "transition-[opacity,translate] duration-250",
+        // scale, which is what generates this utility; the curve is the shared
+        // entry easing.
+        shouldAnimate &&
+          "transition-[opacity,translate] duration-250 ease-[var(--ease-spring-critical)] motion-reduce:transition-opacity motion-reduce:translate-none",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
         isUntinted && "bg-overlay-subtle",
         edgeClass,

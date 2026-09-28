@@ -279,6 +279,7 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
         className="grid w-full grid-cols-[auto_auto_1fr_auto] items-start gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       >
         <ChevronRight
+          data-animated-chevron
           aria-hidden
           className={cn(
             "mt-px w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",

@@ -139,7 +139,7 @@ variants: `(bare)` `-subtle` `-text` `-border`
 
 **Custom variants** — write as `variant:utility`
 
-`reduce-motion:`
+`reduce-motion:` `motion-reduce:` `motion-safe:`
 
 <!-- END generated: plugin-style-vocabulary -->
 

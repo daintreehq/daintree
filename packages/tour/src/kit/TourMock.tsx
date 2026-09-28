@@ -36,7 +36,7 @@ export function typingRate(
 /** Entry/exit for any element a cue reveals. Opacity survives reduced motion; the lift does not. */
 export function reveal(visible: boolean, from: "below" | "above" | "left" | "none" = "below") {
   return cn(
-    "transition-[opacity,translate] duration-200 ease-out reduce-motion:translate-0",
+    "transition-[opacity,translate] duration-200 ease-out motion-reduce:translate-0",
     visible ? "opacity-100 translate-0" : "opacity-0 pointer-events-none",
     !visible && from === "below" && "translate-y-2",
     !visible && from === "above" && "-translate-y-2",
@@ -256,7 +256,7 @@ export function MockCursor({
       data-tour-cursor={anchor ?? undefined}
       className={cn(
         "pointer-events-none absolute left-0 top-0 z-40",
-        "transition-[translate,opacity] duration-[450ms] ease-[cubic-bezier(0.45,0,0.2,1)] reduce-motion:transition-[opacity]",
+        "transition-[translate,opacity] duration-[450ms] ease-[cubic-bezier(0.45,0,0.2,1)] motion-reduce:transition-[opacity]",
         visible ? "opacity-100" : "opacity-0"
       )}
       style={{ translate: `${point.x}px ${point.y}px` }}

@@ -4,7 +4,8 @@ import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
-import { useAnimate, useReducedMotion } from "framer-motion";
+import { useAnimate } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { WorktreeDetails } from "../WorktreeDetails";
@@ -143,7 +144,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
 
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
   const [countScope, animate] = useAnimate<HTMLSpanElement>();
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
   const didMountRef = useRef(false);
   const prevCountRef = useRef(changedFileCount);
   const lastBumpTimeRef = useRef(0);

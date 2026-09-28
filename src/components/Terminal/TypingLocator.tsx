@@ -72,7 +72,8 @@ export function TypingLocator() {
           "text-xs text-text-secondary",
           // `starting:` paints the first frame hidden so the entry actually
           // animates; Tailwind v4 `translate-*` sets `translate`, not `transform`.
-          "motion-safe:transition-[opacity,translate] motion-safe:starting:opacity-0 motion-safe:starting:-translate-y-1",
+          "transition-[opacity,translate] starting:opacity-0 starting:-translate-y-1",
+          "motion-reduce:transition-opacity motion-reduce:translate-none",
           isLeaving ? "opacity-0" : "opacity-100"
         )}
         style={{

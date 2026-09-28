@@ -76,7 +76,7 @@
   transition-timing-function: var(--ease-panel-minimize);
 }
 
-@media (prefers-reduced-motion: reduce) {
+@variant reduce-motion {
   .file-pane-body-releasing {
     transition-property: none;
   }

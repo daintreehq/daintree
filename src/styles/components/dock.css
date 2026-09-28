@@ -11,39 +11,26 @@
  * empty so it reclaims its layout slot and drops out of the a11y tree.
  * Tier 2 timing from animationUtils.ts: 200ms enter (UI_ENTER_DURATION),
  * 120ms exit (UI_EXIT_DURATION). The Button inside owns its own hover/press
- * transitions; this wrapper only carries presence.
+ * transitions; this wrapper only carries presence. Opacity-only, so reduced
+ * motion leaves it as it is.
  */
 .dock-status-pill {
   display: none;
   opacity: 0;
   transition:
-    display 120ms allow-discrete,
-    opacity 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit);
 }
 
 .dock-status-pill[data-visible="true"] {
   display: inline-flex;
   opacity: 1;
   transition:
-    display 200ms allow-discrete,
-    opacity 200ms ease;
+    display var(--duration-200) allow-discrete,
+    opacity var(--duration-200) var(--ease-spring-critical);
 
   @starting-style {
     opacity: 0;
-  }
-}
-
-/* ── Reduced motion ──
- * The fade is already opacity-only (WCAG 2.3.3-safe). Keep a timed (not
- * `none`) display swap so the discrete show/hide still completes
- * (lesson #6182); mirror the [data-toolbar-overflow-trigger] treatment.
- */
-@variant reduce-motion {
-  .dock-status-pill,
-  .dock-status-pill[data-visible="true"] {
-    transition:
-      display 0s,
-      opacity 200ms ease;
   }
 }
 

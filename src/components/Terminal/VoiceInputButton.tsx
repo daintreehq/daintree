@@ -3,6 +3,7 @@ import { Mic } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import type { VoiceInputError } from "@shared/types";
@@ -159,9 +160,15 @@ export function VoiceInputButton({
       const scale = SCALE_MIN + level * (SCALE_MAX - SCALE_MIN);
 
       // Rotate wrapper with scale for thickness modulation
+      // Reduced motion holds the arc still at its resting thickness; its
+      // brightness still follows the voice. Read per frame so flipping either
+      // preference mid-dictation takes effect at once.
+      const still = prefersReducedMotion();
       const wrapper = wrapperRef.current;
       if (wrapper) {
-        wrapper.style.transform = `rotate(${angle}deg) scale(${scale}) translateZ(0)`;
+        wrapper.style.transform = still
+          ? `rotate(0deg) scale(${SCALE_MIN}) translateZ(0)`
+          : `rotate(${angle}deg) scale(${scale}) translateZ(0)`;
       }
 
       // Refined gradient — exponential clustering near the head
@@ -203,7 +210,7 @@ export function VoiceInputButton({
       // Icon — slight inverse scale on peaks
       const icon = iconRef.current;
       if (icon) {
-        const iconScale = 1 - level * 0.08;
+        const iconScale = still ? 1 : 1 - level * 0.08;
         icon.style.transform = `scale(${iconScale})`;
       }
 
@@ -282,7 +289,7 @@ export function VoiceInputButton({
               maskComposite: "exclude",
               WebkitMaskComposite: "xor",
               padding: `${BASE_THICKNESS}px`,
-              transition: "opacity 80ms ease-out",
+              transition: "opacity var(--duration-75) ease-out",
             }}
           />
           {/* Rotating wrapper */}

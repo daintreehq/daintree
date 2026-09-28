@@ -97,7 +97,8 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import type { WorktreeSnapshot } from "@shared/types";
-import { m, useReducedMotion } from "framer-motion";
+import { m } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import {
   resolveContainerId,
   filterTerminalsByContainer,
@@ -436,7 +437,7 @@ function DragOverlayWithCursorTracking({
 }) {
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const pointerPositionRef = useRef<{ x: number; y: number } | null>(null);
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
 
   useDndMonitor({
     onDragStart({ activatorEvent }) {
@@ -631,7 +632,7 @@ export function DndProvider({ children }: DndProviderProps) {
   // against a future horizontally-scrollable ancestor, which would otherwise
   // hit Infinity speed inside dnd-kit's getScrollDirectionAndSpeed via the
   // `acceleration * abs(delta / threshold.width)` divide-by-zero path.
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
   const autoScroll = useMemo(
     () => ({
       threshold: { x: 0, y: 0.08 },

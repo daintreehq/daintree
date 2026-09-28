@@ -36,8 +36,9 @@ function EnvVarReference({ suggestions }: { suggestions: EnvSuggestion[] }) {
         className="group flex items-center gap-1.5 rounded-[var(--radius-sm)] text-xs text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
       >
         <ChevronRight
+          data-animated-chevron
           className={cn(
-            "h-3.5 w-3.5 shrink-0 transition-transform duration-150",
+            "h-3.5 w-3.5 shrink-0 transition-transform duration-150 ease-out",
             open ? "rotate-90" : "rotate-0"
           )}
           aria-hidden="true"

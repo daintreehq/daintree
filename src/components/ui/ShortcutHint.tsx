@@ -5,9 +5,13 @@ import type { ActionId } from "@shared/types/actions";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
-import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
+import {
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+  UI_PALETTE_ENTER_DURATION,
+  UI_PALETTE_EXIT_DURATION,
+} from "@/lib/animationUtils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
-import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { shortcutHintStore, type ShortcutHintRect } from "@/store/shortcutHintStore";
 import { actionService } from "@/services/ActionService";
 import { KbdChord } from "./Kbd";
@@ -55,7 +59,6 @@ export function ShortcutHint() {
     width: window.innerWidth,
     height: window.innerHeight,
   }));
-  const skipMotion = useShouldSkipMotion();
   // Keep the last visible hint in state so we can keep rendering it while
   // the exit animation plays (after activeHint has cleared).
   const [lastHint, setLastHint] = useState(activeHint);
@@ -196,12 +199,17 @@ export function ShortcutHint() {
             "max-w-[calc(100vw-16px)]",
             "rounded-[var(--radius-md)] surface-overlay shadow-overlay",
             "text-xs text-text-primary",
-            !skipMotion && "transition-[opacity,translate]",
-            !skipMotion && (isVisible ? "duration-150 ease-out" : "duration-100 ease-out"),
-            isVisible ? "opacity-100" : "opacity-0",
-            !skipMotion && !isVisible && "translate-y-1"
+            // The tooltip tier and easing pair. Reduced motion keeps the fade
+            // and drops the 4px drift.
+            "transition-[opacity,translate] motion-reduce:transition-opacity motion-reduce:translate-none",
+            isVisible ? "opacity-100" : "opacity-0 translate-y-1"
           )}
-          style={{ left, top }}
+          style={{
+            left,
+            top,
+            transitionDuration: `${isVisible ? UI_PALETTE_ENTER_DURATION : UI_PALETTE_EXIT_DURATION}ms`,
+            transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+          }}
           aria-hidden="true"
         >
           {title && <span className="min-w-0 truncate">{title}</span>}

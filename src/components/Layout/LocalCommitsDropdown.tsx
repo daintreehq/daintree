@@ -351,8 +351,9 @@ function LocalCommitRow({
         {hasBody ? (
           <ChevronRight
             aria-hidden="true"
+            data-animated-chevron
             className={cn(
-              "shrink-0 mt-0.5 size-4 text-text-secondary transition-transform duration-150 ease-out motion-reduce:transition-none",
+              "shrink-0 mt-0.5 size-4 text-text-secondary transition-transform duration-150 ease-out",
               isExpanded && "rotate-90"
             )}
           />
@@ -436,8 +437,9 @@ function LocalCommitRow({
           {hasBody && (
             <div
               aria-hidden={!isExpanded}
+              data-animated-reveal
               className={cn(
-                "grid transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none",
+                "grid transition-[grid-template-rows] duration-150 ease-out",
                 isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
               )}
             >

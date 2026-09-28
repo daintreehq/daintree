@@ -134,7 +134,7 @@ export function WorktreeActionsToolbar({
           <ChevronRight
             data-animated-chevron
             className={cn(
-              "w-3.5 h-3.5 transition-transform duration-150",
+              "w-3.5 h-3.5 transition-transform duration-150 ease-out",
               isCollapsed ? "rotate-0" : "rotate-90"
             )}
             aria-hidden="true"

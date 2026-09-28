@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { useRef } from "react";
 
 vi.mock("@/services/ActionService", () => ({
@@ -146,7 +146,12 @@ describe("ForgeTokenCallout", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss GitHub token warning" }));
 
-    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+    // Retiring: it fades out on the exit tier, inert from the moment it is
+    // dismissed, then leaves.
+    const retiring = screen.queryByTestId("forge-token-callout");
+    expect(retiring).not.toBeNull();
+    expect(retiring?.hasAttribute("inert")).toBe(true);
+    await waitFor(() => expect(screen.queryByTestId("forge-token-callout")).toBeNull());
     expect(useForgeTokenCalloutStore.getState().dismissed[PROVIDER_ID]).toBe("fp-1");
 
     unmount();
@@ -163,7 +168,7 @@ describe("ForgeTokenCallout", () => {
     setTokenHealth(0);
     await flush();
 
-    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("forge-token-callout")).toBeNull());
   });
 
   it("stays quiet when the token is replaced until a request fails with the new one", async () => {
@@ -176,7 +181,7 @@ describe("ForgeTokenCallout", () => {
     getCredentialStatus.mockResolvedValue({ hasCredential: true, fingerprint: "fp-2" });
     setTokenHealth(1);
     await flush();
-    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("forge-token-callout")).toBeNull());
 
     // The next request settles, still failing — now on token B.
     rerender(<Harness errorKind="invalid" validating />);
@@ -199,7 +204,7 @@ describe("ForgeTokenCallout", () => {
     rerender(<Harness errorKind="invalid" validating={false} />);
     await flush();
 
-    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("forge-token-callout")).toBeNull());
   });
 
   it("asks for the fingerprint again after a failed lookup once a request settles", async () => {
@@ -241,7 +246,7 @@ describe("ForgeTokenCallout", () => {
     close.focus();
     fireEvent.keyDown(close, { key: "Escape" });
 
-    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("forge-token-callout")).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "issues pill" }));
   });
 
@@ -263,7 +268,7 @@ describe("ForgeTokenCallout", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss GitHub token warning" }));
 
-    expect(screen.queryByTestId("forge-token-callout")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("forge-token-callout")).toBeNull());
     expect(document.activeElement).toBe(outside);
     outside.remove();
   });

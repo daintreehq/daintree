@@ -547,8 +547,9 @@ export function WorktreeOverviewRow({
                     >
                       <span className="flex items-center gap-1.5 text-2xs text-text-secondary">
                         <ChevronRight
+                          data-animated-chevron
                           className={cn(
-                            "h-3 w-3 shrink-0 transition-transform duration-150",
+                            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
                             sessionsExpanded && "rotate-90"
                           )}
                           aria-hidden="true"

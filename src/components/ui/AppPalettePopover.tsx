@@ -1,11 +1,27 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  type CSSProperties,
+} from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PALETTE_HEADER_ATTR } from "@/components/ui/paletteHeaderAttr";
 import { PALETTE_SURFACE_WIDTHS, type PaletteSurfaceTier } from "@/components/ui/AppPaletteDialog";
 import { cn } from "@/lib/utils";
+import { UI_PALETTE_ENTER_DURATION, UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
 import { useUIStore } from "@/store/uiStore";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+
+/** The palette tier (150/100ms) through the overlay motion class's variables. */
+const PALETTE_TIER_STYLE: CSSProperties &
+  Record<"--overlay-enter-duration" | "--overlay-exit-duration", string> = {
+  "--overlay-enter-duration": `${UI_PALETTE_ENTER_DURATION}ms`,
+  "--overlay-exit-duration": `${UI_PALETTE_EXIT_DURATION}ms`,
+};
 
 /**
  * The anchored half of the palette shell.
@@ -402,10 +418,11 @@ function AppPalettePopoverContent({
         // Palette tier, not the popover tier `PopoverContent` defaults to. The
         // same palette opens as this and as `AppPaletteDialog`, and at the
         // inherited 200/120 the anchored one felt heavier than the modal for no
-        // reason a user could name.
-        "data-[state=open]:duration-150 data-[state=closed]:duration-100",
+        // reason a user could name. Set through the overlay class's duration
+        // variables, which is the one spelling `cn()` cannot lose.
         className
       )}
+      style={PALETTE_TIER_STYLE}
       aria-label={ariaLabel}
       // Radix does not set this itself. `aria-modal="false"` is noise, so the
       // non-modal form carries nothing rather than a negation.

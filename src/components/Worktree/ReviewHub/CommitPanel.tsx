@@ -650,7 +650,7 @@ export function CommitPanel({
                   className="h-1 rounded-full bg-overlay-soft overflow-hidden"
                 >
                   <div
-                    className="h-full rounded-full bg-text-secondary transition-[width] duration-300 ease-out"
+                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                     style={{ width: `${value}%` }}
                   />
                 </div>

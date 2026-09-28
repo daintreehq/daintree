@@ -35,6 +35,14 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useOverlayClaim } from "@/hooks";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  getUiTransitionDuration,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -288,6 +296,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // Register the viewport claim so AppLayout can `inert` the app chrome while
   // the view is open, and wire Escape-to-close through the shared LIFO stack.
   useOverlayClaim("plugin-manager", isOpen);
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen,
+    animationDuration: getUiTransitionDuration("exit"),
+    syncEnter: true,
+  });
   useEscapeStack(isOpen, close);
   // The global keybinding layer takes Escape at window capture and pops the
   // escape stack before Radix's menu ever sees the key, so an open Install
@@ -475,16 +488,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // the body — instead of the panel or control the user opened the manager
   // from. Skipped when the user has already put focus somewhere else visible.
   const wasOpenRef = useRef(isOpen);
+  const viewRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const wasOpen = wasOpenRef.current;
     wasOpenRef.current = isOpen;
     if (!wasOpen || isOpen) return;
     const target = usePluginManagerStore.getState().returnFocusTarget;
     usePluginManagerStore.setState({ returnFocusTarget: null });
-    // The view renders nothing while closed, so focus that was inside it is on
-    // the body by now.
+    // The view stays painted, inert, through its exit fade, so focus that was
+    // inside it is either still there or already on the body.
     const active = document.activeElement;
-    const focusIsStranded = active === null || active === document.body;
+    const focusIsStranded =
+      active === null || active === document.body || !!viewRef.current?.contains(active);
     if (target?.isConnected && focusIsStranded) {
       target.focus({ preventScroll: true });
     }
@@ -650,17 +665,31 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     }
   };
 
-  if (!isOpen) return null;
+  if (!shouldRender) return null;
 
   return createPortal(
     <div
+      ref={viewRef}
       role="region"
       aria-label="Plugin manager"
       data-testid="plugin-manager-view"
+      // Painted through its exit fade, but nothing in it takes a click or
+      // focus once it is closing.
+      inert={!isOpen || undefined}
       onFocus={(e) => {
         lastFocusedRef.current = e.target instanceof HTMLElement ? e.target : null;
       }}
-      className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-surface-canvas motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
+      className={cn(
+        "fixed inset-0 z-[var(--z-modal)] flex flex-col bg-surface-canvas",
+        // A full-window view: it fades on the entry/exit tier and never moves,
+        // so reduced motion leaves it as it is.
+        "transition-opacity starting:opacity-0",
+        isVisible ? "opacity-100" : "opacity-0"
+      )}
+      style={{
+        transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
+        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+      }}
     >
       <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-border-default app-drag-region">
         <div className="flex items-center gap-2 min-w-0">
@@ -669,7 +698,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               aria-hidden="true"
               data-fullscreen={isFullscreen ? "true" : undefined}
               className={cn(
-                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120 motion-reduce:transition-none",
                 isFullscreen ? "w-0" : "w-16"
               )}
             />
@@ -734,7 +763,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               aria-hidden="true"
               data-fullscreen={isFullscreen ? "true" : undefined}
               className={cn(
-                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120 motion-reduce:transition-none",
                 isFullscreen && "w-0"
               )}
               style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}

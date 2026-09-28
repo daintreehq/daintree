@@ -4,11 +4,11 @@ import {
   CircleCheck,
   CircleDashed,
   ExternalLink,
-  ChevronDown,
   ChevronRight,
   Download,
   AlertCircle,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
@@ -390,11 +390,14 @@ export function AgentCliStep({
                         aria-controls={`error-log-${agentId}`}
                         className="text-2xs"
                       >
-                        {isErrorExpanded ? (
-                          <ChevronDown className="w-3 h-3" />
-                        ) : (
-                          <ChevronRight className="w-3 h-3" />
-                        )}
+                        <ChevronRight
+                          data-animated-chevron
+                          className={cn(
+                            "w-3 h-3 transition-transform duration-150 ease-out",
+                            isErrorExpanded && "rotate-90"
+                          )}
+                          aria-hidden="true"
+                        />
                         Show error log
                       </Button>
                       <pre

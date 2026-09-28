@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
@@ -114,7 +114,6 @@ function RemovedHeading({
       </div>
     );
   }
-  const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <div>
       <button
@@ -126,7 +125,14 @@ function RemovedHeading({
         aria-expanded={expanded}
         className={cn(className, "w-full text-left transition-colors hover:text-text-primary")}
       >
-        <Chevron className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <ChevronRight
+          data-animated-chevron
+          className={cn(
+            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+            expanded && "rotate-90"
+          )}
+          aria-hidden="true"
+        />
         <span>Worktree removed</span>
         <span aria-hidden="true">·</span>
         <span className="tabular-nums">{count}</span>

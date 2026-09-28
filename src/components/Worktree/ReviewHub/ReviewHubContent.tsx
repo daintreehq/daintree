@@ -2299,8 +2299,9 @@ export function ReviewHubContent({
                         )}
                       >
                         <ChevronRight
+                          data-animated-chevron
                           className={cn(
-                            "w-3 h-3 transition-transform duration-150",
+                            "w-3 h-3 transition-transform duration-150 ease-out",
                             fileListExpanded && "rotate-90"
                           )}
                           aria-hidden="true"

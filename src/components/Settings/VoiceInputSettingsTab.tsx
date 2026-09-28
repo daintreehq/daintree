@@ -1292,7 +1292,7 @@ function CorePromptRow() {
             <ChevronRight
               data-animated-chevron
               aria-hidden="true"
-              className={cn("transition-transform duration-150", expanded && "rotate-90")}
+              className={cn("transition-transform duration-150 ease-out", expanded && "rotate-90")}
             />
             {expanded ? "Hide core prompt" : "Inspect core prompt"}
           </Button>

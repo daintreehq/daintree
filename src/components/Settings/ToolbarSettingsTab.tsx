@@ -1092,8 +1092,9 @@ export function ToolbarSettingsTab() {
                       )}
                     >
                       <ChevronRight
+                        data-animated-chevron
                         className={cn(
-                          "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                          "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
                           showUninstalledAgents ? "rotate-90" : "rotate-0"
                         )}
                         aria-hidden="true"

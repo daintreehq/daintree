@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronUp } from "lucide-react";
-import { useReducedMotion } from "framer-motion";
-import { DURATION_200 } from "@/lib/animationUtils";
+import { Check, ChevronDown } from "lucide-react";
+import {
+  DURATION_200,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -68,7 +74,7 @@ export function GettingStartedChecklist({
   onMarkItem,
 }: GettingStartedChecklistProps) {
   const [isVisible, setIsVisible] = useState(false);
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
   const items = checklist.items;
   const prevItemsRef = useRef(items);
   const popTimersRef = useRef(new Map<ChecklistItemId, ReturnType<typeof setTimeout>>());
@@ -191,10 +197,14 @@ export function GettingStartedChecklist({
           "rounded-[var(--radius-sm)] border border-border-default bg-surface-panel",
           "text-sm text-text-primary",
           "shadow-[var(--theme-shadow-floating)]",
-          "transition-[translate,opacity] duration-200 ease-out",
-          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none",
+          "transition-[translate,opacity]",
+          "motion-reduce:transition-opacity motion-reduce:translate-none",
           isVisible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
         )}
+        style={{
+          transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2.5">
@@ -216,11 +226,14 @@ export function GettingStartedChecklist({
                   animateKey={counterAnimateKey}
                   textClassName="text-3xs font-mono tabular-nums text-text-secondary"
                 />
-                {collapsed ? (
-                  <ChevronUp className="h-3 w-3 text-text-secondary shrink-0" />
-                ) : (
-                  <ChevronDown className="h-3 w-3 text-text-secondary shrink-0" />
-                )}
+                <ChevronDown
+                  data-animated-chevron
+                  aria-hidden="true"
+                  className={cn(
+                    "h-3 w-3 text-text-secondary shrink-0 transition-transform duration-150 ease-out",
+                    collapsed && "rotate-180"
+                  )}
+                />
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{collapsed ? "Expand" : "Collapse"}</TooltipContent>
@@ -236,9 +249,9 @@ export function GettingStartedChecklist({
         {/* Collapsible body */}
         <div
           id={CHECKLIST_BODY_ID}
+          data-animated-reveal
           className={cn(
-            "overflow-hidden transition-[height] duration-300 ease-in-out",
-            "motion-reduce:transition-none motion-reduce:duration-0",
+            "overflow-hidden transition-[height] duration-150 ease-out",
             collapsed ? "h-0" : "h-auto"
           )}
           {...(collapsed ? { inert: true } : {})}

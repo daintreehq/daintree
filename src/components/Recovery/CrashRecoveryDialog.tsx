@@ -2,7 +2,6 @@ import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
-  ChevronDown,
   ChevronRight,
   Copy,
   Download,
@@ -13,6 +12,7 @@ import {
   MonitorPlay,
   GitPullRequest,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
@@ -435,11 +435,14 @@ export function CrashRecoveryDialog({
               data-testid="details-toggle"
             >
               <span className="font-medium">Error details</span>
-              {detailsOpen ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "h-4 w-4 transition-transform duration-150 ease-out",
+                  detailsOpen && "rotate-90"
+                )}
+                aria-hidden="true"
+              />
             </button>
 
             {detailsOpen && (

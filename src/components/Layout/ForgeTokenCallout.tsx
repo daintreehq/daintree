@@ -4,6 +4,14 @@ import { createPortal } from "react-dom";
 import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  getUiTransitionDuration,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 import type { ForgeTokenErrorKind } from "@/lib/forgeErrors";
 import {
   selectForgeProviderHealth,
@@ -164,7 +172,9 @@ function useAnchorPosition(
     };
   }, [anchorRef, open]);
 
-  return open ? position : null;
+  // The last measurement outlives `open`, so a dismissed callout can fade out
+  // where it stood. Re-arming measures again before paint.
+  return position;
 }
 
 /**
@@ -231,7 +241,16 @@ export function ForgeTokenCallout({
     );
   }, [anchorRef, dismiss, fingerprint, providerId]);
 
-  if (!open || !position || !reconnectKind) return null;
+  // Dismissal fades the callout out on the exit tier. The anchor position and
+  // the error it reports outlive `open`, so the retiring frame still has them;
+  // the toolbar unmounting it outright (the error cleared) skips the exit.
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen: open,
+    animationDuration: getUiTransitionDuration("exit"),
+    syncEnter: true,
+  });
+
+  if (!shouldRender || !position || !reconnectKind) return null;
 
   const actions: BannerAction[] = [
     {
@@ -262,8 +281,19 @@ export function ForgeTokenCallout({
       role="region"
       aria-label={COPY[reconnectKind](providerName)}
       // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-      className="app-no-drag fixed z-[calc(var(--z-modal)-1)] text-text-primary"
-      style={{ top: position.top, left: position.left, width: CALLOUT_WIDTH }}
+      // Drops from its anchor like a toolbar dropdown: 4px and 97% on the
+      // entry/exit tier, from `@starting-style`, and reverses on dismissal.
+      // Reduced motion keeps the fade. Retiring, it takes no pointer or keys.
+      inert={!open || undefined}
+      data-visible={isVisible}
+      className="app-no-drag fixed z-[calc(var(--z-modal)-1)] text-text-primary origin-top transition-[opacity,translate,scale] starting:opacity-0 starting:-translate-y-1 starting:scale-[0.97] data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0 data-[visible=false]:-translate-y-1 data-[visible=false]:scale-[0.97] motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none data-[visible=false]:motion-reduce:translate-none data-[visible=false]:motion-reduce:scale-none"
+      style={{
+        top: position.top,
+        left: position.left,
+        width: CALLOUT_WIDTH,
+        transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
+        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+      }}
       onPointerDownCapture={() => {
         pointerRef.current = true;
       }}

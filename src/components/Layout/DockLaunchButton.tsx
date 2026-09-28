@@ -1654,10 +1654,10 @@ function DockLaunchOption({
                 }}
               >
                 <ChevronRight
+                  data-animated-chevron
                   aria-hidden
                   className={cn(
                     "h-3 w-3 text-text-secondary transition-transform duration-150 ease-out",
-                    "motion-reduce:transition-none",
                     isExpanded && "rotate-90"
                   )}
                 />

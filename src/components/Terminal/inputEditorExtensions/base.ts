@@ -219,6 +219,7 @@ const CHIP_CLASSES = [
 ];
 
 const CHIP_ANIMATION = `chip-enter ${UI_PALETTE_ENTER_DURATION}ms ${EASE_OUT_EXPO} both`;
+const CHIP_REDUCED_ANIMATION = `chip-fade ${UI_PALETTE_ENTER_DURATION}ms ${EASE_OUT_EXPO} both`;
 
 // Lives outside the swappable buildInputBarTheme compartment so terminal
 // color-scheme changes don't re-inject @keyframes and re-trigger the entrance
@@ -229,13 +230,21 @@ export const chipEntranceTheme: Extension = EditorView.baseTheme({
     to: { opacity: "1", transform: "translateY(0)" },
   },
   ...Object.fromEntries(CHIP_CLASSES.map((cls) => [cls, { animation: CHIP_ANIMATION }])),
-  // Honor the OS-level prefers-reduced-motion and the Daintree-level
-  // "Reduce UI animations" toggle (body[data-reduce-animations]). WCAG 2.3.3.
+  "@keyframes chip-fade": {
+    from: { opacity: "0" },
+    to: { opacity: "1" },
+  },
+  // The OS-level prefers-reduced-motion and the Daintree-level "Reduce UI
+  // animations" toggle (body[data-reduce-animations]) keep the fade and drop
+  // the 2px rise. WCAG 2.3.3.
   "@media (prefers-reduced-motion: reduce)": Object.fromEntries(
-    CHIP_CLASSES.map((cls) => [cls, { animation: "none" }])
+    CHIP_CLASSES.map((cls) => [cls, { animation: CHIP_REDUCED_ANIMATION }])
   ),
   ...Object.fromEntries(
-    CHIP_CLASSES.map((cls) => [`body[data-reduce-animations="true"] ${cls}`, { animation: "none" }])
+    CHIP_CLASSES.map((cls) => [
+      `body[data-reduce-animations="true"] ${cls}`,
+      { animation: CHIP_REDUCED_ANIMATION },
+    ])
   ),
 });
 

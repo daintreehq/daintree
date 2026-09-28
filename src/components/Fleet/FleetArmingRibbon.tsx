@@ -10,12 +10,19 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { AnimatePresence, m, useReducedMotion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { useEscapeStack, useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import {
+  UI_DOHERTY_THRESHOLD,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING_FM,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING_FM,
+} from "@/lib/animationUtils";
 import "./fleetRawInputBroadcast";
 import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
@@ -199,7 +206,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
   const ribbonRef = useRef<HTMLDivElement | null>(null);
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = useShouldSkipMotion();
 
   useEffect(() => {
     if (armedCount < 2 && popoverOpen) {
@@ -626,27 +633,26 @@ export function FleetArmingRibbon(): ReactElement | null {
     </>
   );
 
-  // Entrance is a low-bounce spring (~200ms). Exit is critically damped and
-  // faster (~120ms) so the bar tucks away cleanly without overshoot —
-  // important when the user is about to refocus an unarmed pane. Framer
-  // Motion 12 reads `transition` from inside the exit variant when present,
-  // overriding the top-level `transition` for exit only.
+  // The entry/exit tier every other surface enters and leaves on: 200ms in on
+  // the decelerate curve, 120ms out on the accelerate one, so the bar tucks
+  // away before the user refocuses an unarmed pane. Framer Motion 12 reads
+  // `transition` from inside the exit variant when present, overriding the
+  // top-level `transition` for exit only. Reduced motion keeps the fade and
+  // drops the slide.
+  const enter = { duration: UI_ENTER_DURATION / 1000, ease: UI_ENTER_EASING_FM };
+  const leave = { duration: UI_EXIT_DURATION / 1000, ease: UI_EXIT_EASING_FM };
   const ribbonMotionProps = reduceMotion
     ? {
         initial: { opacity: 0 },
         animate: { opacity: 1 },
-        exit: { opacity: 0 },
-        transition: { duration: 0.12 },
+        exit: { opacity: 0, transition: leave },
+        transition: enter,
       }
     : {
         initial: { y: "-100%", opacity: 0 },
         animate: { y: 0, opacity: 1 },
-        exit: {
-          y: "-100%",
-          opacity: 0,
-          transition: { duration: 0.12, ease: [0.4, 0, 0.2, 1] as const },
-        },
-        transition: { type: "spring" as const, duration: 0.2, bounce: 0.12 },
+        exit: { y: "-100%", opacity: 0, transition: leave },
+        transition: enter,
       };
 
   const exitAriaShortcut = comboToAriaKeyshortcuts(FLEET_EXIT_COMBO, isMac());

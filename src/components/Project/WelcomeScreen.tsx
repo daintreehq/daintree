@@ -176,7 +176,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   return (
     <div className="@container/welcome h-full w-full">
       <div
-        className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in duration-500"
+        className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in [--tw-animation-duration:var(--duration-200)]"
         // Theme-authored wash layered over the existing canvas; `none` = today.
         style={{ background: "var(--welcome-field-wash, none)" }}
       >
@@ -736,7 +736,7 @@ function InlineChecklist({
         className="w-full h-1 bg-overlay-medium rounded-full mb-4 overflow-hidden"
       >
         <div
-          className="h-full bg-text-secondary rounded-full transition-[width] duration-500"
+          className="h-full bg-text-secondary rounded-full transition-[width] duration-150 ease-out"
           style={{ width: `${(progressDone / progressTotal) * 100}%` }}
         />
       </div>

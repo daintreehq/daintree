@@ -21,7 +21,7 @@ export function TourCaption() {
       {caption && (
         <p
           key={caption.start}
-          className="max-w-[60ch] text-balance text-center text-sm leading-snug text-text-primary motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-150)]"
+          className="max-w-[60ch] text-balance text-center text-sm leading-snug text-text-primary animate-in fade-in [--tw-animation-duration:var(--duration-150)]"
         >
           {caption.text}
         </p>
@@ -154,7 +154,7 @@ function EndCard({
   return (
     <div
       ref={ref}
-      className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-surface-canvas/90 backdrop-blur-md motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]"
+      className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-surface-canvas/90 backdrop-blur-md animate-in fade-in [--tw-animation-duration:var(--duration-200)]"
     >
       <span className="text-xs font-medium text-text-secondary">
         {nextTitle ? `Up next · Chapter ${nextNumber}` : "That's the tour"}

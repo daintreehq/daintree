@@ -352,7 +352,7 @@ export function EditorIntegrationTab() {
                   <ChevronRight
                     data-animated-chevron
                     className={cn(
-                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out group-hover:text-text-primary",
                       showDetected ? "rotate-90" : "rotate-0"
                     )}
                     aria-hidden="true"

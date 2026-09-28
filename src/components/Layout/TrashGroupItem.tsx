@@ -1,5 +1,6 @@
 import { useState, useCallback, useSyncExternalStore } from "react";
-import { RotateCcw, X, Layers, ChevronDown, ChevronRight, Unlink } from "lucide-react";
+import { RotateCcw, X, Layers, ChevronRight, Unlink } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
@@ -130,11 +131,14 @@ export function TrashGroupItem({
           aria-expanded={isExpanded}
           aria-controls={`trash-group-${groupRestoreId}`}
         >
-          {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-text-secondary" />
-          ) : (
-            <ChevronRight className="w-3 h-3 text-text-secondary" />
-          )}
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "w-3 h-3 text-text-secondary transition-transform duration-150 ease-out",
+              isExpanded && "rotate-90"
+            )}
+            aria-hidden="true"
+          />
         </Button>
 
         <div className="shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">

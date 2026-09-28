@@ -17,7 +17,8 @@ import type { CliAvailability } from "@shared/types";
 import { useAgentSetupPoll } from "./useAgentSetupPoll";
 import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ArrowRight, Check, Sun, Moon, FolderOpen } from "lucide-react";
-import { AnimatePresence, m, useReducedMotion, type Variants } from "framer-motion";
+import { AnimatePresence, m, type Variants } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Plug } from "@/components/icons";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import {
@@ -25,7 +26,7 @@ import {
   UI_EXIT_DURATION,
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
-  EASE_OUT_EXPO_FM,
+  UI_ENTER_EASING_FM,
   UI_EXIT_EASING_FM,
 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
@@ -223,7 +224,7 @@ const stepVariants: Variants = {
   animate: {
     x: 0,
     opacity: 1,
-    transition: { duration: UI_ENTER_DURATION / 1000, ease: EASE_OUT_EXPO_FM },
+    transition: { duration: UI_ENTER_DURATION / 1000, ease: UI_ENTER_EASING_FM },
   },
   exit: (direction: number) => ({
     x: direction * -STEP_SLIDE_PX,
@@ -520,7 +521,7 @@ export function AgentSetupWizard({
   const isOpenRef = useRef(isOpen);
   const initRef = useRef(false);
   const directionRef = useRef<1 | -1>(1);
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
 
   useEffect(() => {
     isOpenRef.current = isOpen;
