@@ -1629,6 +1629,12 @@ export class HelpSessionService {
     return record.copilotLaunchArgs ?? [];
   }
 
+  /** The project a live session was provisioned for; null for an unknown or revoked one. */
+  getSessionProjectId(sessionId: string): string | null {
+    const record = this.sessionsById.get(sessionId);
+    return record && !record.revoked ? record.projectId : null;
+  }
+
   /**
    * Invalidates the in-memory bearer for this session. The on-disk dir is
    * intentionally preserved across launches so the user's one-time Claude
@@ -1647,12 +1653,6 @@ export class HelpSessionService {
    * revokes (renderer IPC) leave the option off so "+ New session" /
    * explicit close discards the transcript as the user intended.
    */
-  /** The project a live session was provisioned for; null for an unknown or revoked one. */
-  getSessionProjectId(sessionId: string): string | null {
-    const record = this.sessionsById.get(sessionId);
-    return record && !record.revoked ? record.projectId : null;
-  }
-
   revokeSession(
     sessionId: string,
     opts?: { captureHibernation?: boolean; rendererGone?: boolean }
