@@ -59,7 +59,7 @@ function ProjectPluginRow({
 }) {
   const running = plugin.state === "active";
   const failed = plugin.loadError !== undefined;
-  const nameTruncation = useTruncationDetection();
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
 
   return (
     <li
@@ -72,7 +72,7 @@ function ProjectPluginRow({
     >
       <TruncatedTooltip
         content={plugin.version ? `${plugin.displayName} v${plugin.version}` : plugin.displayName}
-        isTruncated={nameTruncation.isTruncated}
+        isTruncated={isNameTruncated}
       >
         <button
           type="button"
@@ -86,7 +86,7 @@ function ProjectPluginRow({
           <PluginGlyphTile icon={Package} size="sm" dimmed={!running || failed} />
           <span className="min-w-0 flex-1">
             <span
-              ref={nameTruncation.ref}
+              ref={nameRef}
               className={cn(
                 "block text-sm font-medium truncate",
                 !running && "text-text-secondary"

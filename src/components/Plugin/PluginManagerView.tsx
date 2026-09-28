@@ -145,7 +145,7 @@ function PluginRow({
   highlighted,
 }: PluginRowProps) {
   const label = pluginLabel(plugin);
-  const nameTruncation = useTruncationDetection();
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
   const blocklisted = plugin.blocklisted === true;
   // The switch reflects the user's INTENT, which is the only thing it controls.
   // Whether the plugin actually runs is a separate fact and gets its own line —
@@ -172,7 +172,7 @@ function PluginRow({
     >
       <TruncatedTooltip
         content={`${label} v${plugin.manifest.version}`}
-        isTruncated={nameTruncation.isTruncated}
+        isTruncated={isNameTruncated}
       >
         <button
           type="button"
@@ -183,7 +183,7 @@ function PluginRow({
           <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled || !healthy} />
           <span className="min-w-0 flex-1">
             <span
-              ref={nameTruncation.ref}
+              ref={nameRef}
               className={cn(
                 "block text-sm font-medium truncate",
                 !enabled && "text-text-secondary"

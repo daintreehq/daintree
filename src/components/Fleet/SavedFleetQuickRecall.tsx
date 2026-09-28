@@ -92,9 +92,9 @@ function SavedFleetChip({
   mode: SavedFleetQuickRecallProps["mode"];
   onRecalled: () => void;
 }): ReactElement {
-  const nameTruncation = useTruncationDetection();
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
   return (
-    <TruncatedTooltip content={scope.name} isTruncated={nameTruncation.isTruncated}>
+    <TruncatedTooltip content={scope.name} isTruncated={isNameTruncated}>
       <Button
         variant="subtle"
         size="xs"
@@ -121,7 +121,7 @@ function SavedFleetChip({
         data-testid="fleet-picker-saved-fleet"
         className="max-w-[14rem] gap-1.5 px-2 text-xs text-text-primary"
       >
-        <span ref={nameTruncation.ref} className="min-w-0 truncate">
+        <span ref={nameRef} className="min-w-0 truncate">
           {scope.name}
         </span>
         <span className="shrink-0 text-2xs tabular-nums text-text-secondary">
