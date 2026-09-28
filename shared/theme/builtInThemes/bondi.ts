@@ -63,7 +63,7 @@ export const theme: BuiltInThemeSource = {
     // the chip and highlighted-menu-row compositions. Danger already did.
     status: {
       success: "#017249",
-      warning: "#895A00",
+      warning: "#865C00",
       danger: "#A83C34",
       info: "#11699B",
     },
@@ -72,11 +72,12 @@ export const theme: BuiltInThemeSource = {
       idle: "#5F6A76",
       working: "#017249",
       // The waiting ring is a 1.5px stroke, and at that size luminance contrast
-      // carries it, not chroma — so it sits well below everything else (7.0:1 on
-      // white vs warning's 6.0) while keeping enough chroma to stay amber rather
-      // than brown. Pulled toward orange (H 58) so it separates from warning
-      // (H 74, ΔE 0.05) instead of reading as the same colour a shade darker.
-      waiting: "#884700",
+      // carries it, not chroma — so it sits below every status colour (7.1:1 on
+      // white vs warning's 5.9) while keeping enough chroma to stay amber. It
+      // parts from warning by lightness and hue together (H 64 vs warning's 78,
+      // ΔE 0.046); pushing it further toward orange made it read as rust, a few
+      // ΔE from danger.
+      waiting: "#834B00",
     },
     // Warm ink: a cool overlay tint reads as grime on the cream field.
     overlayTint: "#322E26",
@@ -189,8 +190,9 @@ export const theme: BuiltInThemeSource = {
     // The keyboard-current row in palettes and menus (overlay-highlight derives
     // from this). Those rows sit on white popovers, where there is nothing
     // lighter to elevate to, so the row steps DOWN into sand. #F6F0E7 was
-    // 1.13:1 against the white and easy to lose mid-list; this is 1.19:1.
-    "overlay-raised": "#F1E9DC",
+    // 1.13:1 against the white and easy to lose mid-list; this is 1.24:1, the
+    // weight light IDE quick-pick rows carry.
+    "overlay-raised": "#EEE6D8",
     // Forge chips and glyphs in resting chrome. The engine defaults are
     // GitHub's brand hexes (#176E31, #CF222E, #7544CC): a fourth green and a
     // neon red louder than status.danger. Re-cut into this palette — seagrass,
@@ -272,9 +274,9 @@ export const theme: BuiltInThemeSource = {
     // threw a broad dark band up the shell, heavier than anything else in the
     // chrome; -1px/5px keeps the contact edge and drops the halo.
     "dock-shadow": "0 -1px 5px rgb(from var(--theme-shadow-color) r g b / 0.25)",
-    // Panel title bars sit clearly between the grid gutter and the panel body
-    // (dL 0.042 above the gutter, 0.055 below it), so an unfocused pane's cap
-    // keeps its top edge. The focused pane's cap goes all the way to white.
+    // An unfocused pane's cap is a sand band a step below the gutter, so the
+    // pane border draws its top edge; the focused pane's cap goes all the way to
+    // white, which is the strongest focus cue the grid has.
     "panel-header-bg": "#EDE5D8",
     "panel-header-focus-bg": "#FFFFFF",
     // Warm ink only, never accent — the white-card-plus-rail selection stays
@@ -282,10 +284,12 @@ export const theme: BuiltInThemeSource = {
     "panel-focus-border": "rgba(43,38,31,0.50)",
     "panel-focus-shadow": "0 1px 2px rgba(43,38,31,0.12)",
     // Flat, not a gradient: `#panel-grid` paints this as background-COLOR, where
-    // a gradient is invalid and the gutter silently fell through to the canvas
-    // behind it — so panes floated on #F7F1E7 and the header ladder above was
-    // measured against a gutter that never rendered.
-    "panel-grid-bg": "#E1D7C5",
+    // a gradient is invalid and the gutter silently fell through to the canvas.
+    // The sidebar's sand, not surfaces.grid: the same element is the empty
+    // workbench, and at #E1D7C5 the first screen of every session became a
+    // khaki field. At sidebar sand the shell reads as one material and panes
+    // (1.14:1, plus their border and ambient shadow) sit on it as paper.
+    "panel-grid-bg": "#F2E9DA",
     // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":
       "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",

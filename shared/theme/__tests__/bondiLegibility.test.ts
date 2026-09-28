@@ -126,6 +126,8 @@ describe("bondi", () => {
   it("gives the panel gutter a plain colour and keeps it below the panels", () => {
     const gutter = bondi.extensions?.["panel-grid-bg"];
     expect(gutter).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(contrastRatio(gutter!, token("surface-panel"))).toBeGreaterThan(1.15);
+    // Below the panels by a step a large field reads as a frame; the pane
+    // border and ambient shadow carry the edge itself.
+    expect(contrastRatio(gutter!, token("surface-panel"))).toBeGreaterThanOrEqual(1.1);
   });
 });
