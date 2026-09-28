@@ -2,7 +2,7 @@ import { app, type Details, type RenderProcessGoneDetails, type WebContents } fr
 import { createLogger } from "../utils/logger.js";
 import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
 import { describeProcessDeath, isExternalKill } from "./processDeathDescription.js";
-import { getTerminationIntent } from "./processTerminationIntent.js";
+import { getTerminationIntent, settleTerminationIntent } from "./processTerminationIntent.js";
 
 const logger = createLogger("main:ProcessDeath");
 
@@ -126,6 +126,18 @@ export class ProcessDeathLogger {
   }
 }
 
+// Only a `killed` death can be the kill Daintree asked for; a crash that
+// races the kill is still a crash.
+function claimIntent(
+  reason: string,
+  target: Parameters<typeof getTerminationIntent>[0]
+): string | null {
+  if (reason !== "killed") return null;
+  const intent = getTerminationIntent(target);
+  if (intent) settleTerminationIntent(target);
+  return intent;
+}
+
 let instance: ProcessDeathLogger | null = null;
 let removeListeners: (() => void) | null = null;
 
@@ -154,7 +166,7 @@ export function initializeProcessDeathLogger(): ProcessDeathLogger {
       name,
       reason: details.reason,
       exitCode: details.exitCode,
-      intent: getTerminationIntent({ serviceName: name }),
+      intent: claimIntent(details.reason, { serviceName: name }),
     });
   };
 
@@ -179,7 +191,7 @@ export function initializeProcessDeathLogger(): ProcessDeathLogger {
       reason: details.reason,
       exitCode: details.exitCode,
       webContentsId,
-      intent: webContentsId !== undefined ? getTerminationIntent({ webContentsId }) : null,
+      intent: webContentsId !== undefined ? claimIntent(details.reason, { webContentsId }) : null,
     });
   };
 

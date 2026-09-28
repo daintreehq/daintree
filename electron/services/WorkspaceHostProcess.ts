@@ -939,10 +939,10 @@ export class WorkspaceHostProcess extends EventEmitter {
         // pre-41.0.4 builds and future regressions of the Windows signed/unsigned
         // mangling bug (fixed in electron/electron#50386, landed Electron 41.0.4).
         const reportedCode = gone ? gone.exitCode : code;
-        // Logged even when a dispose landed during the defer: the exit was
-        // still unexpected, and nothing else records it.
+        // The host was live when it exited, so this is unexpected even if a
+        // dispose landed during the defer — and nothing else records it.
         const disposedDuringDefer = this.isDisposed;
-        (disposedDuringDefer ? logInfo : logWarn)(
+        logWarn(
           `[WorkspaceHost:${this.serviceName}] Host process ${
             gone
               ? describeProcessDeath(gone.reason, gone.exitCode, {

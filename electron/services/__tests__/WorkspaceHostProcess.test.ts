@@ -1771,17 +1771,15 @@ describe("WorkspaceHostProcess crash window", () => {
       host.dispose();
     });
 
-    it("still records the exit at info when a dispose lands during the defer", async () => {
+    it("still records the exit when a dispose lands during the defer", async () => {
       const { host, child } = await readyHost();
 
       child.emit("exit", 1);
       host.dispose();
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(exitWarn()).toBeUndefined();
-      const info = loggerCalls.find((c) => c.message.includes("] Host process exited with code 1"));
-      expect(info?.level).toBe("info");
-      expect(info?.context).toMatchObject({ disposedDuringDefer: true });
+      expect(exitWarn()?.message).toContain("exited with code 1");
+      expect(exitWarn()?.context).toMatchObject({ disposedDuringDefer: true });
     });
   });
 

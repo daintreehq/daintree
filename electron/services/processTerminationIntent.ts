@@ -7,6 +7,7 @@
  * webContents id, which survives the renderer's death and reload.
  */
 const INTENT_TTL_MS = 10_000;
+const SETTLED_GRACE_MS = 2_000;
 
 type Target = { serviceName: string } | { webContentsId: number };
 
@@ -32,6 +33,18 @@ export function getTerminationIntent(target: Target, now = Date.now()): string |
     return null;
   }
   return intent.reason;
+}
+
+/**
+ * The death an intent was noted for has been seen. Keep it just long enough
+ * for the owner's own exit handling to read it, so it can't be pinned on a
+ * later death of a replacement with the same service name or webContents.
+ */
+export function settleTerminationIntent(target: Target, now = Date.now()): void {
+  const key = keyOf(target);
+  const intent = intents.get(key);
+  if (!intent) return;
+  intent.at = Math.min(intent.at, now - INTENT_TTL_MS + SETTLED_GRACE_MS);
 }
 
 export function resetTerminationIntentsForTesting(): void {

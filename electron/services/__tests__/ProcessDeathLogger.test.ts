@@ -285,6 +285,41 @@ describe("ProcessDeathLogger", () => {
     expect(entry.message).toContain("renderer (unknown) crashed");
   });
 
+  it("never downgrades a real crash that races a noted kill", () => {
+    initializeProcessDeathLogger();
+    noteTerminationIntent({ serviceName: "ws-host" }, "dispose backstop");
+    emit(
+      "child-process-gone",
+      {},
+      { type: "Utility", name: "ws-host", reason: "crashed", exitCode: 11 }
+    );
+    advance(PROCESS_DEATH_BURST_WINDOW_MS);
+
+    expect(loggerCalls[0].level).toBe("warn");
+    expect(loggerCalls[0].message).not.toContain("by Daintree");
+    expect(loggerCalls[0].context).not.toHaveProperty("initiatedBy");
+  });
+
+  it("does not pin a noted kill on a later death of a same-named replacement", () => {
+    initializeProcessDeathLogger();
+    noteTerminationIntent({ serviceName: "daintree-plugin-database" }, "query cancelled");
+    const killed = {
+      type: "Utility",
+      name: "daintree-plugin-database",
+      reason: "killed",
+      exitCode: 9,
+    };
+    emit("child-process-gone", {}, killed);
+    advance(PROCESS_DEATH_BURST_WINDOW_MS);
+    expect(loggerCalls[0].level).toBe("info");
+
+    advance(3_000);
+    emit("child-process-gone", {}, killed);
+    advance(PROCESS_DEATH_BURST_WINDOW_MS);
+    expect(loggerCalls[1].level).toBe("warn");
+    expect(loggerCalls[1].message).toContain("from outside the process");
+  });
+
   it("installs its listeners once and removes them on reset", () => {
     const first = initializeProcessDeathLogger();
     expect(initializeProcessDeathLogger()).toBe(first);
