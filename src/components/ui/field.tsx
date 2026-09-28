@@ -348,6 +348,8 @@ function FieldDescription({ className, ...props }: FieldDescriptionProps) {
 export interface InlineErrorProps extends React.HTMLAttributes<HTMLParagraphElement> {
   /** A trailing control on the error's own line — a Retry for a load that failed. */
   action?: React.ReactNode;
+  /** `span` where the error sits inside running text, which cannot hold a `<p>`. */
+  as?: "p" | "span";
 }
 
 /**
@@ -363,9 +365,9 @@ export interface InlineErrorProps extends React.HTMLAttributes<HTMLParagraphElem
  * The glyph carries the severity and the words stay neutral: severity-coloured
  * text has no contrast floor across the themes.
  */
-function InlineError({ className, children, action, ...props }: InlineErrorProps) {
+function InlineError({ className, children, action, as: Tag = "p", ...props }: InlineErrorProps) {
   return (
-    <p
+    <Tag
       className={cn("flex items-start gap-1.5 text-xs text-text-primary select-text", className)}
       data-slot="inline-error"
       {...props}
@@ -373,11 +375,11 @@ function InlineError({ className, children, action, ...props }: InlineErrorProps
       <CircleAlert className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
       <span className="min-w-0 flex-1">{children}</span>
       {action}
-    </p>
+    </Tag>
   );
 }
 
-export type FieldErrorProps = Omit<InlineErrorProps, "id" | "action">;
+export type FieldErrorProps = Omit<InlineErrorProps, "id" | "action" | "as">;
 
 function FieldError(props: FieldErrorProps) {
   const { errorId } = useFieldContext("FieldError");

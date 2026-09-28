@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { InlineError } from "@/components/ui/field";
 import {
   FolderOpen,
   FolderPlus,
@@ -678,13 +679,13 @@ function AgentWelcomeCard() {
               </Button>
             </div>
             {pinError && (
-              <p
+              <InlineError
                 role="alert"
                 data-testid="welcome-card-pin-error"
-                className="mt-2 text-xs text-status-error @min-[1920px]/welcome:text-sm"
+                className="mt-2 @min-[1920px]/welcome:text-sm"
               >
                 Couldn&apos;t pin all agents. Please try again.
-              </p>
+              </InlineError>
             )}
           </div>
         </div>

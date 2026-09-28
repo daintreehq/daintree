@@ -7,8 +7,8 @@ export type NoticeTone = "info" | "warning" | "error";
 
 const TONE_CLASS: Record<NoticeTone, string> = {
   info: "border-border-subtle bg-surface-elevated",
-  warning: "border-status-warning/40 bg-status-warning/10",
-  error: "border-status-error/40 bg-status-error/10",
+  warning: "border-status-warning/20 bg-status-warning/10",
+  error: "border-status-error/20 bg-status-error/10",
 };
 
 const ICON_CLASS: Record<NoticeTone, string> = {
@@ -54,7 +54,7 @@ export function InspectorNotice({
       role={role}
       data-tone={tone}
       className={cn(
-        "flex gap-2 rounded-md border text-xs",
+        "flex gap-2 rounded-[var(--radius-md)] border text-xs",
         density === "compact" ? "px-2.5 py-1.5" : "px-3 py-2",
         TONE_CLASS[tone],
         className

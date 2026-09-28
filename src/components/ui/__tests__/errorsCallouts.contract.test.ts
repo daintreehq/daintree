@@ -37,6 +37,20 @@ const MIGRATED_FILES = [
   "src/components/Plugin/PluginDetailPane.tsx",
   "src/components/McpConfirmDialog.tsx",
   "src/components/Settings/SettingsLoadErrorBanner.tsx",
+  "src/components/Settings/ResourceEnvironmentsSection.tsx",
+  "src/components/Settings/WorktreeSettingsTab.tsx",
+  "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
+  "src/components/Project/GeneralTab.tsx",
+  "src/components/Project/WelcomeScreen.tsx",
+  "src/components/Pilot/PilotParkEditor.tsx",
+  "src/components/Config/ImportConfigDialog.tsx",
+  "src/components/Settings/EditorIntegrationTab.tsx",
+  "src/components/Settings/ForgeIntegrationsTab.tsx",
+  "src/components/Settings/EnvironmentSettingsTab.tsx",
+  "src/components/Project/EnvironmentVariablesEditor.tsx",
+  "src/components/Plugin/PluginMcpConfirmDialog.tsx",
+  "src/components/Project/ProjectSwitcherPalette.tsx",
+  "plugins/builtin/sveltekit-builder/renderer/InspectorNotice.tsx",
 ];
 
 /**
@@ -60,6 +74,10 @@ const EXEMPT: Record<string, string[]> = {
   "src/components/Plugin/PluginManagerView.tsx": [
     "text-2xs text-status-danger min-w-0 flex-1",
     "text-2xs text-status-danger underline underline-offset-2 shrink-0",
+  ],
+  // A destructive row button ("Delete all"), not a message.
+  "src/components/Project/ProjectSwitcherPalette.tsx": [
+    "text-xs font-medium text-status-error transition-colors hover:bg-status-error/10",
   ],
   // Raw setup output behind a "Show details" disclosure: a log, not a callout.
   "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": [

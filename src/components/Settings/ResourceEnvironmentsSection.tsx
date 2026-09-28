@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { InlineError } from "@/components/ui/field";
 import {
   Plus,
   Trash2,
@@ -367,13 +368,9 @@ export function ResourceEnvironmentsSection({
                   </Button>
                 </div>
                 {addEnvironmentError && (
-                  <p
-                    id="new-environment-name-error"
-                    className="text-xs text-status-error"
-                    role="alert"
-                  >
+                  <InlineError id="new-environment-name-error" role="alert">
                     {addEnvironmentError}
-                  </p>
+                  </InlineError>
                 )}
               </div>
             )}

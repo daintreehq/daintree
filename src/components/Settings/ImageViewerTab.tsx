@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useId } from "react";
+import { InlineError } from "@/components/ui/field";
 import { RadioChoiceGroup, RadioChoiceRow, CHOICE_LABEL_INSET } from "@/components/ui/RadioChoice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -239,9 +240,9 @@ export function ImageViewerTab() {
         <SettingsActions
           status={
             loadError ? (
-              <span className="text-status-error">{loadError}</span>
+              <InlineError>{loadError}</InlineError>
             ) : saveError ? (
-              <span className="text-status-error">{saveError}</span>
+              <InlineError>{saveError}</InlineError>
             ) : !persisted ? (
               isLoading ? null : (
                 "Not saved yet — images open with the OS default"

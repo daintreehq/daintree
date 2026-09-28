@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useEffect, useRef, useState, useCallback } from "react";
+import { Callout } from "@/components/ui/Callout";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { JSX } from "react";
 import {
@@ -3036,11 +3037,8 @@ export function ProjectSwitcherPalette({
             </div>
             {removeConfirmProject.isActive
               ? hasRunningProcesses && (
-                  <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
-                    <div className="font-medium">
-                      Warning: All running processes will be terminated
-                    </div>
-                    <div className="mt-1 text-status-warning/80">
+                  <Callout severity="warning" title="All running processes will be terminated">
+                    <div>
                       {removeConfirmProject.processCount > 0 && (
                         <div>• {removeConfirmProject.processCount} running process(es)</div>
                       )}
@@ -3051,12 +3049,11 @@ export function ProjectSwitcherPalette({
                         <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
                       )}
                     </div>
-                  </div>
+                  </Callout>
                 )
               : hasRunningProcesses && (
-                  <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
-                    <div className="font-medium">Warning: Active sessions detected</div>
-                    <div className="mt-1 text-status-warning/80">
+                  <Callout severity="warning" title="Active sessions detected">
+                    <div>
                       {removeConfirmProject.processCount > 0 && (
                         <div>• {removeConfirmProject.processCount} running process(es)</div>
                       )}
@@ -3067,7 +3064,7 @@ export function ProjectSwitcherPalette({
                         <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
                       )}
                     </div>
-                  </div>
+                  </Callout>
                 )}
             <div className="text-xs text-text-secondary">
               {removeConfirmProject.isActive
@@ -3099,9 +3096,8 @@ export function ProjectSwitcherPalette({
             {(sleepConfirmProject.processCount > 0 ||
               sleepConfirmProject.activeAgentCount > 0 ||
               sleepConfirmProject.waitingAgentCount > 0) && (
-              <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
-                <div className="font-medium">Running processes will be stopped</div>
-                <div className="mt-1 text-status-warning/80">
+              <Callout severity="warning" title="Running processes will be stopped">
+                <div>
                   {sleepConfirmProject.processCount > 0 && (
                     <div>• {sleepConfirmProject.processCount} running process(es)</div>
                   )}
@@ -3112,7 +3108,7 @@ export function ProjectSwitcherPalette({
                     <div>• {sleepConfirmProject.waitingAgentCount} waiting agent(s)</div>
                   )}
                 </div>
-              </div>
+              </Callout>
             )}
             {sleepConfirmProject.isActive && (
               <div className="text-xs text-text-secondary">
