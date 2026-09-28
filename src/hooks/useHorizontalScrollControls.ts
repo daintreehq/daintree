@@ -89,9 +89,16 @@ export function useHorizontalScrollControls(
     if (!el || !mapVerticalWheel) return;
 
     const onWheel = (event: WheelEvent) => {
-      if (el.scrollWidth <= el.clientWidth) return;
       const delta = getWheelHorizontalDelta(event, el.clientWidth);
       if (delta === 0) return;
+      const { canScrollLeft, canScrollRight } = getHorizontalScrollState({
+        scrollLeft: el.scrollLeft,
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      });
+      // A notch the rail cannot take at its end is left to chain outward, as a
+      // native nested scroller would.
+      if (delta < 0 ? !canScrollLeft : !canScrollRight) return;
       event.preventDefault();
       // Instant, not smooth: each notch lands where it points, where a smooth
       // scroll started mid-way through the last one would swallow the delta.

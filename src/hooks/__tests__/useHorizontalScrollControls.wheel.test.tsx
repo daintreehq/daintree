@@ -12,7 +12,15 @@ vi.stubGlobal("ResizeObserver", NoopResizeObserver);
 
 const scrollCalls: ScrollToOptions[] = [];
 
-function Rail({ mapVerticalWheel, overflow }: { mapVerticalWheel?: boolean; overflow: boolean }) {
+function Rail({
+  mapVerticalWheel,
+  overflow,
+  scrollLeft = 0,
+}: {
+  mapVerticalWheel?: boolean;
+  overflow: boolean;
+  scrollLeft?: number;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useHorizontalScrollControls(ref, { mapVerticalWheel });
   return (
@@ -22,6 +30,7 @@ function Rail({ mapVerticalWheel, overflow }: { mapVerticalWheel?: boolean; over
         ref.current = el;
         if (!el) return;
         Object.defineProperty(el, "clientWidth", { configurable: true, value: 400 });
+        Object.defineProperty(el, "scrollLeft", { configurable: true, value: scrollLeft });
         Object.defineProperty(el, "scrollWidth", {
           configurable: true,
           value: overflow ? 1000 : 400,
@@ -71,6 +80,19 @@ describe("useHorizontalScrollControls — vertical wheel mapping", () => {
       expect(wheel(rail, init).defaultPrevented).toBe(false);
     }
     expect(scrollCalls).toHaveLength(0);
+  });
+
+  it("lets a notch the rail cannot take at either end chain outward", () => {
+    const atStart = render(<Rail mapVerticalWheel overflow scrollLeft={0} />);
+    expect(wheel(atStart.getByTestId("rail"), { deltaY: -100 }).defaultPrevented).toBe(false);
+    atStart.unmount();
+
+    const atEnd = render(<Rail mapVerticalWheel overflow scrollLeft={600} />);
+    const rail = atEnd.getByTestId("rail");
+    expect(wheel(rail, { deltaY: 100 }).defaultPrevented).toBe(false);
+    expect(scrollCalls).toHaveLength(0);
+    // Back the other way it still moves.
+    expect(wheel(rail, { deltaY: -100 }).defaultPrevented).toBe(true);
   });
 
   it("does nothing when the rail does not overflow", () => {
