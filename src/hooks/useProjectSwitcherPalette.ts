@@ -931,7 +931,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const openRelocation = useProjectRelocationStore((state) => state.open);
   const projectStats = useProjectStatsStore((state) => state.stats);
 
-  const { copy: copyToClipboard } = useCopyWithFeedback({ announcement: "Path copied" });
+  const { copy: copyToClipboard } = useCopyWithFeedback({ announcement: false });
 
   const scratches = useScratchStore((state) => state.scratches);
   const currentScratch = useScratchStore((state) => state.currentScratch);

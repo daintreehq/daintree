@@ -432,7 +432,7 @@
   border-color: var(--_border);
   color: var(--_fg);
   font-size: var(--_size);
-  transition: color 150ms ease;
+  transition: color 150ms ease-out;
 }
 
 .toolbar-project-meta {
