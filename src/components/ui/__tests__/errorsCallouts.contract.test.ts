@@ -81,6 +81,8 @@ const EXEMPT: Record<string, string[]> = {
   ],
   // Raw setup output behind a "Show details" disclosure: a log, not a callout.
   "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": [
+    // The approval row's Review button: a button's ink, not a message.
+    "shrink-0 px-2 text-xs text-status-warning hover:text-status-warning focus-visible:text-status-warning",
     "mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text",
   ],
 };
