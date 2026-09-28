@@ -8,9 +8,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import type { AgentState } from "@/types";
+
+/**
+ * The panel-chrome action button (`icon-xs`, 14px glyph), pulled in a pixel at
+ * top and bottom so the 24px target fits the header's existing height.
+ */
+const HEADER_ACTION_CLASS = "-my-px [&_svg]:size-3.5";
 
 /** What the active lane's state is called when it is spoken rather than drawn. */
 const SPOKEN_STATE: Partial<Record<NonNullable<AgentState>, string>> = {
@@ -108,17 +116,23 @@ export function HelpPanelHeader({
           different things, and only the destructive one was visible. Restarting
           is now a named overflow item, and the strip owns the only `+`. */}
       <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-text-primary hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            aria-label="More actions"
-            aria-haspopup="menu"
-            data-testid="assistant-header-more"
-          >
-            <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-        </DropdownMenuTrigger>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className={HEADER_ACTION_CLASS}
+                aria-label="More actions"
+                aria-haspopup="menu"
+                data-testid="assistant-header-more"
+              >
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">More actions</TooltipContent>
+        </Tooltip>
         <DropdownMenuContent align="end" className="min-w-[180px]">
           {/* Named for what it does to the conversation, not for what it does to
               the session. "Start new session" read as "give me another session",
@@ -149,14 +163,20 @@ export function HelpPanelHeader({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <button
-        type="button"
-        onClick={onClose}
-        className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-text-primary hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        aria-label="Hide Daintree Assistant"
-      >
-        <ChevronRight className="w-3.5 h-3.5" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={onClose}
+            className={HEADER_ACTION_CLASS}
+            aria-label="Hide Daintree Assistant"
+          >
+            <ChevronRight aria-hidden="true" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Hide Daintree Assistant</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

@@ -55,18 +55,25 @@ describe("SidebarContent header reveal — issue #6964", () => {
     return src.slice(start, end);
   }
 
-  it("renders focus-visible outlines on all four header icon buttons — issue #7602", () => {
+  it("builds all four header actions from the shared ghost icon button — issue #7602", () => {
+    // The Button primitive owns the focus ring, hover and press for every one
+    // of them, so none of the four can drift into its own treatment.
     const header = headerSlice(source);
-    const focusVisibleCount = (header.match(/focus-visible:outline-accent-primary/g) ?? []).length;
-    expect(focusVisibleCount).toBe(4);
-    expect(header).toContain("focus-visible:outline focus-visible:outline-2");
+    const buttons = header.match(/<Button\s+variant="ghost"\s+size="icon-xs"/g) ?? [];
+    expect(buttons).toHaveLength(4);
+    expect(header).not.toMatch(/<button\b/);
+    expect(header).not.toMatch(/focus-visible:outline-accent-primary/);
   });
 
-  it("lifts the always-visible create button to text-daintree-text/60 while siblings stay at /40 — issue #7602", () => {
+  it("gives the always-visible create button the same treatment as its revealed siblings", () => {
+    // Visibility is the cluster's only hierarchy: the three secondary actions
+    // are hidden until the header is hovered or focused, and create is not.
+    // Once shown, all four read as one family.
     const header = headerSlice(source);
-    expect(header).toContain("text-daintree-text/60");
-    const fortyCount = (header.match(/text-daintree-text\/40/g) ?? []).length;
-    expect(fortyCount).toBe(4);
+    expect(header).not.toMatch(/text-daintree-text\//);
+    const classNames = [...header.matchAll(/className=\{([^}]*)\}/g)].map((m) => m[1] ?? "");
+    expect(classNames).toHaveLength(4);
+    expect(classNames.every((cls) => cls.includes("SIDEBAR_HEADER_ACTION"))).toBe(true);
   });
 
   it("respects prefers-reduced-motion via motion-reduce:transition-none", () => {

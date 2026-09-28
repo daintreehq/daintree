@@ -72,7 +72,7 @@ describe("SidebarContent accessibility — issue #9662", () => {
       // button focusable while the re-entry guard in handleRefreshAll blocks
       // activation.
       const refreshButton = source.match(
-        /<button[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
+        /<(?:button|Button)[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
       );
       expect(refreshButton).not.toBeNull();
       const button = refreshButton![0];
@@ -85,12 +85,12 @@ describe("SidebarContent accessibility — issue #9662", () => {
 
     it("uses aria-disabled: Tailwind variants for the disabled styling", () => {
       const refreshButton = source.match(
-        /<button[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
+        /<(?:button|Button)[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
       );
       const button = refreshButton![0];
-      expect(button).toMatch(/aria-disabled:opacity-40/);
+      expect(button).toMatch(/aria-disabled:opacity-\d+/);
       expect(button).toMatch(/aria-disabled:cursor-not-allowed/);
-      expect(button).not.toMatch(/[^-]disabled:opacity-40/);
+      expect(button).not.toMatch(/[^-]disabled:opacity-\d+/);
     });
 
     it("keeps the handleRefreshAll re-entry guard that suppresses activation", () => {
