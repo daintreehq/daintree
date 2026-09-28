@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { MarkdownEditorStatusBar } from "./MarkdownEditorStatusBar.js";
 import { DocumentController } from "./documentController.js";
 import { identityKey } from "../shared/protocol.js";
@@ -472,6 +473,11 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
         <input
           value={saveAsPath ?? ""}
           onChange={(event) => setSaveAsPath(event.target.value)}
+          onKeyDown={(event) => {
+            if (!isEnterToSubmit(event)) return;
+            event.preventDefault();
+            void handleSaveAs();
+          }}
           aria-label="New file path"
           className="w-full rounded-md border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-xs text-text-primary focus:outline-hidden focus-visible:ring-1 focus-visible:ring-border-strong"
           data-testid="markdown-editor-save-as-path"

@@ -19,6 +19,9 @@ import { actionService } from "@/services/ActionService";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { logError } from "@/utils/logger";
 
+/** How long a reset of hidden commands can be undone — the app's standard window. */
+const HIDDEN_COMMANDS_UNDO_MS = 5_000;
+
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
 type LoadState = "loading" | "ready" | "error";
@@ -327,13 +330,30 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   };
 
   const hiddenActionCount = useActionPrefsStore((state) => state.hiddenActionIds.length);
+  // Undone rather than confirmed, like the app's other reversible resets: the
+  // list is small, local and put back exactly.
   const handleResetHiddenCommands = () => {
-    useActionPrefsStore.getState().resetHiddenActions();
+    const prefs = useActionPrefsStore.getState();
+    const wasHidden = [...prefs.hiddenActionIds];
+    prefs.resetHiddenActions();
     notify({
       type: "success",
       title: "Hidden commands reset",
       message: "All previously hidden commands will appear in Recently used again.",
       transient: true,
+      priority: "high",
+      duration: HIDDEN_COMMANDS_UNDO_MS,
+      context: { eventKind: "uiFeedback" },
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const current = useActionPrefsStore.getState();
+          // A command pinned since the reset stays pinned: pinning outranks hiding.
+          for (const id of wasHidden) {
+            if (!current.isActionPinned(id)) current.hideAction(id);
+          }
+        },
+      },
     });
   };
 

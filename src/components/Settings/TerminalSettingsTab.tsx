@@ -13,6 +13,7 @@ import {
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
@@ -150,6 +151,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const setPreferPreview = useTwoPaneSplitStore((state) => state.setPreferPreview);
   const setDefaultRatio = useTwoPaneSplitStore((state) => state.setDefaultRatio);
   const resetAllWorktreeRatios = useTwoPaneSplitStore((state) => state.resetAllWorktreeRatios);
+  // Confirmed like the other settings resets: every ratio was set by hand, one
+  // worktree at a time, and nothing restores them.
+  const [isResetRatiosConfirmOpen, setIsResetRatiosConfirmOpen] = useState(false);
 
   const panelLimits = usePanelLimitStore(
     useShallow((state) => ({
@@ -679,13 +683,26 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={resetAllWorktreeRatios}
+                        onClick={() => setIsResetRatiosConfirmOpen(true)}
                         disabled={disabled}
                         aria-label="Reset all worktree split ratios"
                       >
                         Reset all
                       </Button>
                     )}
+                  />
+                  <ConfirmDialog
+                    isOpen={isResetRatiosConfirmOpen}
+                    variant="destructive"
+                    onConfirm={() => {
+                      resetAllWorktreeRatios();
+                      setIsResetRatiosConfirmOpen(false);
+                    }}
+                    onClose={() => setIsResetRatiosConfirmOpen(false)}
+                    title="Reset worktree split ratios?"
+                    description="Every worktree's two-pane split goes back to the default ratio."
+                    confirmLabel="Reset split ratios"
+                    zIndex="nested"
                   />
                 </SettingsDependents>
               </SettingsGroup>
