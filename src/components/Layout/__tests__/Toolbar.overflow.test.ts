@@ -145,6 +145,30 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       expect(source).toMatch(/id === "copy-tree" && \(!hasActiveWorktree \|\| isCopyingTree\)/);
       expect(source).toContain("disabled={disabled}");
     });
+
+    it("says why the copy-tree row is disabled while a copy is in flight", () => {
+      // A greyed row alone reads as unavailable, not busy. The in-flight state
+      // must change what the row says, not only its opacity, and its spinner
+      // takes the same Doherty gate as the visible button's so a quick copy
+      // never flashes one.
+      const menu = source.match(/function OverflowMenu[\s\S]*?\n}\n/);
+      expect(menu).not.toBeNull();
+      const flag = menu![0].match(/const (\w+) = id === "copy-tree" && isCopyingTree;/);
+      expect(flag).not.toBeNull();
+      const copying = flag![1]!;
+      expect(menu![0]).toContain("const showCopyingSpinner = useDohertyGate(isCopyingTree);");
+      expect(menu![0]).toMatch(
+        new RegExp(`\\{${copying} && showCopyingSpinner \\?\\s*\\(?\\s*<Spinner`)
+      );
+      const label = menu![0].match(new RegExp(`\\{${copying} \\? "([^"]+)" : meta\\.label\\}`));
+      expect(label).not.toBeNull();
+      expect(label![1]).toMatch(/…$/);
+      // The busy label's width is reserved in the same cell, so an open menu
+      // doesn't resize when a copy starts or lands.
+      expect(menu![0]).toMatch(
+        new RegExp(`aria-hidden="true" className="invisible[^"]*">\\s*${label![1]}\\s*<`)
+      );
+    });
   });
 
   describe("forge-stats group label", () => {

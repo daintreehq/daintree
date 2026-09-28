@@ -24,6 +24,7 @@ import {
   Settings,
   CircleStop,
   X,
+  Check,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { BrandSurface, FolderTree, Folders } from "@/components/icons";
@@ -298,6 +299,7 @@ function OverflowMenu({
   // mirrors the visible button's disabled states, and in-flight copies can
   // start from routes that never touch this menu (MCP, Cmd+Shift+C).
   const isCopyingTree = useCopyTreeRunStore((s) => s.activeRunCount > 0);
+  const showCopyingSpinner = useDohertyGate(isCopyingTree);
   // Snapshot of the repo stats taken when the menu opens. The stats live in
   // ForgeStatsToolbarButton's hook and are exposed through its imperative
   // handle, so they can't be read during render (refs aren't reactive — the
@@ -591,6 +593,12 @@ function OverflowMenu({
           // look live yet silently close with no feedback, since its handler
           // guards on the same two conditions.
           const disabled = id === "copy-tree" && (!hasActiveWorktree || isCopyingTree);
+          // The in-flight reason is spelled out, as the visible button's
+          // spinner and "Copying…" name do — a greyed row alone reads as
+          // unavailable rather than busy. The label carries it rather than a
+          // trailing meta, which would widen the open menu and snap it back
+          // narrower the moment the copy lands.
+          const copying = id === "copy-tree" && isCopyingTree;
           const count = overflowCount(id);
           return [
             <DropdownMenuItem
@@ -599,8 +607,26 @@ function OverflowMenu({
               onClick={() => overflowActions[id]?.()}
               keybinding={keybindingById[id]}
             >
-              <Icon className="mr-2 h-3.5 w-3.5" />
-              <span className="flex-1">{meta.label}</span>
+              {copying && showCopyingSpinner ? (
+                <Spinner size="sm" className="mr-2" />
+              ) : (
+                <Icon className="mr-2 h-3.5 w-3.5" />
+              )}
+              {id === "copy-tree" ? (
+                // Both labels share one grid cell so the row is always as wide
+                // as the longer one: the open menu keeps its width when a copy
+                // starts or lands under the pointer.
+                <span className="grid flex-1">
+                  <span className="[grid-area:1/1]">
+                    {copying ? "Copying context…" : meta.label}
+                  </span>
+                  <span aria-hidden="true" className="invisible [grid-area:1/1]">
+                    Copying context…
+                  </span>
+                </span>
+              ) : (
+                <span className="flex-1">{meta.label}</span>
+              )}
               {/* Audible: the count belongs in the row's accessible name. */}
               {count !== null && <DropdownMenuMeta aria-hidden={false}>{count}</DropdownMenuMeta>}
             </DropdownMenuItem>,
@@ -798,6 +824,19 @@ export function Toolbar({
     announcement: copyTreeAnnouncement,
     clearNotice: clearCopyTreeNotice,
   } = useCopyTreeCompletionNotice(copyTreeButtonRef, { suppress: copyTreeOpen });
+  // A new run supersedes the last one's confirmation — from every route, not
+  // just this button's menu, which already clears it on open. Left standing, a
+  // run that then fails would hand the check back to the earlier success. On
+  // the store's own start rather than the rendered flag, so a run that begins
+  // and settles before a render still retires it, and the clear can't land
+  // after that run's own announcement.
+  useEffect(
+    () =>
+      useCopyTreeRunStore.subscribe((state, prev) => {
+        if (state.activeRunCount > prev.activeRunCount) clearCopyTreeNotice();
+      }),
+    [clearCopyTreeNotice]
+  );
 
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
@@ -1483,7 +1522,16 @@ export function Toolbar({
                           aria-label={isCopyingTree ? "Copying…" : "Copy context"}
                           aria-keyshortcuts={copyTreeAriaShortcut}
                         >
-                          {showCopyingSpinner ? <Spinner /> : <Folders />}
+                          {showCopyingSpinner ? (
+                            <Spinner />
+                          ) : copyTreeNotice && !isCopyingTree ? (
+                            // Same Copy→Check swap as CopyButton, held for the
+                            // notice's window so the glyph and the tooltip
+                            // clear together.
+                            <Check className="animate-checkbox-check" />
+                          ) : (
+                            <Folders />
+                          )}
                         </Button>
                       </ContextMenuTrigger>
                     </DropdownMenuTrigger>
