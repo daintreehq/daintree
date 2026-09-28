@@ -108,6 +108,43 @@ describe("SearchField Escape", () => {
     expect(onClear).not.toHaveBeenCalled();
   });
 
+  it("still clears when an outer layer vetoed its own dismissal on capture", () => {
+    const veto = (e: KeyboardEvent) => e.preventDefault();
+    document.addEventListener("keydown", veto, true);
+    try {
+      const { onClear, input } = renderField("abc");
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(onClear).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("keydown", veto, true);
+    }
+  });
+
+  it("stands down when the caller's own handler prevented the default", () => {
+    const { onClear, input } = renderField("abc", {
+      onKeyDown: (e) => {
+        if (e.key === "Escape") e.preventDefault();
+      },
+    });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
+  it("does not clear again after a dismissable layer already cleared the query", () => {
+    const onLayerClear = vi.fn();
+    const { onClear, input } = renderField("abc");
+    const layer = (e: KeyboardEvent) => clearSearchBeforeDismiss(e, input, onLayerClear);
+    input.focus();
+    document.addEventListener("keydown", layer, true);
+    try {
+      fireEvent.keyDown(input, { key: "Escape" });
+    } finally {
+      document.removeEventListener("keydown", layer, true);
+    }
+    expect(onLayerClear).toHaveBeenCalledTimes(1);
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
   it("leaves Escape to an IME that is composing", () => {
     const { onClear, input } = renderField("abc");
     fireEvent.keyDown(input, { key: "Escape", isComposing: true });

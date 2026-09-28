@@ -25,18 +25,18 @@ export function WorktreeSelector({
   disabledId,
   onChange,
 }: WorktreeSelectorProps) {
-  const labelId = useId();
+  const triggerId = useId();
   return (
     <div className="flex flex-col gap-1.5 min-w-0">
-      <span
-        id={labelId}
+      <label
+        htmlFor={triggerId}
         className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
       >
         {label}
-      </span>
+      </label>
       {/* "" is Radix's unset value: the trigger shows the placeholder. */}
       <Select value={selectedId ?? ""} onValueChange={onChange}>
-        <SelectTrigger aria-labelledby={labelId} className="justify-start">
+        <SelectTrigger id={triggerId} className="justify-start">
           <FolderGit2 aria-hidden="true" className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
           <SelectValue placeholder="Choose a worktree…" className="flex-1" />
         </SelectTrigger>

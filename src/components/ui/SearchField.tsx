@@ -2,6 +2,9 @@ import * as React from "react";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+/** Escapes a dismissable layer already spent on clearing the query. */
+const clearedBeforeDismiss = new WeakSet<Event>();
+
 function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null): void {
   if (typeof ref === "function") ref(value);
   else if (ref) (ref as React.RefObject<T | null>).current = value;
@@ -102,13 +105,20 @@ export function SearchField({
   // down if that handler claimed the key — a field whose Escape first closes
   // its own popover, say — and while an IME is composing, where Escape
   // cancels the composition rather than the query.
+  //
+  // Only the caller's own preventDefault counts as a claim. One set before the
+  // key reached the field came from a capture-phase layer — a docked panel's
+  // popover vetoing its own dismissal so the panel keeps the key — and the
+  // query is still the field's to clear.
   const { onKeyDown } = inputProps;
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const preventedUpstream = event.defaultPrevented;
     onKeyDown?.(event);
     if (
       event.key !== "Escape" ||
-      event.defaultPrevented ||
+      (event.defaultPrevented && !preventedUpstream) ||
       event.isPropagationStopped() ||
+      clearedBeforeDismiss.has(event.nativeEvent) ||
       event.nativeEvent.isComposing ||
       !onClear ||
       !hasValue ||
@@ -177,5 +187,6 @@ export function clearSearchBeforeDismiss(
     return;
   }
   event.preventDefault();
+  clearedBeforeDismiss.add(event);
   onClear();
 }

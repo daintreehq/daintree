@@ -84,8 +84,6 @@ describe("CrossWorktreeDiff pickers", () => {
     renderComparison([]);
     const base = screen.getByLabelText("Base");
     const compare = screen.getByLabelText("Compare");
-    expect(base.tagName).toBe("SELECT");
-    expect(compare.tagName).toBe("SELECT");
     expect(base).not.toBe(compare);
   });
 
