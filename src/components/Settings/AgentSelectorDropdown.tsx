@@ -1,4 +1,4 @@
-import type { ComponentType, CSSProperties } from "react";
+import type { ComponentType, CSSProperties, ReactNode } from "react";
 import { Settings2, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";
@@ -19,6 +19,8 @@ export interface AgentOption {
 
 interface AgentSelectorDropdownProps {
   agentOptions: AgentOption[];
+  /** Controls for the shown agent, on the picker strip's right end. */
+  actions?: ReactNode;
   activeSubtab: string;
   onSubtabChange: (id: string) => void;
 }
@@ -32,6 +34,7 @@ export function AgentSelectorDropdown({
   agentOptions,
   activeSubtab,
   onSubtabChange,
+  actions,
 }: AgentSelectorDropdownProps) {
   const entries: PickerItem[] = agentOptions.map((agent) => ({ ...agent, kind: "agent" }));
   const selectedAgent =
@@ -49,6 +52,10 @@ export function AgentSelectorDropdown({
       filterLabel="Filter agents"
       placeholder="Filter agents…"
       noMatches={(q) => <>No agents match &ldquo;{q}&rdquo;</>}
+      switchLabel="Switch agent"
+      triggerLabel={`Switch agent, current: ${selectedAgent ? selectedAgent.name : "General"}`}
+      actions={actions}
+      status={selectedAgent ? <AgentStatusMarks agent={selectedAgent} /> : undefined}
       current={
         selectedAgent ? (
           <>
@@ -56,7 +63,6 @@ export function AgentSelectorDropdown({
               <selectedAgent.Icon size={18} />
             </BrandMark>
             <span className="min-w-0 truncate text-base font-semibold">{selectedAgent.name}</span>
-            <AgentStatusMarks agent={selectedAgent} />
           </>
         ) : (
           <>

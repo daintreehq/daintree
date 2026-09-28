@@ -29,6 +29,8 @@ function renderPicker(activeId: string, onChange = vi.fn()) {
       activeId={activeId}
       onChange={onChange}
       current={<span>{activeId}</span>}
+      switchLabel="Switch thing"
+      triggerLabel={`Switch thing, current: ${activeId}`}
       renderRow={(item) => <span>{item.name}</span>}
       listLabel="Things"
       filterLabel="Filter things"
@@ -59,6 +61,15 @@ const cursorRows = () => options().filter((o) => o.getAttribute("aria-selected")
 const currentRows = () => options().filter((o) => o.getAttribute("aria-current") === "page");
 
 describe("SettingsSubjectPicker", () => {
+  it("names the trigger by its subject, not by everything it happens to render", () => {
+    renderPicker("beta");
+    const trigger = screen.getByTestId("test-picker-trigger");
+    // The visible verb is chrome; left to content, it and every status word ran
+    // into the spoken name.
+    expect(trigger.textContent).toContain("Switch thing");
+    expect(screen.getByRole("button", { name: "Switch thing, current: beta" })).toBe(trigger);
+  });
+
   it("opens from a pointer with no cursor, marking only the page being shown", async () => {
     const onChange = renderPicker("beta");
     const input = await openWithPointer();
