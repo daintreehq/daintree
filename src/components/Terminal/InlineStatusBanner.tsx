@@ -473,6 +473,14 @@ export function InlineStatusBanner({
   const insetFromSurface = use(InsetSurfaceContext);
   const isInset = inset ?? insetFromSurface;
   const isUntinted = isNeutral || (isInline && severity !== "error");
+  // A tinted band draws its edge inline, in its severity's colour; an untinted
+  // one needs a class. Inset, that edge wraps the whole box; at a pane's top it
+  // is the inline layout's bottom rule.
+  const edgeClass = isInset
+    ? cn("rounded-[var(--radius-md)]", isUntinted && "border border-border-default")
+    : isInline
+      ? "border-b border-divider"
+      : undefined;
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -619,7 +627,7 @@ export function InlineStatusBanner({
         stacked
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : isInline
-            ? cn("flex items-start px-3 py-2 shrink-0", !isInset && "border-b border-divider")
+            ? "flex items-start px-3 py-2 shrink-0"
             : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
         // The strip wraps its controls beneath the text once the container is
         // narrower than a two-line sentence plus three actions can share.
@@ -631,8 +639,7 @@ export function InlineStatusBanner({
         shouldAnimate && "transition-[opacity,translate] duration-250",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
         isUntinted && "bg-overlay-subtle",
-        isInset && "rounded-[var(--radius-md)]",
-        isInset && isUntinted && "border border-border-default",
+        edgeClass,
         // The native caption strip is a fixed 48px tall. A shorter banner would
         // let the tint applied to that strip bleed over the toolbar beneath it,
         // so a title-bar banner always fills the band it is colouring.
