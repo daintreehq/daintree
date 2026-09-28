@@ -404,7 +404,7 @@ test("recipes review", async ({ page }) => {
       await dialog.waitFor({ state: "visible", timeout: 5000 });
       await snap(page, `${DIALOG}:has-text("Import recipe")`, "40-import-manager-empty.png");
       await dialog.locator("textarea").fill(BAD_JSON);
-      await dialog.getByRole("button", { name: "Import", exact: true }).click();
+      await dialog.getByRole("button", { name: "Import recipe", exact: true }).click();
       await snap(page, `${DIALOG}:has-text("Import recipe")`, "41-import-manager-error.png");
     });
 
@@ -422,7 +422,7 @@ test("recipes review", async ({ page }) => {
       await dialog.waitFor({ state: "visible", timeout: 5000 });
       await snap(page, `${DIALOG}:has-text("Import recipe")`, "43-import-tab-empty.png");
       await dialog.locator("textarea").fill(BAD_JSON);
-      await dialog.getByRole("button", { name: "Import", exact: true }).click();
+      await dialog.getByRole("button", { name: "Import recipe", exact: true }).click();
       await snap(page, `${DIALOG}:has-text("Import recipe")`, "44-import-tab-error.png");
     });
 

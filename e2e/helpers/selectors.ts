@@ -567,8 +567,8 @@ export const SEL = {
     importDialog: '[role="dialog"]:has-text("Import recipe")',
     importTextarea: '[data-testid="recipe-import-textarea"]',
     // Scope this with the importDialog locator in specs — the import dialog's
-    // footer has only "Cancel" and "Import", so a bare text match is unambiguous.
-    importConfirmButton: 'button:has-text("Import")',
+    // footer has only "Cancel" and "Import recipe".
+    importConfirmButton: 'button[data-confirm-role="confirm"]:has-text("Import recipe")',
     overriddenBadge: 'text="Overridden by team recipe"',
     moreButton: (name: string) => `[aria-label="More actions for recipe ${name}"]`,
     copyJsonItem: '[role="menuitem"]:has-text("Copy as JSON")',

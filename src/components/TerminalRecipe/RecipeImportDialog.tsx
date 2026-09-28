@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Field, FieldError } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -22,48 +23,48 @@ interface RecipeImportDialogProps {
  */
 export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportDialogProps) {
   const importRecipe = useRecipeStore((s) => s.importRecipe);
-  const [scope, setScope] = useState<"global" | "project">("project");
+  // With no project open only Global can succeed, so it is the starting choice
+  // and Project is offered but unavailable rather than failing on submit.
+  const defaultScope = projectId ? "project" : "global";
+  const [scope, setScope] = useState<"global" | "project">(defaultScope);
   const [json, setJson] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // What is wrong with the pasted text belongs on the field; a store that
+  // refused a well-formed recipe is a failed operation, reported as one.
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const scopeId = useId();
   const jsonLabelId = useId();
 
   useEffect(() => {
     if (isOpen) return;
-    setScope("project");
+    setScope(defaultScope);
     setJson("");
-    setError(null);
-  }, [isOpen]);
-
-  const fail = (message: string) => {
-    // `FieldError` is not a live region; a rejected import is a discrete event
-    // the user caused, so it is announced once here instead.
-    useAnnouncerStore.getState().announce(message, "assertive");
-    setError(message);
-  };
+    setJsonError(null);
+    setImportError(null);
+  }, [isOpen, defaultScope]);
 
   const handleImport = async () => {
-    setError(null);
-    const targetProjectId = scope === "global" ? undefined : projectId;
-    if (scope === "project" && !targetProjectId) {
-      fail("No project is open. Import it as a global recipe instead.");
-      return;
-    }
+    setJsonError(null);
+    setImportError(null);
     try {
       JSON.parse(json);
     } catch (err) {
       // The engine's own message carries the position ("at position 35 (line 1
       // column 36)"), which is what the user needs to find the mistake.
-      fail(`That isn't valid JSON: ${formatErrorMessage(err, "parse failed")}`);
+      const message = `That isn't valid JSON: ${formatErrorMessage(err, "parse failed")}`;
+      // `FieldError` is not a live region; a rejected import is a discrete event
+      // the user caused, so it is announced once here instead.
+      useAnnouncerStore.getState().announce(message, "assertive");
+      setJsonError(message);
       return;
     }
     setIsImporting(true);
     try {
-      await importRecipe(targetProjectId, json);
+      await importRecipe(scope === "global" ? undefined : projectId, json);
       onClose();
     } catch (err) {
-      fail(formatErrorMessage(err, "Couldn't import the recipe"));
+      setImportError(formatErrorMessage(err, "The recipe couldn't be imported"));
     } finally {
       setIsImporting(false);
     }
@@ -83,12 +84,14 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
               id={scopeId}
               value={scope}
               onChange={(e) => {
-                setScope(e.target.value as "global" | "project");
-                setError(null);
+                setScope(e.target.value === "global" ? "global" : "project");
+                setImportError(null);
               }}
               className={cn(FIELD_INPUT, "pr-8")}
             >
-              <option value="project">Project (current project only)</option>
+              <option value="project" disabled={!projectId}>
+                Project (current project only)
+              </option>
               <option value="global">Global (all projects)</option>
             </select>
           </FormRow>
@@ -104,7 +107,8 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
             value={json}
             onChange={(e) => {
               setJson(e.target.value);
-              setError(null);
+              setJsonError(null);
+              setImportError(null);
             }}
             data-testid="recipe-import-textarea"
             aria-labelledby={jsonLabelId}
@@ -115,14 +119,23 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
             className="h-48"
             spellCheck={false}
           />
-          {error && <FieldError>{error}</FieldError>}
+          {jsonError && <FieldError>{jsonError}</FieldError>}
         </Field>
+
+        {importError && (
+          <InlineStatusBanner
+            severity="error"
+            title="Couldn't import the recipe"
+            description={importError}
+            className="mt-4 rounded-[var(--radius-md)]"
+          />
+        )}
       </AppDialog.Body>
 
       <AppDialog.Footer
         secondaryAction={{ label: "Cancel", onClick: onClose, disabled: isImporting }}
         primaryAction={{
-          label: "Import",
+          label: "Import recipe",
           onClick: () => void handleImport(),
           disabled: !json.trim(),
           loading: isImporting,
