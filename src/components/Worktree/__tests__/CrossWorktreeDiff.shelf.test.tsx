@@ -5,6 +5,9 @@ import type { ReactNode } from "react";
 import { CrossWorktreeDiff } from "../CrossWorktreeDiff";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
+// Driven as a value and a change event, not as a Radix popup.
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 const worktrees = new Map([
   [
     "wt-left",
@@ -81,8 +84,6 @@ describe("CrossWorktreeDiff pickers", () => {
     renderComparison([]);
     const base = screen.getByLabelText("Base");
     const compare = screen.getByLabelText("Compare");
-    expect(base.tagName).toBe("SELECT");
-    expect(compare.tagName).toBe("SELECT");
     expect(base).not.toBe(compare);
   });
 

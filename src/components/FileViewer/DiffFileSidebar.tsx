@@ -390,15 +390,6 @@ export function DiffFileSidebar({
           onChange={(event) => setFilter(event.target.value)}
           onClear={() => setFilter("")}
           clearLabel="Clear file filter"
-          onKeyDown={(event) => {
-            // Escape clears an active filter instead of bubbling to the
-            // dialog's escape stack and closing the whole workspace.
-            if (event.key === "Escape" && filter) {
-              event.preventDefault();
-              event.stopPropagation();
-              setFilter("");
-            }
-          }}
           placeholder="Filter files"
           aria-label="Filter files"
           data-testid="diff-sidebar-filter"

@@ -880,6 +880,9 @@ export function LocalCommitsDropdown({
           break;
         }
         case "Escape":
+          // A query is SearchField's to clear; only an empty field closes the
+          // dropdown.
+          if (searchQuery || e.nativeEvent.isComposing) break;
           e.preventDefault();
           e.stopPropagation();
           onClose?.();
@@ -899,6 +902,7 @@ export function LocalCommitsDropdown({
       onClose,
       toggleCommitExpanded,
       copyHash,
+      searchQuery,
     ]
   );
 
@@ -942,9 +946,6 @@ export function LocalCommitsDropdown({
       <div className="p-3 border-b border-[var(--border-divider)] shrink-0">
         <SearchField
           size="compact"
-          // Keeps the dropdown header's 32px, text-sm field rather than the
-          // rail's 28px.
-          fieldClassName="h-8 text-sm"
           icon={
             showRefreshing ? (
               <SpinningIcon

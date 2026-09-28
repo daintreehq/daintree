@@ -438,10 +438,8 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
 
         {/* Search */}
         <SearchField
-          size="compact"
-          // 22px matches the toolbar's icon buttons; the compact 28px would
-          // make the filter the tallest thing in this strip.
-          fieldClassName="h-5.5 flex-1 max-w-[160px] gap-1 px-1.5 text-2xs [&_.search-field-icon]:size-3"
+          size="dense"
+          fieldClassName="flex-1 max-w-[160px]"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onClear={() => setSearch("")}

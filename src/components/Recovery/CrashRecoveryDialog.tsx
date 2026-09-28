@@ -15,6 +15,7 @@ import {
 import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
+import { Textarea } from "../ui/textarea";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { SettingsSwitch } from "../Settings/SettingsSwitch";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
@@ -534,7 +535,10 @@ export function CrashRecoveryDialog({
                       Review and edit before submitting. The report is redacted and will be publicly
                       visible on GitHub.
                     </p>
-                    <textarea
+                    <Textarea
+                      variant="code"
+                      density="compact"
+                      aria-label="Crash report"
                       key={crash.entry.id}
                       ref={reportTextRef}
                       defaultValue={reportResult.fullBody}
@@ -545,7 +549,7 @@ export function CrashRecoveryDialog({
                             .usedClipboardFallback
                         )
                       }
-                      className="w-full max-h-48 min-h-32 h-48 resize-y rounded border border-border-default bg-overlay-soft p-2 font-mono text-xs text-text-primary select-text"
+                      className="max-h-48 min-h-32 h-48 select-text"
                       data-testid="report-textarea"
                     />
                     {clipboardFallback && (

@@ -8,6 +8,9 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { MCP_CLIENT_CONFIGS } from "@shared/config/mcpClientConfigs";
 
+// Driven as a value and a change event, not as a Radix popup.
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 vi.stubGlobal(
   "ResizeObserver",
   class {

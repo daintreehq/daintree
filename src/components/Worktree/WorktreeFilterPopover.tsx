@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { SearchField } from "@/components/ui/SearchField";
+import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -495,6 +495,15 @@ export function WorktreeFilterPopover({
     };
   }, []);
 
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const clearQuery = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    setLocalQuery("");
+    setQuery("");
+  }, [setQuery]);
+
   const handleClearAll = useCallback(() => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -605,21 +614,17 @@ export function WorktreeFilterPopover({
         sideOffset={8}
         className="flex w-72 max-h-[70vh] flex-col p-0"
         data-testid="worktree-filter-popover"
+        onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, searchInputRef.current, clearQuery)}
       >
         {/* Search */}
         {!hideSearchInput && (
           <div className="shrink-0 border-b border-border-default p-3">
             <SearchField
               size="compact"
+              inputRef={searchInputRef}
               value={localQuery}
               onChange={(e) => handleQueryChange(e.target.value)}
-              onClear={() => {
-                if (debounceRef.current) {
-                  clearTimeout(debounceRef.current);
-                }
-                setLocalQuery("");
-                setQuery("");
-              }}
+              onClear={clearQuery}
               placeholder="Search worktrees…"
               aria-label="Search worktrees"
             />

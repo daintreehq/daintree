@@ -3,6 +3,7 @@ import { Eye, EyeOff, ChevronRight } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -900,7 +901,7 @@ export function McpServerSettingsTab() {
                 }
                 control={({ disabled, descriptionId }) => (
                   <>
-                    <input
+                    <Input
                       type="text"
                       inputMode="numeric"
                       pattern="[0-9]*"
@@ -918,10 +919,7 @@ export function McpServerSettingsTab() {
                       aria-label="MCP server port"
                       aria-describedby={descriptionId}
                       aria-invalid={portError ? true : undefined}
-                      className={cn(
-                        SETTINGS_CONTROL_WIDTH.number,
-                        "h-7 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                      )}
+                      className={cn(SETTINGS_CONTROL_WIDTH.number, "font-mono tabular-nums")}
                     />
                     <Button
                       variant="outline"
@@ -1032,7 +1030,7 @@ export function McpServerSettingsTab() {
               error={maxRecordsError}
               control={({ labelId, descriptionId }) => (
                 <>
-                  <input
+                  <Input
                     id="mcp-audit-max-records"
                     type="text"
                     inputMode="numeric"
@@ -1050,10 +1048,7 @@ export function McpServerSettingsTab() {
                     aria-labelledby={labelId}
                     aria-describedby={descriptionId}
                     aria-invalid={maxRecordsError ? true : undefined}
-                    className={cn(
-                      SETTINGS_CONTROL_WIDTH.number,
-                      "h-7 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                    )}
+                    className={cn(SETTINGS_CONTROL_WIDTH.number, "font-mono tabular-nums")}
                   />
                   <Button
                     variant="outline"

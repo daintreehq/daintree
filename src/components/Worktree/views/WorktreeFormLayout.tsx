@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
  * boxes. Focus is the global accent outline; nothing here paints accent at rest.
  */
 export const FIELD_SURFACE =
-  "bg-surface-input border border-border-strong rounded-[var(--radius-md)] transition-colors duration-150 ease-out";
+  "bg-surface-input border border-border-input rounded-[var(--radius-md)] transition-colors duration-150 ease-out";
 
 export const FIELD_FOCUS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
@@ -27,7 +27,7 @@ export const FIELD_INPUT = cn(
 export const FIELD_TRIGGER = cn(
   FIELD_SURFACE,
   "w-full h-8 justify-between px-2.5 font-normal text-text-primary",
-  "hover:bg-surface-hover hover:text-text-primary hover:border-border-default"
+  "hover:bg-surface-hover hover:text-text-primary"
 );
 
 const LABEL_CLASSES = "text-xs text-text-secondary";

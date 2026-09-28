@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 import { Eye, EyeOff, Plus, X, Check, AlertCircle, ExternalLink, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -899,7 +900,7 @@ function ApiKeyRow({
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-0 flex-1 basis-64">
-              <input
+              <Input
                 type={showKey ? "text" : "password"}
                 value={keyInput}
                 aria-labelledby={labelId}
@@ -918,7 +919,7 @@ function ApiKeyRow({
                   }
                 }}
                 placeholder={value ? "Paste a new key to replace the saved one" : placeholder}
-                className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-9 font-mono text-sm text-text-primary placeholder:font-sans placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+                className="pr-9 font-mono placeholder:font-sans"
                 autoComplete="new-password"
                 spellCheck={false}
                 disabled={disabled || busy}
@@ -1184,7 +1185,7 @@ function DictionaryGroup({
         control={({ labelId, descriptionId }) => (
           <div className="space-y-2">
             <div className="flex gap-2">
-              <input
+              <Input
                 ref={inputRef}
                 type="text"
                 value={newWord}
@@ -1198,7 +1199,7 @@ function DictionaryGroup({
                   }
                 }}
                 placeholder="Add a term…"
-                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+                className="w-auto min-w-0 flex-1"
               />
               <Button onClick={onAdd} disabled={!newWord.trim()} size="sm" variant="outline">
                 <Plus aria-hidden="true" />

@@ -145,13 +145,15 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 
 ### Search Field
 
-**Role:** Every place the app offers a query box — the Worktrees rail, the settings nav search, settings-page filters, palette header inputs, find bars, log and audit filters. One control in two sizes.
+**Role:** Every place the app offers a query box — the Worktrees rail, the settings nav search, settings-page filters, palette header inputs, find bars, log and audit filters. One control: two inset sizes (dense and compact) plus the palette header size.
 
 ```tsx
 <SearchField size="compact" value={q} onChange={...} onClear={...} aria-label="Search worktrees" />
 ```
 
-**Usage:** Use `SearchField` (`src/components/ui/SearchField.tsx`); never hand-roll a wrapper, magnifier and input. Styling lives in `src/styles/components/search-field.css`, inside `@layer components` so a caller's utilities (a width, a denser height in a crowded toolbar) win. `compact` is 28px `text-xs` for rails, nav columns and toolbars; `palette` is 38px `text-sm` for palette and dialog headers (`AppPaletteDialog.Input` renders it).
+**Usage:** Use `SearchField` (`src/components/ui/SearchField.tsx`); never hand-roll a wrapper, magnifier and input. Styling lives in `src/styles/components/search-field.css`, inside `@layer components` so a caller's utilities (a width, a flex basis) win. Two inset sizes and a header size, and sites never set their own height: `compact` is 28px `text-xs` for rails, nav columns and dropdown headers; `dense` is 24px `text-xs` for filter strips and pane toolbars, level with xs chips and icon buttons; `palette` is 38px `text-sm` for palette and dialog headers (`AppPaletteDialog.Input` renders it).
+
+**Escape** clears before it closes. A `SearchField` given `onClear` claims Escape while it holds a query — clears it and stops the key there — and lets an empty field's Escape fall through to the surface. It runs after the caller's own `onKeyDown` and stands down if that handler claimed the key (a field that first closes its own popover), and during IME composition. Inside a Radix popover the layer dismisses on capture before the field sees the key, so the popover passes `clearSearchBeforeDismiss` from its `onEscapeKeyDown`. A site that can type a query has a clear button: pass `onClear`. In-page find bars (terminal, browser) are the exception: they own Escape and have no clear button.
 
 Rest is a recessed well (`surface-canvas`, or the site's theme hook through `--search-field-bg`) with a `border-default` hairline: the magnifier (`text-secondary`) identifies the field, so it does not need `border-input`'s 3:1 edge (WCAG 1.4.11 asks for a boundary only when nothing else identifies the control). Focus is neutral: the edge steps to `selection-outline` and a wash layer fades in on the 150ms tier (a white-ink `overlay-hover` on dark; on light, a lift toward `surface-panel-elevated`, since ink over a pale well reads as grime). **No accent** — palette inputs are focused whenever their palette is open, and the owner ruled against an accent ring on search fields. The placeholder takes `text-secondary`, not the form placeholder tier: it is the field's visible label. `invalid` swaps the edge to `status-danger`. Forced-colors and increased-contrast handling are in the family CSS (separate blocks, forced-colors last); sites need none of their own. `PopoverSearchField` is the edge-to-edge strip variant at the top of a filtering popover and shares the same neutral focus.
 
@@ -159,25 +161,13 @@ Rest is a recessed well (`surface-canvas`, or the site's theme hook through `--s
 
 ### Input Focus (Outline)
 
-**Role:** Text inputs, textareas. Pre-allocate border width; only change color to avoid layout shifts.
+**Role:** Every field-like control: text inputs, textareas, select triggers, dialog form fields (`FIELD_INPUT`, `FIELD_TRIGGER`). One focus language for all of them. Pre-allocate border width; only change color to avoid layout shifts.
 
 ```tsx
 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 ```
 
-**Usage:** Base state includes `border-border-strong`. On focus, outline is added — do NOT change `border-width`. Changing width causes layout jitter. Used in `src/components/ui/input.tsx` (`inputVariants`) and `src/components/ui/textarea.tsx` (`textareaVariants`); the settings wrappers `SettingsInput.tsx` and `SettingsTextarea.tsx` compose those rather than restating the recipe.
-
----
-
-### Input Focus (Border Shift)
-
-**Role:** Standard form inputs where outline treatment is not desired. Shifts border color on focus without adding extra ring.
-
-```tsx
-"border border-border-strong focus:border-accent-primary focus:outline-hidden transition-colors";
-```
-
-**Usage:** Border-shift is the lighter-weight alternative to outline-based focus. Base state must always have a visible border (`border-border-strong` or equivalent). On focus, only the border color changes — no outline or ring is added. Suitable for simple text inputs within constrained UIs. Used in `GitHubSettingsTab.tsx` and `NotificationSettingsTab.tsx` (several inputs share the same `focus:border-accent-primary focus:outline-hidden` string).
+**Usage:** Rest is `bg-surface-input` with a `border-border-input` edge — the 3:1 boundary a field needs when the edge is all that identifies it. On focus, the outline is added — do NOT change `border-width` or the border colour. Changing width causes layout jitter, and a 1px colour shift is too small an area to be the indicator (WCAG 2.4.13). `focus-visible`, never `focus`: Radix returns focus to a select trigger after a pick, and a ring lit by every mouse choice is noise. Used in `src/components/ui/input.tsx` (`inputVariants`), `src/components/ui/textarea.tsx` (`textareaVariants`) and `src/components/ui/select.tsx` (`selectTriggerVariants`); the settings wrappers and `Worktree/views/WorktreeFormLayout.tsx` compose those rather than restating the recipe. Search fields are the one family with their own treatment (see Search Field); `ProjectIdentityEditor`'s always-autofocused name field is a documented neutral exception for the same reason.
 
 ---
 
@@ -269,14 +259,13 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | --- | --- | --- |
 | Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with neutral rail via `PALETTE_ROW_CLASS` |
 | Text Input | `ui/input.tsx` (`inputVariants`) | Input focus with outline ring |
+| Select Trigger | `ui/select.tsx` (`selectTriggerVariants`) | Input chrome and outline ring |
 | Search Field | `ui/SearchField.tsx` + `styles/components/search-field.css` | Search field (neutral focus, no accent) |
 | Textarea | `ui/textarea.tsx` (`textareaVariants`) | Input focus with outline ring |
 | Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-soft |
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |
 | Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |
-| GitHub Settings Tab | `GitHubSettingsTab.tsx` | Input focus with border-shift (no outline) |
-| Notification Settings | `NotificationSettingsTab.tsx` | Input focus with border-shift (no outline) |
 | Settings Switch Row | `SettingsSwitchCard.tsx` + `ui/switch.tsx` | Neutral row, neutral switch track (accent only on focus) |
 | Portal Drag Handle | `PortalToolbar.tsx` (`isDragging`) | Drag state with elevation + scale, no accent |
 | Inline Rename Input | `TabButton.tsx` (rename input) | Neutral `bg-overlay-soft`, transparent border |

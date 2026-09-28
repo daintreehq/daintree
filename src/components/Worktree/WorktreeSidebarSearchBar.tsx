@@ -215,14 +215,11 @@ export function WorktreeSidebarSearchBar({
         e.stopPropagation();
         return;
       }
-      if (liveQuery) {
-        e.stopPropagation();
-        handleClearSearch();
-        return;
-      }
+      // A query is SearchField's to clear; only an empty field gives up focus.
+      if (liveQuery) return;
       internalRef.current?.blur();
     },
-    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults, onEscape, onSubmit]
+    [isPopoverOpen, liveQuery, onArrowIntoResults, onEscape, onSubmit]
   );
 
   const setRefs = useCallback(

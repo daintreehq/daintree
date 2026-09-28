@@ -35,6 +35,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
@@ -1231,7 +1232,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               <p className="text-2xs text-status-danger break-words">{pm.error}</p>
             </div>
           )}
-          <input
+          <Input
             type="url"
             value={pm.urlInput}
             onChange={(e) => pm.setUrlInput(e.target.value)}
@@ -1239,7 +1240,6 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               if (e.key === "Enter" && pm.urlInput.trim()) void pm.handleInstallFromUrl();
             }}
             placeholder="https://example.com/plugin.dntr"
-            className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             aria-label="Plugin URL"
           />
         </AppDialog.Body>

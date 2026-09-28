@@ -141,9 +141,7 @@ export function SettingsInput({
     >
       <FieldLabel accessory={accessory}>{label}</FieldLabel>
       <Input ref={ref} disabled={disabled} className={className} {...props} />
-      {description && (
-        <FieldDescription className="text-text-secondary">{description}</FieldDescription>
-      )}
+      {description && <FieldDescription>{description}</FieldDescription>}
       {isError && <FieldError>{error}</FieldError>}
     </Field>
   );

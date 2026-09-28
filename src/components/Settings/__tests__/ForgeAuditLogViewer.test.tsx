@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { ForgeAuditLogViewer } from "../ForgeAuditLogViewer";
 import type { ForgeAuditRecord } from "@shared/types/ipc/forge";
 
+// Driven as a value and a change event, not as a Radix popup.
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 function record(id: string, methodName: string, result: ForgeAuditRecord["result"]) {
   return {
     id,

@@ -101,9 +101,7 @@ export function SettingsTextarea({
       {/* Settings textareas hold prompts, paths and env blocks — read character
           by character, so the monospace variant rather than the prose default. */}
       <Textarea variant="code" ref={ref} disabled={disabled} className={className} {...props} />
-      {description && (
-        <FieldDescription className="text-text-secondary">{description}</FieldDescription>
-      )}
+      {description && <FieldDescription>{description}</FieldDescription>}
       {isError && <FieldError>{error}</FieldError>}
     </Field>
   );

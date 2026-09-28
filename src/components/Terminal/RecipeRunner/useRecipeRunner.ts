@@ -549,11 +549,6 @@ export function useRecipeRunner({
         } else {
           handleCreate();
         }
-      } else if (e.key === "Escape") {
-        if (searchQuery) {
-          e.preventDefault();
-          setSearchQuery("");
-        }
       } else if (
         e.key === "e" &&
         // Ctrl+E in a text input means "move cursor to end of line" on
@@ -570,7 +565,7 @@ export function useRecipeRunner({
         }
       }
     },
-    [totalItems, focusedIndex, getFlatRecipes, handleRun, handleCreate, handleEdit, searchQuery]
+    [totalItems, focusedIndex, getFlatRecipes, handleRun, handleCreate, handleEdit]
   );
 
   return {
