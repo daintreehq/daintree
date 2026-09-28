@@ -31,7 +31,10 @@ function createHarness(
   opts: {
     pvm?: Pick<
       ProjectViewManager,
-      "getProjectIdForWebContents" | "notifyActiveViewCrashed" | "getLowMemoryFreeThresholdMb"
+      | "getProjectIdForWebContents"
+      | "notifyActiveViewCrashed"
+      | "evictCrashedCachedView"
+      | "getLowMemoryFreeThresholdMb"
     > | null;
     onRecreateWindow?: () => Promise<void>;
   } = {}
@@ -65,7 +68,7 @@ function createHarness(
  * gating itself is covered against the real manager in
  * ProjectViewManager.lifecycle.test.ts.
  */
-function createClaimingManager(opts: { claimed: boolean; active: boolean }) {
+function createClaimingManager(opts: { claimed: boolean; active: boolean; cached?: boolean }) {
   const onViewCrashed = vi.fn();
   const pvm = {
     getProjectIdForWebContents: (id: number) => (opts.claimed && id === 2 ? "proj-a" : null),
@@ -74,6 +77,10 @@ function createClaimingManager(opts: { claimed: boolean; active: boolean }) {
       onViewCrashed(wc);
       return true;
     }),
+    evictCrashedCachedView: vi.fn(
+      (_wc: Electron.WebContents, _trigger: "memory-eviction" | "crash") =>
+        opts.claimed && !opts.active && opts.cached === true
+    ),
     getLowMemoryFreeThresholdMb: (): number | null => null,
   };
   return { pvm, onViewCrashed };
@@ -157,6 +164,53 @@ describe("app-view render-process-gone (#12954)", () => {
     crash("crashed");
 
     expect(onViewCrashed).not.toHaveBeenCalled();
+  });
+
+  it("hands a cached startup view's crash to the manager's eviction instead of reloading", () => {
+    const { pvm, onViewCrashed } = createClaimingManager({
+      claimed: true,
+      active: false,
+      cached: true,
+    });
+    const { appWebContents, crash } = createHarness({ pvm });
+
+    crash("crashed");
+    vi.runAllTimers();
+
+    expect(onViewCrashed).not.toHaveBeenCalled();
+    expect(pvm.evictCrashedCachedView).toHaveBeenCalledTimes(1);
+    expect(pvm.evictCrashedCachedView).toHaveBeenCalledWith(appWebContents, "crash");
+    expect(appWebContents.reload).not.toHaveBeenCalled();
+    expect(appWebContents.loadURL).not.toHaveBeenCalled();
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(recordRendererGone).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts a cached startup view reclaimed by memory pressure without a toast", () => {
+    const { pvm } = createClaimingManager({ claimed: true, active: false, cached: true });
+    const { appWebContents, crash } = createHarness({ pvm });
+
+    crash("memory-eviction", 0);
+    vi.runAllTimers();
+
+    expect(pvm.evictCrashedCachedView).toHaveBeenCalledWith(appWebContents, "memory-eviction");
+    expect(appWebContents.reload).not.toHaveBeenCalled();
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it("still sends a cached startup view's probable OOM to window recreation", async () => {
+    availableMemory.mb = 100;
+    const { pvm } = createClaimingManager({ claimed: true, active: false, cached: true });
+    pvm.getLowMemoryFreeThresholdMb = () => 500;
+    const onRecreateWindow = vi.fn(() => Promise.resolve());
+    const { win, crash } = createHarness({ pvm, onRecreateWindow });
+
+    crash("crashed");
+    await vi.runAllTimersAsync();
+
+    expect(pvm.evictCrashedCachedView).not.toHaveBeenCalled();
+    expect(win.destroy).toHaveBeenCalledTimes(1);
+    expect(onRecreateWindow).toHaveBeenCalledTimes(1);
   });
 
   it("still recovers when the window has no manager yet", () => {

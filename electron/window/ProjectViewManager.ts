@@ -776,13 +776,36 @@ export class ProjectViewManager {
    * already carries createWindow's listeners, and a second set would double
    * every reload, Ctrl+Tab and port hand-off — so createWindow's
    * render-process-gone calls this instead. Mirrors ProjectViewHandlers: only
-   * the active view owns the per-window port and the help-session pin.
-   * Returns whether the hook ran.
+   * the active view owns the per-window port, so a cached startup view goes
+   * through `evictCrashedCachedView` instead. Returns whether the hook ran.
    */
   notifyActiveViewCrashed(wc: Electron.WebContents): boolean {
     const projectId = this.webContentsToProject.get(wc.id);
     if (!projectId || projectId !== this.activeProjectId) return false;
     this.onViewCrashed?.(wc);
+    return true;
+  }
+
+  /**
+   * Cached-view half of the startup view's crash hook (#12954). A crashed
+   * cached project view is evicted rather than reloaded in the background —
+   * ProjectViewHandlers does this for every view it created — and the eviction
+   * hook capture-revokes the assistant pinned to it. The startup view needs
+   * the same: a reload keeps its WebContents id, so the assistant would stay
+   * pinned to a renderer that lost it, and the next panel open would displace
+   * it with a hard kill. Returns whether the eviction was taken on, in which
+   * case the caller must skip its own reload and toast. The switch-back
+   * cold-starts a fresh view, as for any evicted project.
+   */
+  evictCrashedCachedView(wc: Electron.WebContents, trigger: "memory-eviction" | "crash"): boolean {
+    const projectId = this.webContentsToProject.get(wc.id);
+    if (!projectId || projectId === this.activeProjectId) return false;
+    const entry = this.views.get(projectId);
+    if (entry?.state !== "cached" || entry.view.webContents.id !== wc.id) return false;
+    console.warn(
+      `[ProjectViewManager] Cached startup view gone (${trigger}); evicting instead of background reload (project: ${projectId})`
+    );
+    EvictionController.evictDeadView(this, projectId, wc, trigger);
     return true;
   }
 

@@ -246,6 +246,7 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
+import { notifyError } from "../../ipc/errorHandlers.js";
 import { onProjectPresenceChanged } from "../projectPresenceChanges.js";
 import { BACKGROUND_HYDRATION_TIMEOUT_MS } from "../ProjectViewRestoreController.js";
 import { MIN_PRESSURE_EVICTION_AGE_MS } from "../ProjectViewEvictionController.js";
@@ -1542,4 +1543,47 @@ describe("ProjectViewManager — startup view crash hook (#12954)", () => {
     expect(setup.manager.notifyActiveViewCrashed(setup.initialWc as never)).toBe(false);
     expect(onViewCrashed).not.toHaveBeenCalled();
   });
+
+  it.each(["crashed", "memory-eviction"])(
+    "evicts the cached startup view on %s instead of reloading it, then cold-starts it on switch-back",
+    async (reason) => {
+      const setup = createManager();
+      const { manager, win, initialWc } = setup;
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+      const onViewCrashed = vi.fn();
+      manager.onViewCrashed = onViewCrashed;
+      attachAppViewRendererGoneHandler({
+        win: win as never,
+        appWebContents: initialWc as never,
+        getProjectViewManager: () => manager,
+        getRecoveryUrl: () => "app://daintree/recovery.html",
+      });
+      vi.mocked(notifyError).mockClear();
+
+      initialWc._fire("render-process-gone", {}, { reason, exitCode: 1 });
+      await flushImmediates();
+
+      // Same path as any other crashed cached view: the eviction hook runs for
+      // the startup view's id — in main.ts that capture-revokes the assistant
+      // pinned to it — and nothing reloads the dead renderer in the background.
+      expect(onViewCrashed).not.toHaveBeenCalled();
+      expect(setup.onViewEvicted).toHaveBeenCalledTimes(1);
+      expect(setup.onViewEvicted).toHaveBeenCalledWith(initialWc.id);
+      expect(initialWc.reload).not.toHaveBeenCalled();
+      expect(initialWc.close).toHaveBeenCalled();
+      expect(notifyError).not.toHaveBeenCalled();
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(manager.getProjectIdForWebContents(initialWc.id)).toBeNull();
+      expect(manager.getAllViews().map((entry) => entry.projectId)).toEqual(["proj-b"]);
+      assertLifecycleInvariants(manager as never, win as never);
+      setup.ledger.assertNoPortsForDeadViews(manager as never);
+
+      const aWc = await coldSwitch(setup, "proj-a", "/a");
+      expect(aWc.id).not.toBe(initialWc.id);
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      expect(manager.getProjectIdForWebContents(aWc.id)).toBe("proj-a");
+      expect(manager.getProjectIdForWebContents(bWc.id)).toBe("proj-b");
+      assertLifecycleInvariants(manager as never, win as never);
+    }
+  );
 });
