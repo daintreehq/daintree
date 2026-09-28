@@ -306,7 +306,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
               // Focusable so a keyboard user can open the same explanation a
               // pointer gets on hover.
               tabIndex={0}
-              className="-mx-1 flex min-w-0 cursor-default items-center gap-1.5 rounded-sm px-1 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent-primary"
+              className="-mx-1 flex min-w-0 cursor-default items-center gap-1.5 rounded-sm px-1 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             >
               <BookDashed aria-hidden="true" strokeWidth={1.25} className="size-3.5 shrink-0" />
               <span className="truncate">Temporary</span>
