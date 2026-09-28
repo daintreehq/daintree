@@ -33,7 +33,6 @@ import {
 } from "@/lib/fileListWindowing";
 import type { VirtuosoHandle } from "react-virtuoso";
 
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { RefreshCw, CircleCheck, ArrowUpFromLine, ChevronRight, AlertTriangle } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";

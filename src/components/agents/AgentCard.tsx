@@ -18,7 +18,7 @@ import { extractInspectUrl } from "@/lib/agentInstall";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { Badge, CountBadge } from "@/components/ui/badge";
+import { CountBadge } from "@/components/ui/badge";
 
 export interface AgentIdentity {
   name: string;

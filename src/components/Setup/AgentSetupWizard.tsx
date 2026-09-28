@@ -38,7 +38,7 @@ import type { AppColorScheme } from "@shared/types/appTheme";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
-import { Badge, CountBadge } from "@/components/ui/badge";
+import { CountBadge } from "@/components/ui/badge";
 
 const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
 
