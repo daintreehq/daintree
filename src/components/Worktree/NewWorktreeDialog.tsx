@@ -133,6 +133,9 @@ export function NewWorktreeDialog({
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  // A failed branch list is a load state, not a field the user got wrong: it
+  // holds until the list loads, whatever else is edited.
+  const [branchLoadError, setBranchLoadError] = useState<string | null>(null);
   const [baseBranch, setBaseBranch] = useState("");
   const [prBranchResolved, setPrBranchResolved] = useState<boolean | null>(null);
   const [branchMode, setBranchMode] = useState<BranchMode>("new");
@@ -432,6 +435,7 @@ export function NewWorktreeDialog({
     const cached = initialPR ? undefined : branchListCache.get(rootPath);
 
     setLoading(!cached);
+    setBranchLoadError(null);
     resetErrors();
     setPrBranchResolved(null);
     setBranches(cached ?? []);
@@ -540,7 +544,7 @@ export function NewWorktreeDialog({
           logError("Failed to refresh branches", err);
           return;
         }
-        setValidationError(`Failed to load branches: ${err.message}`, "base-branch");
+        setBranchLoadError(`Failed to load branches: ${err.message}`);
         setBranches([]);
         setBaseBranch("");
         setFromRemote(false);
@@ -1115,9 +1119,11 @@ export function NewWorktreeDialog({
     // which beats a disabled button that explains nothing. This is what keeps
     // the not-yet-ready state from looking identical to the ready one.
     <span className="truncate">
-      {parsedBranch.fullBranchName
-        ? "Pick a base branch to continue"
-        : "Name the branch to continue"}
+      {branchLoadError && !isExistingMode
+        ? "Branches didn't load, so there's no base to pick"
+        : parsedBranch.fullBranchName
+          ? "Pick a base branch to continue"
+          : "Name the branch to continue"}
     </span>
   );
 
@@ -1218,6 +1224,9 @@ export function NewWorktreeDialog({
                       htmlFor="base-branch"
                       hint={
                         <div className="flex flex-col gap-2">
+                          {branchLoadError && (
+                            <InlineError role="alert">{branchLoadError}</InlineError>
+                          )}
                           {fieldError("base-branch")}
                           <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
                             <Checkbox

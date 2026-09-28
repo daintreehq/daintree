@@ -1073,6 +1073,25 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     expect(baseBranchButton?.getAttribute("aria-describedby")).toBe("validation-error");
   });
 
+  it("keeps a failed branch list on screen while other fields are edited", async () => {
+    mockListBranches.mockRejectedValueOnce(new Error("not a git repository"));
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const failure = () => screen.queryByText(/Failed to load branches: not a git repository/);
+    expect(failure()).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/new" },
+      });
+    });
+    await advanceTimersGradually(500);
+
+    expect(failure()).not.toBeNull();
+    expect(screen.getByTestId("branch-name-input").getAttribute("aria-invalid")).toBeNull();
+  });
+
   it("clears aria-invalid when the user types in the failing field", async () => {
     renderDialog();
     await advanceTimersGradually(500);
