@@ -68,7 +68,7 @@ const ONLY = new Set(
  * React replacement will be compared against. Remove the entry once "+" opens a
  * `role="menu"`.
  */
-const ALLOW_NO_SURFACE = new Set(["portal-plus"]);
+const ALLOW_NO_SURFACE = new Set<string>();
 
 const PAD = 24;
 const MIN_SURFACE = { width: 40, height: 20 };
@@ -278,7 +278,7 @@ const SHOTS: Shot[] = [
     path: "Click the ⋯ on a terminal spawn-error banner",
     open: async (page) => {
       const trigger = page.locator('button[aria-label="More recovery options"]').first();
-      const surface = page.locator(POPOVER).last();
+      const surface = page.locator(MENU).last();
       await clickOpen(page, trigger, surface);
       return { trigger, surface };
     },
@@ -321,10 +321,8 @@ const SHOTS: Shot[] = [
     open: async (page) => {
       const trigger = page.locator('button[aria-label="New Tab"]').first();
       const surface = page.locator(MENU).last();
-      await trigger.hover();
-      await trigger.click({ button: "right" });
-      await page.waitForTimeout(600);
-      return { trigger, surface };
+      const point = await rightClick(page, trigger, surface);
+      return { trigger, surface, point };
     },
   },
   {
@@ -492,9 +490,7 @@ const SHOTS: Shot[] = [
     path: "Press and hold the Back button in a browser or dev-preview panel",
     open: async (page) => {
       const trigger = page.locator('[data-testid="browser-back"]').first();
-      const surface = page
-        .locator('.relative.flex:has([data-testid="browser-back"]) > div.surface-overlay')
-        .first();
+      const surface = page.locator(MENU).last();
       await trigger.hover();
       await page.mouse.down();
       await page.waitForTimeout(650);

@@ -1147,7 +1147,8 @@ export function useContentGridContext({
       />
       <ContextMenuSeparator />
       <ContextMenuSub>
-        <ContextMenuSubTrigger>Grid layout</ContextMenuSubTrigger>
+        {/* Inset into the launch rows' icon column above it. */}
+        <ContextMenuSubTrigger inset>Grid layout</ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <MenuActionSourceContext.Consumer>
             {(menuSource) => (
@@ -1194,7 +1195,7 @@ export function useContentGridContext({
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSeparator />
-      <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "terminal" }}>
+      <ContextMenuActionItem inset actionId="app.settings.openTab" args={{ tab: "terminal" }}>
         Terminal settings…
       </ContextMenuActionItem>
     </ContextMenuContent>

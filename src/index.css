@@ -1756,11 +1756,14 @@ label:focus-within .brand-mark,
    we want: a submenu of plain durations keeps no gutter. Unlayered and (0,4,0),
    so it outranks a caller's own `pl-*` utility — an item that needs to opt out
    has to do it with an inline style.
-   A row that leads with an unmarked icon already occupies the gutter, so it is
-   left alone rather than indented a second time: a shared fragment that marks
-   its own icons must not push a host menu's unmarked icon rows out of line. */
+   A row that leads with an unmarked icon (the canonical `mr-2` leading glyph)
+   already occupies the gutter, so it is left alone rather than indented a
+   second time: a shared fragment that marks its own icons must not push a host
+   menu's unmarked icon rows out of line. `.mr-2` rather than `:first-child`
+   alone, because a sub-trigger's label is a text node and its trailing chevron
+   is then its first element. */
 [role="menu"]:has([data-menu-icon])
-  [role="menuitem"]:not(:has([data-menu-icon])):not(:has(> svg:first-child)) {
+  [role="menuitem"]:not(:has([data-menu-icon])):not(:has(> svg.mr-2:first-child)) {
   padding-left: 2rem;
 }
 
