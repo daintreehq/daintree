@@ -168,14 +168,29 @@ test("Agent indicator and exit badge — states and themes", async ({ page }) =>
       await expect(target).toHaveAttribute("aria-label", /waiting/i);
       if (reduceMotion) expect(early, "reduced motion interpolated the chip").toBe(settled);
       else expect(early, "the chip snapped instead of easing").not.toBe(settled);
-      await page.evaluate(() =>
+      // Flip it back and freeze the chip's own transitions half-way, so the
+      // "mid" frame shows the blend itself rather than whatever a timer caught.
+      const paused = await target.evaluate(async (el) => {
+        const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
         (Reflect.get(window, "__setAgentState") as (id: string, s: string) => void)(
           "working",
           "working"
-        )
-      );
-      // Photograph it part-way back, so the frame shows the blend itself.
-      await page.waitForTimeout(50);
+        );
+        await frame();
+        const transitions = el.getAnimations().filter((a) => a instanceof CSSTransition);
+        for (const t of transitions) {
+          t.pause();
+          t.currentTime = 75;
+        }
+        return { count: transitions.length, background: getComputedStyle(el).backgroundColor };
+      });
+      if (reduceMotion) {
+        expect(paused.count, "reduced motion started a transition").toBe(0);
+      } else {
+        expect(paused.count, "no transition to pause").toBeGreaterThan(0);
+        expect(paused.background).not.toBe(early);
+        expect(paused.background).not.toBe(settled);
+      }
       written.push(
         await snap(
           page.locator('[data-shot="working"]'),
