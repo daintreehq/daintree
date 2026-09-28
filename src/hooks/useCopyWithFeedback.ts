@@ -5,8 +5,12 @@ import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 export interface UseCopyWithFeedbackOptions {
   /** How long the `copied` flag stays true. Defaults to UI_ACTION_SUCCESS_DWELL_MS. */
   dwellMs?: number;
-  /** Polite live-region message announced on success. Defaults to "Copied". */
-  announcement?: string;
+  /**
+   * Polite live-region message announced on success. Defaults to "Copied".
+   * `false` for callers whose own confirmation (a toast) already speaks, so the
+   * copy is not announced twice.
+   */
+  announcement?: string | false;
 }
 
 export interface UseCopyWithFeedbackResult {
@@ -59,7 +63,7 @@ export function useCopyWithFeedback(
       if (!isMountedRef.current) return true;
 
       setCopiedText(text);
-      useAnnouncerStore.getState().announce(announcement, "polite");
+      if (announcement !== false) useAnnouncerStore.getState().announce(announcement, "polite");
 
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       timeoutRef.current = setTimeout(() => {

@@ -96,7 +96,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
@@ -2278,11 +2277,12 @@ export function Toolbar({
       : chipState === "detached"
         ? `detached at ${shortSha(headSha) ?? "unknown commit"}`
         : undefined;
-  const { copy: copyPillPath } = useCopyWithFeedback({ announcement: "Path copied" });
+  // Routed through the switcher row's copy so the two "Copy path" rows confirm
+  // the same way; the menu closes on select, leaving nothing else to show it.
   const handleCopyProjectPath = useCallback(() => {
     if (!currentProject) return;
-    void copyPillPath(currentProject.path);
-  }, [currentProject, copyPillPath]);
+    projectSwitcher.copyPath(currentProject.path);
+  }, [currentProject, projectSwitcher]);
   const handlePillTogglePin = useCallback(() => {
     if (!currentProject) return;
     void projectSwitcher.togglePinProject(currentProject.id);

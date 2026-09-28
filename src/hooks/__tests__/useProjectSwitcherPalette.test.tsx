@@ -1658,8 +1658,8 @@ describe("useProjectSwitcherPalette", () => {
       });
     });
 
-    it("does not emit a toast when the clipboard write fails", async () => {
-      copyMock.mockResolvedValueOnce(false);
+    it("raises an error toast with a Retry that re-runs the copy when the write fails", async () => {
+      copyMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -1667,8 +1667,29 @@ describe("useProjectSwitcherPalette", () => {
         result.current.copyPath("/repo/one");
       });
 
-      expect(copyMock).toHaveBeenCalledWith("/repo/one");
-      expect(notifyMock).not.toHaveBeenCalled();
+      expect(copyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const failure = notifyMock.mock.calls[0]![0] as {
+        type: string;
+        title: string;
+        action: { label: string; onClick: () => void };
+      };
+      expect(failure.type).toBe("error");
+      expect(failure.title).toBe("Couldn't copy path");
+      expect(failure.action.label).toBe("Retry");
+
+      await act(async () => {
+        failure.action.onClick();
+      });
+
+      expect(copyMock).toHaveBeenCalledTimes(2);
+      expect(copyMock).toHaveBeenLastCalledWith("/repo/one");
+      expect(notifyMock).toHaveBeenLastCalledWith({
+        type: "info",
+        title: "Path copied",
+        message: "/repo/one",
+        transient: true,
+      });
     });
   });
 

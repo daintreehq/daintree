@@ -138,6 +138,15 @@ describe("useCopyWithFeedback", () => {
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Path copied");
   });
 
+  it("stays silent but still flips copied when the caller owns the announcement", async () => {
+    const { result } = renderHook(() => useCopyWithFeedback({ announcement: false }));
+    await act(async () => {
+      await result.current.copy("/home/foo");
+    });
+    expect(result.current.copied).toBe(true);
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
   // Regression guard: the hook is a general-purpose clipboard primitive shared
   // by crash-report and stack-trace copy paths. Paste-jacking sanitization
   // belongs at the install-command boundary (CopyableCommand), not here —
