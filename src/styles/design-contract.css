@@ -32,12 +32,20 @@
  * `body[data-reduce-animations="true"]`. Forms using `&` (either
  * `body[...] &` or `&:is(body[...] *)`) misbehave when the `@variant`
  * block is used at top level: `&` desugars to `:scope` and the resulting
- * `:scope:is(body[...] *) .foo` selectors never match in production. */
+ * `:scope:is(body[...] *) .foo` selectors never match in production.
+ *
+ * The third branch is the one that makes `reduce-motion:` work as a utility
+ * class, where the rule IS the element: `&:where(body[…] *)` puts the flag on an
+ * ancestor at zero specificity. In a top-level block it compiles to a dead
+ * `:scope:where(…)` rule, and the bare branch above does the work instead. */
 @custom-variant reduce-motion {
   @media (prefers-reduced-motion: reduce) {
     @slot;
   }
   body[data-reduce-animations="true"] {
+    @slot;
+  }
+  &:where(body[data-reduce-animations="true"] *) {
     @slot;
   }
 }

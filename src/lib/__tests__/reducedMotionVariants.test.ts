@@ -7,8 +7,6 @@
  * does) and check the output reacts to the app flag, not just the media query.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   createPluginCssCompiler,
@@ -63,27 +61,17 @@ describe("motion variants honour the in-app reduced-motion setting", () => {
   });
 });
 
-describe("components guard motion with the utility spelling that works", () => {
-  // `reduce-motion` is the at-rule spelling (`@variant reduce-motion { }` in CSS
-  // files). As a class prefix its app-flag branch nests under the element and
-  // never matches, so components must use `motion-reduce:` instead.
-  const roots = ["src", "packages"].map((dir) => path.resolve(__dirname, "../../..", dir));
-
-  function sourceFiles(dir: string, out: string[] = []): string[] {
-    for (const entry of readdirSync(dir)) {
-      if (entry === "node_modules" || entry === "dist" || entry === "__tests__") continue;
-      const full = path.join(dir, entry);
-      if (statSync(full).isDirectory()) sourceFiles(full, out);
-      else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) out.push(full);
-    }
-    return out;
-  }
-
-  it("never uses reduce-motion: as a class prefix", () => {
-    const offenders = roots
-      .flatMap((root) => sourceFiles(root))
-      .filter((file) => /(^|[\s"'`])reduce-motion:[\w[-]/m.test(readFileSync(file, "utf8")))
-      .map((file) => path.relative(path.resolve(__dirname, "../../.."), file));
-    expect(offenders).toEqual([]);
+describe("reduce-motion: works as a utility too", () => {
+  // `reduce-motion` is also the at-rule spelling (`@variant reduce-motion { }`
+  // in CSS files), and the plugin vocabulary advertises it as a class prefix.
+  // As a prefix its bare `body[…] { }` branch nests under the element and never
+  // matches, so the ancestor branch is what makes the utility honour the app flag.
+  it("carries the app-flag branch as an ancestor of the element", () => {
+    const block = blockFor(
+      compiler.build(["reduce-motion:transition-none"]),
+      "reduce-motion:transition-none"
+    );
+    expect(block).toContain("prefers-reduced-motion: reduce");
+    expect(block).toContain(`&:where(${APP_FLAG} *)`);
   });
 });
