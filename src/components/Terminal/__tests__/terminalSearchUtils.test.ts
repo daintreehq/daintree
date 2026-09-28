@@ -156,7 +156,7 @@ describe("getSearchDecorationColors", () => {
     expect(colors.matchOverviewRuler).toBe(colors.matchBackground);
     const wash = [54, 206, 148];
     const backdrop = channels("#1a1b18");
-    channels(colors.matchBackground).forEach((c, i) => {
+    channels(colors.matchBackground ?? "").forEach((c, i) => {
       const lo = Math.min(wash[i]!, backdrop[i]!);
       const hi = Math.max(wash[i]!, backdrop[i]!);
       expect(c).toBeGreaterThanOrEqual(lo);
