@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -201,11 +202,20 @@ export function useDevPreviewCommandConfig({
               <DropdownMenuItem
                 key={c.id}
                 onSelect={() => void handleHeaderPickCandidate(c)}
-                className={isActive ? "bg-overlay-subtle" : ""}
+                // The command in use is a committed value, so it takes the check
+                // every picker gives one — a resting fill would read as a second
+                // highlighted row.
                 aria-current={isActive ? "true" : undefined}
               >
                 <span className="text-xs font-medium">{c.name}</span>
                 <code className="text-2xs text-text-secondary truncate ml-auto">{c.command}</code>
+                <Check
+                  className={cn(
+                    "ml-2 h-3.5 w-3.5 shrink-0 text-text-secondary",
+                    !isActive && "invisible"
+                  )}
+                  aria-hidden="true"
+                />
               </DropdownMenuItem>
             );
           })}

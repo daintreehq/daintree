@@ -18,6 +18,7 @@ import {
   Ellipsis,
   X,
 } from "lucide-react";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
@@ -906,7 +907,11 @@ export function BrowserToolbar({
                     id={`${listboxId}-option-${index}`}
                     role="option"
                     aria-selected={index === highlightedIndex}
-                    onMouseEnter={() => setHighlightedIndex(index)}
+                    // `pointermove`, not `mouseenter`: rows scrolling under a
+                    // resting pointer must not steal the cursor from the keys.
+                    onPointerMove={
+                      index === highlightedIndex ? undefined : () => setHighlightedIndex(index)
+                    }
                     onMouseDown={(e) => {
                       e.preventDefault();
                       setIsEditing(false);
@@ -915,8 +920,8 @@ export function BrowserToolbar({
                       onNavigate(entry.url);
                     }}
                     className={cn(
-                      "group/row w-full text-left px-2.5 py-1.5 flex items-center gap-2 cursor-pointer",
-                      index === highlightedIndex ? "bg-overlay-medium" : "hover:bg-overlay-soft"
+                      PALETTE_ROW_CLASS,
+                      "group/row w-full text-left px-2.5 py-1.5 flex items-center gap-2 cursor-pointer"
                     )}
                   >
                     {entry.favicon ? (

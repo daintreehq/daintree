@@ -10,6 +10,7 @@ import {
   Upload,
 } from "lucide-react";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
 import { isSecretEnvEntry, looksLikeSecret } from "@/utils/secretDetection";
 import { ImportEnvDialog } from "./ImportEnvDialog";
@@ -371,10 +372,12 @@ function EnvVarKeyCell({
                   role="option"
                   aria-selected={idx === activeIndex}
                   onClick={() => handleSelect(s.key)}
-                  onMouseEnter={() => setActiveIndex(idx)}
+                  // `pointermove`, not `mouseenter`: rows scrolling under a
+                  // resting pointer must not steal the cursor from the keys.
+                  onPointerMove={idx === activeIndex ? undefined : () => setActiveIndex(idx)}
                   className={cn(
-                    "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer",
-                    idx === activeIndex && "bg-overlay-soft"
+                    PALETTE_ROW_CLASS,
+                    "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer"
                   )}
                   data-testid="env-editor-key-suggestion"
                 >

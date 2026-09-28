@@ -9,6 +9,7 @@ import React, {
   type ReactNode,
 } from "react";
 import {
+  Check,
   X,
   Maximize2,
   Minimize2,
@@ -961,6 +962,8 @@ function PanelHeaderComponent({
               key={tab.id}
               onSelect={() => onTabClick?.(tab.id)}
               aria-current={tab.isActive ? "true" : undefined}
+              // The tab on screen takes the committed-value check, as in the
+              // docked tab-group menu, not weight alone.
               className={cn(tab.isActive && "font-medium")}
             >
               <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
@@ -971,14 +974,21 @@ function PanelHeaderComponent({
                   brandColor={tab.presetColor ?? tab.chrome.color}
                 />
               </span>
-              <span className="truncate">{tab.title}</span>
+              <span className="mr-3 truncate">{tab.title}</span>
               {StateIcon && tab.agentState && (
                 <span className="sr-only">, {getEffectiveStateLabel(tab.agentState)}</span>
+              )}
+              {tab.isActive && (
+                <Check
+                  className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary"
+                  aria-hidden="true"
+                />
               )}
               {StateIcon && tab.agentState && (
                 <StateIcon
                   className={cn(
-                    "ml-auto h-3 w-3 shrink-0",
+                    tab.isActive ? "ml-1.5" : "ml-auto",
+                    "h-3 w-3 shrink-0",
                     getEffectiveStateColor(tab.agentState),
                     tab.agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
                   )}

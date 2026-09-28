@@ -298,9 +298,7 @@ function GridCell({ row, selected }: { row: RowFixture; selected?: boolean }) {
     <div
       className={cn(
         "relative h-full max-w-[480px] overflow-hidden rounded-lg border border-divider bg-overlay-subtle",
-        selected && "bg-overlay-medium",
-        selected &&
-          "before:absolute before:bottom-3 before:start-0 before:top-6 before:z-10 before:w-[3px] before:rounded-full before:bg-selection-outline before:content-['']"
+        selected && "bg-overlay-medium"
       )}
     >
       <Card row={row} variant="grid" collapsed={false} />

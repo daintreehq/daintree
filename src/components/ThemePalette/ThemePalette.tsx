@@ -34,12 +34,14 @@ function ThemeListItem({
   isCurrent,
   matches,
   onClick,
+  onHover,
 }: {
   scheme: AppColorScheme;
   isSelected: boolean;
   isCurrent: boolean;
   matches: readonly FuseResultMatch[] | undefined;
   onClick: () => void;
+  onHover: () => void;
 }) {
   return (
     <button
@@ -47,6 +49,9 @@ function ThemeListItem({
       tabIndex={-1}
       onPointerDown={(e) => e.preventDefault()}
       id={`theme-option-${scheme.id}`}
+      // Pointing moves the one cursor, so the pointer previews a theme exactly as
+      // the arrow keys do, and the row that looks lit is the one Enter saves.
+      onPointerMove={isSelected ? undefined : onHover}
       onClick={onClick}
       role="option"
       // The cursor, and only the cursor — the live preview follows it. What is
@@ -56,8 +61,7 @@ function ThemeListItem({
       aria-current={isCurrent ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "w-full text-left px-3 py-1.5 rounded-[var(--radius-md)] flex items-center gap-3",
-        "hover:bg-overlay-subtle"
+        "w-full text-left px-3 py-1.5 rounded-[var(--radius-md)] flex items-center gap-3"
       )}
     >
       <div className="flex-1 min-w-0">
@@ -259,11 +263,12 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       onConfirm={handleConfirm}
       onClose={onClose}
       onSelectIndex={setSelectedIndex}
+      onHoverIndex={setSelectedIndex}
       getItemId={(scheme) => scheme.id}
       getFooter={getThemeFooter}
       getSectionLabel={getThemeSectionLabel}
       matchesById={matchesById}
-      renderItem={(scheme, _index, isSelected, _onHover, matches) => (
+      renderItem={(scheme, index, isSelected, onHover, matches) => (
         <ThemeListItem
           key={scheme.id}
           scheme={scheme}
@@ -271,6 +276,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
           isCurrent={scheme.id === selectedSchemeId}
           matches={matches}
           onClick={() => commit(scheme)}
+          onHover={() => onHover(index)}
         />
       )}
       label="Theme switcher"

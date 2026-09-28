@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, beforeAll, afterAll } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { ResumeSessionItem } from "@/services/resumeSessionItems";
 
@@ -14,6 +14,7 @@ const paletteState = {
   setQuery: vi.fn(),
   selectPrevious: vi.fn(),
   selectNext: vi.fn(),
+  setSelectedIndex: vi.fn(),
   close: vi.fn(),
   isLoading: false,
   isSearching: false,
@@ -178,11 +179,29 @@ describe("ResumeSessionsPalette", () => {
     // item, not of the selection, so it must not have been folded away.
     expect(rowFor("c").className).not.toBe(rowFor("b").className);
     expect(rowFor("c").getAttribute("aria-disabled")).toBe("true");
-    // And an inert row makes no hover promise a live one keeps.
-    const hoverTokens = (el: HTMLElement) =>
-      el.className.split(/\s+/).filter((token) => token.startsWith("hover:"));
-    expect(hoverTokens(rowFor("b")).length).toBeGreaterThan(0);
-    expect(hoverTokens(rowFor("c"))).toEqual([]);
+  });
+
+  it("moves the one cursor with the pointer, and never onto an inert row", () => {
+    render(<ResumeSessionsPalette />);
+
+    // Pointing at a live row moves the cursor Enter acts on, rather than
+    // painting a second row beside it.
+    fireEvent.pointerMove(rowFor("b"));
+    expect(paletteState.setSelectedIndex).toHaveBeenCalledWith(1);
+
+    // A removed-worktree row cannot take the cursor, so pointing at it leaves
+    // the cursor where it was.
+    paletteState.setSelectedIndex.mockClear();
+    fireEvent.pointerMove(rowFor("c"));
+    expect(paletteState.setSelectedIndex).not.toHaveBeenCalled();
+
+    // No row lights itself on hover — the cursor is the only highlight.
+    for (const id of ["a", "b", "c", "d"]) {
+      const hoverFills = rowFor(id)
+        .className.split(/\s+/)
+        .filter((token) => token.startsWith("hover:bg-"));
+      expect(hoverFills).toEqual([]);
+    }
   });
 
   it("says 'Worktree removed' once for the section, never once per row", () => {

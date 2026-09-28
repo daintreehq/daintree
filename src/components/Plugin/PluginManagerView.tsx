@@ -128,8 +128,8 @@ interface PluginRowProps {
  * content-model violation that screen readers prune or skip.
  *
  * Selection is `PALETTE_ROW_CLASS` — the app's single definition of "this is the
- * row Enter will act on", which already owns the neutral leading rail, the
- * reduce-motion handling, and the forced-colors outline. `row-select-target`
+ * row Enter will act on", which already owns the highlight fill, the
+ * reduce-motion handling, and the high-contrast outlines. `row-select-target`
  * exempts the inner button from the high-contrast blanket button border, which
  * otherwise framed the text half of every row and left its switch outside.
  */

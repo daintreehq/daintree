@@ -163,7 +163,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
     "src/components/Panel/TabButton.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
-    "src/components/Settings/SettingsDialog.tsx",
     "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/HybridInputBar.tsx",

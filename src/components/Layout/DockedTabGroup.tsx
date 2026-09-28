@@ -20,7 +20,7 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
-import { ChevronDown, CopyPlus, CheckCircle2 } from "lucide-react";
+import { Check, ChevronDown, CopyPlus, CheckCircle2 } from "lucide-react";
 import { SpinnerCircle } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
@@ -928,10 +928,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               key={panel.id}
                               onSelect={() => handleTabClick(panel.id)}
                               aria-current={isActive ? "true" : undefined}
-                              className={cn(
-                                isActive &&
-                                  "font-medium before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-accent-primary before:content-['']"
-                              )}
+                              // The tab on screen is a committed value, so it
+                              // takes the check every picker gives one — not a
+                              // rail, which would read as the highlighted row.
+                              className={cn(isActive && "font-medium")}
                             >
                               <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
                                 <TerminalIcon
@@ -940,7 +940,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                   className="w-3.5 h-3.5"
                                 />
                               </span>
-                              <span className="truncate">{panel.title}</span>
+                              <span className="mr-3 truncate">{panel.title}</span>
+                              {isActive && (
+                                <Check
+                                  className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary"
+                                  aria-hidden="true"
+                                />
+                              )}
                             </DropdownMenuItem>
                           );
                         })}

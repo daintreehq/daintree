@@ -145,7 +145,7 @@ export function PluginQuickPickDialog() {
           role="option"
           // Multi-select splits the two meanings a single-select row folds
           // together: `aria-checked` carries membership, and the cursor rides
-          // `data-selected`, which draws the same rail and fill. Putting both on
+          // `data-selected`, which draws the same highlight fill. Putting both on
           // `aria-selected` would light every checked row as if Enter acted on it.
           aria-selected={canSelectMany ? undefined : isSelected}
           aria-checked={canSelectMany ? isChecked : undefined}
@@ -160,7 +160,7 @@ export function PluginQuickPickDialog() {
           className={cn(
             PALETTE_ROW_CLASS,
             "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-            "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+            "text-text-secondary"
           )}
         >
           {canSelectMany && (

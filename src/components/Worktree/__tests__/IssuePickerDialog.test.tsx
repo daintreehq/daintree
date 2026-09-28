@@ -233,7 +233,7 @@ describe("IssuePickerDialog keyboard contract", () => {
     await waitFor(() => screen.getByText("Two", VISIBLE));
 
     const [, second] = screen.getAllByRole("option");
-    fireEvent.mouseMove(second!);
+    fireEvent.pointerMove(second!);
     const selected = screen.getAllByRole("option").filter((o) => o.ariaSelected === "true");
     expect(selected).toEqual([second]);
   });

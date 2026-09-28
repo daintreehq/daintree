@@ -135,8 +135,6 @@ export const theme: BuiltInThemeSource = {
     // labels hold ~6.1:1 here (washed out on the elevated fallback).
     "settings-card-bg": "#2F2D32",
     "settings-list-item-bg": "#2F2D32",
-    "settings-nav-active-bg": "rgba(180,135,216,0.11)",
-    "settings-nav-hover-bg": "rgba(207,192,225,0.05)",
     "settings-search-bg": "rgba(19,17,20,0.60)",
     "settings-sidebar-bg": "rgba(23,21,25,0.60)",
     // Composited settings-sidebar-bg over the shell.

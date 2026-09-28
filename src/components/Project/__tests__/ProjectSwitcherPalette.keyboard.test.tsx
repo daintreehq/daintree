@@ -644,3 +644,75 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     expect(onSelectNewWindow).toHaveBeenCalledWith(row);
   });
 });
+
+describe("ProjectSwitcherPalette pointer cursor", () => {
+  const baseProps = {
+    isOpen: true,
+    query: "",
+    selectedIndex: 0,
+    onQueryChange: vi.fn(),
+    onSelectPrevious: vi.fn(),
+    onSelectNext: vi.fn(),
+    onSelect: vi.fn(),
+    onClose: vi.fn(),
+    mode: "modal" as const,
+  };
+
+  it("moves the one cursor to the row under the pointer rather than lighting a second row", () => {
+    const onHoverRow = vi.fn();
+    const onHoverProject = vi.fn();
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ id: "p1", name: "one" }), makeProject({ id: "p2", name: "two" })]}
+        onHoverRow={onHoverRow}
+        onHoverProject={onHoverProject}
+      />
+    );
+
+    const second = document.getElementById("project-option-p2")!;
+    fireEvent.pointerMove(second);
+    expect(onHoverRow).toHaveBeenCalledWith("p2");
+
+    // The row already holding the cursor has nothing to move.
+    onHoverRow.mockClear();
+    fireEvent.pointerMove(document.getElementById("project-option-p1")!);
+    expect(onHoverRow).not.toHaveBeenCalled();
+
+    for (const id of ["p1", "p2"]) {
+      const row = document.getElementById(`project-option-${id}`)!;
+      expect(row.className.split(/\s+/).filter((t) => t.startsWith("hover:bg-"))).toEqual([]);
+    }
+  });
+});
+
+describe("ProjectSwitcherPalette current workspace mark", () => {
+  it("checks the workspace you are in, apart from the cursor fill", () => {
+    render(
+      <ProjectSwitcherPalette
+        isOpen
+        query="pro"
+        selectedIndex={1}
+        onQueryChange={vi.fn()}
+        onSelectPrevious={vi.fn()}
+        onSelectNext={vi.fn()}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        mode="modal"
+        rankedSearch
+        results={[
+          makeProject({ id: "here", name: "project here", isActive: true }),
+          makeProject({ id: "there", name: "project there" }),
+        ]}
+      />
+    );
+
+    const here = document.getElementById("project-option-here")!;
+    const there = document.getElementById("project-option-there")!;
+    expect(here.querySelector("svg.lucide-check")).not.toBeNull();
+    expect(there.querySelector("svg.lucide-check")).toBeNull();
+    // The cursor is on the other row; the check is not the cursor.
+    expect(there.getAttribute("aria-selected")).toBe("true");
+    expect(here.getAttribute("aria-selected")).toBe("false");
+  });
+});

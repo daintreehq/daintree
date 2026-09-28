@@ -48,22 +48,20 @@
   font-size: var(--settings-meta-size, var(--text-2xs));
 }
 
+/* The nav marks the page being shown the way every list-detail list in the app
+   marks its selected record: the highlight fill and nothing else, with hover a
+   lighter step so pointing at another page can never out-weigh the one open.
+   It used to add a 2px accent marker that slid between items, clipped round on
+   one side — the same leading rail the palettes dropped, and a second shape of
+   it. The keyboard focus ring stays accent: it is the one focus anchor here.
+   Themes that tune this surface do it through the two extension tokens; the
+   inset ring stays polarity-scoped through --settings-nav-active-shadow. */
 .settings-nav-item:hover {
-  background: var(--settings-nav-hover-bg, var(--theme-overlay-hover));
+  background: var(--settings-nav-hover-bg, var(--theme-overlay-subtle));
 }
 
-/* Active nav item ELEVATES toward surface-panel-elevated (overlay-raised),
-   it does not darken a recessed sidebar. The single load-bearing accent for
-   the active item is the 2px accent marker — a shared left-edge indicator that
-   slides between items, rendered in SettingsDialog.tsx as a layoutId-projected
-   motion node (not a pseudo-element, which motion cannot animate). The inset
-   ring is polarity-scoped through the token:
-   dark palettes set --settings-nav-active-shadow to a subtle ring; light
-   palettes drop the value so it falls back to `none`, leaving the 2px marker
-   as the sole accent cue (S1). Keeping the consumer wired preserves the dark
-   ring instead of silently dropping it. */
 .settings-nav-item[data-active="true"] {
-  background: var(--settings-nav-active-bg, var(--theme-overlay-raised));
+  background: var(--settings-nav-active-bg, var(--theme-overlay-highlight));
   box-shadow: var(--settings-nav-active-shadow, none);
 }
 
@@ -83,9 +81,9 @@
    only prefers-contrast, Windows swaps in system colors, and only this path discards
    backgrounds, tints and shadows outright. Same rationale as src/index.css.
 
-   Without it the settings nav loses its selected state entirely — the tinted fill, the
-   inset ring and the 2px accent marker are all dropped, leaving every section row
-   identical and no way to tell which one you are looking at. */
+   Without it the settings nav loses its selected state entirely — the fill and the
+   inset ring are both dropped, leaving every section row identical and no way to tell
+   which one you are looking at. */
 @media (forced-colors: active) {
   /* Outline, not fill. A `Highlight` background makes Chromium paint a Canvas backplate
      behind the label, which comes out as a solid white block where the text should be —

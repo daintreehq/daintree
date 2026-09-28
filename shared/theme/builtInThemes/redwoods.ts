@@ -147,8 +147,6 @@ export const theme: BuiltInThemeSource = {
     // Rows above the panel shell, below elevated: secondary labels ~5.2:1.
     "settings-card-bg": "#231A14",
     "settings-list-item-bg": "#231A14",
-    "settings-nav-active-bg": "rgba(80,162,77,0.13)",
-    "settings-nav-hover-bg": "rgba(180,140,120,0.05)",
     "settings-search-bg": "#0E0A08",
     "sidebar-action-hover-bg": "rgba(180,140,120,0.06)",
     "sidebar-active-bg": "rgba(255,255,255,0.065)",

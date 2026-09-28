@@ -125,8 +125,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#1B1715",
     "pulse-ring-offset": "#261F1C",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #352E29 25%, #3E3530 50%, #352E29 75%)",
-    "settings-nav-active-bg": "rgba(196,98,64,0.10)",
-    "settings-nav-hover-bg": "rgba(220,232,196,0.05)",
     "sidebar-action-hover-bg": "rgba(220,232,196,0.05)",
     // Registry requires white-alpha ink for these two on dark.
     "sidebar-active-bg": "rgba(255,255,255,0.065)",

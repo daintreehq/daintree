@@ -7,6 +7,7 @@ import {
   useRef,
   type KeyboardEvent,
 } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ExternalLink, RefreshCw, WifiOff, Plus, Settings, ArrowUpDown, Clock } from "lucide-react";
 import { ListChecks } from "@/components/icons";
@@ -114,6 +115,8 @@ interface LoadMoreFooterContext {
   rowIndex: number;
   onLoadMore: () => void;
   onOpenSettings: () => void;
+  /** Moves the list's cursor onto this row on real pointer movement. */
+  onPointerActivate: () => void;
 }
 
 /**
@@ -136,10 +139,16 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
     rowIndex,
     onLoadMore,
     onOpenSettings,
+    onPointerActivate,
   } = context;
   const isTokenError = loadMoreError !== null && isTokenRelatedError(loadMoreError);
   return (
-    <div role="row" aria-rowindex={rowIndex} className="p-3">
+    <div
+      role="row"
+      aria-rowindex={rowIndex}
+      className="p-3"
+      onPointerMove={isLoadMoreActive ? undefined : onPointerActivate}
+    >
       <div role="gridcell">
         {loadMoreError ? (
           // ONE way out, not two. This used to render Retry-or-Settings AND
@@ -153,7 +162,7 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
               variant="ghost"
               size="sm"
               onClick={isTokenError ? onOpenSettings : onLoadMore}
-              className={cn("mt-1 h-6 text-xs", isLoadMoreActive && "bg-overlay-soft")}
+              className={cn("mt-1 h-6 text-xs", isLoadMoreActive && "bg-overlay-highlight")}
             >
               {isTokenError ? (
                 <>
@@ -176,7 +185,7 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
               // Neutral, not accent: the keyboard cursor uses the same neutral
               // lift here that it uses on a row, so the two can never both claim
               // the accent at once.
-              isLoadMoreActive && "bg-overlay-soft text-text-primary"
+              isLoadMoreActive && "bg-overlay-highlight text-text-primary"
             )}
           >
             {showLoadingMoreSpinner ? (
@@ -790,6 +799,12 @@ export function GitHubResourceList({
 
   useEffect(() => {
     if (activeIndex < 0) return;
+    // A row under the pointer was just claimed by it; revealing it would scroll
+    // a half-visible row out from under the pointer.
+    // Found by grid position, not resource id, so a refresh that swaps the
+    // resource in this slot doesn't re-run the reveal on its own.
+    const row = document.querySelector(`#github-${type}-list [aria-rowindex="${activeIndex + 1}"]`);
+    if (isPointerClaimed(row)) return;
     if (isLoadMoreActive) {
       document.getElementById(`github-${type}-load-more`)?.scrollIntoView({ block: "nearest" });
       return;
@@ -931,6 +946,7 @@ export function GitHubResourceList({
       rowIndex: data.length + 1,
       onLoadMore: handleLoadMore,
       onOpenSettings: handleOpenGitHubSettings,
+      onPointerActivate: () => setActiveIndex(data.length),
     }),
     [
       canLoadMore,
@@ -1575,6 +1591,7 @@ export function GitHubResourceList({
                     onMenuClose={focusSearchInput}
                     onOpenExternalUrl={handleOpenUrlExternal}
                     isActive={activeIndex === index}
+                    onPointerActivate={() => setActiveIndex(index)}
                     isSelected={selection.selectedIds.has(item.number)}
                     isSelectionActive={selection.isSelectionActive}
                     onToggleSelect={(e: { shiftKey: boolean }) => {

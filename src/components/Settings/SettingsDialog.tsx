@@ -11,9 +11,8 @@ import {
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { LayoutGroup, m } from "framer-motion";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { logError } from "@/utils/logger";
-import { getUiAnimationDuration, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import {
   usePortalStore,
   usePerformanceModeStore,
@@ -803,41 +802,39 @@ function SettingsDialogInner({
             onKeyDown={handleTablistKeyDown}
             onBlur={handleTablistBlur}
           >
-            <LayoutGroup id="settings-nav">
-              {navGroups.map((group) => (
-                // A lone group's label only repeats the heading above it ("Project
-                // settings" over "Project"), so it is dropped rather than shown twice.
-                <NavGroup key={group.label} label={group.label} hideLabel={navGroups.length === 1}>
-                  {group.entries.map((entry) => {
-                    const tabId = entry.id as SettingsTab;
-                    const isLazy = entry.importKind === "lazy";
-                    return (
-                      <NavItem
-                        key={entry.id}
-                        tab={tabId}
-                        icon={entry.icon}
-                        label={entry.label}
-                        activeTab={activeTab}
-                        tabStop={(focusedNavTab ?? activeTab) === tabId}
-                        isSearching={isSearching}
-                        matchCount={matchCounts[tabId]}
-                        modified={modifiedTabs.has(tabId)}
-                        hasError={tabsWithErrors.has(tabId)}
-                        onSelect={handleNavSelect}
-                        onPrefetchImport={isLazy ? entry.importer : undefined}
-                        onPrefetchMount={
-                          isLazy
-                            ? () => {
-                                if (isOpenRef.current) markTabVisited(tabId);
-                              }
-                            : undefined
-                        }
-                      />
-                    );
-                  })}
-                </NavGroup>
-              ))}
-            </LayoutGroup>
+            {navGroups.map((group) => (
+              // A lone group's label only repeats the heading above it ("Project
+              // settings" over "Project"), so it is dropped rather than shown twice.
+              <NavGroup key={group.label} label={group.label} hideLabel={navGroups.length === 1}>
+                {group.entries.map((entry) => {
+                  const tabId = entry.id as SettingsTab;
+                  const isLazy = entry.importKind === "lazy";
+                  return (
+                    <NavItem
+                      key={entry.id}
+                      tab={tabId}
+                      icon={entry.icon}
+                      label={entry.label}
+                      activeTab={activeTab}
+                      tabStop={(focusedNavTab ?? activeTab) === tabId}
+                      isSearching={isSearching}
+                      matchCount={matchCounts[tabId]}
+                      modified={modifiedTabs.has(tabId)}
+                      hasError={tabsWithErrors.has(tabId)}
+                      onSelect={handleNavSelect}
+                      onPrefetchImport={isLazy ? entry.importer : undefined}
+                      onPrefetchMount={
+                        isLazy
+                          ? () => {
+                              if (isOpenRef.current) markTabVisited(tabId);
+                            }
+                          : undefined
+                      }
+                    />
+                  );
+                })}
+              </NavGroup>
+            ))}
           </ScrollShadow>
 
           <div className="pt-2 mt-2 border-t border-border-default px-3">
@@ -916,6 +913,7 @@ function SettingsDialogInner({
                   cleanQuery={cleanSearchQuery}
                   onResultClick={handleResultClick}
                   activeIndex={activeResultIndex}
+                  onResultHover={setActiveResultIndex}
                   activeScope={activeScope}
                   projectLabel={hasProject ? projectLabel : null}
                 />
@@ -1652,26 +1650,6 @@ export function NavItem({
       )}
       data-active={active ? "true" : undefined}
     >
-      {active && (
-        // Shared across every nav item in this scope, so selecting another tab
-        // projects this same node to its new position (transform-only) instead
-        // of unmounting and remounting the marker. Scoping the id keeps a
-        // cross-scope jump (a search hit in the other scope) from sliding the
-        // marker between two unrelated nav trees. A span, not a div: <button>
-        // takes phrasing content only, and `absolute` makes it block anyway.
-        // Duration comes from getUiAnimationDuration() rather than the raw
-        // constant because performance mode has to collapse this to 0 — it
-        // suppresses CSS transitions, but cannot stop motion's JS transform
-        // writes, which are exactly what a projection animation emits.
-        <m.span
-          layoutId={`active-indicator-${scopeForTab(tab)}`}
-          layout="position"
-          className="pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r-full bg-accent-primary"
-          transition={{ duration: getUiAnimationDuration() / 1000, ease: EASE_OUT_EXPO_FM }}
-          aria-hidden="true"
-          data-settings-nav-indicator="true"
-        />
-      )}
       <span className="relative">
         {icon}
         {/* "Changed" and "broken" used to be the same dot in two hues, which is no
@@ -1851,6 +1829,8 @@ interface SearchResultsProps {
     requiresEnabled?: { settingId: string; label: string }
   ) => void;
   activeIndex?: number;
+  /** Moves the active result to the row under the pointer — one cursor for pointer and keys. */
+  onResultHover?: (index: number) => void;
   activeScope: SettingsScope;
   /** null when no project is open. */
   projectLabel: string | null;
@@ -1862,6 +1842,7 @@ export function SearchResults({
   cleanQuery,
   onResultClick,
   activeIndex = -1,
+  onResultHover,
   activeScope,
   projectLabel,
 }: SearchResultsProps) {
@@ -1869,6 +1850,9 @@ export function SearchResults({
   const renderLimit = useProgressiveRenderLimit(results.length, query, activeIndex);
 
   useEffect(() => {
+    // A result under the pointer was just claimed by it; revealing it would
+    // scroll a half-visible row out from under the pointer.
+    if (isPointerClaimed(activeRef.current)) return;
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
 
@@ -1939,6 +1923,9 @@ export function SearchResults({
               tabIndex={-1}
               aria-selected={index === activeIndex}
               ref={index === activeIndex ? activeRef : undefined}
+              onPointerMove={
+                onResultHover && index !== activeIndex ? () => onResultHover(index) : undefined
+              }
               onClick={() =>
                 onResultClick(
                   { tab: result.tab, subtab: result.subtab, sectionId: result.id },
@@ -1946,11 +1933,10 @@ export function SearchResults({
                 )
               }
               className={cn(
-                // The app's one "Enter acts on this row" treatment — the neutral
-                // selection-outline rail carries the 3:1 the raised fill cannot.
+                // The app's one "Enter acts on this row" treatment, moved by the
+                // pointer as well as the arrow keys so only one row is ever lit.
                 PALETTE_ROW_CLASS,
                 "group w-full text-left p-3 rounded-[var(--radius-md)]",
-                "hover:bg-overlay-soft",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
               )}
             >

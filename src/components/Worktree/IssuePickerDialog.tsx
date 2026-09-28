@@ -85,7 +85,7 @@ function IssueOptionRow({
         // Options are reached through the search field's active descendant,
         // never by Tab: Tab goes from the search to the filter to the footer.
         tabIndex={-1}
-        onMouseMove={onPoint}
+        onPointerMove={onPoint}
         // Keep DOM focus in the search field so a click that lands and a
         // keypress after it act on the same cursor.
         onMouseDown={(event) => event.preventDefault()}

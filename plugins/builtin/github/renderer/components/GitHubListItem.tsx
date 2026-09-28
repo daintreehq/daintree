@@ -68,6 +68,8 @@ interface GitHubListItemProps {
   /** Where focus belongs once the row's actions menu closes. */
   onMenuClose?: () => void;
   isActive?: boolean;
+  /** Moves the list's cursor here on real pointer movement, so pointer and keys share one row. */
+  onPointerActivate?: () => void;
   isSelected?: boolean;
   isSelectionActive?: boolean;
   /** Widened past `MouseEvent` so the actions menu can run the same command. */
@@ -117,6 +119,7 @@ export function GitHubListItem({
   onMenuOpenChange,
   onMenuClose,
   isActive,
+  onPointerActivate,
   isSelected = false,
   isSelectionActive = false,
   onToggleSelect,
@@ -285,24 +288,15 @@ export function GitHubListItem({
       aria-selected={isSelected}
       className={cn(
         "forge-row group relative cursor-default select-none transition-colors duration-150 ease-out",
-        // Neutral three-step ladder. Hover is the lightest fill, the keyboard
-        // cursor adds the leading rail below, and membership is the heaviest
-        // fill plus a filled checkbox — no accent anywhere (accent restraint:
-        // the search field owns the one focus anchor in this region).
-        "hover:bg-overlay-subtle",
-        // Each step keeps its own floor under the pointer — otherwise hovering
-        // the cursor row ran the ladder backwards and the row got *lighter*.
-        isActive && "bg-overlay-soft hover:bg-overlay-soft",
-        isSelected && "bg-overlay-medium hover:bg-overlay-medium",
-        // The keyboard cursor's own mark, borrowed from `.palette-row`: a 3px
-        // leading rail on `selection-outline`, which is the token that carries
-        // 1.4.11's 3:1 against both the surface and the fill. Keyed on `isActive`
-        // rather than `aria-selected`, which this listbox spends on membership.
-        "before:absolute before:inset-y-1.5 before:-start-px before:w-[3px] before:rounded-full",
-        "before:bg-selection-outline before:opacity-0 before:transition-opacity before:duration-150",
-        "before:content-[''] before:pointer-events-none",
-        isActive && "before:opacity-100"
+        // The app's highlighted-row fill, on the one row the pointer or the
+        // arrow keys last put the cursor on — keyed on `isActive` rather than
+        // `aria-selected`, which this grid spends on membership. Membership is
+        // the filled checkbox and nothing else: a second fill would sit a step
+        // away from the cursor's and the two would be read as one another. No
+        // accent anywhere (the search field owns the one focus anchor here).
+        isActive && "bg-overlay-highlight"
       )}
+      onPointerMove={!isActive ? onPointerActivate : undefined}
       // The row draws to exactly the height Virtuoso lays it out on, so the
       // fill and the hit area cover the whole slot with no unowned strip.
       style={{ height: RESOURCE_ITEM_HEIGHT_PX }}

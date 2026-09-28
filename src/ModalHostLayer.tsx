@@ -427,6 +427,7 @@ export function ModalHostLayer({
               onQueryChange={panelPalette.setQuery}
               onSelectPrevious={panelPalette.selectPrevious}
               onSelectNext={panelPalette.selectNext}
+              onHoverIndex={panelPalette.setSelectedIndex}
               onSelect={(kind) => {
                 const result = panelPalette.handleSelect(kind);
                 if (!result) return;

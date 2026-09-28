@@ -184,7 +184,7 @@ export const theme: BuiltInThemeSource = {
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",
     "settings-nav-active-shadow": "none",
-    "settings-nav-hover-bg": "rgba(30,42,58,0.05)",
+    "settings-nav-hover-bg": "rgba(255,255,255,0.55)",
     // Scope pill elevates to white on the tinted settings sidebar.
     "settings-scope-bg": "#FFFFFF",
     "settings-sidebar-bg": "rgba(222,234,241,0.60)",

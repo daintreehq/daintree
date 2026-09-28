@@ -86,6 +86,7 @@ const TERMINAL_LINES = [
 ];
 
 function Pane() {
+  const [selectedIndex, setSelectedIndex] = useState(menuCase.selectedIndex);
   return (
     <div
       className="flex flex-col border border-divider bg-surface-panel"
@@ -99,10 +100,11 @@ function Pane() {
         <AutocompleteMenu
           isOpen
           items={menuCase.items}
-          selectedIndex={menuCase.selectedIndex}
+          selectedIndex={selectedIndex}
           isLoading={menuCase.isLoading}
           staleKeys={staleKeys}
           onSelect={noop}
+          onHoverIndex={setSelectedIndex}
           style={{ left: "12px" }}
           title={copy.title}
           ariaLabel={copy.ariaLabel}

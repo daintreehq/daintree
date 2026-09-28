@@ -235,6 +235,7 @@ export function ProjectSwitcher() {
             onSelectNewWindow={handleSelectNewWindow}
             onHoverProject={projectSwitcher.onHoverProject}
             onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+            onHoverRow={projectSwitcher.hoverRow}
             fleetLiveness={projectSwitcher.fleetLiveness}
             removeConfirmProject={projectSwitcher.removeConfirmProject}
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
@@ -324,6 +325,7 @@ export function ProjectSwitcher() {
         onCopyPath={projectSwitcher.copyPath}
         onHoverProject={projectSwitcher.onHoverProject}
         onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+        onHoverRow={projectSwitcher.hoverRow}
         fleetLiveness={projectSwitcher.fleetLiveness}
         removeConfirmProject={projectSwitcher.removeConfirmProject}
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}

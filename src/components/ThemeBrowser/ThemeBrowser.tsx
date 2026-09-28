@@ -95,12 +95,14 @@ function ThemeRow({
       // plain click would drop focus on document.body and the next arrow key
       // would go nowhere.
       onPointerDown={(e) => e.preventDefault()}
+      // The pointer moves the same cursor the arrow keys do — which previews,
+      // exactly as arrowing does — so the lit row is always the one Enter saves.
+      onPointerMove={isActive ? undefined : () => onSelect(scheme.id)}
       onClick={() => onSelect(scheme.id)}
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full flex items-center gap-2.5 px-2.5 py-2 text-left cursor-pointer",
-        "duration-150 ease-out",
-        !isActive && "hover:bg-surface-hover"
+        "duration-150 ease-out"
       )}
     >
       {scheme.heroImage && !error ? (

@@ -7,6 +7,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import {
   RefreshCw,
   AlertCircle,
@@ -46,7 +47,7 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 //
 // Chrome follows the forge issue/PR dropdowns: a fixed
 // 450×500 panel, the search shell as the region's one accent, a grid popup so
-// rows may carry a control, and a neutral cursor ladder with a leading rail.
+// rows may carry a control, and the shared highlight fill on the cursor row.
 
 interface LocalCommitsDropdownProps {
   cwd: string;
@@ -285,6 +286,8 @@ interface LocalCommitRowProps {
   isCopied: boolean;
   onToggle: (hash: string) => void;
   onCopy: (commit: GitCommit) => void;
+  /** Moves the list's cursor here on real pointer movement — one cursor for pointer and keys. */
+  onPointerActivate: () => void;
 }
 
 function LocalCommitRow({
@@ -296,6 +299,7 @@ function LocalCommitRow({
   isCopied,
   onToggle,
   onCopy,
+  onPointerActivate,
 }: LocalCommitRowProps) {
   const trimmedBody = reflowCommitBody(commit.body?.trim() ?? "");
   const hasBody = trimmedBody.length > 0;
@@ -332,16 +336,11 @@ function LocalCommitRow({
         // under the cursor is never the one being washed out.
         "scroll-my-8",
         hasBody ? "cursor-pointer" : "cursor-default",
-        // The forge rows' neutral ladder: hover is the lightest fill, the
-        // keyboard cursor adds a heavier fill plus the leading rail, which is
-        // what carries 1.4.11 — the fill alone cannot on these surfaces.
-        "hover:bg-overlay-subtle",
-        isActive && "bg-overlay-soft hover:bg-overlay-soft",
-        "before:absolute before:inset-y-1.5 before:-start-px before:w-[3px] before:rounded-full",
-        "before:bg-selection-outline before:opacity-0 before:transition-opacity before:duration-150",
-        "before:content-[''] before:pointer-events-none",
-        isActive && "before:opacity-100"
+        // The app's highlighted-row fill on the one row the pointer or the
+        // arrow keys last put the cursor on — never a second, hover-only row.
+        isActive && "bg-overlay-highlight"
       )}
+      onPointerMove={isActive ? undefined : onPointerActivate}
     >
       <div role="gridcell" className="flex items-start gap-2 px-3 py-2.5">
         {hasBody ? (
@@ -646,7 +645,11 @@ export function LocalCommitsDropdown({
 
   useEffect(() => {
     if (activeDescendantId) {
-      document.getElementById(activeDescendantId)?.scrollIntoView({ block: "nearest" });
+      const row = document.getElementById(activeDescendantId);
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (isPointerClaimed(row)) return;
+      row?.scrollIntoView({ block: "nearest" });
     }
   }, [activeDescendantId]);
 
@@ -1070,6 +1073,7 @@ export function LocalCommitsDropdown({
                         isCopied={copiedHash === commit.hash}
                         onToggle={toggleCommitExpanded}
                         onCopy={copyHash}
+                        onPointerActivate={() => setCursorIndex(index)}
                       />
                     ))}
                   </div>
@@ -1082,13 +1086,14 @@ export function LocalCommitsDropdown({
                       data-active={isLoadMoreActive ? "true" : undefined}
                       className={cn(
                         "forge-row relative scroll-my-8 border-t border-[var(--border-divider)] p-2",
-                        // The same rail as a commit row: the fill alone can't
-                        // carry 3:1, and this is where the cursor lands last.
-                        "before:absolute before:inset-y-1.5 before:-start-px before:w-[3px] before:rounded-full",
-                        "before:bg-selection-outline before:opacity-0 before:transition-opacity before:duration-150",
-                        "before:content-[''] before:pointer-events-none",
-                        isLoadMoreActive && "before:opacity-100"
+                        "transition-colors duration-150 ease-out",
+                        // The same highlight as a commit row: this is where the
+                        // cursor lands last.
+                        isLoadMoreActive && "bg-overlay-highlight"
                       )}
+                      onPointerMove={
+                        isLoadMoreActive ? undefined : () => setCursorIndex(data.length)
+                      }
                     >
                       <div role="gridcell">
                         {loadMoreError ? (
@@ -1108,7 +1113,10 @@ export function LocalCommitsDropdown({
                               onClick={handleLoadMore}
                               className={cn(
                                 "h-6 text-xs shrink-0",
-                                isLoadMoreActive && "bg-overlay-soft text-text-primary"
+                                // The row carries the highlight fill; the button
+                                // only steps its text up rather than painting a
+                                // second fill on top.
+                                isLoadMoreActive && "text-text-primary"
                               )}
                             >
                               <RefreshCw className="h-3 w-3" />
@@ -1124,9 +1132,10 @@ export function LocalCommitsDropdown({
                             disabled={loadingMore}
                             className={cn(
                               "w-full",
-                              // Neutral, like the row cursor — the search field
-                              // keeps the region's one accent.
-                              isLoadMoreActive && "bg-overlay-soft text-text-primary"
+                              // The row carries the highlight fill; the button
+                              // only steps its text up rather than painting a
+                              // second fill on top.
+                              isLoadMoreActive && "text-text-primary"
                             )}
                           >
                             {showLoadingMore ? (
