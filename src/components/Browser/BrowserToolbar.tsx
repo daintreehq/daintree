@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useId, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -129,6 +130,11 @@ interface BrowserToolbarProps {
   onForward: () => void;
   onGoToHistoryIndex?: (index: number) => void;
   onReload: () => void;
+  /**
+   * Moves keyboard focus into the page. Returns false when there is no page able
+   * to take it, and the address bar hands focus to its panel instead.
+   */
+  onFocusPage?: () => boolean;
   /** Cancels an in-flight load; while loading, Reload becomes Stop. */
   onStop?: () => void;
   onHardReload?: () => void;
@@ -173,6 +179,7 @@ export function BrowserToolbar({
   onForward,
   onGoToHistoryIndex,
   onReload,
+  onFocusPage,
   onStop,
   onHardReload,
   onOpenExternal,
@@ -197,6 +204,9 @@ export function BrowserToolbar({
   const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  // Set by the Escape that puts the address back, so the restored address does not
+  // reopen the suggestions it just dismissed. Typing or refocusing clears it.
+  const suggestionsDismissedRef = useRef(false);
   const [historyAnnouncement, setHistoryAnnouncement] = useState("");
 
   // Long-press state for back/forward history dropdown
@@ -343,7 +353,7 @@ export function BrowserToolbar({
 
   useEffect(() => {
     setHighlightedIndex(-1);
-    setIsDropdownOpen(isEditing && suggestions.length > 0);
+    setIsDropdownOpen(isEditing && suggestions.length > 0 && !suggestionsDismissedRef.current);
   }, [suggestions, isEditing]);
 
   useEffect(() => {
@@ -382,6 +392,7 @@ export function BrowserToolbar({
   );
 
   const handleFocus = useCallback(() => {
+    suggestionsDismissedRef.current = false;
     setIsEditing(true);
     setInputValue(address);
     if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
@@ -402,6 +413,8 @@ export function BrowserToolbar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Keys that belong to an IME composition are the composition's to handle.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (isDropdownOpen && suggestions.length > 0) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -424,6 +437,7 @@ export function BrowserToolbar({
         }
         if (e.key === "Escape") {
           e.preventDefault();
+          e.stopPropagation();
           setIsDropdownOpen(false);
           setHighlightedIndex(-1);
           return;
@@ -446,15 +460,41 @@ export function BrowserToolbar({
         }
       }
       if (e.key === "Escape") {
-        setIsEditing(false);
-        setError(null);
-        inputRef.current?.blur();
+        // Chrome's two steps: an edited field first gets the current address back,
+        // selected, without losing focus; only an unchanged field lets go. Editing
+        // shows the full address, a commit leaves the resting one.
+        const isEdited = inputValue !== (isEditing ? address : getDisplayUrl(address));
+        if (isEdited || error) {
+          e.preventDefault();
+          e.stopPropagation();
+          suggestionsDismissedRef.current = true;
+          setError(null);
+          setIsEditing(true);
+          flushSync(() => setInputValue(address));
+          inputRef.current?.select();
+          return;
+        }
+        // Leaving the field runs handleBlur, which restores the resting address. This
+        // Escape still bubbles, so a hosting dialog keeps its Escape exit.
+        if (onFocusPage?.()) return;
+        // With no page to take focus, the panel keeps it rather than the document.
+        const panel = inputRef.current?.closest<HTMLElement>("[data-panel-id]");
+        if (panel) {
+          panel.focus();
+        } else {
+          inputRef.current?.select();
+        }
       }
     },
     [
       isDropdownOpen,
       suggestions,
       highlightedIndex,
+      inputValue,
+      isEditing,
+      address,
+      error,
+      onFocusPage,
       onNavigate,
       projectId,
       announceHistoryChange,
@@ -832,6 +872,7 @@ export function BrowserToolbar({
                   // A commit leaves the field focused but out of editing, so typing
                   // again has to bring editing back or it lands under the overlay.
                   setIsEditing(true);
+                  suggestionsDismissedRef.current = false;
                   setInputValue(e.target.value);
                   setError(null);
                 }}

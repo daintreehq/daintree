@@ -10,6 +10,7 @@ import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "./DevPreviewBanners";
 import { initializeBrowserHistory } from "../Browser/historyUtils";
+import { focusWebviewPage } from "../Browser/browserUtils";
 import { useDevServer } from "@/hooks/useDevServer";
 import { ConsoleDrawer } from "./ConsoleDrawer";
 import { useDevPreviewConsoleCapture } from "./useDevPreviewConsoleCapture";
@@ -960,6 +961,7 @@ export function DevPreviewPane({
           onBack={handleBack}
           onForward={handleForward}
           onReload={handleReload}
+          onFocusPage={() => isWebviewReady && !isEvicted && focusWebviewPage(webviewRef.current)}
           onStop={handleCancelLoad}
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}

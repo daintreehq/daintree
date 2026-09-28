@@ -61,3 +61,10 @@ export type LoadError = {
   kind: LoadErrorKind;
   message: string;
 };
+
+/** Hands keyboard focus to a webview's page; false when the element could not take it. */
+export function focusWebviewPage(webview: HTMLElement | null): boolean {
+  if (!webview?.isConnected) return false;
+  webview.focus();
+  return document.activeElement === webview;
+}

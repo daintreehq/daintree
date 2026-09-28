@@ -17,6 +17,7 @@ import {
   extractHostname,
   isValidBrowserUrl,
   clampZoom,
+  focusWebviewPage,
   type LoadError,
 } from "./browserUtils";
 import {
@@ -875,6 +876,7 @@ export function BrowserPane({
       onReload={() =>
         void actionService.dispatch("browser.reload", { terminalId: id }, { source: "user" })
       }
+      onFocusPage={() => isWebviewReady && !isEvicted && focusWebviewPage(webviewRef.current)}
       onStop={handleCancelLoad}
       onHardReload={() =>
         void actionService.dispatch("browser.hardReload", { terminalId: id }, { source: "user" })
