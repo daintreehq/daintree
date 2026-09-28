@@ -214,6 +214,8 @@ export function PilotFilterBar({
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
+      // Chords belong to the app, as they do in every other segmented control.
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
       const index = SEGMENTS.indexOf(value);
       if (index === -1) return;
 

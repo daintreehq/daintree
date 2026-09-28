@@ -243,10 +243,11 @@ export function SegmentedRadioGroup<T extends string>({
             // and light themes, and the fill barely moves, so the selection leaned on
             // the label alone — under SC 1.4.11's 3:1 for a state indicator.
             "bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]",
-            // forced-colors discards the fill and the ambient shadow, so the thumb says
-            // "selected" with a system-coloured border. Not a Highlight *fill*: that
-            // makes Chromium paint a backplate behind the label and the text vanishes.
-            "forced-colors:border-[Highlight]",
+            // forced-colors discards the fill and the ambient shadow; the global
+            // `[data-slot="segmented-thumb"]` rule in index.css repaints the thumb as a
+            // 2px ButtonText border. ButtonText, not Highlight, because Highlight is
+            // the focus cue — and never a fill, which makes Chromium paint a backplate
+            // that hides the label.
             // Only the thumb's own geometry animates, and reduced motion drops
             // it entirely rather than shortening it.
             thumb.animate && !skipMotion && "transition-[translate,width] duration-150 ease-out",
@@ -291,7 +292,7 @@ export function SegmentedRadioGroup<T extends string>({
               // selected state.
               isActive &&
                 !thumb &&
-                "bg-overlay-medium border border-text-secondary forced-colors:border-[Highlight]",
+                "bg-overlay-medium border border-text-secondary forced-colors:border-2 forced-colors:border-[ButtonText]",
               isDisabled && "opacity-40"
             )}
           >
