@@ -111,30 +111,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the last CI run on the pull request",
     },
   ],
-  "src/components/Browser/BrowserToolbar.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'aria-label="Copy URL"',
-      expectedOccurrences: 1,
-      rationale: "Copy-URL confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'aria-label="Copy screenshot to clipboard"',
-      expectedOccurrences: 1,
-      rationale: "Copy-screenshot confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'aria-label="More page actions"',
-      expectedOccurrences: 1,
-      rationale:
-        "Copy-URL confirmation on the More trigger in a compact pane, where Copy URL lives in the menu; resets when the copy flash times out",
-    },
-  ],
   "src/components/Commands/CommandBuilder.tsx": [
     {
       category: "outcome",
@@ -185,30 +161,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "border-status-success/60 bg-status-success/20 text-status-success",
       expectedOccurrences: 3,
       rationale: "Per-file viewed toggle; one mark per item in the review checklist",
-    },
-  ],
-  "src/components/FileViewer/FileViewerToolbar.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "copyLabel}: ${path}",
-      expectedOccurrences: 1,
-      rationale: "Copy-path confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'label="Copy file contents"',
-      expectedOccurrences: 1,
-      rationale: "Copy-file-contents confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "{confirmed ? (",
-      expectedOccurrences: 1,
-      rationale:
-        "Copy confirmation on the More actions trigger when Copy ran from the folded menu; resets when the copy flash times out",
     },
   ],
   "src/components/FileViewer/diffChangeSet.ts": [
@@ -393,14 +345,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Wizard completion step; leaves with the wizard",
-    },
-  ],
-  "src/components/Setup/CopyableCommand.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-command confirmation; resets when the copy flash times out",
     },
   ],
   "src/components/Setup/SystemRequirementsSection.tsx": [
@@ -638,14 +582,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Ahead-arrow count against the upstream, as the sidebar card paints it",
     },
   ],
-  "src/components/Worktree/WorktreeDetails.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-path confirmation; resets when the copy flash times out",
-    },
-  ],
   "src/components/ui/ReEntrySummary.tsx": [
     {
       category: "outcome",
@@ -739,5 +675,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 86;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 90;
+export const EXPECTED_STATUS_SUCCESS_SITES = 78;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 82;

@@ -305,7 +305,7 @@ function Path({
           className="relative flex items-center min-w-0 flex-1 group/path"
         >
           {copied ? (
-            <Check className="absolute left-2 w-3.5 h-3.5 text-status-success pointer-events-none" />
+            <Check className="absolute left-2 w-3.5 h-3.5 text-text-secondary pointer-events-none" />
           ) : (
             <Icon
               aria-hidden="true"
@@ -508,11 +508,7 @@ function CopyContentsButton({ contents }: { contents: string | null }) {
 
   return (
     <IconButton label="Copy file contents" onClick={handleClick}>
-      {copied ? (
-        <Check className={cn(TOOLBAR_ICON_CLASS, "text-status-success")} />
-      ) : (
-        <Copy className={TOOLBAR_ICON_CLASS} />
-      )}
+      {copied ? <Check className={TOOLBAR_ICON_CLASS} /> : <Copy className={TOOLBAR_ICON_CLASS} />}
     </IconButton>
   );
 }
@@ -552,10 +548,7 @@ function MoreActions({
               className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
             >
               {confirmed ? (
-                <Check
-                  className={cn(TOOLBAR_ICON_CLASS, "text-status-success")}
-                  aria-hidden="true"
-                />
+                <Check className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
               ) : (
                 <Ellipsis className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
               )}

@@ -869,7 +869,7 @@ export function BrowserToolbar({
                         aria-label="Copy URL"
                       >
                         {copied ? (
-                          <Check className="w-3.5 h-3.5 text-status-success" />
+                          <Check className="w-3.5 h-3.5" />
                         ) : (
                           <Copy className="w-3.5 h-3.5" />
                         )}
@@ -1033,7 +1033,7 @@ export function BrowserToolbar({
                   aria-label="Copy screenshot to clipboard"
                 >
                   {screenshotCopied ? (
-                    <Check className={cn(PANE_TOOLBAR_ICON_CLASS, "text-status-success")} />
+                    <Check className={PANE_TOOLBAR_ICON_CLASS} />
                   ) : (
                     <Camera className={PANE_TOOLBAR_ICON_CLASS} />
                   )}
@@ -1067,7 +1067,7 @@ export function BrowserToolbar({
                       data-testid="browser-more-actions"
                     >
                       {copied && isCompact ? (
-                        <Check className={cn(PANE_TOOLBAR_ICON_CLASS, "text-status-success")} />
+                        <Check className={PANE_TOOLBAR_ICON_CLASS} />
                       ) : (
                         <Ellipsis className={PANE_TOOLBAR_ICON_CLASS} />
                       )}

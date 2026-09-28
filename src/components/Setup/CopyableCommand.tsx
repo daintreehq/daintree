@@ -1,7 +1,8 @@
 import { Fragment } from "react";
-import { Check, Copy, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { systemClient } from "@/clients/systemClient";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
@@ -32,8 +33,6 @@ export function CopyableCommand({
    */
   wrap?: boolean;
 }) {
-  const { copied, copy } = useCopyWithFeedback();
-
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-sm)] bg-overlay-subtle border border-border-default font-mono text-xs select-text group">
       <span
@@ -44,41 +43,30 @@ export function CopyableCommand({
       >
         {wrap ? withPathBreaks(command) : command}
       </span>
+      {/* -my-1: the 24px targets sit inside the row's own padding rather
+          than growing the strip around a one-line command. */}
       {inspectUrl && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={() => void systemClient.openExternal(inspectUrl)}
-              className="shrink-0 p-0.5 rounded-[var(--radius-sm)] hover:bg-overlay transition-colors duration-150 text-text-secondary hover:text-text-primary"
+              className="-my-1 shrink-0 [&_svg]:size-3.5"
               aria-label="Inspect install script in browser"
             >
-              <ExternalLink className="w-3.5 h-3.5" />
-            </button>
+              <ExternalLink aria-hidden="true" />
+            </Button>
           </TooltipTrigger>
           <TooltipContent>Inspect install script</TooltipContent>
         </Tooltip>
       )}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => void copy(sanitizeForClipboard(command))}
-            className="shrink-0 p-0.5 rounded-[var(--radius-sm)] hover:bg-overlay transition-colors duration-150 text-text-secondary hover:text-text-primary"
-            aria-label="Copy command to clipboard"
-          >
-            {copied ? (
-              <Check
-                key="check"
-                className={cn("w-3.5 h-3.5 text-status-success animate-badge-bump")}
-              />
-            ) : (
-              <Copy key="copy" className="w-3.5 h-3.5" />
-            )}
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>Copy to clipboard</TooltipContent>
-      </Tooltip>
+      <CopyButton
+        text={sanitizeForClipboard(command)}
+        aria-label="Copy command to clipboard"
+        tooltip="Copy to clipboard"
+        className="-my-1"
+      />
     </div>
   );
 }
