@@ -104,6 +104,10 @@ export function RecipeEditor({
   const createRecipe = useRecipeStore((state) => state.createRecipe);
   const updateRecipe = useRecipeStore((state) => state.updateRecipe);
   const currentProject = useProjectStore((state) => state.currentProject);
+  // With no project open only Global can be saved, so a new recipe starts there
+  // and Project is shown but unavailable — the same rule as the import dialog.
+  const hasProject = !!currentProject?.id;
+  const newRecipeScope = hasProject ? (defaultScope ?? "project") : "global";
 
   const [recipeName, setRecipeName] = useState("");
   const [terminals, setTerminals] = useState<RecipeTerminal[]>([
@@ -170,7 +174,7 @@ export function RecipeEditor({
       setCardKeys(freshCardKeys(nextTerminals.length));
       setShowInEmptyState(false);
       setAutoAssign("always");
-      setScope(defaultScope ?? "project");
+      setScope(newRecipeScope);
       initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
     } else {
       const nextTerminals: RecipeTerminal[] = [
@@ -181,12 +185,12 @@ export function RecipeEditor({
       setCardKeys(freshCardKeys(nextTerminals.length));
       setShowInEmptyState(false);
       setAutoAssign("always");
-      setScope(defaultScope ?? "project");
+      setScope(newRecipeScope);
       initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
     }
     setError(null);
     setNameAttempted(false);
-  }, [recipe, initialTerminals, defaultScope, isOpen]);
+  }, [recipe, initialTerminals, newRecipeScope, isOpen]);
 
   const isDirty = useMemo(
     () =>
@@ -437,7 +441,9 @@ export function RecipeEditor({
                   onChange={(e) => setScope(e.target.value as "global" | "project")}
                   className={cn(FIELD_INPUT, "pr-8")}
                 >
-                  <option value="project">Project (current project only)</option>
+                  <option value="project" disabled={!hasProject}>
+                    Project (current project only)
+                  </option>
                   <option value="global">Global (all projects)</option>
                 </select>
               )}

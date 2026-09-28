@@ -167,4 +167,19 @@ describe("RecipeEditor", () => {
       focusedCard?.querySelector<HTMLInputElement>('input[id^="terminal-title-"]')?.value
     ).toBe(titleOfSecond);
   });
+
+  it("starts a new recipe on a scope it can save to when no project is open", async () => {
+    useProjectStore.setState({ currentProject: null });
+    renderEditor();
+    const scope = document.getElementById("recipe-scope");
+    expect(scope?.querySelector('option[value="project"]')?.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.change(document.getElementById("recipe-name")!, { target: { value: "Build" } });
+    await act(async () => {
+      screen.getByRole("button", { name: "Create recipe" }).click();
+    });
+    expect(createRecipe).toHaveBeenCalledTimes(1);
+    expect(createRecipe.mock.calls[0]?.[0]).toBeUndefined();
+    expect(document.querySelector("[data-inline-status-banner]")).toBeNull();
+  });
 });
