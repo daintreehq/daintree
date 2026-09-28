@@ -129,9 +129,53 @@ describe("BranchPickerPanel cursor", () => {
 });
 
 describe("BranchPickerPanel row metadata", () => {
-  it("shows the owning worktree, keyed to the worktree name not the branch", () => {
+  it("names the owning worktree in the row itself, keyed to its name not the branch", () => {
     renderPanel([inUseRow("main", { id: "main-wt", name: "main-worktree" })]);
-    expect(screen.getByTitle("In use by worktree: main-worktree")).toBeTruthy();
+    const meta = options()[0]!.querySelector("[data-branch-meta]")!;
+    expect(meta.textContent).toContain("in use");
+    expect(meta.textContent).toContain("main-worktree");
+    expect(meta.textContent).not.toContain("main-wt");
+  });
+
+  it("speaks the owning worktree as part of the option's name", () => {
+    renderPanel([inUseRow("develop", { id: "wt-1", name: "uploads" }), optionRow("main")]);
+    expect(screen.getByRole("option", { name: /in use by worktree uploads/ })).toBe(options()[0]);
+  });
+
+  it("does not hide the owning worktree behind a hover-only title", () => {
+    renderPanel([inUseRow("main", { id: "main-wt", name: "main-worktree" })]);
+    expect(options()[0]!.querySelector("[title]")).toBeNull();
+  });
+
+  it("lets the worktree name give way before the branch name", () => {
+    renderPanel([inUseRow("main", { id: "main-wt", name: "main-worktree" })]);
+    const holder = [...options()[0]!.querySelectorAll("[data-in-use] span")].find(
+      (el) => el.textContent === "main-worktree"
+    )!;
+    // Capped, and clamped by line rather than a nowrap ellipsis: a nowrap
+    // element reports its whole text as its minimum width, so it could never
+    // give way before the branch name.
+    expect(holder.className).toMatch(/\bmax-w-/);
+    expect(holder.className).toMatch(/\bline-clamp-1\b/);
+    expect(holder.className).toMatch(/\bbreak-all\b/);
+    expect(holder.className).not.toMatch(/\btruncate\b/);
+    // And the metadata column must be allowed to shrink at all, or the holder's
+    // give is never used and the branch name absorbs the squeeze.
+    expect(options()[0]!.querySelector("[data-branch-meta]")!.className).not.toMatch(
+      /\bshrink-0\b/
+    );
+  });
+
+  it("does not repeat the branch when the holder is named after it", () => {
+    renderPanel([inUseRow("feature/x", { id: "/wt/x", name: "feature/x" })]);
+    const meta = options()[0]!.querySelector("[data-branch-meta]")!;
+    expect(meta.textContent).toBe("in use");
+  });
+
+  it("marks no worktree on a branch nobody holds", () => {
+    renderPanel([optionRow("main")]);
+    expect(options()[0]!.querySelector("[data-in-use]")).toBeNull();
+    expect(options()[0]!.textContent).not.toContain("in use");
   });
 
   it("shows the remote a branch came from", () => {
