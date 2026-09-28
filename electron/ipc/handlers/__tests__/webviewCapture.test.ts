@@ -7,6 +7,7 @@ interface MockImage {
 }
 
 interface MockGuest {
+  hostWebContents?: { id: number; isDestroyed: () => boolean };
   isDestroyed: () => boolean;
   getURL: () => string;
   capturePage: () => Promise<MockImage>;
@@ -38,6 +39,7 @@ function makeImage(overrides: Partial<MockImage> = {}): MockImage {
 
 function makeGuest(overrides: Partial<MockGuest> = {}): MockGuest {
   return {
+    hostWebContents: { id: SENDER_VIEW, isDestroyed: () => false },
     isDestroyed: () => false,
     getURL: () => "https://example.com",
     capturePage: async () => makeImage(),
@@ -45,11 +47,15 @@ function makeGuest(overrides: Partial<MockGuest> = {}): MockGuest {
   };
 }
 
+const SENDER_VIEW = 5;
+
 async function getCapture() {
   const { webviewCaptureNamespace } = await import("../webviewCapture.js");
-  return webviewCaptureNamespace.ops.captureScreenshot.handler as (
+  const handler = webviewCaptureNamespace.ops.captureScreenshot.handler as (
+    ctx: { webContentsId: number },
     panelId: string
   ) => Promise<{ pngBase64: string; width: number; height: number }>;
+  return (panelId: string, sender = SENDER_VIEW) => handler({ webContentsId: sender }, panelId);
 }
 
 describe("webviewCapture handler", () => {
@@ -71,6 +77,20 @@ describe("webviewCapture handler", () => {
       width: 800,
       height: 600,
     });
+  });
+
+  it("refuses a panel another view embeds, without capturing it", async () => {
+    const capturePage = vi.fn(async () => makeImage());
+    dialogService.getWebContentsId.mockReturnValue(7);
+    guestRegistry.set(7, makeGuest({ capturePage }));
+
+    const capture = await getCapture();
+    await expect(capture("panel-a", SENDER_VIEW + 1)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    guestRegistry.set(7, makeGuest({ capturePage, hostWebContents: undefined }));
+    await expect(capture("panel-a")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(capturePage).not.toHaveBeenCalled();
   });
 
   it("throws NOT_FOUND when no panel resolves to a webContents", async () => {

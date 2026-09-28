@@ -512,9 +512,16 @@ describe("createHost dispatch, catalog and prompts", () => {
     await host.showInputBox({ title: "name" });
     await host.showConfirm({ title: "sure?" });
 
-    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, PROJECT_A);
-    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(PROJECT_A);
-    expect(h.sendActionsGetToRenderer).toHaveBeenCalledWith("terminal.focus", PROJECT_A);
+    // The plugin's identity travels too: in Host mode it decides which
+    // frontend (possibly on another machine) the round-trip reaches.
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+      "terminal.focus",
+      undefined,
+      PROJECT_A,
+      PLUGIN_ID
+    );
+    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(PROJECT_A, PLUGIN_ID);
+    expect(h.sendActionsGetToRenderer).toHaveBeenCalledWith("terminal.focus", PROJECT_A, PLUGIN_ID);
     for (const call of h.requestPrompt.mock.calls) expect(call[2]).toBe(PROJECT_A);
   });
 
@@ -555,8 +562,13 @@ describe("createHost dispatch, catalog and prompts", () => {
     await host.actions.list();
     await host.showInputBox({ title: "name" });
 
-    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, null);
-    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(null);
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+      "terminal.focus",
+      undefined,
+      null,
+      PLUGIN_ID
+    );
+    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(null, PLUGIN_ID);
     expect(h.requestPrompt.mock.calls[0][2]).toBeNull();
   });
 

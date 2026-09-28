@@ -684,7 +684,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 113_400 → 113_900 for #12882's `diagnostics.openReview` on core, measured
   // at 113_882 B: its description and the `sections` field note that an
   // unlisted section starts unchecked, which a caller guessing keys needs.
-  const MAX_COHORT_PAYLOAD_BYTES = 113_900;
+  // 113_900 → 115_500 for #11158's `host.switch` and `project.openOnHost` on
+  // full, measured at 115_487 B: their trimmed descriptions and the `hostId`,
+  // `newWindow`, `projectId` and `worktree` arguments. In-app only, so the
+  // external ceiling above does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 115_500;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

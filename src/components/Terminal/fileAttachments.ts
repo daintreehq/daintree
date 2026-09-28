@@ -1,6 +1,14 @@
 import type { RefObject } from "react";
 import type { EditorView } from "@codemirror/view";
 import { basename } from "@shared/utils/path";
+import type { HostId, MaterializeOptions } from "@shared/types/remoteHosts";
+import {
+  materializeTransferSources,
+  type TransferSource,
+  type TransferSourceKind,
+} from "@/lib/transferSources";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { trackUpload } from "./uploads/pendingUploads";
 import { IMAGE_EXTENSIONS } from "./useTerminalFileTransfer";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { addImageChip, addFileDropChip } from "./inputEditorExtensions";
@@ -12,6 +20,10 @@ import { addImageChip, addFileDropChip } from "./inputEditorExtensions";
  * and can differ from it.
  */
 export interface FileAttachmentEntry {
+  /** Where `filePath` lives before it is materialized for the agent. */
+  source: TransferSourceKind;
+  /** For a `host` entry from a remote window's tree: the host it lives on. */
+  hostId?: HostId;
   filePath: string;
   rawName: string;
   fileName: string;
@@ -24,30 +36,91 @@ export interface FileAttachmentEntry {
  * there is no size, which the chip already treats as optional: the tooltip
  * just omits the size line rather than this reaching for a stat over IPC.
  */
-export function fileAttachmentEntryFromPath(filePath: string): FileAttachmentEntry {
+export function fileAttachmentEntryFromPath(
+  filePath: string,
+  source: TransferSourceKind
+): FileAttachmentEntry {
   const rawName = basename(filePath);
-  return { filePath, rawName, fileName: rawName || filePath, fileSize: undefined };
+  return { source, filePath, rawName, fileName: rawName || filePath, fileSize: undefined };
+}
+
+/**
+ * An entry for a resolved drop. An OS `File` carries its own name and size;
+ * the display name falls back to the path's last segment when the OS name is
+ * blank. An in-app drag takes {@link fileAttachmentEntryFromPath}'s spelling.
+ */
+export function fileAttachmentEntryFromSource(transfer: TransferSource): FileAttachmentEntry {
+  if (transfer.kind === "host") {
+    const entry = fileAttachmentEntryFromPath(transfer.path, "host");
+    return transfer.hostId === undefined ? entry : { ...entry, hostId: transfer.hostId };
+  }
+  const { path: filePath, name: rawName, size: fileSize } = transfer;
+  return {
+    source: "local",
+    filePath,
+    rawName,
+    fileName: rawName.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath,
+    fileSize,
+  };
 }
 
 type ResolvedFile =
   | { type: "image"; filePath: string; thumbnailDataUrl: string }
   | { type: "file"; filePath: string; fileName: string; fileSize: number | undefined };
 
+export interface InsertFileAttachmentsOptions {
+  /**
+   * Where uploads to a remote host show their progress chips. Sending from the
+   * composer waits until every one of them has resolved.
+   */
+  uploadSurface?: string;
+  /** Add to project: upload into this folder of the project instead of the inbox. */
+  destination?: MaterializeOptions["destination"];
+  /** The terminal's cwd when the references are inserted, read after the uploads land. */
+  cwdProvider?: () => string;
+}
+
 /**
  * Inserts `entries` at the caret of `view` as chips, in order, in a single
  * transaction: images as their absolute path behind a thumbnail chip, anything
- * else as an `@file` token. `editorViewRef` is the live ref `view` was read
- * from, so an editor torn down while a thumbnail resolves is left alone.
+ * else as an `@file` token. Every entry goes through `materialize` first, which
+ * is the identity locally, and one that fails is skipped. `editorViewRef` is
+ * the live ref `view` was read from, so an editor torn down while a path or
+ * thumbnail resolves is left alone.
+ *
+ * In a remote window each upload runs under a chip on `uploadSurface`, and
+ * nothing is inserted until every upload has settled.
  */
 export async function insertFileAttachments(
   editorViewRef: RefObject<EditorView | null>,
   view: EditorView,
   entries: readonly FileAttachmentEntry[],
-  cwd: string
+  cwd: string,
+  options: InsertFileAttachmentsOptions = {}
 ): Promise<void> {
+  const { uploadSurface, destination, cwdProvider } = options;
+  const tracked = uploadSurface !== undefined && isRemoteWindow();
+  const materialized = await materializeTransferSources(
+    entries.map(({ source, filePath, hostId }) =>
+      hostId === undefined
+        ? { kind: source, path: filePath }
+        : { kind: source, path: filePath, hostId }
+    ),
+    tracked
+      ? (source, run) =>
+          trackUpload(uploadSurface, basename(source.path) || source.path, (progress) =>
+            run(destination ? { ...progress, destination } : progress)
+          )
+      : destination
+        ? (_source, run) => run({ destination })
+        : undefined
+  );
   const resolved: ResolvedFile[] = [];
 
-  for (const { filePath, rawName, fileName, fileSize } of entries) {
+  for (const [index, { rawName, fileName, fileSize }] of entries.entries()) {
+    const result = materialized[index];
+    if (!result) continue;
+    const filePath = result.hostPath;
     // Classified on the untrimmed name every provenance agrees on, never on
     // the display name: a real file called `shot.png ` is not an image, and
     // trimming first would make the same file classify one way from Finder
@@ -57,6 +130,10 @@ export async function insertFileAttachments(
     // extension fails the thumbnail and falls back to the file chip, which
     // is the same recovery a corrupt image already takes.
     if (IMAGE_EXTENSIONS.test(rawName)) {
+      if (result.thumbnail) {
+        resolved.push({ type: "image", filePath, thumbnailDataUrl: result.thumbnail });
+        continue;
+      }
       try {
         const { thumbnailDataUrl } = await window.electron.clipboard.thumbnailFromPath(filePath);
         resolved.push({ type: "image", filePath, thumbnailDataUrl });
@@ -100,7 +177,7 @@ export async function insertFileAttachments(
           })
         );
       } else {
-        const token = formatAtFileTokenForCwd(entry.filePath, cwd);
+        const token = formatAtFileTokenForCwd(entry.filePath, cwdProvider?.() ?? cwd);
         insertText += token + " ";
         fileEffects.push(
           addFileDropChip.of({

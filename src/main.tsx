@@ -39,6 +39,7 @@ import {
 import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
+import { isRemoteShellSupported } from "./lib/remoteHosts";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
@@ -98,6 +99,15 @@ async function bootstrap() {
   // Synchronous with module evaluation, so it is listening before main's
   // `did-finish-load` gate lets it send `project:on-switch` to a new view.
   installProjectSwitchStatusTiming();
+
+  // Off the entry chunk, and never loaded where remote hosts can't exist.
+  if (isRemoteShellSupported()) {
+    void import("./components/Hosts/installHostProjectsLoader")
+      .then((m) => m.installHostProjectsLoader())
+      .catch((error: unknown) => {
+        console.warn("[Hosts] Couldn't install the host project listing:", error);
+      });
+  }
 
   // Kick off the agent-settings store so `App.tsx`, `Toolbar`, and the tray
   // all read from a normalized snapshot on cold boot. The install-aware

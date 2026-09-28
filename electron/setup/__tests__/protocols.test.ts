@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import path from "path";
 import { Readable } from "node:stream";
 
@@ -161,6 +161,7 @@ import {
 } from "../protocols.js";
 import { mintHtmlPreviewToken, _resetHtmlPreviewTokensForTests } from "../htmlPreviewTokens.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
+import { setRemoteWebviewSrcGate } from "../../window/webviewSrcGate.js";
 
 const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
 
@@ -1109,6 +1110,123 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       const event = { preventDefault: vi.fn() };
       expect(() => handler(event, "https://github.com/login")).not.toThrow();
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("guests in a remote-bound view", () => {
+    const REMOTE_EMBEDDER = 901;
+    const LOCAL_EMBEDDER = 902;
+    let disposeGate: (() => void) | null = null;
+
+    beforeEach(() => {
+      // The port client's gate: views on a host reach only its forwarded port 5173.
+      disposeGate = setRemoteWebviewSrcGate(
+        (webContentsId, src) =>
+          webContentsId === REMOTE_EMBEDDER ? src.startsWith("http://localhost:5173/") : null,
+        (webContentsId) => webContentsId === REMOTE_EMBEDDER
+      );
+    });
+
+    afterEach(() => {
+      disposeGate?.();
+      disposeGate = null;
+    });
+
+    function guest(embedderId: number, partition?: string): MockWebContents {
+      const contents = createMockWebContents("webview");
+      const extra = contents as unknown as {
+        hostWebContents: { id: number };
+        session?: { partition: string };
+      };
+      extra.hostWebContents = { id: embedderId };
+      if (partition) extra.session = { partition };
+      simulateWebContentsCreated(contents);
+      return contents;
+    }
+
+    function blocks(contents: MockWebContents, event: string, url: string): boolean {
+      const handler = getEventHandlers(contents, event)[0];
+      const e = { preventDefault: vi.fn() };
+      handler(e, url);
+      return e.preventDefault.mock.calls.length > 0;
+    }
+
+    it.each(["will-navigate", "will-redirect"])(
+      "keeps a dev-preview guest on the host's forwarded ports (%s)",
+      (event) => {
+        const contents = guest(REMOTE_EMBEDDER);
+        expect(blocks(contents, event, "http://localhost:5173/app")).toBe(false);
+        expect(blocks(contents, event, "http://localhost:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://127.0.0.1:3000/")).toBe(true);
+      }
+    );
+
+    it.each(["will-navigate", "will-redirect"])(
+      "lets a browser panel leave for the web but not reach this machine's localhost (%s)",
+      (event) => {
+        const contents = guest(REMOTE_EMBEDDER, "persist:browser-proj-a");
+        expect(blocks(contents, event, "https://github.com/login")).toBe(false);
+        expect(blocks(contents, event, "http://localhost:5173/")).toBe(false);
+        expect(blocks(contents, event, "http://localhost:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://[::1]:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://app.localhost:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://2130706433:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://[::ffff:127.0.0.1]:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://0:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://[::]:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://[::ffff:0.0.0.0]:3000/")).toBe(true);
+      }
+    );
+
+    it("keeps a remote view's popups off this machine's localhost, and local views' as before", async () => {
+      const { openExternalUrl } = await import("../../utils/openExternal.js");
+      vi.mocked(openExternalUrl).mockResolvedValue(undefined as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const open = (embedder: number, url: string) => {
+        const contents = guest(embedder, "persist:browser-proj-a");
+        const handler = contents.setWindowOpenHandler.mock.calls[0]![0] as (d: { url: string }) => {
+          action: string;
+        };
+        return handler({ url });
+      };
+      expect(open(REMOTE_EMBEDDER, "http://localhost:3000/admin")).toEqual({ action: "deny" });
+      expect(openExternalUrl).not.toHaveBeenCalled();
+      open(REMOTE_EMBEDDER, "http://localhost:5173/");
+      expect(openExternalUrl).toHaveBeenCalledWith("http://localhost:5173/");
+      open(LOCAL_EMBEDDER, "http://localhost:3000/admin");
+      expect(openExternalUrl).toHaveBeenCalledWith("http://localhost:3000/admin");
+      warn.mockRestore();
+    });
+
+    it("puts every request of a remote view's guest session through the gate, and none of a local one's", () => {
+      const onBeforeRequest = vi.fn();
+      const embedder = createMockWebContents("window");
+      embedder.id = REMOTE_EMBEDDER;
+      simulateWebContentsCreated(embedder);
+      const attach = getEventHandlers(embedder, "did-attach-webview")[0]!;
+      attach({}, { session: { webRequest: { onBeforeRequest } } });
+      expect(onBeforeRequest).toHaveBeenCalledTimes(1);
+      expect(onBeforeRequest.mock.calls[0]![0]).toEqual({ urls: ["<all_urls>"] });
+
+      const local = createMockWebContents("window");
+      local.id = LOCAL_EMBEDDER;
+      simulateWebContentsCreated(local);
+      const localOnBeforeRequest = vi.fn();
+      getEventHandlers(local, "did-attach-webview")[0]!(
+        {},
+        { session: { webRequest: { onBeforeRequest: localOnBeforeRequest } } }
+      );
+      expect(localOnBeforeRequest).not.toHaveBeenCalled();
+    });
+
+    it("leaves guests in a local view on today's rules", () => {
+      const preview = guest(LOCAL_EMBEDDER);
+      expect(blocks(preview, "will-navigate", "http://localhost:3000/")).toBe(false);
+      expect(blocks(preview, "will-redirect", "http://dp-a-b.localhost:43000/")).toBe(false);
+      expect(blocks(preview, "will-navigate", "https://example.com/")).toBe(true);
+      const browser = guest(LOCAL_EMBEDDER, "persist:browser-proj-a");
+      expect(blocks(browser, "will-navigate", "http://localhost:3000/")).toBe(false);
+      expect(blocks(browser, "will-redirect", "https://github.com/login")).toBe(false);
     });
   });
 });

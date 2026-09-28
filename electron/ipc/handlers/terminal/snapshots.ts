@@ -41,7 +41,7 @@ type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloa
  * very binding this works around.
  */
 function resolveSenderWorkspaceId(ctx: IpcContext): string | null {
-  return ctx.projectId ?? getProjectIdFromSenderUrl(ctx.event.sender);
+  return ctx.projectId ?? (ctx.event && getProjectIdFromSenderUrl(ctx.event.sender));
 }
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {

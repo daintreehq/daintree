@@ -78,8 +78,18 @@ import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import { serializableErrorFields } from "./pluginHostErrorFields.js";
 import { approvePluginDatabaseBackup } from "./pluginInternalApprovers.js";
+import {
+  currentPluginInvocation,
+  runWithPluginInvocation,
+  type PluginInvocationScope,
+} from "./pluginFrontendRouting.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
+
+/** A worker's prompt may only opt in to waiting; any other value is the default. */
+function promptQueueOption(value: unknown): { whenNoFrontend?: "queue" } {
+  return value === "queue" ? { whenNoFrontend: "queue" } : {};
+}
 
 /**
  * Structural narrowing for an interactive process handle (#11300). The host adds
@@ -185,6 +195,8 @@ export interface PluginDevWorkerMainBridgeDeps {
 interface PendingInvoke {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  /** The frontend invocation this call runs for, re-entered for its host calls. */
+  scope: PluginInvocationScope | null;
 }
 
 /**
@@ -738,7 +750,15 @@ export class PluginDevWorkerMainBridge {
     // rather than mis-delivered to the new worker (whose requestIds collide).
     const generation = this.reloadGeneration;
     try {
-      const result = await this.dispatchHostCall(msg.method, msg.params, controller.signal);
+      // The call answers the invocation it was made for, while that invocation
+      // is still outstanding; anything else belongs to no caller.
+      const scope =
+        msg.invocationId !== undefined
+          ? (this.pendingInvokes.get(msg.invocationId)?.scope ?? null)
+          : null;
+      const result = await runWithPluginInvocation(scope, () =>
+        this.dispatchHostCall(msg.method, msg.params, controller.signal)
+      );
       if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({ type: "host-result", requestId: msg.requestId, ok: true, result });
     } catch (err) {
@@ -823,15 +843,24 @@ export class PluginDevWorkerMainBridge {
         // dismisses the question rather than leaving it on screen owned by a
         // worker that no longer exists (#12279).
         const p = params as ShowQuickPickParams;
-        return this.host.showQuickPick(p.items, p.options ?? {}, { signal });
+        return this.host.showQuickPick(p.items, p.options ?? {}, {
+          signal,
+          ...promptQueueOption(p.whenNoFrontend),
+        });
       }
       case "showInputBox": {
         const p = params as ShowInputBoxParams;
-        return this.host.showInputBox(p.options, { signal });
+        return this.host.showInputBox(p.options, {
+          signal,
+          ...promptQueueOption(p.whenNoFrontend),
+        });
       }
       case "showConfirm": {
         const p = params as ShowConfirmParams;
-        return this.host.showConfirm(p.options, { signal });
+        return this.host.showConfirm(p.options, {
+          signal,
+          ...promptQueueOption(p.whenNoFrontend),
+        });
       }
       case "settings.get": {
         const p = params as SettingsGetParams;
@@ -1472,6 +1501,10 @@ export class PluginDevWorkerMainBridge {
     }
     if (signal?.aborted) return Promise.reject(abortErrorFor(signal));
     const requestId = `i${this.invokeSeq++}`;
+    // Only this plugin's own invocation: another plugin's call that reached
+    // this one (an action it dispatched) is not this plugin's caller.
+    const current = currentPluginInvocation();
+    const scope = current?.pluginId === this.pluginId ? current : null;
     return new Promise<unknown>((resolve, reject) => {
       let onAbort: (() => void) | undefined;
       const detach = (): void => {
@@ -1486,6 +1519,7 @@ export class PluginDevWorkerMainBridge {
           detach();
           reject(error);
         },
+        scope,
       });
       if (signal) {
         onAbort = (): void => {

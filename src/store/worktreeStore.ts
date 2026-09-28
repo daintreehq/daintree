@@ -16,6 +16,11 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getFleetArmedIds, getFleetLastArmedId } from "./storeAccessors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import {
+  getHostOwnedStateEpoch,
+  sendHostOwnedWrite,
+  supersedeDeferredHostOwnedWrite,
+} from "@/store/persistence/hostOwnedWrites";
 
 interface CreateDialogState {
   isOpen: boolean;
@@ -392,6 +397,10 @@ let lastPersistedActiveWorktreeId: string | null | undefined;
 let pendingPersistActiveWorktreeId: string | null | undefined;
 let persistRequestVersion = 0;
 
+/** The host-state epoch each "last persisted" value was acknowledged in; stale once it moves. */
+let lastPersistedActiveWorktreeEpoch = 0;
+let lastPersistedMruEpoch = 0;
+
 let lastPersistedMruList: string[] | undefined;
 let pendingPersistMruList: string[] | undefined;
 let mruPersistVersion = 0;
@@ -414,8 +423,17 @@ function mruListsEqual(a: string[] | undefined, b: string[]): boolean {
   return true;
 }
 
+const MRU_WRITE_KEY = "app-state:mruList";
+const ACTIVE_WORKTREE_WRITE_KEY = "app-state:activeWorktreeId";
+
 export function persistMruList(list: string[]): void {
-  if (mruListsEqual(pendingPersistMruList ?? lastPersistedMruList, list)) {
+  const epoch = getHostOwnedStateEpoch();
+  const acknowledged = lastPersistedMruEpoch === epoch ? lastPersistedMruList : undefined;
+  // On its way already: that write stays the one to hold if the link loses it.
+  if (pendingPersistMruList !== undefined && mruListsEqual(pendingPersistMruList, list)) return;
+  if (pendingPersistMruList === undefined && mruListsEqual(acknowledged, list)) {
+    // The host has it: anything held from before is older.
+    supersedeDeferredHostOwnedWrite(MRU_WRITE_KEY);
     return;
   }
 
@@ -423,10 +441,19 @@ export function persistMruList(list: string[]): void {
   const requestVersion = ++mruPersistVersion;
 
   void loadClientsModule()
-    .then(({ appClient }) => appClient.setState({ mruList: list }))
-    .then(() => {
+    .then(({ appClient }) =>
+      sendHostOwnedWrite(
+        MRU_WRITE_KEY,
+        () => appClient.setState({ mruList: list }),
+        () => persistMruList(list)
+      )
+    )
+    .then((outcome) => {
       if (requestVersion === mruPersistVersion) {
-        lastPersistedMruList = list;
+        if (outcome === "sent") {
+          lastPersistedMruList = list;
+          lastPersistedMruEpoch = epoch;
+        }
         pendingPersistMruList = undefined;
       }
     })
@@ -495,7 +522,16 @@ function scheduleWorktreeSwitchPaintedMark(
 }
 
 function persistActiveWorktree(id: string | null): void {
-  if (id === lastPersistedActiveWorktreeId || id === pendingPersistActiveWorktreeId) {
+  const epoch = getHostOwnedStateEpoch();
+  // What the host was last known to hold, unless another screen may have
+  // driven the project since, or a different pick is still on its way there.
+  const acknowledged =
+    lastPersistedActiveWorktreeEpoch === epoch ? lastPersistedActiveWorktreeId : undefined;
+  // On its way already: that write stays the one to hold if the link loses it.
+  if (id === pendingPersistActiveWorktreeId) return;
+  if (pendingPersistActiveWorktreeId === undefined && id === acknowledged) {
+    // The host has it: anything held from before is older.
+    supersedeDeferredHostOwnedWrite(ACTIVE_WORKTREE_WRITE_KEY);
     return;
   }
 
@@ -505,10 +541,17 @@ function persistActiveWorktree(id: string | null): void {
   const payload = { activeWorktreeId: id ?? undefined };
 
   void loadClientsModule()
-    .then(({ appClient }) => appClient.setState(payload))
-    .then(() => {
-      if (requestVersion === persistRequestVersion) {
+    .then(({ appClient }) =>
+      sendHostOwnedWrite(
+        ACTIVE_WORKTREE_WRITE_KEY,
+        () => appClient.setState(payload),
+        () => persistActiveWorktree(id)
+      )
+    )
+    .then((outcome) => {
+      if (requestVersion === persistRequestVersion && outcome === "sent") {
         lastPersistedActiveWorktreeId = id;
+        lastPersistedActiveWorktreeEpoch = epoch;
       }
     })
     .catch((error) => {

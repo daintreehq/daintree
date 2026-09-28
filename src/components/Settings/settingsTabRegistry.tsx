@@ -22,11 +22,14 @@ import {
   KeyRound,
   Shield,
   ArrowDownUp,
+  Server,
 } from "lucide-react";
 import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
+import type { SettingsOwner } from "@/hooks/useSettingsOwner";
 import type {
   GlobalSettingsTab,
   ProjectSettingsTab,
@@ -70,6 +73,12 @@ export interface SettingsTabEntry {
    * project or it states the wrong scope outright. Nav placement is unchanged.
    */
   readonly contentScope?: "global" | "project";
+  /**
+   * Whose values the tab edits in a window attached to another host: the host's, this
+   * machine's, or both (each section then names its own). Required, so a new tab can't
+   * leave the question unanswered; follows the ownership of the settings it writes.
+   */
+  readonly owner: SettingsOwner;
   readonly group: string;
   readonly label: string;
   readonly headerTitle?: string;
@@ -130,6 +139,7 @@ const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSett
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
 const importPrivacyDataTab = () => import("./PrivacyDataTab");
 const importImportExportSettingsTab = () => import("./ImportExportSettingsTab");
+const importHostsSettingsTab = () => import("./Hosts/HostsSettingsTab");
 const importProjectGeneralTab = () => import("@/components/Project/GeneralTab");
 const importProjectContextTab = () => import("@/components/Project/ContextTab");
 const importProjectVariablesTab = () => import("@/components/Project/EnvironmentVariablesEditor");
@@ -194,6 +204,7 @@ const LazyRunHistorySettingsTab = lazyWithPreload(
   (m) => m.RunHistorySettingsTab
 );
 const LazyPluginsTab = lazyWithPreload(importPluginsTab, (m) => m.PluginsTab);
+const LazyHostsSettingsTab = lazyWithPreload(importHostsSettingsTab, (m) => m.default);
 const LazyDaintreeAssistantSettingsTab = lazyWithPreload(
   importDaintreeAssistantSettingsTab,
   (m) => m.DaintreeAssistantSettingsTab
@@ -246,6 +257,52 @@ const MCP_REQUIRES_ENABLED = {
   label: "MCP server",
 } as const;
 
+/**
+ * Settings → Hosts. Registered only where Remote Hosts exists (never on
+ * Windows), so the tab, its panel and its search entries are all absent there.
+ */
+const HOSTS_TAB = {
+  id: "hosts",
+  scope: "global",
+  group: "Integrations",
+  owner: "device",
+  label: "Hosts",
+  icon: <Server className="w-4 h-4" />,
+  importKind: "lazy",
+  importer: LazyHostsSettingsTab.preload,
+  LazyComponent: LazyHostsSettingsTab,
+  searchNavDescription:
+    "Machines this one opens projects on over SSH, adding one, and this machine as a host",
+  searchNavKeywords: [
+    "hosts",
+    "remote",
+    "ssh",
+    "tailscale",
+    "linux",
+    "mac",
+    "server",
+    "host mode",
+    "install",
+    "update",
+  ],
+  sections: [
+    {
+      id: "hosts-list",
+      section: "Remote hosts",
+      title: "Remote hosts",
+      description: "Add a host, rename it, change its SSH target, update its build or forget it",
+      keywords: ["add host", "forget", "rename", "ssh target", "discover", "bonjour"],
+    },
+    {
+      id: "host-mode",
+      section: "This machine as a host",
+      title: "Allow this machine to be a host",
+      description: "Let Daintree on your other machines open this one's projects over SSH",
+      keywords: ["host mode", "start at login", "socket", "keychain", "attached machines"],
+    },
+  ],
+} as const satisfies LazySettingsTabEntry;
+
 // ── Registry (module-level const — stable identity for Fuse.js WeakMap) ─
 
 export const SETTINGS_REGISTRY = [
@@ -254,6 +311,7 @@ export const SETTINGS_REGISTRY = [
     id: "general",
     scope: "global",
     group: "General",
+    owner: "mixed",
     label: "General",
     icon: <Settings2 className="w-4 h-4" />,
     importKind: "eager",
@@ -470,6 +528,7 @@ export const SETTINGS_REGISTRY = [
     id: "terminalAppearance",
     scope: "global",
     group: "General",
+    owner: "device",
     label: "Appearance",
     icon: <SquareTerminal className="w-4 h-4" />,
     importKind: "lazy",
@@ -551,6 +610,7 @@ export const SETTINGS_REGISTRY = [
     id: "keyboard",
     scope: "global",
     group: "General",
+    owner: "device",
     label: "Keyboard",
     headerTitle: "Keyboard shortcuts",
     icon: <Keyboard className="w-4 h-4" />,
@@ -589,6 +649,7 @@ export const SETTINGS_REGISTRY = [
     id: "notifications",
     scope: "global",
     group: "General",
+    owner: "mixed",
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",
@@ -626,6 +687,7 @@ export const SETTINGS_REGISTRY = [
     id: "privacy",
     scope: "global",
     group: "General",
+    owner: "mixed",
     label: "Privacy & data",
     icon: <Shield className="w-4 h-4" />,
     importKind: "lazy",
@@ -705,6 +767,7 @@ export const SETTINGS_REGISTRY = [
     id: "import-export",
     scope: "global",
     group: "General",
+    owner: "device",
     label: "Import & export",
     icon: <ArrowDownUp className="w-4 h-4" />,
     importKind: "lazy",
@@ -735,6 +798,7 @@ export const SETTINGS_REGISTRY = [
     id: "terminal",
     scope: "global",
     group: "Terminal",
+    owner: "mixed",
     label: "Panel grid",
     icon: <LayoutGrid className="w-4 h-4" />,
     importKind: "lazy",
@@ -885,6 +949,7 @@ export const SETTINGS_REGISTRY = [
     id: "worktree",
     scope: "global",
     group: "Terminal",
+    owner: "mixed",
     label: "Worktree",
     headerTitle: "Worktree paths",
     icon: <FolderGit2 className="w-4 h-4" />,
@@ -946,6 +1011,7 @@ export const SETTINGS_REGISTRY = [
     id: "toolbar",
     scope: "global",
     group: "Terminal",
+    owner: "mixed",
     label: "Toolbar",
     headerTitle: "Toolbar customization",
     // Not the gear: that is project General's glyph, and global General's sliders
@@ -1000,6 +1066,7 @@ export const SETTINGS_REGISTRY = [
     id: "environment",
     scope: "global",
     group: "Terminal",
+    owner: "host",
     label: "Environment",
     headerTitle: "Environment variables",
     icon: <KeyRound className="w-4 h-4" />,
@@ -1047,6 +1114,7 @@ export const SETTINGS_REGISTRY = [
     id: "assistant",
     scope: "global",
     group: "Assistant",
+    owner: "host",
     label: "Daintree Assistant",
     icon: <DaintreeIcon className="w-4 h-4" size={16} />,
     importKind: "lazy",
@@ -1154,6 +1222,7 @@ export const SETTINGS_REGISTRY = [
     id: "agents",
     scope: "global",
     group: "Integrations",
+    owner: "host",
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
     importKind: "lazy",
@@ -1272,6 +1341,7 @@ export const SETTINGS_REGISTRY = [
     id: "code-forge",
     scope: "global",
     group: "Integrations",
+    owner: "host",
     label: "Code forge",
     headerTitle: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
@@ -1363,6 +1433,7 @@ export const SETTINGS_REGISTRY = [
     // editorClient.setConfig({ projectId }) and projectClient.saveSettings(projectId).
     contentScope: "project",
     group: "Integrations",
+    owner: "host",
     label: "Integrations",
     icon: <Blocks className="w-4 h-4" />,
     importKind: "lazy",
@@ -1430,6 +1501,7 @@ export const SETTINGS_REGISTRY = [
     id: "voice",
     scope: "global",
     group: "Integrations",
+    owner: "device",
     label: "Voice input",
     icon: <Mic className="w-4 h-4" />,
     importKind: "lazy",
@@ -1504,10 +1576,13 @@ export const SETTINGS_REGISTRY = [
     ],
   } satisfies LazySettingsTabEntry,
 
+  ...(isRemoteShellSupported() ? [HOSTS_TAB] : []),
+
   {
     id: "portal",
     scope: "global",
     group: "Integrations",
+    owner: "device",
     label: "Portal",
     headerTitle: "Portal links",
     icon: <PanelRight className="w-4 h-4" />,
@@ -1545,6 +1620,7 @@ export const SETTINGS_REGISTRY = [
     id: "mcp",
     scope: "global",
     group: "Integrations",
+    owner: "host",
     label: "MCP server",
     icon: <McpServerIcon className="w-4 h-4" />,
     importKind: "lazy",
@@ -1607,6 +1683,7 @@ export const SETTINGS_REGISTRY = [
     id: "plugins",
     scope: "global",
     group: "Integrations",
+    owner: "host",
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
@@ -1653,6 +1730,7 @@ export const SETTINGS_REGISTRY = [
     id: "plugin-actions",
     scope: "global",
     group: "Integrations",
+    owner: "host",
     label: "Plugin actions",
     headerTitle: "Plugin actions",
     icon: <ScrollText className="w-4 h-4" />,
@@ -1677,6 +1755,7 @@ export const SETTINGS_REGISTRY = [
     id: "run-history",
     scope: "global",
     group: "Integrations",
+    owner: "host",
     label: "Run history",
     headerTitle: "Run history",
     icon: <History className="w-4 h-4" />,
@@ -1722,6 +1801,7 @@ export const SETTINGS_REGISTRY = [
     id: "troubleshooting",
     scope: "global",
     group: "Support",
+    owner: "mixed",
     label: "Troubleshooting",
     icon: <LifeBuoy className="w-4 h-4" />,
     importKind: "lazy",
@@ -1806,6 +1886,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:general",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "General",
     icon: <SettingsIcon className="w-4 h-4" />,
     importKind: "lazy",
@@ -1818,6 +1899,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:context",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "Context",
     icon: <FileCode className="w-4 h-4" />,
     importKind: "lazy",
@@ -1830,6 +1912,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:variables",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "Variables",
     icon: <KeyRound className="w-4 h-4" />,
     importKind: "lazy",
@@ -1842,6 +1925,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:automation",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "Worktree setup",
     // Not GitBranch: project Code Forge already uses it, and two sections in the same
     // nav list sharing one glyph makes the icon useless for telling them apart.
@@ -1856,6 +1940,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:recipes",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "Recipes",
     icon: <Workflow className="w-4 h-4" />,
     importKind: "lazy",
@@ -1868,6 +1953,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:commands",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "Commands",
     icon: <Command className="w-4 h-4" />,
     importKind: "lazy",
@@ -1880,6 +1966,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:notifications",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",
@@ -1892,6 +1979,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:code-forge",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
@@ -1904,6 +1992,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:plugins",
     scope: "project",
     group: "Project",
+    owner: "host",
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
@@ -1933,6 +2022,11 @@ export function contentScopeForTab(tab: SettingsTab): "global" | "project" {
   // that declare it. The base type is where the optional property lives.
   const entry: AnySettingsTabEntry | undefined = SETTINGS_REGISTRY.find((e) => e.id === tab);
   return entry?.contentScope ?? scopeForTab(tab);
+}
+
+/** Whose values the tab edits when the window belongs to another host. */
+export function ownerForTab(tab: SettingsTab): SettingsOwner {
+  return getSettingsTabEntry(tab)?.owner ?? "host";
 }
 
 type ProjectScopedEntry = Extract<(typeof SETTINGS_REGISTRY)[number], { scope: "project" }>;
@@ -2184,6 +2278,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
   "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,
   integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
+  hosts: <Server className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,

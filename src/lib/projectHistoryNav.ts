@@ -4,6 +4,7 @@ import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { LOCAL_HOST_ID, parseHostScopedKey } from "@shared/types/remoteHosts";
 
 /**
  * Toggle to the workspace this window was in before the current one — project
@@ -38,6 +39,20 @@ export async function switchToLastWorkspace(): Promise<void> {
     // a failure, and not worth interrupting for.
     if (!target) return;
 
+    // Remote workspaces are remembered by host-scoped key. One on a host other
+    // than this view's moves the window there, project and host together; one
+    // on this view's own host is switched to by its bare id, like any other.
+    const { hostId: targetHostId, projectId: workspaceId } = parseHostScopedKey(target.workspaceId);
+    const viewHostId = window.__DAINTREE_HOST_ID__?.id ?? LOCAL_HOST_ID;
+    if (targetHostId !== viewHostId) {
+      await window.electron.remoteHosts.switchWindowHost({
+        hostId: targetHostId,
+        newWindow: false,
+        projectId: workspaceId,
+      });
+      return;
+    }
+
     const projectState = useProjectStore.getState();
     const scratchState = useScratchStore.getState();
 
@@ -53,24 +68,24 @@ export async function switchToLastWorkspace(): Promise<void> {
     // all, and the view's own seeded id is the only thing left that names this
     // view rather than the window that switched most recently.
     const currentWorkspaceId = projectState.currentProject?.id ?? getViewWorkspaceId();
-    if (currentWorkspaceId === target.workspaceId) return;
+    if (currentWorkspaceId === workspaceId) return;
 
     // Routed on the id's shape, not on whether the scratch store lists it: both
     // stores hydrate asynchronously, so a membership test answers "has the list
     // loaded yet" and sends a scratch down the project path during boot. Main
     // has already pruned anything that no longer exists.
-    if (isScratchWorkspaceId(target.workspaceId)) {
-      await scratchState.switchScratch(target.workspaceId);
+    if (isScratchWorkspaceId(workspaceId)) {
+      await scratchState.switchScratch(workspaceId);
       return;
     }
 
     // The project list decides how to arrive, never whether the target is a
     // project: a backgrounded project still holds live processes, and reopening
     // reconnects them instead of treating it as cold.
-    const project = projectState.projects.find((candidate) => candidate.id === target.workspaceId);
+    const project = projectState.projects.find((candidate) => candidate.id === workspaceId);
     const switchFn =
       project?.status === "background" ? projectState.reopenProject : projectState.switchProject;
-    await switchFn(target.workspaceId);
+    await switchFn(workspaceId);
   } catch (error) {
     notify({
       type: "error",

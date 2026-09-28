@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../channels.js";
-import { typedHandleWithContext, broadcastToRenderer } from "../../utils.js";
+import { typedHandleWithContext, broadcastToRenderer, sendToRendererContext } from "../../utils.js";
 import {
   getWindowForWebContents,
   getProjectForWebContents,
@@ -15,10 +15,14 @@ import {
   type ProjectOwner,
 } from "../../../window/projectOwnership.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { mayWriteProjectState } from "../../../services/DriveLeaseService.js";
 import { probeGitMarker } from "../../../services/projectOpenPreflight.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
-import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
+import {
+  ProjectSwitchService,
+  activateProjectOnHost,
+} from "../../../services/ProjectSwitchService.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import {
   buildTerminalInventory,
@@ -81,6 +85,10 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    if (ctx.endpoint?.kind === "remote-view") {
+      return activateForRemoteShell(deps, ctx, project, outgoingState, "project:switch");
+    }
+
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:switch");
     const trace = resolveSwitchTrace(options?.trace);
     const requestedAt = Date.now();
@@ -103,7 +111,11 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // Started concurrently with the view swap — the incoming view never reads
       // the outgoing project's state file — and awaited before returning so the
       // IPC contract (state persisted before resolve) is preserved.
-      const persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
+      const persistOutgoing = persistOutgoingProjectState(
+        outgoingState,
+        operation,
+        () => ctx.endpoint
+      );
       trackOutgoingPersist(outgoingProjectId, persistOutgoing);
 
       if (pvm) {
@@ -192,6 +204,10 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       );
     }
 
+    if (ctx.endpoint?.kind === "remote-view") {
+      return activateForRemoteShell(deps, ctx, project, outgoingState, "project:reopen");
+    }
+
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:reopen");
     const trace = resolveSwitchTrace(options?.trace);
     const requestedAt = Date.now();
@@ -212,7 +228,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // sender still has its own outgoing layout to save (#11101).
       let persistOutgoing: Promise<void> = Promise.resolve();
       if (outgoingProjectId !== projectId) {
-        persistOutgoing = persistOutgoingProjectState(outgoingState, operation);
+        persistOutgoing = persistOutgoingProjectState(outgoingState, operation, () => ctx.endpoint);
         trackOutgoingPersist(outgoingProjectId, persistOutgoing);
       }
 
@@ -402,8 +418,11 @@ async function awaitPendingOutgoingPersist(projectId: string): Promise<void> {
   }
 }
 
-function resolveProjectViewManager(deps: HandlerDependencies, event: Electron.IpcMainInvokeEvent) {
-  const senderWindow = getWindowForWebContents(event.sender);
+function resolveProjectViewManager(
+  deps: HandlerDependencies,
+  event: Electron.IpcMainInvokeEvent | null
+) {
+  const senderWindow = event && getWindowForWebContents(event.sender);
   const pvmCtx = senderWindow ? deps.windowRegistry?.getByWindowId(senderWindow.id) : undefined;
   return pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
 }
@@ -432,7 +451,7 @@ function resolveOutgoingProjectId(
 
   // Startup gap: the restored view loads before `registerInitialView` binds it,
   // and can send IPC in between. Its URL is the only per-sender identity there.
-  const fromUrl = getProjectIdFromSenderUrl(ctx.event.sender);
+  const fromUrl = ctx.event && getProjectIdFromSenderUrl(ctx.event.sender);
   if (fromUrl && projectStore.getProjectById(fromUrl)) return fromUrl;
 
   // An unbound view (a fresh Cmd+N welcome window) has no project layout of its
@@ -464,7 +483,7 @@ function captureSwitchOperation(
   incomingProjectId: string,
   action: SwitchOperation["action"]
 ): SwitchOperation {
-  const senderWindow = getWindowForWebContents(ctx.event.sender);
+  const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
   const projectViewManager = resolveProjectViewManager(deps, ctx.event);
   return Object.freeze({
     action,
@@ -476,13 +495,80 @@ function captureSwitchOperation(
   });
 }
 
+/**
+ * A view on a remote Shell is moving to this project. The Shell swaps its own
+ * view and tells it it switched; this machine runs only its half: the
+ * repository check, saving the layout the view is leaving, and the shared Host
+ * activation (the project's workspace host started or woken and held for the
+ * view, its status and MRU recorded). The global current-project pointer and
+ * the window history describe this machine's own windows, so they are left
+ * alone.
+ */
+async function activateForRemoteShell(
+  deps: HandlerDependencies,
+  ctx: IpcContext,
+  project: Project,
+  outgoingState: ProjectSwitchOutgoingState | undefined,
+  action: SwitchOperation["action"]
+): Promise<ProjectSwitchResult> {
+  await assertProjectRepositoryIntact(project);
+  const operation: SwitchOperation = Object.freeze({
+    action,
+    incomingProjectId: project.id,
+    outgoingProjectId: ctx.projectId,
+    senderWindow: null,
+    windowId: undefined,
+    projectViewManager: undefined,
+  });
+  if (operation.outgoingProjectId !== project.id) {
+    const persistOutgoing = persistOutgoingProjectState(
+      outgoingState,
+      operation,
+      () => ctx.endpoint
+    );
+    trackOutgoingPersist(operation.outgoingProjectId, persistOutgoing);
+    await persistOutgoing;
+  }
+  await awaitPendingOutgoingPersist(project.id);
+  if (deps.worktreeService) {
+    // Forward-fail, as a local switch does (#8400): the Shell has committed to
+    // the project, so a load failure is the view's recovery banner, not a
+    // refused switch. Null clears a banner left by an earlier failure.
+    let worktreeLoadError: string | null = null;
+    try {
+      await activateProjectOnHost(deps.worktreeService, project, ctx.webContentsId);
+    } catch (err) {
+      console.error(`[${action}] Failed to load worktrees for a remote view:`, err);
+      worktreeLoadError = formatErrorMessage(err, "Failed to load worktrees");
+    }
+    sendToRendererContext(ctx, CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+      projectId: project.id,
+      worktreeLoadError,
+    });
+  }
+  return { outcome: "switched", project: projectStore.getProjectById(project.id) ?? project };
+}
+
+/**
+ * Save the layout, drafts and active worktree the sender is leaving. Leaving is
+ * navigation and always allowed, but the saved state is the project's own: a
+ * view that doesn't drive the outgoing project (another screen took it over)
+ * leaves it as the driver has it, just as the dedicated setters would refuse.
+ */
 async function persistOutgoingProjectState(
   outgoingState: ProjectSwitchOutgoingState | undefined,
-  operation: SwitchOperation
+  operation: SwitchOperation,
+  writer: () => IpcContext["endpoint"] | undefined
 ): Promise<void> {
   const previousProjectId = operation.outgoingProjectId;
   const logLabel = operation.action;
   if (!outgoingState || !previousProjectId) return;
+  if (!mayWriteProjectState(previousProjectId, writer)) {
+    logInfo(`[${logLabel}] Leaving the outgoing project's saved state to its driver`, {
+      projectId: previousProjectId,
+    });
+    return;
+  }
 
   const validTerminals = outgoingState.terminals
     ? sanitizeTerminals(outgoingState.terminals, `${logLabel}/pre-apply(${previousProjectId})`)

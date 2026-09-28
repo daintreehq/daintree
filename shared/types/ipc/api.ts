@@ -109,6 +109,7 @@ import type { CopyTreeRunSource } from "./copyTreeHistory.js";
 import type {
   SystemWakePayload,
   SystemOpenInEditorPayload,
+  SystemOpenInEditorFallback,
   CliAvailability,
   AgentCliDetails,
   AgentVersionInfo,
@@ -223,6 +224,28 @@ export interface NotificationSettings {
  * positional-arg `demo` namespace, etc.).
  */
 export interface ElectronAPI extends GeneratedElectronAPI {
+  // Remote Hosts namespaces with a push channel.
+  remoteHosts: GeneratedElectronAPI["remoteHosts"] & {
+    onEvent(callback: (event: import("./remoteHosts.js").RemoteHostsEvent) => void): () => void;
+  };
+  hostMode: GeneratedElectronAPI["hostMode"] & {
+    onEvent(callback: (event: import("./hostMode.js").HostModeEvent) => void): () => void;
+  };
+  driveLease: GeneratedElectronAPI["driveLease"] & {
+    onEvent(callback: (event: import("./driveLease.js").DriveLeaseEvent) => void): () => void;
+  };
+  operations: GeneratedElectronAPI["operations"] & {
+    onEvent(callback: (event: import("./operations.js").OperationsEvent) => void): () => void;
+  };
+  fileTransfer: GeneratedElectronAPI["fileTransfer"] & {
+    onEvent(callback: (event: import("./fileTransfer.js").FileTransferEvent) => void): () => void;
+  };
+  hostMetrics: GeneratedElectronAPI["hostMetrics"] & {
+    onEvent(callback: (event: import("./hostMetrics.js").HostMetricsEvent) => void): () => void;
+  };
+  portForwards: GeneratedElectronAPI["portForwards"] & {
+    onEvent(callback: (event: import("./portForwards.js").PortForwardsEvent) => void): () => void;
+  };
   // Invoke methods are generated; onWebglThresholds is the hand-wired push
   // listener for the webglBudget apply step (surface-view side).
   paintSurface: GeneratedElectronAPI["paintSurface"] & {
@@ -254,7 +277,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     create(
       options: CreateWorktreeOptions,
-      rootPath: string
+      rootPath: string,
+      /** Names the create as a host operation; only a remote view passes one. */
+      opId?: string
     ): Promise<import("../worktree.js").WorktreeCreateResult>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;
     fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void>;
@@ -425,6 +450,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
     read(payload: FileReadPayload): Promise<FileReadResult>;
+    /**
+     * The native path of each dropped or pasted `File`, in order, via
+     * `webUtils.getPathForFile` in the preload. The only path-recovery bridge
+     * on `window.electron`; it narrows the surface but does not isolate it —
+     * plugin views render in this same document and can reach it too. `""`
+     * for a synthetic or non-disk File (treat it as unresolvable).
+     */
+    getDroppedFilePaths(files: readonly File[]): string[];
   };
   watchdog: {
     restart(): Promise<void>;
@@ -490,7 +523,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     openPath(path: string): Promise<void>;
     showItemInFolder(path: string): Promise<void>;
     showItemInFolderUnconfined(path: string): Promise<void>;
-    openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;
+    openInEditor(
+      payload: SystemOpenInEditorPayload & { projectId?: string }
+    ): Promise<SystemOpenInEditorFallback | void>;
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;
     getHomeDir(): Promise<string>;
@@ -727,7 +762,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Subscribe to clone progress events */
     onCloneProgress(callback: (event: CloneRepoProgressEvent) => void): () => void;
     /** Cancel an in-progress clone operation */
-    cancelClone(): Promise<void>;
+    cancelClone(opId?: string): Promise<void>;
     getRecipes(
       projectId: string
     ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }>;
@@ -1002,7 +1037,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
     commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
-    push(cwd: string, setUpstream?: boolean): Promise<void>;
+    push(cwd: string, setUpstream?: boolean, opId?: string): Promise<void>;
     pullRebase(cwd: string): Promise<void>;
     forcePushWithLease(cwd: string, branchName: string, leaseSha: string): Promise<void>;
     listRemoteCommits(
@@ -1541,9 +1576,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     listBookmarks(input?: { projectId?: string }): Promise<AgentSessionRecord[]>;
   };
   // clipboard is generated — see GeneratedElectronAPI.
-  webUtils: {
-    getPathForFile(file: File): string;
-  };
   appTheme: {
     get(): Promise<AppThemeConfig>;
     setColorScheme(schemeId: string): Promise<void>;
@@ -1620,20 +1652,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     resolveProvider(projectId: string, remoteUrl?: string): Promise<ResolvedForgeProvider>;
     /** Open the issues list page for the resolved forge provider. */
-    openIssues(cwd: string, query?: string, state?: string): Promise<void>;
+    openIssues(cwd: string, query?: string, state?: string): Promise<string | undefined>;
     /** Open the pull requests list page for the resolved forge provider. */
-    openPRs(cwd: string, query?: string, state?: string): Promise<void>;
+    openPRs(cwd: string, query?: string, state?: string): Promise<string | undefined>;
     /** Open the commits page for the resolved forge provider. */
-    openCommits(cwd: string, branch?: string): Promise<void>;
+    openCommits(cwd: string, branch?: string): Promise<string | undefined>;
     /** Open a single issue in the system browser via the resolved forge provider. */
-    openIssue(payload: { cwd: string; issueNumber: number }): Promise<void>;
+    openIssue(payload: { cwd: string; issueNumber: number }): Promise<string | undefined>;
     /** Resolve the canonical URL for a single issue via the resolved forge provider. */
     getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
     /**
      * Open the repository's home page via the resolved forge provider. Rejects
      * when the provider doesn't implement the optional `buildRepoUrl`.
      */
-    openRepo(payload: { cwd: string }): Promise<void>;
+    openRepo(payload: { cwd: string }): Promise<string | undefined>;
     /**
      * Resolve the repository's home page URL via the resolved forge provider,
      * or `null` when the provider doesn't implement the optional `buildRepoUrl`.
@@ -1919,7 +1951,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Detailed per-bucket rate-limit snapshot for diagnostics UI; `null` when not inspectable. */
     getRateLimitDetails(payload: { cwd: string }): Promise<RateLimitDetails | null>;
     /** Open a single PR in the system browser via the resolved forge provider. */
-    openPR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    openPR(payload: { cwd: string; prNumber: number }): Promise<string | undefined>;
     /** Open a new pull request from `head` into `base` via the resolved forge provider. */
     createPR(payload: {
       cwd: string;
@@ -2232,14 +2264,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // helpers that aren't expressible through IpcInvokeMap, and the on*
   // entries are renderer-only subscriptions.
   plugin: GeneratedElectronAPI["plugin"] & {
-    /**
-     * Resolve the absolute native filesystem path of a dropped File via
-     * `webUtils.getPathForFile`. Plugin-scoped (never exposed globally) so
-     * native-path recovery stays confined to the plugin install surface
-     * (#9295). Returns `""` for synthetic/non-disk File objects (clipboard
-     * paste, virtual files) — treat empty as a structured error.
-     */
-    getDroppedFilePath(file: File): string;
     invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
     /**
      * Subscribe to broadcast pushes for `(pluginId, channel)` — every

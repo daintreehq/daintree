@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsDependents, SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
@@ -26,6 +27,8 @@ interface SaveFailure {
  * once main has acted.
  */
 export function KeepAwakeSection() {
+  // Each machine holds its own power assertion, so a remote window edits this one's.
+  const ownerMarker = useSettingsOwnerMarker();
   const state = useKeepAwakeStore((s) => s.state);
   const loadError = useKeepAwakeStore((s) => s.loadError);
   const [pendingPatch, setPendingPatch] = useState<Partial<KeepAwakeConfig> | null>(null);
@@ -68,6 +71,7 @@ export function KeepAwakeSection() {
   return (
     <SettingsSection
       title="Keep awake"
+      badge={ownerMarker("device")}
       description={
         <span role="status">
           {state === null

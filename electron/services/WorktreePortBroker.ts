@@ -13,11 +13,25 @@ import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("main:WorktreePortBroker");
 
+/**
+ * What the broker needs from the far end of a worktree port. A workspace host
+ * process is one; a remote view's link relay is another, standing in for the
+ * host that lives on the other machine.
+ */
+export type WorktreePortHost = Pick<WorkspaceHostProcess, "projectPath" | "attachWorktreePort">;
+
+/**
+ * Picks the far end for a view whose worktree port must not come from a local
+ * workspace host (a view bound to a remote host). Null means "use the host the
+ * caller passed".
+ */
+export type WorktreePortHostOverride = (webContentsId: number) => WorktreePortHost | null;
+
 interface PortEntry {
   /** The host-side port (port1). Kept for cleanup — closing it signals the host. */
   hostPort: Electron.MessagePortMain;
   /** Reference to the host process that owns port1 */
-  host: WorkspaceHostProcess;
+  host: WorktreePortHost;
   /** The webContents.id this port pair serves */
   webContentsId: number;
   /** Identifies this transfer in the renderer's receipt. */
@@ -55,6 +69,15 @@ export class WorktreePortBroker {
 
   private nextToken = 0;
 
+  private hostOverride: WorktreePortHostOverride | null = null;
+
+  /**
+   * Remote endpoints served by a main-held port instead of a renderer, keyed
+   * by their negative handle; kept across a host restart so the re-broker can
+   * hand them a fresh port.
+   */
+  private endpointReceivers = new Map<number, (port: Electron.MessagePortMain) => void>();
+
   private readonly onPortAck = (event: Electron.IpcMainEvent, payload: unknown): void => {
     const token = (payload as { token?: unknown } | null | undefined)?.token;
     if (typeof token !== "number") return;
@@ -76,10 +99,12 @@ export class WorktreePortBroker {
    * — including an unconfirmed one, which may never have arrived.
    */
   brokerPort(
-    host: WorkspaceHostProcess,
+    requestedHost: WorktreePortHost,
     webContents: WebContents,
     options: BrokerPortOptions = {}
   ): boolean {
+    const host =
+      (!webContents.isDestroyed() && this.hostOverride?.(webContents.id)) || requestedHost;
     if (webContents.isDestroyed()) {
       logger.warn("Worktree port not brokered", {
         webContentsId: webContents.id,
@@ -209,6 +234,99 @@ export class WorktreePortBroker {
   }
 
   /**
+   * Install the far-end override consulted on every {@link brokerPort}, so
+   * each existing re-broker path (load, reload, project switch, recovery)
+   * reaches a remote view's relay rather than a local workspace host.
+   */
+  setHostOverride(override: WorktreePortHostOverride | null): () => void {
+    this.hostOverride = override;
+    return () => {
+      if (this.hostOverride === override) this.hostOverride = null;
+    };
+  }
+
+  /**
+   * Connect a remote endpoint to a workspace host. The endpoint's end of the
+   * pair stays in this process and is handed to `receive`, which relays it
+   * over the link; there is no renderer receipt to wait for. Re-brokered with
+   * a fresh pair after a host restart until {@link releaseEndpointPort}.
+   */
+  brokerEndpointPort(
+    host: WorktreePortHost,
+    handle: number,
+    receive: (port: Electron.MessagePortMain) => void
+  ): boolean {
+    if (handle >= 0) throw new Error("Endpoint worktree ports are keyed by a negative handle");
+    this.endpointReceivers.set(handle, receive);
+    const { port1, port2 } = new MessageChannelMain();
+    if (!host.attachWorktreePort(port1)) {
+      port1.close();
+      port2.close();
+      logger.warn("Worktree port not brokered", {
+        endpointHandle: handle,
+        projectPath: host.projectPath,
+        reason: "host-rejected",
+      });
+      return false;
+    }
+    this.closePortsForView(handle);
+
+    const onPortClose = () => {
+      this.closePortsForView(handle);
+    };
+    port1.on("close", onPortClose);
+    const entry: PortEntry = {
+      hostPort: port1,
+      host,
+      webContentsId: handle,
+      token: ++this.nextToken,
+      confirmed: true,
+      confirmationWaiters: new Set(),
+      cleanupListeners: () => port1.removeListener("close", onPortClose),
+    };
+    this.ports.set(handle, entry);
+    let viewSet = this.hostToViews.get(host.projectPath);
+    if (!viewSet) {
+      viewSet = new Set();
+      this.hostToViews.set(host.projectPath, viewSet);
+    }
+    viewSet.add(handle);
+    receive(port2);
+    logger.info("Worktree port brokered for remote endpoint", {
+      endpointHandle: handle,
+      projectPath: host.projectPath,
+    });
+    return true;
+  }
+
+  /**
+   * Record where a remote endpoint's port goes before any workspace host is up
+   * for it, so a later load (a Retry after a failed one) can connect it with
+   * {@link connectEndpointPort} rather than waiting on the endpoint's own retry.
+   */
+  expectEndpointPort(handle: number, receive: (port: Electron.MessagePortMain) => void): void {
+    if (handle >= 0) throw new Error("Endpoint worktree ports are keyed by a negative handle");
+    this.endpointReceivers.set(handle, receive);
+  }
+
+  /**
+   * Connect a remote endpoint that is waiting for a port, or holds one to
+   * another host, to `host`. True when it holds a port to `host` afterwards;
+   * false when nothing is waiting for one under that handle.
+   */
+  connectEndpointPort(host: WorktreePortHost, handle: number): boolean {
+    if (this.ports.get(handle)?.host === host) return true;
+    const receive = this.endpointReceivers.get(handle);
+    return receive ? this.brokerEndpointPort(host, handle, receive) : false;
+  }
+
+  /** Close a remote endpoint's pair for good. */
+  releaseEndpointPort(handle: number): void {
+    this.endpointReceivers.delete(handle);
+    this.closePortsForView(handle);
+  }
+
+  /**
    * Record the renderer's receipt for a posted port. Only the view's current
    * transfer can be confirmed — a receipt for a port that has since been
    * replaced or closed says nothing about the one the view holds now.
@@ -328,6 +446,11 @@ export class WorktreePortBroker {
   ): number {
     let reBrokered = 0;
     for (const wcId of wcIds) {
+      const receive = this.endpointReceivers.get(wcId);
+      if (receive) {
+        if (this.brokerEndpointPort(host, wcId, receive)) reBrokered += 1;
+        continue;
+      }
       const wc = getWebContents(wcId);
       if (wc && !wc.isDestroyed()) {
         if (this.brokerPort(host, wc)) {
@@ -351,6 +474,8 @@ export class WorktreePortBroker {
    */
   dispose(): void {
     ipcMain.removeListener(CHANNELS.WORKTREE_PORT_ACK, this.onPortAck);
+    this.endpointReceivers.clear();
+    this.hostOverride = null;
     for (const wcId of [...this.ports.keys()]) {
       this.closePortsForView(wcId);
     }

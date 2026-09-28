@@ -647,6 +647,58 @@ describe("hydrateAppState", () => {
       expect(getTmpDirMock).toHaveBeenCalledTimes(1);
     });
 
+    it("seeds the host platform from the payload's host fields", async () => {
+      const hostPlatform = await import("@/hooks/useHostPlatform");
+      hostPlatform._resetHostPlatformForTests();
+      try {
+        appClientMock.hydrate.mockResolvedValue({
+          appState: { terminals: [] },
+          terminalConfig,
+          project,
+          agentSettings,
+          gpuWebGLHardware: true,
+          systemTmpDir: "/client-tmp",
+          hostPlatform: "linux",
+          hostHomeDir: "/home/greg",
+          hostTmpDir: "/host-tmp",
+        });
+        await hydrateAppState(baseOptions());
+
+        expect(hostPlatform.getHostPlatformInfo()).toMatchObject({
+          platform: "linux",
+          homeDir: "/home/greg",
+          tmpDir: "/host-tmp",
+          hostName: null,
+        });
+        expect(getTmpDirMock).not.toHaveBeenCalled();
+      } finally {
+        hostPlatform._resetHostPlatformForTests();
+      }
+    });
+
+    it("never takes this machine's systemTmpDir for a remote view", async () => {
+      const hostPlatform = await import("@/hooks/useHostPlatform");
+      hostPlatform._resetHostPlatformForTests();
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      try {
+        appClientMock.hydrate.mockResolvedValue({
+          appState: { terminals: [] },
+          terminalConfig,
+          project,
+          agentSettings,
+          gpuWebGLHardware: true,
+          systemTmpDir: "/client-tmp",
+        });
+
+        await hydrateAppState(baseOptions());
+
+        expect(getTmpDirMock).toHaveBeenCalledTimes(1);
+      } finally {
+        delete window.__DAINTREE_HOST_ID__;
+        hostPlatform._resetHostPlatformForTests();
+      }
+    });
+
     it("degrades without throwing when the getTmpDir fallback rejects", async () => {
       appClientMock.hydrate.mockResolvedValue({
         appState: { terminals: [] },

@@ -7,6 +7,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 import { isMac, isWindows } from "@/lib/platform";
 import { GlobalBannerCoordinator } from "../GlobalBannerCoordinator";
+import { HostConnectionBanner } from "../HostConnectionBanner";
+import { DriveLeaseBanner } from "../DriveLeaseBanner";
 import { HostCrashBanner } from "../HostCrashBanner";
 import { WatchdogDisabledBanner } from "../WatchdogDisabledBanner";
 import { HostMemoryStallBanner } from "../HostMemoryStallBanner";
@@ -133,8 +135,12 @@ function BannerHost({ children, label }: { children: ReactNode; label?: string }
 
 function bannerForSlot(slot: Exclude<GlobalBannerSlot, null>) {
   switch (slot) {
+    case "host-connection":
+      return <HostConnectionBanner />;
     case "host-crash":
       return <HostCrashBanner />;
+    case "drive-lease":
+      return <DriveLeaseBanner />;
     case "watchdog-disabled":
       return <WatchdogDisabledBanner />;
     case "host-memory-stall":

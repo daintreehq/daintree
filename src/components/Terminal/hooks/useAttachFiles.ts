@@ -2,6 +2,8 @@ import { useCallback, useRef } from "react";
 import type { RefObject } from "react";
 import type { EditorView } from "@codemirror/view";
 import { logError } from "@/utils/logger";
+import { currentHostId } from "@/hooks/useHostPlatform";
+import { pickHostPaths } from "@/components/HostFilePicker/hostFilePickerQueue";
 import { fileAttachmentEntryFromPath, insertFileAttachments } from "../fileAttachments";
 
 /**
@@ -13,7 +15,11 @@ import { fileAttachmentEntryFromPath, insertFileAttachments } from "../fileAttac
  * root, whose own click handling already selects the pane and focuses the
  * editor before the picker opens.
  */
-export function useAttachFiles(editorViewRef: RefObject<EditorView | null>, cwd: string) {
+export function useAttachFiles(
+  editorViewRef: RefObject<EditorView | null>,
+  cwd: string,
+  uploadSurface?: string
+) {
   // The picker is modal when it has a parent window, but it opens unparented
   // when none can be resolved, and then nothing stops a second click from
   // stacking another one.
@@ -37,11 +43,49 @@ export function useAttachFiles(editorViewRef: RefObject<EditorView | null>, cwd:
       await insertFileAttachments(
         editorViewRef,
         view,
-        filePaths.map(fileAttachmentEntryFromPath),
-        cwd
+        filePaths.map((filePath) => fileAttachmentEntryFromPath(filePath, "local")),
+        cwd,
+        uploadSurface === undefined ? {} : { uploadSurface }
       );
     } catch (error) {
       logError("[HybridInputBar] Attachment picker failed", error);
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, [editorViewRef, cwd, uploadSurface]);
+}
+
+/**
+ * The attach menu's host leg in a remote window: Daintree's picker over the
+ * host, whose choices are host paths already, so nothing is transferred.
+ */
+export function useAttachFromHost(editorViewRef: RefObject<EditorView | null>, cwd: string) {
+  const inFlightRef = useRef(false);
+
+  return useCallback(async () => {
+    const view = editorViewRef.current;
+    if (!view || inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      const paths = await pickHostPaths({
+        mode: "file",
+        multiple: true,
+        title: "Attach files",
+        buttonLabel: "Attach",
+        ...(cwd ? { defaultPath: cwd } : {}),
+      });
+      if (!paths || paths.length === 0) return;
+      if (editorViewRef.current !== view) return;
+      view.focus();
+      const hostId = currentHostId();
+      await insertFileAttachments(
+        editorViewRef,
+        view,
+        paths.map((filePath) => ({ ...fileAttachmentEntryFromPath(filePath, "host"), hostId })),
+        cwd
+      );
+    } catch (error) {
+      logError("[HybridInputBar] Host attachment picker failed", error);
     } finally {
       inFlightRef.current = false;
     }

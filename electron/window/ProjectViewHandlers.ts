@@ -12,7 +12,6 @@ import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { isRendererOwnedShortcut } from "../services/menuAccelerators.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
-import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { notifyError } from "../ipc/errorHandlers.js";
@@ -29,10 +28,17 @@ import {
 import { evictDeadView, getAvailableMemoryMb } from "./ProjectViewEvictionController.js";
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import { logError, logWarn } from "../utils/logger.js";
+import { isWebviewSrcAllowed } from "./webviewSrcGate.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
+
+export {
+  isWebviewSrcAllowed,
+  setRemoteWebviewSrcGate,
+  type RemoteWebviewSrcGate,
+} from "./webviewSrcGate.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
@@ -77,9 +83,7 @@ export function setupViewHandlers(
     webPreferences: Electron.WebPreferences,
     params: Record<string, string>
   ) => {
-    // Dev-preview webviews load the stable proxy origin (dp-*.localhost), which
-    // isLocalhostUrl rejects — accept it explicitly (#9100).
-    const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
+    const isAllowedLocalhostUrl = isWebviewSrcAllowed(wc.id, params.src);
     const partition = params.partition ?? "";
     const isValidPartition =
       isBrowserPartition(partition) ||

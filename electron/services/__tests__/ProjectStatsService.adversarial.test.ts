@@ -605,6 +605,25 @@ describe("ProjectStatsService adversarial", () => {
     svc.stop();
   });
 
+  it("replays to a view attached over a link on the live channel", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    const svc = new ProjectStatsService(makePtyClient() as never);
+    const endpoint = { kind: "remote-view" as const, isClosed: vi.fn(() => false), send: vi.fn() };
+
+    svc.pushSnapshotToEndpoint(endpoint as never);
+    expect(endpoint.send).not.toHaveBeenCalled();
+
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const [liveChannel, livePayload] = broadcastMock.mock.calls[0]!;
+    svc.pushSnapshotToEndpoint(endpoint as never);
+
+    expect(endpoint.send.mock.calls).toEqual([
+      [{ type: "event", channel: liveChannel, args: [livePayload] }],
+    ]);
+    svc.stop();
+  });
+
   it("does not replay before the deferred initial compute has produced a map", () => {
     const svc = new ProjectStatsService(makePtyClient() as never);
     const wc = makeWebContents();

@@ -9,6 +9,7 @@ import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { logDebug, logInfo } from "../utils/logger.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
 import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
+import { isLocalViewKey } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
@@ -162,7 +163,7 @@ export function evictDeadView(
     // (#12313). A bound MCP session learns from this that its route went away
     // and roughly when, which is the difference between a workspace it can wait
     // for and an id that was never right.
-    recordWorkspaceEviction(projectId, trigger);
+    if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, trigger);
   });
 }
 
@@ -560,7 +561,8 @@ export function evictStaleViews(
     cleanupEntry(host, projectId);
     // After the teardown, because the read side is what gates the record on
     // liveness — see `readWorkspaceBindingState` (#12313).
-    recordWorkspaceEviction(projectId, effectiveReason);
+    // A remote project's residency is its host's; only local keys enter this ledger.
+    if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
     evictedFootprintKb += memoryKb + guestMemoryKb;
   }

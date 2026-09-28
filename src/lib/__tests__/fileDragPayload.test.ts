@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   FILE_DRAG_MIME,
+  decodeFileDrag,
   decodeFileDragPaths,
   encodeFileDragPaths,
   hasFileDrag,
@@ -124,5 +125,30 @@ describe("fileDragPayload", () => {
       expect(hasFileDrag(["text/plain", "text/uri-list"])).toBe(false);
       expect(hasFileDrag([])).toBe(false);
     });
+  });
+});
+
+describe("fileDragPayload host", () => {
+  it("writes a local drag exactly as before: a bare array", () => {
+    expect(encodeFileDragPaths(["/repo/a.ts"])).toBe('["/repo/a.ts"]');
+    expect(encodeFileDragPaths(["/repo/a.ts"], "local")).toBe('["/repo/a.ts"]');
+  });
+
+  it("names a remote host and reads it back", () => {
+    const encoded = encodeFileDragPaths(["/srv/a.ts"], "studio-01");
+    expect(JSON.parse(encoded)).toEqual({ hostId: "studio-01", paths: ["/srv/a.ts"] });
+    expect(decodeFileDrag(encoded)).toEqual({ hostId: "studio-01", paths: ["/srv/a.ts"] });
+    expect(decodeFileDragPaths(encoded)).toEqual(["/srv/a.ts"]);
+  });
+
+  it("treats a payload without a host as this machine's", () => {
+    expect(decodeFileDrag('["/repo/a.ts"]')).toEqual({ hostId: "local", paths: ["/repo/a.ts"] });
+  });
+
+  it("rejects a payload with an invalid host id or paths", () => {
+    expect(decodeFileDrag(JSON.stringify({ hostId: "local", paths: ["/a"] }))).toBeNull();
+    expect(decodeFileDrag(JSON.stringify({ hostId: "a:b", paths: ["/a"] }))).toBeNull();
+    expect(decodeFileDrag(JSON.stringify({ hostId: "studio-01", paths: ["rel"] }))).toBeNull();
+    expect(decodeFileDrag(JSON.stringify({ paths: ["/a"] }))).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 import type { StorageValue } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import {
@@ -80,7 +81,7 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
           const trimmed = prompt.trim();
           if (trimmed === "") return state;
 
-          const projectEntries = [...(state.history[projectId] ?? [])];
+          const projectEntries = [...(state.history[hostScopedKey(projectId)] ?? [])];
           // For fleet entries with armed IDs, only dedup against entries with
           // the same armed set — different targets are different intents.
           const armedKey = fleetMeta?.armedIds?.join(",") ?? "";
@@ -101,12 +102,12 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
             targetSpec: fleetMeta?.targetSpec,
           };
           const updated = [entry, ...filtered].slice(0, MAX_HISTORY_SIZE);
-          return { history: { ...state.history, [projectId]: updated } };
+          return { history: { ...state.history, [hostScopedKey(projectId)]: updated } };
         }),
 
       getProjectHistory: (projectId) => {
         if (!projectId) return [];
-        return get().history[projectId] ?? [];
+        return get().history[hostScopedKey(projectId)] ?? [];
       },
 
       getGlobalHistory: () => {
@@ -124,7 +125,7 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
 
       removeProjectHistory: (projectId) =>
         set((state) => {
-          const { [projectId]: _, ...rest } = state.history;
+          const { [hostScopedKey(projectId)]: _, ...rest } = state.history;
           return { history: rest };
         }),
     }),

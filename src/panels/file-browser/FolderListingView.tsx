@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/formatBytes";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
+import { currentHostId } from "@/hooks/useHostPlatform";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
@@ -171,7 +172,10 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
       event.preventDefault();
       return;
     }
-    dataTransfer.setData(FILE_DRAG_MIME, encodeFileDragPaths([join(context.basePath, row.path)]));
+    dataTransfer.setData(
+      FILE_DRAG_MIME,
+      encodeFileDragPaths([join(context.basePath, row.path)], currentHostId())
+    );
     dataTransfer.effectAllowed = "copy";
     dataTransfer.setDragImage(event.currentTarget, 12, ROW_HEIGHT_PX / 2);
   };

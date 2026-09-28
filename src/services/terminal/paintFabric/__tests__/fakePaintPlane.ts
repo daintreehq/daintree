@@ -41,6 +41,7 @@ export function makeFakePlane() {
     subscribeHibernation: vi.fn(() => vi.fn()),
     addAgentStateListener: vi.fn(() => vi.fn()),
     addExitListener: vi.fn(() => vi.fn()),
+    reportLost: vi.fn(),
     addAltBufferListener: vi.fn(() => vi.fn()),
     registerPostCompleteHook: vi.fn(() => vi.fn()),
     unregisterPostCompleteHook: vi.fn(),

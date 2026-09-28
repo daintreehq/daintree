@@ -28,7 +28,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
 
   handlers.push(
     typedHandleWithContext(CHANNELS.RECOVERY_RELOAD_APP, async (ctx): Promise<void> => {
-      const senderUrl = ctx.event.senderFrame?.url;
+      const senderUrl = ctx.event?.senderFrame?.url;
       if (!senderUrl || !isRecoveryPageUrl(senderUrl)) {
         throw new Error(
           `recovery:reload-app rejected: untrusted sender (url=${senderUrl ?? "unknown"})`
@@ -45,7 +45,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
 
   handlers.push(
     typedHandleWithContext(CHANNELS.RECOVERY_RESET_AND_RELOAD, async (ctx): Promise<void> => {
-      const senderUrl = ctx.event.senderFrame?.url;
+      const senderUrl = ctx.event?.senderFrame?.url;
       if (!senderUrl || !isRecoveryPageUrl(senderUrl)) {
         throw new Error(
           `recovery:reset-and-reload rejected: untrusted sender (url=${senderUrl ?? "unknown"})`
@@ -69,7 +69,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
 
   handlers.push(
     typedHandleWithContext(CHANNELS.RECOVERY_EXPORT_DIAGNOSTICS, async (ctx): Promise<boolean> => {
-      const senderUrl = ctx.event.senderFrame?.url;
+      const senderUrl = ctx.event?.senderFrame?.url;
       if (!senderUrl || !isRecoveryPageUrl(senderUrl)) {
         throw new Error(
           `recovery:export-diagnostics rejected: untrusted sender (url=${senderUrl ?? "unknown"})`
@@ -82,7 +82,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const parentWin =
-        BrowserWindow.fromWebContents(ctx.event.sender) ??
+        (ctx.event && BrowserWindow.fromWebContents(ctx.event.sender)) ??
         deps.windowRegistry?.getPrimary()?.browserWindow ??
         deps.mainWindow;
       const dialogOpts = {
@@ -105,7 +105,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
 
   handlers.push(
     typedHandleWithContext(CHANNELS.RECOVERY_OPEN_LOGS, async (ctx): Promise<void> => {
-      const senderUrl = ctx.event.senderFrame?.url;
+      const senderUrl = ctx.event?.senderFrame?.url;
       if (!senderUrl || !isRecoveryPageUrl(senderUrl)) {
         throw new Error(
           `recovery:open-logs rejected: untrusted sender (url=${senderUrl ?? "unknown"})`

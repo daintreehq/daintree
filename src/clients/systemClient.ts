@@ -1,3 +1,4 @@
+import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
 /**
  * @example
  * ```typescript
@@ -30,13 +31,14 @@ export const systemClient = {
     return window.electron.system.showItemInFolderUnconfined(path);
   },
 
-  openInEditor: (payload: {
+  /** Says so when main copied a remote host's path instead of opening an editor. */
+  openInEditor: async (payload: {
     path: string;
     line?: number;
     col?: number;
     projectId?: string;
   }): Promise<void> => {
-    return window.electron.system.openInEditor(payload);
+    announceOpenInEditorFallback(await window.electron.system.openInEditor(payload));
   },
 
   checkCommand: (command: string): Promise<boolean> => {

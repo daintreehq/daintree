@@ -44,6 +44,11 @@ vi.mock("../../utils.js", () => ({
   typedHandleWithContextValidated: () => () => undefined,
 }));
 
+const localPlugins = vi.hoisted(() => new Set<string>());
+vi.mock("../../../services/PluginService.js", () => ({
+  pluginService: { hasPlugin: (pluginId: string) => localPlugins.has(pluginId) },
+}));
+
 const ADAPTER_ID = "daintree.sveltekit-builder.guest";
 
 function ctx(projectId: string | null): IpcContext {
@@ -52,6 +57,8 @@ function ctx(projectId: string | null): IpcContext {
     webContentsId: 1,
     senderWindow: null,
     projectId,
+    endpoint: {} as IpcContext["endpoint"],
+    client: {} as IpcContext["client"],
   };
 }
 
@@ -230,5 +237,66 @@ describe("sitePreview event routing", () => {
     await push({ kind: "guest-event", projectId: "project-a" }, { subscriberWebContentsId: 1 });
 
     expect(foreign.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("sitePreview plugin presence", () => {
+  const PLUGIN = "daintree.sveltekit-builder";
+  const parity = {
+    isPluginLoadedOnHost: vi.fn(async (_hostId: string, _pluginId: string) => false),
+  };
+
+  async function isPluginEnabled(projectId: string): Promise<boolean> {
+    const { registerSitePreviewHandlers } = await import("../sitePreview.js");
+    const dispose = registerSitePreviewHandlers({});
+    const ask = (
+      captured.deps as {
+        isPluginEnabled?: (pluginId: string, projectId: string) => Promise<boolean>;
+      } | null
+    )?.isPluginEnabled;
+    expect(ask).toBeTypeOf("function");
+    try {
+      return await ask!(PLUGIN, projectId);
+    } finally {
+      dispose();
+    }
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    captured.deps = null;
+    localPlugins.clear();
+    parity.isPluginLoadedOnHost.mockReset();
+    parity.isPluginLoadedOnHost.mockResolvedValue(false);
+    const { _resetRemoteServicesForTest } = await import("../../../remote/runtime.js");
+    _resetRemoteServicesForTest();
+  });
+
+  it("asks this machine's plugin service for a local project", async () => {
+    localPlugins.add(PLUGIN);
+    await expect(isPluginEnabled("project-a")).resolves.toBe(true);
+    expect(parity.isPluginLoadedOnHost).not.toHaveBeenCalled();
+  });
+
+  it("asks the host for a view bound to a remote host, whatever is loaded here", async () => {
+    const { registerRemoteService } = await import("../../../remote/runtime.js");
+    registerRemoteService(
+      "pluginParityClient",
+      parity as unknown as Parameters<typeof registerRemoteService<"pluginParityClient">>[1]
+    );
+    // Disabled here, enabled on the host: the host's answer decides.
+    parity.isPluginLoadedOnHost.mockResolvedValue(true);
+    await expect(isPluginEnabled("studio-01:project-a")).resolves.toBe(true);
+    expect(parity.isPluginLoadedOnHost).toHaveBeenCalledWith("studio-01", PLUGIN);
+
+    // Enabled here, absent on the host: refused.
+    localPlugins.add(PLUGIN);
+    parity.isPluginLoadedOnHost.mockResolvedValue(false);
+    await expect(isPluginEnabled("studio-01:project-a")).resolves.toBe(false);
+  });
+
+  it("refuses a remote-bound view when the remote hosts client isn't running", async () => {
+    localPlugins.add(PLUGIN);
+    await expect(isPluginEnabled("studio-01:project-a")).resolves.toBe(false);
   });
 });

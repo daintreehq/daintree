@@ -113,6 +113,23 @@ npm run test -- --run src/components  # Filter by path
 
 Tests live in `__tests__/` directories adjacent to source. Use Vitest. Mock IPC via `vi.mock()`.
 
+## Remote hosts
+
+Remote Hosts (see [architecture/remote-hosts.md](./architecture/remote-hosts.md)) has an integration harness that runs a Host and a Shell in one process over a real Unix socket, through the real boot wiring, with Electron, the pty-host, the workspace hosts behind the real port broker, the persistent stores, the plugin runtime behind `plugin:invoke`, mDNS and a few stand-in host handlers (`terminal:spawn`, `project:clone-repo`, `app:hydrate`) faked. It needs no ssh, no second machine and no build:
+
+```bash
+npm test -- electron/remote/__tests__/e2e.harness.test.ts   # boot, hydrate, invoke, events, terminals, lease, worktree port, files, uploads, plugins, viewless, reconnect, latency
+npm test -- scripts/__tests__/remoteHostsTreeShake.test.ts  # Windows builds carry only the four core-safe electron/remote files
+```
+
+The tree-shake test bundles every entry `scripts/build-main.mjs` builds (the list is shared through `scripts/main-build-entries.mjs`, so a new worker or plugin entry is checked automatically) with the gate off, and fails if anything under `electron/remote/**` ships except four small core-safe files that core code imports statically: `buildGate.ts` (the runtime gate and baked build commit), `runtime.ts` (the service locator core code reaches remote services through), `pendingHandler.ts` (the typed refusal for frozen but unimplemented remote IPC ops) and `handshakeInfo.ts` (what this process reports about itself in a link handshake). None of them opens a link, dials a host or loads a gated module; every other remote directory is reached only through a direct `if (__DAINTREE_REMOTE_HOSTS__) { await import(...) }`, so a Windows build drops it.
+
+The latency scenario prints one `[remote-harness] keystroke RTT ms {...}` line (idle and loaded p50/p95/p99, bulk and flood throughput) to stdout; compare it before and after any change to the link's lanes, scheduler or framing. Helpers live in `electron/remote/__tests__/harness/`.
+
+### Real SSH end-to-end
+
+`electron/remote/__tests__/ssh.e2e.test.ts` drives the real `SshTransport` and port-forward path through the system `ssh` against a private, user-mode OpenSSH `sshd` on 127.0.0.1 (`harness/privateSshd.ts`), with the real windowless Host runtime behind it. Run it with `DAINTREE_SSH_E2E=1 npx vitest run electron/remote/__tests__/ssh.e2e.test.ts`; without the flag the suite reports as skipped, and with it a failure to start `sshd` fails the run. It needs no root and no Remote Login: host and user keys, `sshd_config`, the client `ssh_config` (passed as `-F`, the only injection), known_hosts and the session's HOME (set with `SetEnv`) all live under one short temp directory the test removes, and it never reads or writes `~/.ssh`. It covers the probe and discovery read, the link over ControlMaster plus `-O forward -L`, terminal I/O with a keystroke RTT line (`[ssh-e2e] keystroke RTT ms over ssh {...}`), killing the master mid-session (reconnect with replay), `-O forward` port forwards and their retirement when the master dies, and teardown in which stopping Remote Hosts closes the master itself, down to no leftover ssh or sshd processes. `attachStdio.ssh.e2e.test.ts` (same flag) runs the sshd with `AllowStreamLocalForwarding no` and connects through the stdio fallback, `<command> --attach-stdio` over the master, with the real bridge module bundled as a Node script standing in for the host's binary. On Linux the host socket goes under `/run/user/<uid>/daintree-e2e-*`, which must exist. To try a real remote machine, turn on Host mode on a machine you can `ssh` into and add it from Settings → Hosts.
+
 ## Debugging
 
 **Renderer**: DevTools (View → Toggle Developer Tools, or the Toggle DevTools command; dev builds only). Console, Network, React DevTools.

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
+import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -14,6 +15,8 @@ import { CHANNELS } from "../../channels.js";
 import { registerEventInspectorHandlers } from "../eventInspector.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { EventRecord } from "../../../../shared/types/index.js";
+import { getIpcDispatcher } from "../../dispatcher.js";
+import type { ClientEndpoint, ClientRef, HostFrame } from "../../endpoint.js";
 
 describe("event inspector subscription", () => {
   let mockEventBuffer: {
@@ -283,5 +286,105 @@ describe("event inspector subscription", () => {
       record1,
       record2,
     ]);
+  });
+  describe("views attached over a link", () => {
+    const REMOTE_CLIENT: ClientRef = {
+      clientId: "client-b",
+      clientName: "greg-mbp",
+      platform: "darwin",
+      kind: "remote",
+    };
+
+    function createRemoteEndpoint() {
+      const closeListeners = new Set<() => void>();
+      let closed = false;
+      const endpoint: ClientEndpoint & { send: Mock<(frame: HostFrame) => void> } = {
+        endpointId: "remote:-3",
+        clientId: "client-b",
+        projectId: "proj-1",
+        kind: "remote-view",
+        handle: -3,
+        send: vi.fn<(frame: HostFrame) => void>(),
+        request: vi.fn(),
+        onClose: (cb) => {
+          closeListeners.add(cb);
+          return { dispose: () => closeListeners.delete(cb) };
+        },
+        isClosed: () => closed,
+      };
+      const close = () => {
+        closed = true;
+        for (const cb of [...closeListeners]) cb();
+      };
+      return { endpoint, close, closeListeners };
+    }
+
+    function linkSend(endpoint: ClientEndpoint, channel: string): Promise<void> {
+      getIpcDispatcher().sendForEndpoint({ endpoint, client: REMOTE_CLIENT }, channel, []);
+      // The dispatcher runs listeners inside the (async) envelope.
+      return Promise.resolve().then(() => undefined);
+    }
+
+    beforeEach(() => {
+      getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+        await call();
+        return wrapSuccess(undefined);
+      });
+    });
+
+    afterEach(() => {
+      getIpcDispatcher().setInvokeEnveloper(null);
+    });
+
+    it("delivers batches to a subscribed endpoint", async () => {
+      const { endpoint } = createRemoteEndpoint();
+      await linkSend(endpoint, CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
+
+      const record = createTestRecord("remote-1");
+      expect(onRecordCallback).not.toBeNull();
+      onRecordCallback!(record);
+      vi.advanceTimersByTime(50);
+
+      expect(endpoint.send).toHaveBeenCalledWith({
+        type: "event",
+        channel: CHANNELS.EVENT_INSPECTOR_EVENT_BATCH,
+        args: [[record]],
+      });
+    });
+
+    it("releases the event buffer when the endpoint unsubscribes", async () => {
+      const { endpoint, closeListeners } = createRemoteEndpoint();
+      await linkSend(endpoint, CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
+      await linkSend(endpoint, CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE);
+
+      expect(onRecordUnsubscribe).toHaveBeenCalled();
+      expect(closeListeners.size).toBe(0);
+    });
+
+    it("drops the subscription when the endpoint closes", async () => {
+      const { endpoint, close } = createRemoteEndpoint();
+      await linkSend(endpoint, CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
+
+      close();
+
+      expect(onRecordUnsubscribe).toHaveBeenCalled();
+    });
+
+    it("keeps local and remote subscribers apart", async () => {
+      const { endpoint } = createRemoteEndpoint();
+      const sender = createMockSender();
+      getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE)!({ sender });
+      await linkSend(endpoint, CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
+
+      await linkSend(endpoint, CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE);
+      expect(onRecordUnsubscribe).not.toHaveBeenCalled();
+
+      const record = createTestRecord("local-only");
+      onRecordCallback!(record);
+      vi.advanceTimersByTime(50);
+
+      expect(sender.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, [record]);
+      expect(endpoint.send).not.toHaveBeenCalled();
+    });
   });
 });

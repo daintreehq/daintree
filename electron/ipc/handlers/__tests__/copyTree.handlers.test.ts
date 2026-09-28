@@ -30,7 +30,9 @@ interface TestProjectViewManager {
 }
 
 const browserWindowMock = vi.hoisted(() => ({
-  fromWebContents: vi.fn<() => { id: number; isDestroyed: () => boolean } | null>(() => null),
+  fromWebContents: vi.fn<
+    () => { id: number; isDestroyed: () => boolean; webContents?: unknown } | null
+  >(() => null),
   getAllWindows: vi.fn(() => []),
 }));
 
@@ -76,7 +78,16 @@ vi.mock("../../../window/windowRef.js", () => ({
 
 import type { CopyTreeHistoryAppendInput } from "../../../../shared/types/ipc/copyTreeHistory.js";
 import { CHANNELS } from "../../channels.js";
+import {
+  OperationRegistry,
+  _resetOperationRegistryForTest,
+} from "../../../services/operations/index.js";
+import type { OperationsEvent } from "../../../../shared/types/ipc/operations.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { getIpcDispatcher } from "../../dispatcher.js";
+import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
+import type { ClientEndpoint } from "../../endpoint.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { contextDir, _resetReservedPathsForTests } from "../../../services/copyTreeOutputFile.js";
 import {
   registerCopyTreeHandlers,
@@ -1103,6 +1114,193 @@ describe("file-backed generation", () => {
     expect(await nodeFs.readFile(result.filePath as string, "utf8")).toBe(
       "<files>clipboard me</files>"
     );
+  });
+  describe("bundle grants for a remote Shell", () => {
+    function remoteEndpoint(): ClientEndpoint {
+      return {
+        endpointId: "remote:-1",
+        clientId: "client--1",
+        projectId: "proj-file-backed",
+        kind: "remote-view",
+        handle: -1,
+        send: vi.fn(),
+        request: vi.fn(),
+        onClose: () => ({ dispose: () => undefined }),
+        isClosed: () => false,
+      } as unknown as ClientEndpoint;
+    }
+
+    async function generateFrom(endpoint: ClientEndpoint, payload: Record<string, unknown>) {
+      return getIpcDispatcher().invokeForEndpoint(
+        {
+          endpoint,
+          client: {
+            clientId: endpoint.clientId,
+            clientName: "b",
+            platform: "darwin",
+            kind: "remote",
+          },
+        },
+        CHANNELS.COPYTREE_GENERATE,
+        [payload]
+      );
+    }
+
+    beforeEach(() => {
+      _resetRemoteServicesForTest();
+      getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) =>
+        wrapSuccess(await call())
+      );
+    });
+
+    afterEach(() => {
+      getIpcDispatcher().setInvokeEnveloper(null);
+      _resetRemoteServicesForTest();
+    });
+
+    it("grants the generated bundle to the remote endpoint that asked for it", async () => {
+      makeService("<files/>");
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+      const endpoint = remoteEndpoint();
+
+      const envelope = (await generateFrom(endpoint, { worktreeId: "wt-1" })) as {
+        ok: boolean;
+        data: { filePath: string };
+      };
+
+      expect(envelope.ok).toBe(true);
+      expect(envelope.data.filePath).toBe(lastOutputPath);
+      expect(recordBundle).toHaveBeenCalledTimes(1);
+      expect(recordBundle).toHaveBeenCalledWith(endpoint, lastOutputPath);
+    });
+
+    it("grants nothing for a failed run", async () => {
+      makeService("<files/>", { error: "boom" });
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+
+      await generateFrom(remoteEndpoint(), { worktreeId: "wt-1" });
+
+      expect(recordBundle).not.toHaveBeenCalled();
+    });
+
+    it("grants nothing to a local view", async () => {
+      makeService("<files/>");
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+
+      const result = (await getInvokeHandler(CHANNELS.COPYTREE_GENERATE)(mockSender, {
+        worktreeId: "wt-1",
+      })) as Record<string, unknown>;
+
+      expect(result.filePath).toBe(lastOutputPath);
+      expect(recordBundle).not.toHaveBeenCalled();
+    });
+
+    it("still answers a remote caller when the host's file service isn't running", async () => {
+      makeService("<files/>");
+      const envelope = (await generateFrom(remoteEndpoint(), { worktreeId: "wt-1" })) as {
+        ok: boolean;
+        data: { filePath: string };
+      };
+      expect(envelope.data.filePath).toBe(lastOutputPath);
+    });
+  });
+
+  it("runs a named generate once and answers a retry from the operation record", async () => {
+    const events: OperationsEvent[] = [];
+    const registry = new OperationRegistry({ emit: (_projectId, event) => events.push(event) });
+    _resetOperationRegistryForTest(registry);
+    const generateContext = makeService("<files/>");
+    // No sender window: progress takes the broadcast path this suite can observe.
+    browserWindowMock.fromWebContents.mockReturnValue(null);
+    const writeBundle = generateContext.getMockImplementation()!;
+    generateContext.mockImplementationOnce(async (root, options, onProgress, outputPath) => {
+      (onProgress as (p: { stage: string; progress: number; message: string }) => void)({
+        stage: "load",
+        progress: 0.5,
+        message: "Loading",
+      });
+      return writeBundle(root, options, onProgress, outputPath);
+    });
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const first = (await handler(mockSender, { worktreeId: "wt-1", opId: "ct-1" })) as Record<
+      string,
+      unknown
+    >;
+    const retry = (await handler(mockSender, { worktreeId: "wt-1", opId: "ct-1" })) as Record<
+      string,
+      unknown
+    >;
+
+    expect(generateContext).toHaveBeenCalledTimes(1);
+    expect(retry.filePath).toBe(first.filePath);
+    expect(events).toContainEqual({
+      type: "progress",
+      progress: expect.objectContaining({ opId: "ct-1", kind: "copytree", stage: "load" }),
+    });
+    // The record keeps a summary, never the bundle.
+    expect(registry.status("ct-1")).toMatchObject({
+      status: "succeeded",
+      result: { fileCount: 2, filePath: first.filePath },
+    });
+  });
+
+  it("generates every time for callers that name no operation, recording nothing", async () => {
+    const events: OperationsEvent[] = [];
+    const registry = new OperationRegistry({ emit: (_projectId, event) => events.push(event) });
+    _resetOperationRegistryForTest(registry);
+    const generateContext = makeService("<files/>");
+    const send = vi.fn();
+    browserWindowMock.fromWebContents.mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+      webContents: { send, isDestroyed: () => false },
+    });
+    const writeBundle = generateContext.getMockImplementation()!;
+    generateContext.mockImplementation(async (root, options, onProgress, outputPath) => {
+      (onProgress as (p: { stage: string; progress: number; message: string }) => void)({
+        stage: "load",
+        progress: 0.5,
+        message: "Loading",
+      });
+      return writeBundle(root, options, onProgress, outputPath);
+    });
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-1" });
+    await handler(mockSender, { worktreeId: "wt-1" });
+
+    expect(generateContext).toHaveBeenCalledTimes(2);
+    expect(registry.list()).toEqual([]);
+    expect(events).toEqual([]);
+    // Progress still reaches the renderer, without an operation stamp.
+    const progress = send.mock.calls
+      .filter(([channel]) => channel === CHANNELS.COPYTREE_PROGRESS)
+      .map(([, event]) => event as Record<string, unknown>);
+    expect(progress.length).toBeGreaterThan(0);
+    for (const event of progress) expect(event).not.toHaveProperty("opId");
+  });
+
+  it.each([
+    [CHANNELS.COPYTREE_GENERATE, { worktreeId: "wt-1" }],
+    [CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId: "wt-1" }],
+    [CHANNELS.COPYTREE_INJECT, { worktreeId: "wt-1", terminalId: "term-1" }],
+  ])("%s rejects a malformed opId before any work", async (channel, payload) => {
+    const registry = new OperationRegistry();
+    _resetOperationRegistryForTest(registry);
+    const generateContext = makeService("<files/>");
+    const handler = getInvokeHandler(channel);
+
+    for (const opId of ["has space", "", "x".repeat(129), 7, null]) {
+      await expect(handler(mockSender, { ...payload, opId })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+    }
+    expect(generateContext).not.toHaveBeenCalled();
+    expect(registry.list()).toEqual([]);
   });
 });
 

@@ -89,7 +89,7 @@ export interface ManagedTerminal {
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;
-  exitSubscribers: Set<(exitCode: number) => void>;
+  exitSubscribers: Set<(exitCode: number | null) => void>;
   parserHandler?: { dispose: () => void };
   getRefreshTier: RefreshTierProvider;
   keyHandlerInstalled: boolean;
@@ -335,6 +335,9 @@ export interface ManagedTerminal {
     data: string | Uint8Array;
     chunkCount: number;
     range?: StreamRange;
+    // The port-ack generation the chunk arrived under, so a remote reset
+    // during the restore can retire it (see terminalClient).
+    ackGeneration?: number;
   }>;
   // Stream offset the last live snapshot restore covered (#12791): output
   // ending at or before it is already on screen, so the write path acks it

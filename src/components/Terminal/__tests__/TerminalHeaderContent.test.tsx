@@ -123,6 +123,15 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
     expect(badge.textContent).toContain("[exit 0]");
   });
 
+  it("shows a bare exited badge when no exit code was seen", () => {
+    mockTerminal = { id: "t1" };
+
+    render(<TerminalHeaderContent id="t1" isExited={true} exitCode={null} />);
+
+    const badge = screen.getByRole("status");
+    expect(badge.textContent).toBe("[exited]");
+  });
+
   it("renders the cost readout for a settled agent with a session cost", () => {
     mockTerminal = { id: "t1", sessionCost: 0.42, sessionTokens: 12_000 };
 

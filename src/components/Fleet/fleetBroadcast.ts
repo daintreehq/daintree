@@ -2,6 +2,7 @@ import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStor
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
+import { getArmedCrossHostTargets } from "./crossHostFleet";
 
 export const FLEET_BROADCAST_HISTORY_KEY = "fleet-broadcast" as const;
 
@@ -90,11 +91,13 @@ export function getFleetBroadcastByteLength(text: string): number {
 /**
  * Re-evaluate arming set against live panel state so we never submit to a
  * trashed, backgrounded, or exited terminal that was armed earlier.
- * Preserves the `armOrder` ordering from fleetArmingStore.
+ * Preserves the `armOrder` ordering from fleetArmingStore. Agents armed on
+ * other hosts follow, under their host-qualified ids.
  */
 export function resolveFleetBroadcastTargetIds(): string[] {
   const { armOrder, armedIds } = useFleetArmingStore.getState();
-  if (armedIds.size === 0) return [];
+  const crossHost = getArmedCrossHostTargets();
+  if (armedIds.size === 0 && crossHost.length === 0) return [];
   const { panelsById } = usePanelStore.getState();
   const out: string[] = [];
   for (const id of armOrder) {
@@ -102,6 +105,7 @@ export function resolveFleetBroadcastTargetIds(): string[] {
     const panel = panelsById[id];
     if (isFleetArmEligible(panel)) out.push(id);
   }
+  for (const target of crossHost) out.push(target.key);
   return out;
 }
 

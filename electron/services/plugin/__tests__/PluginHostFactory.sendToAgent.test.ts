@@ -249,14 +249,14 @@ describe("host.agents.list", () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     await expect(host.agents.list()).resolves.toEqual([PANE]);
-    expect(h.sendAgentsListToRenderer).toHaveBeenCalledWith(PROJECT_A);
+    expect(h.sendAgentsListToRenderer).toHaveBeenCalledWith(PROJECT_A, PLUGIN_ID);
   });
 
   it("stays ambient for an unbound plugin", async () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
     await host.agents.list();
-    expect(h.sendAgentsListToRenderer).toHaveBeenCalledWith(null);
+    expect(h.sendAgentsListToRenderer).toHaveBeenCalledWith(null, PLUGIN_ID);
   });
 
   it("requires agent:read", async () => {

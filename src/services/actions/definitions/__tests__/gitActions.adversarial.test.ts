@@ -98,7 +98,7 @@ function makeCommit(index: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setupActions(): {
+function setupActions(windowExtras: Record<string, unknown> = {}): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
   runParsed: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
   git: GitStub;
@@ -118,7 +118,7 @@ function setupActions(): {
     if (!factory) throw new Error(`missing ${id}`);
     const def = factory() as AnyActionDefinition;
     Object.defineProperty(globalThis, "window", {
-      value: { electron: { git } },
+      value: { electron: { git }, ...windowExtras },
       configurable: true,
       writable: true,
     });
@@ -448,6 +448,25 @@ describe("gitActions adversarial", () => {
     await resolvePushConfirm(true);
     await p;
     expect(git.push).toHaveBeenCalledWith("/repo", true);
+  });
+
+  it("git.push names the push as an operation only in a remote-bound view", async () => {
+    const remote = setupActions({ __DAINTREE_HOST_ID__: { id: "build-box" } });
+    const p = remote.run("git.push", { cwd: "/repo", setUpstream: true });
+    await resolvePushConfirm(true);
+    await p;
+    expect(remote.git.push).toHaveBeenCalledWith(
+      "/repo",
+      true,
+      expect.stringMatching(/^[0-9a-f-]{36}$/)
+    );
+
+    // A view on this machine's own host takes the untracked path.
+    const local = setupActions({ __DAINTREE_HOST_ID__: { id: "local" } });
+    const q = local.run("git.push", { cwd: "/repo", setUpstream: true });
+    await resolvePushConfirm(true);
+    await q;
+    expect(local.git.push).toHaveBeenCalledWith("/repo", true);
   });
 
   it("git.push does not reach IPC when the confirm gate is declined", async () => {

@@ -93,7 +93,10 @@ import {
 } from "@/store/forgeProviderHealthStore";
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
+import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
 import { forgeClient } from "@/clients/forgeClient";
+import { mintRemoteOperationId } from "@/clients/operationsClient";
+import { runHostOperation } from "@/hooks/useHostConnection";
 import { actionService } from "@/services/ActionService";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -1245,7 +1248,7 @@ export function ReviewHubContent({
         if (typeof line === "number" && Number.isFinite(line) && line > 0) {
           payload.line = line;
         }
-        await window.electron.system.openInEditor(payload);
+        announceOpenInEditorFallback(await window.electron.system.openInEditor(payload));
       } catch (err) {
         setActionError({
           title: "Couldn't open file in editor",
@@ -1332,7 +1335,15 @@ export function ReviewHubContent({
     // state nobody has observed since.
     useGitForcePushStore.getState().clearRecovery(worktreePath);
     try {
-      await window.electron.git.push(worktreePath);
+      const opId = mintRemoteOperationId();
+      await runHostOperation(
+        opId,
+        () =>
+          opId
+            ? window.electron.git.push(worktreePath, undefined, opId)
+            : window.electron.git.push(worktreePath),
+        { fromResult: () => undefined }
+      );
       setPushError(null);
       setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
     } catch (err) {

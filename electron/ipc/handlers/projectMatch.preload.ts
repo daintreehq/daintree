@@ -1,0 +1,27 @@
+import type { IpcInvokeMap } from "../../types/index.js";
+
+export const PROJECT_MATCH_METHOD_CHANNELS = {
+  find: "project-match:find",
+  scan: "project-match:scan",
+  findWorktreeForBranch: "project-match:find-worktree-for-branch",
+  takePendingSetup: "project-match:take-pending-setup",
+} as const satisfies Record<string, keyof IpcInvokeMap>;
+
+type Methods = typeof PROJECT_MATCH_METHOD_CHANNELS;
+
+export type ProjectMatchPreloadBindings = {
+  [M in keyof Methods]: (
+    ...args: IpcInvokeMap[Methods[M]]["args"]
+  ) => Promise<IpcInvokeMap[Methods[M]]["result"]>;
+};
+
+type Invoker = (channel: string, ...args: unknown[]) => Promise<unknown>;
+
+export function buildProjectMatchPreloadBindings(invoke: Invoker): ProjectMatchPreloadBindings {
+  const out: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+  for (const method of Object.keys(PROJECT_MATCH_METHOD_CHANNELS) as Array<keyof Methods>) {
+    const channel = PROJECT_MATCH_METHOD_CHANNELS[method];
+    out[method as string] = (...args) => invoke(channel, ...args);
+  }
+  return out as unknown as ProjectMatchPreloadBindings;
+}

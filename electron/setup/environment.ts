@@ -41,6 +41,7 @@ import {
   shouldRetryGpuAfterUpdate,
 } from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { isAttachStdioRequested, shouldUseHeadlessOzone } from "../boot/hostModeLaunch.js";
 import {
   e2eCrashDumpsDir,
   isDemoMode,
@@ -156,9 +157,27 @@ export const gpuAngleFallbackActive = fs.existsSync(gpuAngleFallbackFlagPath);
 // Chromium feature flags: memory reclamation + platform-specific features
 const enabledFeatures = ["PartitionAllocMemoryReclaimer"];
 
+// A windowless Host on a box with no display server: Ozone's auto-detection
+// aborts without X11 or Wayland, so the headless backend is chosen explicitly,
+// with the GPU off since nothing is ever composited. Only when Host mode is
+// requested — a normal launch without a display should still fail loudly.
+export const headlessOzone = shouldUseHeadlessOzone({
+  platform: process.platform,
+  argv: process.argv,
+  env: process.env,
+});
+
 // Enable native Wayland support on Linux (Electron < 38)
 // Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
-if (process.platform === "linux") {
+if (headlessOzone) {
+  app.commandLine.appendSwitch("ozone-platform", "headless");
+  app.commandLine.appendSwitch("disable-gpu");
+  if (!gpuHardwareAccelerationDisabled) app.disableHardwareAcceleration();
+  // `--attach-stdio`'s stdout is the link: its diagnostics go to stderr.
+  (isAttachStdioRequested(process.argv) ? console.error : console.log)(
+    "[GPU] Headless Host mode: ozone-platform=headless, GPU disabled"
+  );
+} else if (process.platform === "linux") {
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
   if (process.env.XDG_SESSION_TYPE === "wayland") {
     enabledFeatures.push("WaylandWindowDecorations");
@@ -747,6 +766,11 @@ export function clearPendingOpenDirPaths(): void {
  */
 export function setOpenDirConsumer(consumer: ((dirPath: string) => void) | null): void {
   _openDirConsumer = consumer;
+}
+
+/** False until a window has set up and can route external folder opens itself. */
+export function hasOpenDirConsumer(): boolean {
+  return _openDirConsumer !== null;
 }
 
 /** Queue a directory for the first window's drain; dedupes bursts. */

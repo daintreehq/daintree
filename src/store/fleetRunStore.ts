@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { usePanelStore } from "@/store/panelStore";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isTerminalFleetEligible } from "@/store/fleetEligibility";
@@ -56,6 +56,55 @@ export interface FleetRunTarget {
   settled: boolean;
   /** Panel disappeared (closed/trashed/lost PTY) while the run was live. */
   gone: boolean;
+  /**
+   * Set for an agent on another host. It has no panel here, so its state is
+   * only what that host reports when asked; until it has, the target is
+   * submitted but unobserved, and neither done nor working.
+   */
+  host?: FleetRunHostTarget;
+}
+
+export interface FleetRunHostTarget {
+  hostId: string;
+  hostName: string;
+  /** The host's own id for the terminal. */
+  terminalId: string;
+  /** The host has reported this agent since the submit. */
+  observed: boolean;
+  /** The host reported it working or directing at least once since the submit. */
+  sawBusy: boolean;
+  /** When the host accepted the submit; the settle grace runs from here. */
+  sentAt?: number;
+}
+
+/**
+ * Sent to another host's agent with nothing yet seen of it taking the prompt:
+ * the host hasn't reported it, or reported it at rest before it could have
+ * started. Such a target reads as "sent", neither working nor done.
+ */
+export function isAwaitingHost(t: FleetRunTarget): boolean {
+  if (!t.host || t.submission !== "sent") return false;
+  if (!t.host.observed) return true;
+  return !t.settled && !isBusyState(t.agentState);
+}
+
+/** How often a watching run asks each host about its agents. */
+export const FLEET_HOST_OBSERVE_INTERVAL_MS = 5_000;
+/**
+ * A host's agent reported at rest this soon after the submit may simply not
+ * have started on the prompt yet, so it settles only once seen busy or after this.
+ */
+export const FLEET_HOST_SETTLE_GRACE_MS = 10_000;
+/** After this, a host that never answered stops being asked; its targets stay unobserved. */
+export const FLEET_HOST_OBSERVE_LIMIT_MS = 30 * 60_000;
+
+/** The most agents one host lists (its `MAX_FLEET_TARGETS`); a list this long may be cut short. */
+export const FLEET_HOST_LIST_LIMIT = 500;
+
+/** An agent state as another host reported it for one of its terminals. */
+export interface FleetHostObservation {
+  terminalId: string;
+  agentState: AgentState | null;
 }
 
 export interface FleetRun {
@@ -80,6 +129,8 @@ export interface FleetRunCounts {
   waiting: number;
   /** Sent targets settled anywhere else (completed/exited/idle/gone). */
   done: number;
+  /** Sent to another host's agent with nothing yet seen of it taking the prompt (`isAwaitingHost`). */
+  unobserved: number;
 }
 
 export function summarizeFleetRun(run: FleetRun): FleetRunCounts {
@@ -91,6 +142,7 @@ export function summarizeFleetRun(run: FleetRun): FleetRunCounts {
     working: 0,
     waiting: 0,
     done: 0,
+    unobserved: 0,
   };
   for (const t of run.targets) {
     if (t.submission === "failed") {
@@ -102,7 +154,9 @@ export function summarizeFleetRun(run: FleetRun): FleetRunCounts {
       continue;
     }
     counts.sent += 1;
-    if (!t.settled) {
+    if (isAwaitingHost(t)) {
+      counts.unobserved += 1;
+    } else if (!t.settled) {
       counts.working += 1;
     } else if (t.agentState === "waiting" && !t.gone) {
       counts.waiting += 1;
@@ -134,6 +188,20 @@ interface FleetRunState {
    * Called by `subscribeFleetRunWatcher` on panel-store changes.
    */
   reconcile: () => void;
+  /**
+   * Fold what `hostId` reported about its agents into the watching run. A
+   * target absent from a complete report is no longer an agent run there
+   * (the host lists every one it has), so it settles as gone; absence from a
+   * report the host cut short at its cap says nothing.
+   */
+  observeHost: (
+    hostId: string,
+    observations: FleetHostObservation[],
+    at: number,
+    complete?: boolean
+  ) => void;
+  /** Stop waiting on hosts that never reported: their targets settle unobserved. */
+  endHostObservation: () => void;
   /** Drop a finalized run from the UI. No-op while a run is still in flight. */
   dismiss: () => void;
   /** Test-only full reset. */
@@ -149,6 +217,25 @@ function isBusyState(state: AgentState | null): boolean {
 }
 
 function snapshotTarget(terminalId: string): FleetRunTarget {
+  const remote = useFleetArmingStore.getState().crossHostTargets.find((t) => t.key === terminalId);
+  if (remote) {
+    return {
+      terminalId,
+      title: `${remote.title} · ${remote.hostName}`,
+      worktreeId: null,
+      submission: "pending",
+      agentState: null,
+      settled: false,
+      gone: false,
+      host: {
+        hostId: remote.hostId,
+        hostName: remote.hostName,
+        terminalId: remote.terminalId,
+        observed: false,
+        sawBusy: false,
+      },
+    };
+  }
   const panel = getNarrowPanel(usePanelStore.getState().panelsById, terminalId);
   return {
     terminalId,
@@ -168,6 +255,9 @@ function snapshotTarget(terminalId: string): FleetRunTarget {
  */
 function refreshTarget(target: FleetRunTarget): FleetRunTarget {
   if (target.submission !== "sent") return target;
+  // Another host's agent has no panel here: its absence says nothing, and only
+  // that host's own reports (`observeHost`) move it.
+  if (target.host) return target;
   const panel = getNarrowPanel(usePanelStore.getState().panelsById, target.terminalId);
   if (!isTerminalFleetEligible(panel)) {
     if (target.gone && target.settled) return target;
@@ -258,7 +348,9 @@ function foldSubmissionOutcomes(
       return { ...target, submission: "skipped" as const, settled: true };
     }
     if (outcome.status === "fulfilled") {
-      return { ...target, submission: "sent" as const };
+      const sent: FleetRunTarget = { ...target, submission: "sent" as const };
+      if (target.host) sent.host = { ...target.host, sentAt: Date.now() };
+      return sent;
     }
     const failed: FleetRunTarget = {
       ...target,
@@ -271,6 +363,21 @@ function foldSubmissionOutcomes(
     }
     return failed;
   });
+}
+
+/**
+ * The watching run with refreshed targets, finalized as `completed` once every
+ * target has settled. A run that finishes after the user already exited fleet
+ * mode records its history and announces, but leaves no summary line —
+ * re-arming a fresh fleet later must not resurface a stale "Run finished".
+ */
+function advanceWatchingRun(run: FleetRun, targets: FleetRunTarget[]): FleetRun | null {
+  if (!targets.every((t) => t.settled)) return { ...run, targets };
+  const finalized = finalizeRun({ ...run, targets }, "completed");
+  const counts = summarizeFleetRun(finalized);
+  const waiting = counts.waiting > 0 ? ` — ${counts.waiting} waiting for input` : "";
+  useAnnouncerStore.getState().announce(`Fleet run finished${waiting}`, "polite");
+  return selectFleetMemberCount(useFleetArmingStore.getState()) === 0 ? null : finalized;
 }
 
 /**
@@ -371,19 +478,48 @@ export const useFleetRunStore = create<FleetRunState>((set, get) => ({
       return next;
     });
     if (!changed) return;
-    if (targets.every((t) => t.settled)) {
-      const finalized = finalizeRun({ ...run, targets }, "completed");
-      // A run that finishes after the user already exited fleet mode records
-      // its history and announces, but leaves no summary line — re-arming a
-      // fresh fleet later must not resurface a stale "Run finished".
-      const fleetDrained = useFleetArmingStore.getState().armedIds.size === 0;
-      set({ run: fleetDrained ? null : finalized });
-      const counts = summarizeFleetRun(finalized);
-      const waiting = counts.waiting > 0 ? ` — ${counts.waiting} waiting for input` : "";
-      useAnnouncerStore.getState().announce(`Fleet run finished${waiting}`, "polite");
-      return;
-    }
-    set({ run: { ...run, targets } });
+    set({ run: advanceWatchingRun(run, targets) });
+  },
+
+  observeHost: (hostId, observations, at, complete = true) => {
+    const run = get().run;
+    if (!run || run.status !== "watching") return;
+    const reported = new Map(observations.map((o) => [o.terminalId, o.agentState]));
+    let changed = false;
+    const targets = run.targets.map((target) => {
+      const host = target.host;
+      if (!host || host.hostId !== hostId || target.submission !== "sent" || target.settled) {
+        return target;
+      }
+      if (!reported.has(host.terminalId)) {
+        if (!complete) return target;
+        changed = true;
+        return { ...target, gone: true, settled: true, host: { ...host, observed: true } };
+      }
+      changed = true;
+      const agentState = reported.get(host.terminalId) ?? null;
+      const busy = isBusyState(agentState);
+      const sawBusy = host.sawBusy || busy;
+      const sentAt = host.sentAt ?? run.startedAt;
+      const settled = !busy && (sawBusy || at - sentAt >= FLEET_HOST_SETTLE_GRACE_MS);
+      return { ...target, agentState, settled, host: { ...host, observed: true, sawBusy } };
+    });
+    if (!changed) return;
+    set({ run: advanceWatchingRun(run, targets) });
+  },
+
+  endHostObservation: () => {
+    const run = get().run;
+    if (!run || run.status !== "watching") return;
+    let changed = false;
+    const targets = run.targets.map((target) => {
+      if (!target.host || target.submission !== "sent" || target.settled) return target;
+      changed = true;
+      // What was last seen is not how it ended: the count says "sent", not done.
+      return { ...target, settled: true, host: { ...target.host, observed: false } };
+    });
+    if (!changed) return;
+    set({ run: advanceWatchingRun(run, targets) });
   },
 
   dismiss: () => {
@@ -413,7 +549,7 @@ export const useFleetRunStore = create<FleetRunState>((set, get) => ({
  */
 export function subscribeFleetRunWatcher(): () => void {
   useFleetRunStore.getState().reconcile();
-  if (useFleetArmingStore.getState().armedIds.size === 0) {
+  if (selectFleetMemberCount(useFleetArmingStore.getState()) === 0) {
     useFleetRunStore.getState().dismiss();
   }
 
@@ -424,16 +560,89 @@ export function subscribeFleetRunWatcher(): () => void {
     useFleetRunStore.getState().reconcile();
   });
 
-  let prevArmed = useFleetArmingStore.getState().armedIds;
+  let prevMembers = selectFleetMemberCount(useFleetArmingStore.getState());
   const unsubscribeArming = useFleetArmingStore.subscribe((state) => {
-    if (state.armedIds === prevArmed) return;
-    const drained = prevArmed.size > 0 && state.armedIds.size === 0;
-    prevArmed = state.armedIds;
+    const members = selectFleetMemberCount(state);
+    const drained = prevMembers > 0 && members === 0;
+    prevMembers = members;
     if (drained) useFleetRunStore.getState().dismiss();
   });
+
+  const stopObservingHosts = subscribeFleetHostObservation();
 
   return () => {
     unsubscribePanels();
     unsubscribeArming();
+    stopObservingHosts();
+  };
+}
+
+/** Hosts with agents a watching run sent to and still waits on. */
+function hostsAwaitingObservation(run: FleetRun | null): string[] {
+  if (!run || run.status !== "watching") return [];
+  const hosts = new Set<string>();
+  for (const t of run.targets) {
+    if (t.host && t.submission === "sent" && !t.settled) hosts.add(t.host.hostId);
+  }
+  return [...hosts];
+}
+
+/**
+ * While a watching run waits on agents on other hosts, ask each of those hosts
+ * for its agents' states and fold the answers in. A host that can't answer
+ * reports nothing, and its targets stay unobserved. Idle for a run with only
+ * this view's panes, so nothing is asked of any host unless one was sent to.
+ */
+function subscribeFleetHostObservation(): () => void {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const inFlight = new Set<string>();
+
+  const poll = (): void => {
+    const run = useFleetRunStore.getState().run;
+    if (!run) return;
+    if (Date.now() - run.startedAt >= FLEET_HOST_OBSERVE_LIMIT_MS) {
+      useFleetRunStore.getState().endHostObservation();
+      return;
+    }
+    const list = window.electron?.hostMetrics?.listFleetTargets;
+    if (!list) return;
+    const runId = run.runId;
+    for (const hostId of hostsAwaitingObservation(run)) {
+      if (inFlight.has(hostId)) continue;
+      inFlight.add(hostId);
+      list({ hostId })
+        .then(({ targets, complete }) => {
+          if (useFleetRunStore.getState().run?.runId !== runId) return;
+          // A degraded or capped read can omit a live agent: only a complete one says it's gone.
+          useFleetRunStore.getState().observeHost(
+            hostId,
+            targets.map((t) => ({ terminalId: t.terminalId, agentState: t.agentState })),
+            Date.now(),
+            complete && targets.length < FLEET_HOST_LIST_LIMIT
+          );
+        })
+        .catch(() => {
+          // No answer is no observation: the target stays as sent.
+        })
+        .finally(() => inFlight.delete(hostId));
+    }
+  };
+
+  const sync = (): void => {
+    const waiting = hostsAwaitingObservation(useFleetRunStore.getState().run).length > 0;
+    if (waiting && timer === null) {
+      timer = setInterval(poll, FLEET_HOST_OBSERVE_INTERVAL_MS);
+    } else if (!waiting && timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+
+  sync();
+  const unsubscribe = useFleetRunStore.subscribe(sync);
+  return () => {
+    unsubscribe();
+    if (timer !== null) clearInterval(timer);
+    timer = null;
   };
 }

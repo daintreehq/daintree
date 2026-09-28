@@ -52,7 +52,7 @@ export function registerWhySlowHandlers(deps: HandlerDependencies): () => void {
         WHY_SLOW_METHOD_CHANNELS.reportTerminalRendererDiagnostics,
         REPORT_SCHEMA,
         (ctx, payload): void => {
-          if (ctx.event.sender.isDestroyed()) return;
+          if (ctx.event ? ctx.event.sender.isDestroyed() : ctx.endpoint.isClosed()) return;
           recordRendererTerminalDiagnostics(ctx.webContentsId, payload);
         },
         { withContext: true }

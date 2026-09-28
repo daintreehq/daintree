@@ -65,6 +65,7 @@ vi.mock("../../utils.js", () => ({
           webContentsId: event?.sender?.id ?? 0,
           senderWindow: null,
           projectId: null,
+          endpoint: (event as { endpoint?: unknown } | null | undefined)?.endpoint,
         };
         return (handler as (ctx: unknown, payload: unknown) => unknown)(ctx, parsed.data);
       }
@@ -78,13 +79,52 @@ vi.mock("../../../services/FileSearchService.js", () => ({
 }));
 
 import { ipcMain } from "electron";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { CHANNELS } from "../../channels.js";
 import { registerFilesHandlers } from "../files.js";
 
 describe("files:search handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetRemoteServicesForTest();
     fileSearchServiceMock.search.mockResolvedValue(["README.md"]);
+  });
+
+  function searchHandler() {
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    return calls.find((c) => c[0] === CHANNELS.FILES_SEARCH)?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+  }
+
+  const remote = { endpoint: { kind: "remote-view", projectId: "proj-1" } };
+
+  it("searches a remote view's own project folder", async () => {
+    const holdsRoot = vi.fn(async (_projectId: string, root: string) => root === "/srv/app");
+    registerRemoteService("hostFileService", { holdsRoot } as never);
+
+    await expect(
+      searchHandler()(remote, { cwd: "/srv/app", query: "readme", limit: 5 })
+    ).resolves.toEqual({ files: ["README.md"] });
+    expect(holdsRoot).toHaveBeenCalledWith("proj-1", "/srv/app");
+  });
+
+  it("finds nothing for a remote view naming a folder outside its project", async () => {
+    registerRemoteService("hostFileService", { holdsRoot: vi.fn(async () => false) } as never);
+    await expect(
+      searchHandler()(remote, { cwd: "/etc", query: "passwd", limit: 5 })
+    ).resolves.toEqual({ files: [] });
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for a remote view when the host's file service isn't running", async () => {
+    await expect(
+      searchHandler()(remote, { cwd: "/srv/app", query: "readme", limit: 5 })
+    ).resolves.toEqual({ files: [] });
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
   });
 
   it("returns files for valid payloads", async () => {

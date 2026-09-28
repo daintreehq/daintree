@@ -9,7 +9,8 @@
  * here substitutes a project root, the active worktree, or the previous id for
  * a value that failed validation.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { wrapSuccess } from "../../../../../shared/utils/ipcErrorSerialization.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -53,6 +54,8 @@ import { CHANNELS } from "../../../channels.js";
 import { registerTerminalIOHandlers } from "../io.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../../ipcGuard.js";
 import type { HandlerDependencies } from "../../../types.js";
+import { getIpcDispatcher } from "../../../dispatcher.js";
+import type { ClientEndpoint } from "../../../endpoint.js";
 
 const updateWorktreeId = vi.fn();
 
@@ -61,6 +64,8 @@ function buildDeps(): HandlerDependencies {
     ptyClient: {
       updateWorktreeId,
       getTerminalAsync: vi.fn(() => Promise.resolve(null)),
+      // Main's spawn record for the one run a remote view owns in these specs.
+      getTerminalProjectId: vi.fn((id: string) => (id === "t1" ? "project-remote" : null)),
     },
     windowRegistry: { getByWindowId: () => undefined },
   } as unknown as HandlerDependencies;
@@ -85,6 +90,11 @@ describe("terminal:update-worktree-id", () => {
     markIpcSecurityReady();
     getProjectForWebContentsMock.mockReturnValue("project-a");
     dispose = registerTerminalIOHandlers(buildDeps());
+  });
+
+  afterEach(() => {
+    dispose();
+    getIpcDispatcher().setInvokeEnveloper(null);
   });
 
   it("re-files a run onto a real worktree id", () => {
@@ -172,5 +182,37 @@ describe("terminal:update-worktree-id", () => {
       CHANNELS.TERMINAL_UPDATE_WORKTREE_ID,
       listener
     );
+  });
+  it("attributes a move sent over a link to the endpoint's own project", async () => {
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+      await call();
+      return wrapSuccess(undefined);
+    });
+    const endpoint: ClientEndpoint = {
+      endpointId: "remote:-3",
+      clientId: "client-b",
+      projectId: "project-remote",
+      kind: "remote-view",
+      handle: -3,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    };
+
+    getIpcDispatcher().sendForEndpoint(
+      {
+        endpoint,
+        client: { clientId: "client-b", clientName: "b", platform: "darwin", kind: "remote" },
+      },
+      CHANNELS.TERMINAL_UPDATE_WORKTREE_ID,
+      [{ id: "t1", worktreeId: "/repo/wt" }]
+    );
+
+    await vi.waitFor(() => {
+      expect(updateWorktreeId).toHaveBeenCalledWith("t1", "/repo/wt", "project-remote");
+    });
+    expect(updateWorktreeId).toHaveBeenCalledTimes(1);
+    expect(getProjectForWebContentsMock).not.toHaveBeenCalled();
   });
 });

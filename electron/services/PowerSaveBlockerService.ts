@@ -76,6 +76,7 @@ export class PowerSaveBlockerService {
   private checkpointAt: number | null = null;
   private episode: Episode | null = null;
   private terminalRegistry: TerminalRegistry | null = null;
+  private attachedFrontendCount = 0;
   private unsubscribers: Array<() => void> = [];
   private config: KeepAwakeConfig = readStoredConfig();
   private onBatteryPower = readOnBattery(false);
@@ -162,19 +163,33 @@ export class PowerSaveBlockerService {
     return this.config.enabled ? "on-battery" : "disabled";
   }
 
+  /**
+   * Two independent reasons hold the assertion: agents reported working, and
+   * remote frontends attached to this Host. Only the first is a heuristic, so
+   * only it runs on an episode budget — an attached frontend is a live
+   * connection the link server counts, and it holds for as long as it lasts.
+   */
   private recompute(reason: string): void {
-    const activeCount = this.getActiveCount();
+    const agentsWorking = this.getActiveCount() > 0;
 
-    if (activeCount === 0) {
-      if (this.blockerId !== null) this.stopBlocker("no-working-agents");
-      this.episode = null;
-    } else {
+    if (agentsWorking) {
       this.episode ??= { renewals: 0, remainingMs: SAFETY_TIMEOUT_MS };
+    } else if (this.episode !== null) {
+      this.episode = null;
+      this.clearSafetyTimer();
+    }
+
+    if (!agentsWorking && this.attachedFrontendCount === 0) {
+      if (this.blockerId !== null) this.stopBlocker("no-working-agents");
+    } else {
       const allowed = this.isAllowedByPolicy();
       if (allowed && this.blockerId === null) {
         this.startBlocker(reason);
       } else if (!allowed && this.blockerId !== null) {
         this.suspendBlocker();
+      } else if (this.blockerId !== null && this.episode !== null && this.safetyTimer === null) {
+        // Agents began working while frontends were already holding it.
+        this.armSafetyTimer(this.episode.remainingMs);
       }
     }
 
@@ -182,12 +197,12 @@ export class PowerSaveBlockerService {
   }
 
   private startBlocker(reason: string): void {
-    const episode = this.episode!;
+    const episode = this.episode;
     this.blockerId = powerSaveBlocker.start("prevent-app-suspension");
     console.log(
-      `[PowerSaveBlocker] Started blocker (id=${this.blockerId}, reason=${reason}), active terminals: ${this.getActiveCount()}, renewals used: ${episode.renewals}/${MAX_RENEWALS}`
+      `[PowerSaveBlocker] Started blocker (id=${this.blockerId}, reason=${reason}), active terminals: ${this.getActiveCount()}, attached frontends: ${this.attachedFrontendCount}, renewals used: ${episode?.renewals ?? 0}/${MAX_RENEWALS}`
     );
-    this.armSafetyTimer(episode.remainingMs);
+    if (episode) this.armSafetyTimer(episode.remainingMs);
   }
 
   private armSafetyTimer(delayMs: number): void {
@@ -210,8 +225,8 @@ export class PowerSaveBlockerService {
    * it with no agent event needed — and with no more budget than it left with.
    */
   private suspendBlocker(): void {
-    const episode = this.episode!;
-    if (this.checkpointAt !== null) {
+    const episode = this.episode;
+    if (episode && this.checkpointAt !== null) {
       episode.remainingMs = Math.max(0, this.checkpointAt - performance.now());
     }
     this.stopBlocker(this.releaseReason());
@@ -234,7 +249,8 @@ export class PowerSaveBlockerService {
       console.warn(
         `[PowerSaveBlocker] Safety timeout reached after ${episode.renewals} renewal(s), force-releasing blocker`
       );
-      this.stopBlocker("safety-timeout");
+      // The agents' claim ends here; attached frontends still hold on their own.
+      if (this.attachedFrontendCount === 0) this.stopBlocker("safety-timeout");
       this.terminalStates.clear();
       this.episode = null;
       this.publish();
@@ -307,6 +323,22 @@ export class PowerSaveBlockerService {
     return count;
   }
 
+  getAttachedFrontendCount(): number {
+    return this.attachedFrontendCount;
+  }
+
+  /**
+   * How many remote frontends are attached to this Host right now. Set by the
+   * link server as endpoints open and close; the keep-awake setting and the
+   * battery rule still decide whether the count may hold the machine awake.
+   */
+  setAttachedFrontendCount(count: number): void {
+    const next = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+    if (next === this.attachedFrontendCount) return;
+    this.attachedFrontendCount = next;
+    this.recompute(next > 0 ? "frontends-attached" : "frontends-detached");
+  }
+
   isBlocking(): boolean {
     return this.blockerId !== null;
   }
@@ -345,11 +377,22 @@ export class PowerSaveBlockerService {
     this.terminalStates.clear();
     this.episode = null;
     this.terminalRegistry = null;
+    this.attachedFrontendCount = 0;
   }
 }
 
 let instance: PowerSaveBlockerService | null = null;
 let disposed = false;
+let pendingAttachedFrontendCount: number | null = null;
+
+function createInstance(): PowerSaveBlockerService {
+  const created = new PowerSaveBlockerService();
+  if (pendingAttachedFrontendCount !== null) {
+    created.setAttachedFrontendCount(pendingAttachedFrontendCount);
+    pendingAttachedFrontendCount = null;
+  }
+  return created;
+}
 
 /**
  * For IPC, which can still be answering renderers while shutdown disposes the
@@ -361,14 +404,14 @@ export function getPowerSaveBlockerService(): PowerSaveBlockerService {
     throw new Error("Keep-awake is unavailable while Daintree shuts down");
   }
   if (!instance) {
-    instance = new PowerSaveBlockerService();
+    instance = createInstance();
   }
   return instance;
 }
 
 /**
- * Called from per-window setup (`electron/window/windowServices.ts`), so it runs
- * again for every window the user opens.
+ * Called from per-window setup (`electron/window/windowServices.ts`) and from
+ * the windowless Host runtime, so it runs again for every window the user opens.
  *
  * It used to dispose the existing instance and replace it, and both halves of
  * that hurt. Disposing stops the blocker, and the replacement starts with an
@@ -392,7 +435,7 @@ export function initializePowerSaveBlockerService(
 ): PowerSaveBlockerService {
   disposed = false;
   if (!instance) {
-    instance = new PowerSaveBlockerService();
+    instance = createInstance();
   }
   if (terminalRegistry) {
     instance.setTerminalRegistry(terminalRegistry);
@@ -400,8 +443,24 @@ export function initializePowerSaveBlockerService(
   return instance;
 }
 
+/**
+ * The attached-frontend input for callers that must not depend on the service
+ * having been built yet (the remote link server). A count set before the
+ * service exists is kept and applied when it is; after shutdown has disposed
+ * it, the call is dropped rather than rebuilding it.
+ */
+export function setAttachedFrontendCount(count: number): void {
+  if (disposed) return;
+  if (!instance) {
+    pendingAttachedFrontendCount = count;
+    return;
+  }
+  instance.setAttachedFrontendCount(count);
+}
+
 export function disposePowerSaveBlockerService(): void {
   disposed = true;
+  pendingAttachedFrontendCount = null;
   if (instance) {
     instance.dispose();
     instance = null;

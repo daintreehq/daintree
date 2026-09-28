@@ -42,6 +42,7 @@ import {
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientAppError } from "@/utils/clientAppError";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
 import {
   addToWorktreeIndex,
@@ -50,6 +51,7 @@ import {
 } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
+import { mergeTerminalLaunchEnv } from "@shared/utils/terminalLaunchOptions";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
 import { countPanelsTowardLimit } from "./panelCount";
@@ -1025,14 +1027,8 @@ export const createAddPanelActions = (
               )
             : Promise.resolve({} as Record<string, string>),
         ]).then(
-          ([globalEnvVars, projectEnvVars]) => {
-            const hasGlobal = Object.keys(globalEnvVars).length > 0;
-            const hasProject = Object.keys(projectEnvVars).length > 0;
-            if (hasGlobal || hasProject) {
-              return { ...globalEnvVars, ...projectEnvVars, ...options.env };
-            }
-            return options.env;
-          },
+          ([globalEnvVars, projectEnvVars]) =>
+            mergeTerminalLaunchEnv(globalEnvVars, projectEnvVars, options.env),
           (error: unknown) => {
             logWarn("[TerminalStore] Failed to fetch environment variables", { error });
             return options.env;
@@ -1356,12 +1352,18 @@ export const createAddPanelActions = (
           const current = get().panelsById[id];
           if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
 
+          // A refusal from main (a drive lease, a validation) arrives as an
+          // encoded AppError: its code is not a spawn errno, and the person
+          // reads its userMessage, never the wire prefix.
+          const appError = isClientAppError(error) ? error : null;
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- error shape from node-pty spawn rejection
           const err = error as { code?: string; errno?: number; syscall?: string; path?: string };
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SpawnError construction from caught IPC error
           const spawnError = {
-            code: err.code ?? "UNKNOWN",
-            message: formatErrorMessage(error, "Failed to start terminal process"),
+            code: appError ? "UNKNOWN" : (err.code ?? "UNKNOWN"),
+            message: appError
+              ? (appError.userMessage ?? appError.message)
+              : formatErrorMessage(error, "Failed to start terminal process"),
             errno: err.errno,
             syscall: err.syscall,
             path: err.path,

@@ -25,6 +25,7 @@ vi.mock("@/utils/logger", () => ({
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 const mockedUseGitHubConfigStore = vi.mocked(useGitHubConfigStore);
 const mockedDispatch = vi.mocked(actionService.dispatch);
@@ -273,5 +274,42 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     await waitFor(() => {
       expect(screen.getByText(/token works — not saved yet/i)).toBeTruthy();
     });
+  });
+});
+
+describe("GitHubSettingsTab in a window attached to another host", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installForgeMocks();
+  });
+
+  const renderTab = () =>
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+  it("says GitHub isn't connected on that host, and names it when it is", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    setHostPlatformInfo({ hostName: "studio-01" });
+    try {
+      setupStore();
+      const { unmount } = renderTab();
+      expect(screen.getByText("GitHub isn't connected on studio-01")).toBeTruthy();
+      unmount();
+      setupStore({ config: { hasToken: true, username: "greg" } });
+      renderTab();
+      expect(screen.getByText("Token saved for @greg on studio-01")).toBeTruthy();
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    }
+  });
+
+  it("keeps the local wording in a local window", () => {
+    setupStore();
+    renderTab();
+    expect(screen.getByText("No token saved")).toBeTruthy();
   });
 });

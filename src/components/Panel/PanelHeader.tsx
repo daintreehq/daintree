@@ -83,6 +83,7 @@ import {
   useTabOverflow,
 } from "@/hooks";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
+import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
 import {
@@ -1320,6 +1321,8 @@ function PanelHeaderComponent({
                 </Tooltip>
               </div>
             )}
+
+            {hasPty && <TerminalHostSuffix />}
 
             {hasDangerousFlags && (
               <Tooltip>

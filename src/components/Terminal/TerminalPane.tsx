@@ -110,6 +110,8 @@ import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/ter
 import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
 import { useWorktreeMoveBanner, resolveWorktreeMoveRoute } from "./useWorktreeMoveBanner";
+import { useTerminalInputBlock } from "@/hooks/useHostConnection";
+import { TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -674,6 +676,9 @@ function TerminalPaneComponent({
   // Single gate across waiting → injecting so the banner doesn't flicker on
   // the phase transition; fast injections (<400ms) show nothing.
   const showInjectionBanner = useDohertyGate(isInjecting || isPendingInjection);
+  // Typing is held back while the host link is down or another machine
+  // drives the project; the pane says why rather than swallowing keys.
+  const inputBlock = useTerminalInputBlock();
 
   // Cancel auto-restart if terminal is intentionally trashed/removed
   useEffect(() => {
@@ -1422,6 +1427,9 @@ function TerminalPaneComponent({
       {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
           terminal rather than over it. Nothing for a plain terminal. */}
       {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
+      <BannerSlot visible={inputBlock !== null}>
+        {inputBlock && <TerminalInputBlockBanner block={inputBlock} />}
+      </BannerSlot>
 
       <BannerSlot visible={showRestartError}>
         {restartError && (

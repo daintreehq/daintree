@@ -43,7 +43,8 @@ export interface RestoreControllerDeps {
     id: string,
     data: string | Uint8Array,
     chunkCount: number,
-    range?: StreamRange
+    range?: StreamRange,
+    ackGeneration?: number
   ) => void;
 }
 
@@ -234,7 +235,9 @@ export class TerminalRestoreController {
     const deferred = managed.deferredOutput;
     managed.deferredOutput = [];
     for (const entry of deferred) {
-      if (entry.range) this.deps.writeData(id, entry.data, entry.chunkCount, entry.range);
+      if (entry.ackGeneration !== undefined)
+        this.deps.writeData(id, entry.data, entry.chunkCount, entry.range, entry.ackGeneration);
+      else if (entry.range) this.deps.writeData(id, entry.data, entry.chunkCount, entry.range);
       else this.deps.writeData(id, entry.data, entry.chunkCount);
     }
   }
@@ -514,6 +517,35 @@ export class TerminalRestoreController {
     }
 
     return this.restoreFromSerialized(id, serializedState, captureGeometry, continuation);
+  }
+
+  /**
+   * Apply a host-side reset: repaint from `serializedState`, or clear the screen
+   * when there is nothing to repaint from (null, or an empty mirror).
+   *
+   * Unlike `restoreFetchedState`, an empty state is a real outcome here — the
+   * host said the screen is blank — so it must still supersede any restore in
+   * flight and wipe what is visible. The clear is written as RIS through the
+   * normal restore path rather than a bare `terminal.reset()`: that bumps the
+   * generation (so a paused incremental restore stops before its next chunk),
+   * owns the restore window (so output held under it is released under the new
+   * generation), and queues behind any chunk xterm has already accepted, which a
+   * synchronous reset would let paint on top of the cleared screen.
+   */
+  applyReset(
+    id: string,
+    serializedState: string | null,
+    captureGeometry?: TerminalGeometry
+  ): Promise<boolean> {
+    // A reset starts the host's stream over, so a fence from before it would
+    // swallow the output that follows. A snapshot carrying its own offset sets
+    // a fresh one.
+    const managed = this.deps.getInstance(id);
+    if (managed) managed.streamFence = undefined;
+    if (serializedState) {
+      return this.restoreFetchedState(id, serializedState, captureGeometry);
+    }
+    return Promise.resolve(this.restoreFromSerialized(id, "\x1bc", captureGeometry));
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {

@@ -18,6 +18,19 @@ export interface SystemOpenInEditorPayload {
   col?: number;
 }
 
+/**
+ * What an open-in-editor did instead of opening, when it couldn't. Only a
+ * window attached to a remote host answers this: no editor here could open
+ * the host's file, so its path went to this machine's clipboard. Undefined
+ * means the editor was asked to open it.
+ */
+export interface SystemOpenInEditorFallback {
+  outcome: "copied-host-path";
+  path: string;
+  /** The host's display name, for the notice that says where the path is. */
+  hostName: string;
+}
+
 /** System wake event payload */
 export interface SystemWakePayload {
   /** Duration of sleep in milliseconds */

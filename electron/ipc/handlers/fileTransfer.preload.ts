@@ -1,0 +1,32 @@
+import type { IpcInvokeMap } from "../../types/index.js";
+
+export const FILE_TRANSFER_METHOD_CHANNELS = {
+  uploadLocalFile: "file-transfer:upload-local-file",
+  uploadBytes: "file-transfer:upload-bytes",
+  download: "file-transfer:download",
+  cancel: "file-transfer:cancel",
+  answerHostPick: "file-transfer:answer-host-pick",
+  getPreviewCapability: "file-transfer:get-preview-capability",
+  statLocalFile: "file-transfer:stat-local-file",
+  getUploadPreferences: "file-transfer:get-upload-preferences",
+  setUploadPreferences: "file-transfer:set-upload-preferences",
+} as const satisfies Record<string, keyof IpcInvokeMap>;
+
+type Methods = typeof FILE_TRANSFER_METHOD_CHANNELS;
+
+export type FileTransferPreloadBindings = {
+  [M in keyof Methods]: (
+    ...args: IpcInvokeMap[Methods[M]]["args"]
+  ) => Promise<IpcInvokeMap[Methods[M]]["result"]>;
+};
+
+type Invoker = (channel: string, ...args: unknown[]) => Promise<unknown>;
+
+export function buildFileTransferPreloadBindings(invoke: Invoker): FileTransferPreloadBindings {
+  const out: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+  for (const method of Object.keys(FILE_TRANSFER_METHOD_CHANNELS) as Array<keyof Methods>) {
+    const channel = FILE_TRANSFER_METHOD_CHANNELS[method];
+    out[method as string] = (...args) => invoke(channel, ...args);
+  }
+  return out as unknown as FileTransferPreloadBindings;
+}

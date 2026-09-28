@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseHostChannelResult } from "../../../../shared/types/plugin-sdk-react.js";
 import { getPluginHostBridge } from "./hostBridge.js";
+import { isHostLinkError, toHostCallError } from "./hostErrors.js";
 
 /**
  * Typed companion to `host.registerHandler(channel, schema, handler)` for
@@ -20,6 +21,13 @@ import { getPluginHostBridge } from "./hostBridge.js";
  * resolutions are dropped so a fast click that triggers two invokes never
  * lets the older response overwrite the newer one. `loading` reflects the
  * latest call only.
+ *
+ * In a window attached to another machine the plugin's host code runs there,
+ * and the link can drop. A call that could not reach the host fails with
+ * `HostDisconnectedError`; one whose answer was lost after it was sent fails
+ * with `OutcomeUnknownError` (it may have run). Either sets `disconnected`
+ * until a later call gets through, so a view can show a quiet offline state
+ * instead of an error.
  */
 export function useHostChannel<TArgs = unknown, TResult = unknown>(
   pluginId: string,
@@ -27,6 +35,7 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
 ): UseHostChannelResult<TArgs, TResult> {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [disconnected, setDisconnected] = useState(false);
   const callIdRef = useRef(0);
 
   // Clear loading/error when the channel target changes. The call counter is
@@ -50,11 +59,13 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
         // Drop the result of a superseded call so a slow earlier invoke can't
         // overwrite the latest state.
         if (callId !== callIdRef.current) return undefined;
+        setDisconnected(false);
         return result;
       } catch (err) {
         if (callId !== callIdRef.current) return undefined;
-        const wrapped = err instanceof Error ? err : new Error(String(err));
+        const wrapped = toHostCallError(err);
         setError(wrapped);
+        setDisconnected(isHostLinkError(wrapped));
         return undefined;
       } finally {
         if (callId === callIdRef.current) {
@@ -65,5 +76,5 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
     [pluginId, channel]
   );
 
-  return { invoke, loading, error };
+  return { invoke, loading, error, disconnected };
 }

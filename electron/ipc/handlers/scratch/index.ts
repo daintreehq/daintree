@@ -39,8 +39,17 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
       getAll: op(SCRATCH_METHOD_CHANNELS.getAll, async (): Promise<Scratch[]> =>
         scratchStore.getAllScratches()
       ),
-      getCurrent: op(SCRATCH_METHOD_CHANNELS.getCurrent, async (): Promise<Scratch | null> =>
-        scratchStore.getCurrentScratch()
+      getCurrent: op(
+        SCRATCH_METHOD_CHANNELS.getCurrent,
+        async (ctx): Promise<Scratch | null> => {
+          // A view on a remote Shell shows whatever its own binding names; the
+          // current-scratch pointer describes this machine's windows.
+          if (ctx.endpoint?.kind === "remote-view") {
+            return ctx.projectId ? scratchStore.getScratchById(ctx.projectId) : null;
+          }
+          return scratchStore.getCurrentScratch();
+        },
+        { withContext: true }
       ),
       create: op(SCRATCH_METHOD_CHANNELS.create, async (name?: string): Promise<Scratch> => {
         const scratch = await scratchStore.createScratch(name);
@@ -105,10 +114,20 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             throw new Error(`Scratch not found: ${scratchId}`);
           }
 
+          // A view on a remote Shell: the Shell swaps its own view and tells it
+          // it switched. This machine's windows, pointers and history are not
+          // that view's, so only the scratch's own recency moves here.
+          if (ctx.endpoint?.kind === "remote-view") {
+            const opened = scratchStore.updateScratch(scratchId, { lastOpened: Date.now() });
+            // Other views' scratch lists reorder on it; on-switch is the Shell's to send.
+            broadcastToRenderer(CHANNELS.SCRATCH_UPDATED, opened);
+            return opened;
+          }
+
           // Resolve the per-window ProjectViewManager (the same view manager handles
           // scratches; PVM is keyed on opaque string IDs and has no entity-type
           // assumptions, so a UUID scratch ID coexists with SHA256 project IDs).
-          const senderWindow = getWindowForWebContents(ctx.event.sender);
+          const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
           const pvmCtx = senderWindow
             ? deps.windowRegistry?.getByWindowId(senderWindow.id)
             : undefined;
@@ -189,8 +208,8 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           if (windowId !== undefined && senderWindow && deps.windowRegistry) {
             const wctx = deps.windowRegistry.getByWindowId(senderWindow.id);
             if (wctx) {
-              const targetWc = activeView?.webContents ?? ctx.event.sender;
-              if (!targetWc.isDestroyed()) {
+              const targetWc = activeView?.webContents ?? ctx.event?.sender;
+              if (targetWc && !targetWc.isDestroyed()) {
                 distributePortsToView(senderWindow, wctx, targetWc, deps.ptyClient ?? null);
               }
             }
@@ -212,7 +231,11 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
        */
       saveAsProject: op(
         SCRATCH_METHOD_CHANNELS.saveAsProject,
-        async (ctx, scratchId: string): Promise<ScratchSaveAsProjectResult> => {
+        async (
+          ctx,
+          scratchId: string,
+          remoteDestinationPath?: string
+        ): Promise<ScratchSaveAsProjectResult> => {
           if (typeof scratchId !== "string" || !scratchId) {
             throw new Error("Invalid scratch ID");
           }
@@ -222,21 +245,31 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             throw new Error(`Scratch not found: ${scratchId}`);
           }
 
-          const senderWindow = getWindowForWebContents(ctx.event.sender);
-          const dialogOpts: Electron.OpenDialogOptions = {
-            title: "Save scratch as project",
-            buttonLabel: "Save here",
-            properties: ["openDirectory", "createDirectory"],
-          };
-          const result = senderWindow
-            ? await dialog.showOpenDialog(senderWindow, dialogOpts)
-            : await dialog.showOpenDialog(dialogOpts);
+          let destinationPath: string;
+          if (ctx.endpoint?.kind === "remote-view") {
+            // A remote Shell chose the folder in its host picker; a dialog here
+            // would open on this machine's screen, in front of nobody.
+            if (typeof remoteDestinationPath !== "string" || !remoteDestinationPath) {
+              throw new Error("A destination folder is required");
+            }
+            destinationPath = remoteDestinationPath;
+          } else {
+            const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
+            const dialogOpts: Electron.OpenDialogOptions = {
+              title: "Save scratch as project",
+              buttonLabel: "Save here",
+              properties: ["openDirectory", "createDirectory"],
+            };
+            const result = senderWindow
+              ? await dialog.showOpenDialog(senderWindow, dialogOpts)
+              : await dialog.showOpenDialog(dialogOpts);
 
-          if (result.canceled || result.filePaths.length === 0) {
-            return { status: "cancelled" };
+            if (result.canceled || result.filePaths.length === 0) {
+              return { status: "cancelled" };
+            }
+
+            destinationPath = result.filePaths[0]!;
           }
-
-          const destinationPath = result.filePaths[0]!;
           if (!path.isAbsolute(destinationPath)) {
             throw new Error("Destination path must be absolute");
           }

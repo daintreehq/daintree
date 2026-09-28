@@ -33,7 +33,17 @@ import type { PluginContributionBroadcaster } from "./PluginContributionBroadcas
 import type { PluginPanelLifecycleBroker } from "./PluginPanelLifecycleBroker.js";
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
 import type { PluginPanelReloadDispatcher } from "./PluginPanelReloadDispatcher.js";
-import type { PluginUIPromptDispatcher } from "./PluginUIPromptDispatcher.js";
+import type { PluginUIPromptDispatcher, PromptRequestOptions } from "./PluginUIPromptDispatcher.js";
+import {
+  getPluginInvokeOrigin,
+  noFrontendAttached,
+  resolvePluginFrontend,
+} from "./pluginFrontendRouting.js";
+import {
+  PluginFrontendMethod,
+  REMOTE_CLIPBOARD_IMAGE_MAX_BYTES,
+  REMOTE_CLIPBOARD_TIMEOUT_MS,
+} from "./pluginFrontendRequests.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
 import {
   assertStorageKey,
@@ -63,7 +73,7 @@ import {
   scopeMatchesPattern,
 } from "../fileDecorationRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
-import { isAppError } from "../../utils/errorTypes.js";
+import { AppError, isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
@@ -79,6 +89,7 @@ import {
 } from "../../../shared/utils/pluginAgentSnapshot.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type { PluginSendToAgentRequest } from "../../../shared/types/pluginUiPrompt.js";
+import { SEND_TO_AGENT_MAX_ID_LENGTH, SEND_TO_AGENT_REFUSAL_REASONS } from "./sendToAgentLimits.js";
 import {
   AGENT_CONTEXT_MAX_TEXT_LENGTH,
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
@@ -99,7 +110,7 @@ import type {
   ActionHandler,
   PluginQuickPickItem,
   PluginQuickPickOptions,
-  PluginHostCallOptions,
+  PluginPromptCallOptions,
   PluginInputBoxOptions,
   PluginConfirmOptions,
   BuiltInPluginCapability,
@@ -238,29 +249,7 @@ function validateQuickPickItems(
   });
 }
 
-/** Longest id `host.sendToAgent` accepts for a terminal or worktree. */
-const SEND_TO_AGENT_MAX_ID_LENGTH = 512;
-
-// A record keyed by the union so a reason added to the type without an entry
-// here fails typecheck rather than being read back as a dismissal.
-const SEND_TO_AGENT_REFUSAL_REASONS = new Set(
-  Object.keys({
-    "unknown-terminal": true,
-    "not-agent": true,
-    exited: true,
-    "input-bar-off": true,
-    "backend-unavailable": true,
-    "input-locked": true,
-    restarting: true,
-    "input-busy": true,
-    "not-in-grid": true,
-    "fleet-armed": true,
-    "project-unavailable": true,
-    "launch-failed": true,
-    "prompt-open": true,
-    busy: true,
-  } satisfies Record<PluginSendToAgentRefusalReason, true>)
-);
+const SEND_TO_AGENT_REFUSAL_REASON_SET = new Set<string>(SEND_TO_AGENT_REFUSAL_REASONS);
 
 function validateOptionalId(pluginId: string, name: string, value: unknown): string | undefined {
   if (value === undefined) return undefined;
@@ -329,7 +318,7 @@ function toSendToAgentResult(value: unknown): PluginSendToAgentResult {
     if (
       result.status === "refused" &&
       typeof result.reason === "string" &&
-      SEND_TO_AGENT_REFUSAL_REASONS.has(result.reason as PluginSendToAgentRefusalReason)
+      SEND_TO_AGENT_REFUSAL_REASON_SET.has(result.reason as PluginSendToAgentRefusalReason)
     ) {
       return {
         status: "refused",
@@ -647,6 +636,15 @@ export function createHost(
    * a window that never routes through ProjectViewManager); in that state there
    * is no other project's view for it to reach.
    */
+  /**
+   * How a prompt travels beyond this machine: the name a remote frontend shows
+   * for it, and whether it may wait for someone to attach.
+   */
+  const promptRequestOptions = (callOptions?: PluginPromptCallOptions): PromptRequestOptions => ({
+    pluginDisplayName: deps.pluginDisplayName(pluginId),
+    ...(callOptions?.whenNoFrontend === "queue" ? { whenNoFrontend: "queue" as const } : {}),
+  });
+
   const pushToRenderers: (channel: string, ...args: unknown[]) => void =
     boundProjectId === null
       ? broadcastToRenderer
@@ -1158,7 +1156,7 @@ export function createHost(
           );
         }
         try {
-          const agents = await deps.dispatcher.sendAgentsListToRenderer(boundProjectId);
+          const agents = await deps.dispatcher.sendAgentsListToRenderer(boundProjectId, pluginId);
           return isBound() ? agents : [];
         } catch (err) {
           if (isProjectViewUnavailable(err)) return [];
@@ -1748,12 +1746,34 @@ export function createHost(
       // rate-limit bucket per plugin+type — without it plugin toasts fall into
       // the global type-keyed bucket and a burst of unrelated system toasts
       // could silently suppress a plugin's toast.
+      const message = `${deps.pluginDisplayName(pluginId)}: ${parsed.data.message}`;
       pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: parsed.data.type,
-        message: `${deps.pluginDisplayName(pluginId)}: ${parsed.data.message}`,
+        message,
         duration: parsed.data.durationMs,
         rateLimitKey: `plugin:${pluginId}:${parsed.data.type}`,
       });
+      // A toast is the Shell's to show, so a push never reaches a window on
+      // another machine; the one driving the project is asked to show it.
+      const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+      if (frontend.kind === "remote") {
+        frontend.endpoint
+          .request(
+            PluginFrontendMethod.TOAST,
+            {
+              pluginId,
+              type: parsed.data.type,
+              message,
+              ...(parsed.data.durationMs !== undefined
+                ? { durationMs: parsed.data.durationMs }
+                : {}),
+            },
+            { timeoutMs: 10_000 }
+          )
+          .catch(() => {
+            // Best-effort, like the local push: a Shell that went has no screen.
+          });
+      }
     },
     // NOT revoke-guarded for the same reason as invalidateFileDecorations and
     // showToast: plugins dispatch actions from post-activation callbacks and
@@ -1775,8 +1795,10 @@ export function createHost(
       // A bound dispatch reaches only its own project's renderer and rejects
       // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;
       // unbound stays ambient, since an app-global plugin's action belongs
-      // wherever the user is looking.
-      return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+      // wherever the user is looking. In Host mode it goes to the view that
+      // drives the project, which may be on another machine, and answers
+      // NO_FRONTEND_ATTACHED when nobody does.
+      return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId, pluginId);
     },
     // Built-in action catalog (#10561). NOT revoke-guarded for the same reason
     // as dispatch: plugins introspect from post-activation callbacks/timers.
@@ -1789,7 +1811,7 @@ export function createHost(
       list: async () => {
         if (!deps.plugins.has(pluginId)) return [];
         try {
-          return await deps.dispatcher.sendActionsListToRenderer(boundProjectId);
+          return await deps.dispatcher.sendActionsListToRenderer(boundProjectId, pluginId);
         } catch (err) {
           // A bound host whose project has no live view is the catalog's
           // documented "no renderer available" case, not an error — this
@@ -1802,7 +1824,7 @@ export function createHost(
       get: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return null;
         try {
-          return await deps.dispatcher.sendActionsGetToRenderer(actionId, boundProjectId);
+          return await deps.dispatcher.sendActionsGetToRenderer(actionId, boundProjectId, pluginId);
         } catch (err) {
           if (isProjectViewUnavailable(err)) return null;
           throw err;
@@ -1815,7 +1837,7 @@ export function createHost(
       canDispatch: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return "restricted";
         const entry = await deps.dispatcher
-          .sendActionsGetToRenderer(actionId, boundProjectId)
+          .sendActionsGetToRenderer(actionId, boundProjectId, pluginId)
           .catch((err: unknown) => {
             if (isProjectViewUnavailable(err)) return null;
             throw err;
@@ -1838,7 +1860,7 @@ export function createHost(
     showQuickPick: (async (
       items: PluginQuickPickItem[],
       options?: PluginQuickPickOptions,
-      callOptions?: PluginHostCallOptions
+      callOptions?: PluginPromptCallOptions
     ): Promise<PluginQuickPickItem | PluginQuickPickItem[] | undefined> => {
       if (!deps.plugins.has(pluginId)) return undefined;
       const validItems = validateQuickPickItems(pluginId, items);
@@ -1855,7 +1877,8 @@ export function createHost(
           options: sanitizeQuickPickOptions(options),
         },
         boundProjectId,
-        callOptions?.signal
+        callOptions?.signal,
+        promptRequestOptions(callOptions)
       );
       return value as PluginQuickPickItem | PluginQuickPickItem[] | undefined;
     }) as PluginHostApi["showQuickPick"],
@@ -1865,7 +1888,8 @@ export function createHost(
         pluginId,
         { kind: "inputBox", options: sanitizeInputBoxOptions(options) },
         boundProjectId,
-        callOptions?.signal
+        callOptions?.signal,
+        promptRequestOptions(callOptions)
       );
       return value as string | undefined;
     },
@@ -1878,7 +1902,8 @@ export function createHost(
         pluginId,
         { kind: "confirm", options: sanitizeConfirmOptions(options) },
         boundProjectId,
-        callOptions?.signal
+        callOptions?.signal,
+        promptRequestOptions(callOptions)
       );
       return value === true;
     },
@@ -1917,12 +1942,12 @@ export function createHost(
     // module is unavailable in the dev-worker utility process), so it works
     // from a headless plugin with no mounted panel. NOT revoke-guarded —
     // liveness is plugin membership; once unloaded every method rejects.
-    clipboard: buildClipboardApi(deps, pluginId),
+    clipboard: buildClipboardApi(deps, pluginId, boundProjectId),
     // Host-mediated open/reveal, scoped to the plugin's own declared fs roots
     // (including its implicit plugin-data namespace) rather than the user's
     // project roots — the gap that pushed plugins into shelling out to
     // /usr/bin/open. NOT revoke-guarded, same as fs/clipboard.
-    system: buildSystemApi(deps, pluginId),
+    system: buildSystemApi(deps, pluginId, boundProjectId),
     // HTML-to-PDF export written under host.fs.writeFile's gates. NOT
     // revoke-guarded, same as fs/system.
     documents: buildDocumentsApi(deps, pluginId),
@@ -3652,7 +3677,11 @@ async function containToDeclaredRoots(
  * stateless — no watchers or handles — so there is nothing to tear down on
  * unload.
  */
-function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): PluginClipboardApi {
+function buildClipboardApi(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  boundProjectId: string | null
+): PluginClipboardApi {
   // Mirror the renderer IPC clipboard write guard (electron/ipc/handlers/
   // clipboard.ts) so a runaway plugin can't exhaust the main-process heap.
   const MAX_TEXT_BYTES = 8 * 1024 * 1024;
@@ -3662,6 +3691,23 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
         `PLUGIN_UNLOADED: plugin "${pluginId}" clipboard.${op}: plugin is no longer loaded`
       );
     }
+  };
+  // The clipboard is the person's: when another machine drives the project,
+  // theirs is the one the plugin means. A window on this machine, or a project
+  // nobody drives, keeps this machine's, as it always was. A call made for a
+  // person on another machine who has since gone, or a driver away inside its
+  // grace, has nobody's clipboard to use: this one isn't theirs.
+  const remoteDriver = (op: string) => {
+    const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+    if (frontend.kind === "remote") return frontend.endpoint;
+    if (
+      frontend.kind === "none" &&
+      (frontend.reason !== "vacant" ||
+        getPluginInvokeOrigin(pluginId)?.endpoint.kind === "remote-view")
+    ) {
+      throw noFrontendAttached(pluginId, `clipboard.${op}`);
+    }
+    return null;
   };
   return {
     writeText: async (text): Promise<void> => {
@@ -3678,6 +3724,15 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
         throw new Error(
           `PAYLOAD_TOO_LARGE: plugin "${pluginId}" clipboard.writeText text exceeds the ${MAX_TEXT_BYTES} byte limit`
         );
+      }
+      const remote = remoteDriver("writeText");
+      if (remote) {
+        await remote.request(
+          PluginFrontendMethod.CLIPBOARD,
+          { op: "writeText", pluginId, text },
+          { timeoutMs: REMOTE_CLIPBOARD_TIMEOUT_MS }
+        );
+        return;
       }
       clipboard.writeText(text);
     },
@@ -3710,7 +3765,21 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
           `VALIDATION: plugin "${pluginId}" clipboard.writeImage could not decode the data as an image`
         );
       }
-      clipboard.writeImage(image);
+      const remote = remoteDriver("writeImage");
+      if (remote) {
+        if (pngData.byteLength > REMOTE_CLIPBOARD_IMAGE_MAX_BYTES) {
+          throw new Error(
+            `PAYLOAD_TOO_LARGE: plugin "${pluginId}" clipboard.writeImage image exceeds the ${REMOTE_CLIPBOARD_IMAGE_MAX_BYTES} byte limit for a clipboard on another machine`
+          );
+        }
+        await remote.request(
+          PluginFrontendMethod.CLIPBOARD,
+          { op: "writeImage", pluginId, png: new Uint8Array(pngData) },
+          { timeoutMs: REMOTE_CLIPBOARD_TIMEOUT_MS }
+        );
+      } else {
+        clipboard.writeImage(image);
+      }
       // Audit the byte count only — never the bytes. An image write is
       // user-visible state the plugin changed without a prompt, so it belongs
       // in the trail even though it isn't destructive.
@@ -3731,6 +3800,20 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
         throw new Error(
           `PERMISSION_REQUIRED: plugin "${pluginId}" clipboard.readText requires the "clipboard:read" capability, which is not declared in manifest.capabilities`
         );
+      }
+      const remote = remoteDriver("readText");
+      if (remote) {
+        const text = await remote.request(
+          PluginFrontendMethod.CLIPBOARD,
+          { op: "readText", pluginId },
+          { timeoutMs: REMOTE_CLIPBOARD_TIMEOUT_MS }
+        );
+        if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) {
+          throw new Error(
+            `VALIDATION: plugin "${pluginId}" clipboard.readText got an unusable answer from the driving machine`
+          );
+        }
+        return text;
       }
       // Electron returns "" for empty or non-text clipboard content.
       return clipboard.readText();
@@ -3757,7 +3840,11 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
  *
  * Stateless — no watchers or handles, so nothing to tear down on unload.
  */
-function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSystemApi {
+function buildSystemApi(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  boundProjectId: string | null
+): PluginSystemApi {
   const requireLoaded = (op: string): void => {
     if (!deps.plugins.has(pluginId)) {
       throw new Error(
@@ -3779,6 +3866,19 @@ function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSy
         `PERMISSION_REQUIRED: plugin "${pluginId}" system.${op} requires the "${read}" or "${write}" capability for ${rootClass} paths, which is not declared in manifest.capabilities`
       );
     }
+  };
+  // Opening a file manager or an app on this machine's screen does nothing for
+  // a person driving the project from another machine, and puts windows in
+  // front of whoever is sitting here. Refused rather than guessed at.
+  const refuseForRemoteDriver = (op: string): void => {
+    const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+    if (frontend.kind !== "remote") return;
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: `REMOTE_FRONTEND: plugin "${pluginId}" system.${op}: the project is driven from another machine, so nothing is opened on this host's screen`,
+      userMessage: "Files on a host can't be opened on its screen for another machine.",
+      context: { pluginId },
+    });
   };
   const containWithClass = (targetPath: string) =>
     containToDeclaredRoots(deps, pluginId, targetPath);
@@ -3819,6 +3919,7 @@ function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSy
       assertExtensionAllowed(resolved);
       await requireExists("openPath", resolved);
       requireLoaded("openPath");
+      refuseForRemoteDriver("openPath");
       // shell.openPath reports failure through a non-empty return string
       // rather than by rejecting, so an unchecked call fails silently.
       const error = await shell.openPath(resolved);
@@ -3845,6 +3946,7 @@ function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSy
       requireCapForClass("showItemInFolder", rootClass);
       await requireExists("showItemInFolder", resolved);
       requireLoaded("showItemInFolder");
+      refuseForRemoteDriver("showItemInFolder");
       // Returns void and no-ops on a missing path — requireExists above is
       // what turns that silent nothing into a reported failure.
       shell.showItemInFolder(resolved);

@@ -22,7 +22,7 @@ import {
   resolveEffectiveBypass,
   resolveEffectiveInlineMode,
 } from "@shared/types";
-import { supportsCrossDirectoryResume } from "@shared/types/agentSettings";
+import { agentClipboardDirectory, supportsCrossDirectoryResume } from "@shared/types/agentSettings";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -55,12 +55,14 @@ import {
   type AgentRuntimeSettingsResolution,
 } from "@/utils/agentRuntimeSettings";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientAppError } from "@/utils/clientAppError";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -150,6 +152,23 @@ function updateTerminal(
   const terminal = state.panelsById[id];
   if (!terminal) return state;
   return { panelsById: { ...state.panelsById, [id]: updater(terminal) } };
+}
+
+/**
+ * A restart whose new PTY is up. "exited" survives deriveRuntimeStatus, so it
+ * is dropped here, once the spawn has succeeded: a respawn that failed stays
+ * reading as dead.
+ */
+function respawned(
+  t: PanelRegistrySlice["panelsById"][string]
+): PanelRegistrySlice["panelsById"][string] {
+  if (!isPtyPanel(t)) return t;
+  if (t.runtimeStatus !== "exited") return { ...t, isRestarting: false };
+  return {
+    ...t,
+    isRestarting: false,
+    runtimeStatus: deriveRuntimeStatus(t.isVisible, t.flowStatus, undefined),
+  };
 }
 
 /**
@@ -443,7 +462,7 @@ export const createRestartActions = (
       try {
         const [agentSettings, tmpDir] = await Promise.all([
           agentSettingsClient.get(),
-          systemClient.getTmpDir().catch(() => ""),
+          resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
         ]);
         const entry = (agentSettings?.agents?.[effectiveAgentId] ?? {}) as AgentSettingsEntry;
         const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
@@ -588,7 +607,9 @@ export const createRestartActions = (
           try {
             const runtimeSettings = runtimeForEnv ?? (await loadAgentRuntimeSettings());
             const tmpDir = runtimeSettings?.tmpDir ?? "";
-            const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+            const clipboardDirectory = tmpDir
+              ? agentClipboardDirectory(tmpDir, isRemoteWindow())
+              : undefined;
             if (hasPersistedFlags) {
               const entry = runtimeSettings?.entry;
               const shareClipboardDirectory = entry?.shareClipboardDirectory as boolean | undefined;
@@ -907,8 +928,12 @@ export const createRestartActions = (
       terminalInstanceService.setInputLocked(id, false);
 
       unmarkTerminalRestarting(id);
-      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+      set((state) => updateTerminal(state, id, respawned));
     } catch (error) {
+      // Decoding an encoded AppError from main strips its wire prefix in place,
+      // so the phase checks below read the plain message and the person reads
+      // its userMessage.
+      const appError = isClientAppError(error) ? error : null;
       const errorMessage = formatErrorMessage(error, "Failed to restart terminal");
       const errorCode = (error as { code?: string })?.code;
 
@@ -924,7 +949,7 @@ export const createRestartActions = (
       }
 
       const restartError = {
-        message: errorMessage,
+        message: appError?.userMessage ?? errorMessage,
         code: errorCode,
         timestamp: Date.now(),
         recoverable: errorCode === "ENOENT" || phase === "frontend-readiness",
@@ -1310,7 +1335,7 @@ export const createRestartActions = (
     try {
       const [agentSettings, tmpDir] = await Promise.all([
         agentSettingsClient.get(),
-        systemClient.getTmpDir().catch(() => ""),
+        resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
       ]);
       const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
       const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
@@ -1331,7 +1356,7 @@ export const createRestartActions = (
 
       let clipboardDirectory: string | undefined;
       if (effectiveAgentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
-        clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+        clipboardDirectory = tmpDir ? agentClipboardDirectory(tmpDir, isRemoteWindow()) : undefined;
       }
 
       const agentConfig = getAgentConfig(effectiveAgentId);
@@ -1495,10 +1520,12 @@ export const createRestartActions = (
       }
 
       unmarkTerminalRestarting(id);
-      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+      set((state) => updateTerminal(state, id, respawned));
       return { success: true };
     } catch (error) {
-      const errorMessage = formatErrorMessage(error, "Failed to restart terminal");
+      const appError = isClientAppError(error) ? error : null;
+      const errorMessage =
+        appError?.userMessage ?? formatErrorMessage(error, "Failed to restart terminal");
       unmarkTerminalRestarting(id);
       set((state) =>
         updateTerminal(state, id, (t) => ({

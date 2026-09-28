@@ -19,6 +19,7 @@ export const GLOBAL_SETTINGS_TAB_IDS = [
   "agents",
   "code-forge",
   "integrations",
+  "hosts",
   "voice",
   "portal",
   "mcp",

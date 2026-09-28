@@ -95,6 +95,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
+import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -440,6 +441,9 @@ function withoutDuplicates(ids: readonly AnyToolbarButtonId[]): AnyToolbarButton
 }
 
 export function ToolbarSettingsTab() {
+  // Button layout is this screen's; which agents are pinned is the host's agent settings,
+  // so the section listing both stays unmarked.
+  const ownerMarker = useSettingsOwnerMarker();
   const layout = useToolbarPreferencesStore((s) => s.layout);
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
   const setLeftButtons = useToolbarPreferencesStore((s) => s.setLeftButtons);
@@ -985,6 +989,7 @@ export function ToolbarSettingsTab() {
     <div className="space-y-8">
       <SettingsSection
         title="Toolbar buttons"
+        badge={ownerMarker("device")}
         description="Drag a button, or use its menu, to reorder it or move it to the other side. Each side keeps its groups in order: launcher, agents, panels, then the rest."
       >
         <DndContext
@@ -1151,7 +1156,7 @@ export function ToolbarSettingsTab() {
         </div>
       )}
 
-      <SettingsSection id="toolbar-launcher" title="Launcher palette">
+      <SettingsSection id="toolbar-launcher" title="Launcher palette" badge={ownerMarker("device")}>
         <SettingsGroup>
           <SettingsSwitchCard
             title="Always show dev server in launcher"
