@@ -69,7 +69,8 @@ const buttonVariants = cva(
         // No box and no type size: the control takes the font and line height
         // of the text it sits in, so a link inside a sentence stays in the
         // sentence. Inline targets are exempt from the 24px minimum (WCAG 2.5.8).
-        inline: "h-auto p-0 gap-1 rounded-[var(--radius-xs)] [&_svg]:size-[1em]",
+        inline:
+          "h-auto p-0 gap-1 whitespace-normal text-left rounded-[var(--radius-xs)] [&_svg]:size-[1em]",
       },
     },
     defaultVariants: {
