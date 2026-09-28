@@ -9,33 +9,28 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/bondi.webp",
   palette: {
     type: "light",
-    // One cream family, hue 81. The lightness of every tier is deliberately
-    // unchanged from the theme this replaces — only hue and chroma move
-    // (94 -> 81, grid C 0.019 -> 0.027), so the app gets warmer without getting
-    // darker. Body text gains on canvas (+0.085) and panel (+0.048); the worst
-    // case anywhere is the sidebar at -0.002, which is nothing.
-    // Chroma is also carried further up the ladder than before (panel 0.0090 vs
-    // 0.0067) so the warmth survives into the content tiers instead of fading to
-    // neutral white; `elevated` stays pure white because the top tier's job is
-    // maximum lift for popovers.
+    // One cream family, hue 81, lit like the theme this replaced: only hue and
+    // chroma moved, so the app got warmer without getting darker. Chroma is
+    // carried up the ladder (panel C 0.009) so the warmth survives into the
+    // tiers you read on; `elevated` stays pure white because the top tier's job
+    // is maximum lift for popovers. canvas -> panel is held just above the
+    // ramp audit's 0.02 JND (0.023).
     //
-    // The grid -> sidebar step is 2.7x the others. That is intentional and
-    // inherited: the grid is the gutter the panels sit in and wants to be
-    // clearly below them. Evening the ramp out costs perceived lightness on the
-    // three tiers you actually read on, which is a bad trade.
+    // `grid` is the deep sand the ramp is audited from and the boot splash
+    // paints. The panel gutter itself is `panel-grid-bg` below, a lighter sand.
     // Water is a highlight only (accent, links, focus, heat ramp, terminal),
     // never a field surface: a blue plane at this lightness reads as nursery,
     // not ocean.
     surfaces: {
       grid: "#E1D7C5",
       sidebar: "#F2E9DA",
-      canvas: "#F7F1E7",
+      canvas: "#F6F0E6",
       panel: "#FBF8F2",
       elevated: "#FFFFFF",
     },
     text: {
       // Cool ink against warm paper — the counterpoint that stops cream from
-      // going sepia. muted bottoms out at 4.81:1 on the grid, 6.11:1 on canvas.
+      // going sepia. muted bottoms out at 4.81:1 on the grid, 6.06:1 on canvas.
       primary: "#1C2028",
       secondary: "#454D56",
       muted: "#555B62",
@@ -299,7 +294,7 @@ export const theme: BuiltInThemeSource = {
     "pulse-card-header-bg": "#FCF9F5",
     "pulse-card-shadow": "0 1px 2px rgba(43,38,31,0.10), 0 4px 10px rgba(43,38,31,0.08)",
     "pulse-control-hover-bg": "rgba(50,46,38,0.05)",
-    "pulse-empty-bg": "#F7F1E7",
+    "pulse-empty-bg": "#F6F0E6",
     // Bathymetric ramp: dry sand → shallows → ocean → the accent itself. The
     // light end stays warm on purpose; a pale blue first step reads as nursery
     // against cream, which is the one thing this palette must not do.
@@ -307,7 +302,7 @@ export const theme: BuiltInThemeSource = {
     "pulse-heat-2": "#AFC3C4",
     "pulse-heat-3": "#55879E",
     "pulse-heat-4": "#004E6B",
-    "pulse-range-bg": "#F7F1E7",
+    "pulse-range-bg": "#F6F0E6",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #E1D7C5 25%, #F6F1E8 50%, #E1D7C5 75%)",
     "dialog-header-bg": "#FCF9F5",
