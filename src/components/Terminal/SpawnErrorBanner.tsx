@@ -78,7 +78,6 @@ export function SpawnErrorBanner({
     id: "trash",
     label: "Remove terminal",
     icon: Trash2,
-    variant: "danger",
     onClick: () => onTrash(terminalId),
     title: "Move to trash",
     disabled: isRestarting,

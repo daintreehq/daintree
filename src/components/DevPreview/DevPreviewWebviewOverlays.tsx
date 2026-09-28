@@ -242,7 +242,6 @@ export function DevPreviewWebviewOverlays({
                   id: "hard-restart",
                   label: "Hard restart",
                   icon: RotateCw,
-                  variant: "danger",
                   onClick: onRestartDevServer,
                   ariaLabel: "Hard restart preview",
                 },

@@ -35,6 +35,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -806,9 +807,9 @@ function RowOptionsMenu({
       {SNOOZE_LABEL[option]}
       {/* The commitment, before it's made: "Until tomorrow" is 8:00 AM, and
           "Until next week" is Monday. */}
-      <span className="ml-auto pl-6 text-text-secondary tabular-nums">
+      <DropdownMenuMeta aria-hidden={false} className="pl-6">
         {formatSnoozeWake(resolveSnoozeDuration(option))}
-      </span>
+      </DropdownMenuMeta>
     </DropdownMenuItem>
   ));
 

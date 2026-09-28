@@ -30,6 +30,12 @@ interface PluginContextMenuSectionProps {
    * does since #12206.
    */
   leadingSeparator?: boolean;
+  /**
+   * Indent the items onto the host menu's icon gutter. Plugin items carry no
+   * icon, so a host whose own rows all lead with one passes this to keep a
+   * single label edge.
+   */
+  inset?: boolean;
 }
 
 /**
@@ -50,6 +56,7 @@ export function PluginContextMenuSection({
   components,
   dispatchArgs,
   leadingSeparator = true,
+  inset = false,
 }: PluginContextMenuSectionProps) {
   const source = useMenuActionSource();
   const Item = components?.Item ?? ContextMenuItem;
@@ -61,6 +68,7 @@ export function PluginContextMenuSection({
       {items.map((entry) => (
         <Item
           key={`${entry.pluginId}:${entry.item.actionId}`}
+          inset={inset || undefined}
           onSelect={() =>
             void actionService.dispatch(entry.item.actionId, dispatchArgs, { source })
           }

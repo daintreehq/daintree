@@ -789,7 +789,9 @@ export function WorktreeMenuItems({
         {hasRecipes && canSaveLayout && <C.Separator />}
         {canSaveLayout && (
           <C.Item onSelect={onSaveLayout}>
-            <Save className={ICON} />
+            {/* Marked, so the recipe rows above take the icon gutter only while
+                this row is there to need it. */}
+            <Save data-menu-icon className={ICON} />
             Save current layout as recipe…
           </C.Item>
         )}

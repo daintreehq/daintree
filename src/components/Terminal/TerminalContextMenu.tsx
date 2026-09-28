@@ -1181,7 +1181,7 @@ export function TerminalContextMenu({
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
             Trash dev preview
           </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("kill")}>
+          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Stop dev server
           </ContextMenuItem>
@@ -1597,7 +1597,7 @@ export function TerminalContextMenu({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill terminal
           </ContextMenuItem>
-          <PluginContextMenuSection items={pluginItems} />
+          <PluginContextMenuSection items={pluginItems} inset />
         </ContextMenuContent>
         {movePicker}
       </ContextMenu>

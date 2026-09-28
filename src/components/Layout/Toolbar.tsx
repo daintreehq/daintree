@@ -346,11 +346,10 @@ function OverflowMenu({
   const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
   const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
 
-  const countSuffix = (id: AnyToolbarButtonId) => {
-    if (id === "problems" && errorCount > 0) return ` (${errorCount})`;
-    if (id === "notification-center" && notificationUnreadCount > 0)
-      return ` (${notificationUnreadCount})`;
-    return "";
+  const overflowCount = (id: AnyToolbarButtonId) => {
+    if (id === "problems" && errorCount > 0) return errorCount;
+    if (id === "notification-center" && notificationUnreadCount > 0) return notificationUnreadCount;
+    return null;
   };
 
   return (
@@ -413,12 +412,20 @@ function OverflowMenu({
               return [
                 <DropdownMenuGroup key="forge-group">
                   <DropdownMenuLabel>Git</DropdownMenuLabel>
-                  <DropdownMenuItem key="forge-commits" disabled>
+                  <DropdownMenuItem
+                    key="forge-commits"
+                    disabled
+                    aria-label={
+                      repoStats?.commitCount != null
+                        ? `Commits, ${formatCountExact(repoStats.commitCount)}`
+                        : undefined
+                    }
+                  >
                     <GitCommit className="mr-2 h-3.5 w-3.5" />
-                    Commits{" "}
-                    {repoStats?.commitCount != null
-                      ? `(${formatCountExact(repoStats.commitCount)})`
-                      : ""}
+                    Commits
+                    {repoStats?.commitCount != null && (
+                      <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
+                    )}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>,
                 ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
@@ -580,6 +587,7 @@ function OverflowMenu({
           // look live yet silently close with no feedback, since its handler
           // guards on the same two conditions.
           const disabled = id === "copy-tree" && (!hasActiveWorktree || isCopyingTree);
+          const count = overflowCount(id);
           return [
             <DropdownMenuItem
               key={id}
@@ -588,10 +596,9 @@ function OverflowMenu({
               keybinding={keybindingById[id]}
             >
               <Icon className="mr-2 h-3.5 w-3.5" />
-              <span className="flex-1">
-                {meta.label}
-                {countSuffix(id)}
-              </span>
+              <span className="flex-1">{meta.label}</span>
+              {/* Audible: the count belongs in the row's accessible name. */}
+              {count !== null && <DropdownMenuMeta aria-hidden={false}>{count}</DropdownMenuMeta>}
             </DropdownMenuItem>,
           ];
         })}

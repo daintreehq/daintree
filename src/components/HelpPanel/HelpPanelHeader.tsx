@@ -141,7 +141,7 @@ export function HelpPanelHeader({
               mirrored here: the strip's `+` is its single home. */}
           {canRestartConversation && (
             <>
-              <DropdownMenuItem onSelect={onRestartConversation}>
+              <DropdownMenuItem destructive onSelect={onRestartConversation}>
                 <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Restart conversation
               </DropdownMenuItem>
