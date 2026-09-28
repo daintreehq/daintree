@@ -519,17 +519,17 @@ Left sidebar nav items are vertical buttons:
 **Hover:**
 
 ```css
-background: var(--settings-nav-hover-bg, var(--theme-overlay-hover));
+background: var(--settings-nav-hover-bg, var(--theme-overlay-subtle));
 ```
 
 **Active (selected):**
 
 ```css
-background: var(--settings-nav-active-bg, var(--theme-overlay-selected));
+background: var(--settings-nav-active-bg, var(--theme-overlay-highlight));
 box-shadow: var(--settings-nav-active-shadow, none);
 ```
 
-The active nav item also shows a 2px-wide accent-colored bar on its left edge via a CSS `::before` pseudo-element. The text switches to `text-primary` weight.
+The page being shown is marked by the fill alone, like the selected record in any list-detail list — no edge bar. The text switches to `text-primary`. Hover stays a lighter step than the active fill.
 
 ### Settings Subtabs
 

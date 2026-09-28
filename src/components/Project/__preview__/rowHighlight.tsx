@@ -14,6 +14,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ProjectSwitcherPalette } from "../ProjectSwitcherPalette";
+import { NavGroup, NavItem } from "@/components/Settings/SettingsDialog";
+import type { SettingsTab } from "@/components/Settings/settingsTabIds";
+import { Bell, Bot, Keyboard, Palette, Plug, SlidersHorizontal } from "lucide-react";
 import type {
   ProjectSwitcherBrowseBand,
   ProjectSwitcherProjectRow,
@@ -23,14 +26,14 @@ import "@/index.css";
 
 /**
  * Standalone visual-review harness for the app's highlighted-row language on
- * the two surfaces no other preview reaches: the project switcher and a plain
- * Radix dropdown menu. `row-highlight-review.spec.ts` drives these beside the
+ * the surfaces no other preview reaches: the project switcher, a plain Radix
+ * dropdown menu and the settings sidebar nav. `row-highlight-review.spec.ts` drives these beside the
  * other palette previews, so the keyboard cursor and the pointer can be judged
  * on every family in one sweep.
  *
  * Query parameters:
  *   ?theme=daintree|bondi|…        built-in theme id
- *   ?surface=project-switcher|menu which surface to mount
+ *   ?surface=project-switcher|menu|settings-nav which surface to mount
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -147,11 +150,50 @@ function MenuSurface() {
   );
 }
 
+const NAV: Array<{ tab: SettingsTab; label: string; icon: React.ReactNode }> = [
+  { tab: "general", label: "General", icon: <SlidersHorizontal className="h-4 w-4" /> },
+  { tab: "terminal", label: "Terminal", icon: <Palette className="h-4 w-4" /> },
+  { tab: "keyboard", label: "Keyboard", icon: <Keyboard className="h-4 w-4" /> },
+  { tab: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" /> },
+  { tab: "agents", label: "CLI agents", icon: <Bot className="h-4 w-4" /> },
+  { tab: "plugins", label: "Plugins", icon: <Plug className="h-4 w-4" /> },
+];
+
+function SettingsNavSurface() {
+  const [activeTab, setActiveTab] = useState<SettingsTab>("terminal");
+  return (
+    <div data-preview-frame className="p-6">
+      <div
+        className="settings-sidebar w-52 rounded-[var(--radius-lg)] border border-border-default p-3"
+        role="tablist"
+        aria-orientation="vertical"
+        aria-label="Settings sections"
+      >
+        <NavGroup label="App">
+          {NAV.map((entry) => (
+            <NavItem
+              key={entry.tab}
+              tab={entry.tab}
+              icon={entry.icon}
+              label={entry.label}
+              activeTab={activeTab}
+              isSearching={false}
+              onSelect={setActiveTab}
+            />
+          ))}
+        </NavGroup>
+      </div>
+    </div>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <TooltipProvider>
       {surface === "menu" ? (
         <MenuSurface />
+      ) : surface === "settings-nav" ? (
+        <SettingsNavSurface />
       ) : (
         <div data-preview-frame>
           <ProjectSwitcherSurface />

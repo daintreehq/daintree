@@ -72,7 +72,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 ### Highlighted Row
 
-**Role:** The one row in a palette, picker, autocomplete, menu or select that Enter (or a click) will act on right now. Also the selected record in a list-detail browser.
+**Role:** The one row a surface is on right now: the row in a palette, picker, autocomplete, menu or select that Enter (or a click) will act on; the selected record in a list-detail browser; the page a navigation list is showing (the settings sidebar, global and project). One mark for all of them, so a user learns it once.
 
 ```tsx
 "palette-row relative border border-transparent transition-colors aria-selected:bg-overlay-highlight aria-selected:text-text-primary";
@@ -84,14 +84,15 @@ The language, in full:
 
 - **Highlighted** — a neutral `overlay-highlight` fill and nothing else. No leading rail, no outline, no accent.
 - **One cursor** — the pointer and the arrow keys move the same highlight. Rows call the palette's hover callback on `pointermove` (never `pointerenter`, so rows scrolling under a resting pointer don't steal it) and carry no `hover:bg-*` of their own. Two lit rows is a defect.
-- **Committed value** — the current project, the page being shown, the saved theme — is a check mark or a label with `aria-current`, never a competing fill.
+- **Committed value inside a picker** — the current project, the settings page a subject picker is on, the saved theme — is a check mark or a label with `aria-current`, never a competing fill, because the fill belongs to the cursor there.
+- **Selected in a list-detail or navigation list** — where there is no roving cursor, the selected record or page takes the highlight fill itself, and hover is a lighter step in the same direction (`overlay-subtle` on dark; on light, the settings sidebar's white lift and a half-strength white hover). No accent tint and no edge marker — the settings nav's sliding accent bar and its per-theme accent-tinted fills were removed for this.
 - **Destructive** — the highlighted fill swaps to `status-danger/10` with danger text; that is a semantic, not a second selection mechanism.
 - **DOM focus** — rows that hold real focus (Radix items) add their inset `selection-outline` ring on keyboard focus, as every focused control does.
 - **Increased contrast / forced colours** — `prefers-contrast: more` outlines the highlighted row in `selection-outline`; `forced-colors` outlines it in `Highlight`. Both live in `src/index.css`, in their separate blocks.
 
 `overlay-highlight` is its own token rather than `overlay-raised` because, with no rail beside it, the fill alone has to be findable at a glance: 6% on dark (the `overlay-elevated` step brand marks are already measured against), the raised plane on light. WCAG 2.2's Understanding text for 1.4.11 does not hold a colour change between states of one component to 3:1, and hover treatments are supplemental; `selection-outline` is still gated at 3:1 against the fill and the surface (`getPaletteSelectionWarnings`) because it is drawn on the fill as a ring and as the increased-contrast outline.
 
-A leading rail is reserved for persistent "you are here" navigation (the settings nav marker). It was removed from highlighted rows because it made the pointer and the keyboard draw different rows differently and read as heavier than every shipping palette's fill-only highlight (VS Code, Linear, Raycast, macOS menus, Radix).
+A leading rail is not part of this language anywhere. It was removed from highlighted rows because it made the pointer and the keyboard draw different rows differently and read as heavier than every shipping palette's fill-only highlight (VS Code, Linear, Raycast, macOS menus, Radix).
 
 `palette-row` is a hook for the two high-contrast blocks, not styling. The forced-colours outline is deliberately an outline and not a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour), and a fill would leave them painting on a pair with no contrast guarantee. The marker scopes those rules to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns. Forge and commit rows, which spend `aria-selected` on membership, key the same fill off `data-active` and the same outlines off `.forge-row`.
 

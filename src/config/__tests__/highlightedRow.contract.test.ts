@@ -107,6 +107,41 @@ describe("highlighted-row language", () => {
     expect(css).not.toMatch(/\.palette-row[^{]*::before/);
   });
 
+  it("marks the settings page shown with a neutral fill that out-weighs its hover, on every theme", () => {
+    // The nav is a list-detail list: the page shown takes the one highlight
+    // mark, never an accent tint, and hover is a lighter step in the same
+    // direction so pointing at another page can't read as the selection.
+    const parse = (value: string) => {
+      const rgba = value.match(
+        /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)/
+      );
+      if (rgba)
+        return { rgb: [rgba[1], rgba[2], rgba[3]].map(Number), a: rgba[4] ? Number(rgba[4]) : 1 };
+      const hex = value.match(/^#([0-9a-f]{6})$/i);
+      if (hex) {
+        const n = parseInt(hex[1]!, 16);
+        return { rgb: [(n >> 16) & 255, (n >> 8) & 255, n & 255], a: 1 };
+      }
+      return null;
+    };
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const ext = (scheme.extensions ?? {}) as Record<string, string | undefined>;
+      const active = parse(ext["settings-nav-active-bg"] ?? scheme.tokens["overlay-highlight"]);
+      const hover = parse(ext["settings-nav-hover-bg"] ?? scheme.tokens["overlay-subtle"]);
+      expect(active, `${scheme.id}: settings nav active fill must be readable`).not.toBeNull();
+      expect(hover, `${scheme.id}: settings nav hover fill must be readable`).not.toBeNull();
+      const spread = Math.max(...active!.rgb) - Math.min(...active!.rgb);
+      expect(
+        spread,
+        `${scheme.id}: the page shown is marked neutrally, not tinted`
+      ).toBeLessThanOrEqual(24);
+      expect(
+        hover!.a,
+        `${scheme.id}: hover must be a lighter step than the page shown`
+      ).toBeLessThan(active!.a === 1 && hover!.a < 1 ? 1 : active!.a);
+    }
+  });
+
   it("makes the highlight a heavier step than the list-detail hover on every built-in theme", () => {
     // Where hover and selection coexist, the two must never be mistaken for one
     // another, so the highlight has to be the stronger lift of the two.

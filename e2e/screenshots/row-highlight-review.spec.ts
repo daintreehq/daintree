@@ -143,6 +143,21 @@ const SURFACES: Surface[] = [
     arrows: true,
   },
   {
+    // A list-detail list: the page shown and the row under the pointer are two
+    // states on purpose, so this surface is judged for the weight of each rather
+    // than for a single lit row.
+    slug: "settings-nav",
+    url: (t) => `/row-highlight-preview.html?surface=settings-nav&theme=${t}`,
+    open: async (page) => {
+      const list = page.getByRole("tablist");
+      await expect(list.getByRole("tab").first()).toBeVisible();
+      return list;
+    },
+    row: '[role="tab"]',
+    pointerRow: 3,
+    arrows: false,
+  },
+  {
     slug: "menu",
     url: (t) => `/row-highlight-preview.html?surface=menu&theme=${t}`,
     open: async (page) => {
