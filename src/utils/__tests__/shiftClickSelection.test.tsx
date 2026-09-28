@@ -50,22 +50,35 @@ describe("suppressShiftClickTextSelection (#12926)", () => {
     expect(document.activeElement).toBe(get("button"));
   });
 
-  it("does not focus anything when the target has no focusable ancestor in the surface", () => {
+  it("drops focus when nothing around the target is focusable, as a native click would", () => {
     const get = renderSurface();
-    const before = document.activeElement;
+    get("button").focus();
     fireEvent.mouseDown(get("text"), { shiftKey: true, button: 0 });
-    expect(document.activeElement).toBe(before);
+    expect(document.activeElement).toBe(document.body);
   });
 
-  it("does not reach past the surface for a focusable ancestor", () => {
+  it("focuses a focusable ancestor outside the surface, like a listbox around its rows", () => {
     const { getByTestId } = render(
-      <div tabIndex={0} data-testid="outer">
+      <div role="listbox" tabIndex={-1} data-testid="listbox">
         <div onMouseDown={suppressShiftClickTextSelection}>
-          <span data-testid="inner">Row</span>
+          <span data-testid="row-text">src/x.ts</span>
         </div>
+        <input data-testid="filter" />
       </div>
     );
-    fireEvent.mouseDown(getByTestId("inner"), { shiftKey: true, button: 0 });
-    expect(document.activeElement).not.toBe(getByTestId("outer"));
+    getByTestId("filter").focus();
+    fireEvent.mouseDown(getByTestId("row-text"), { shiftKey: true, button: 0 });
+    expect(document.activeElement).toBe(getByTestId("listbox"));
+  });
+
+  it("cancels Shift+mousedown on a checkbox input and focuses it", () => {
+    const { getByTestId } = render(
+      <div onMouseDown={suppressShiftClickTextSelection}>
+        <input type="checkbox" data-testid="checkbox" />
+      </div>
+    );
+    const checkbox = getByTestId("checkbox");
+    expect(fireEvent.mouseDown(checkbox, { shiftKey: true, button: 0 })).toBe(false);
+    expect(document.activeElement).toBe(checkbox);
   });
 });
