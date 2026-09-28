@@ -1,9 +1,21 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  type RenderOptions,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Trash2, RotateCcw } from "lucide-react";
 import { primeRadix } from "@/components/ui/radix-loader";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { BannerOverflowMenu } from "../BannerOverflowMenu";
+
+// The overflow trigger explains itself through the shared Tooltip.
+const render = (ui: ReactElement, options?: RenderOptions) =>
+  rtlRender(ui, { wrapper: TooltipProvider, ...options });
 
 beforeAll(async () => {
   await primeRadix();
