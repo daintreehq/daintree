@@ -1305,3 +1305,36 @@ describe("BrowserToolbar back/forward history menu", () => {
     expect(queryByRole("menu")).toBeNull();
   });
 });
+
+describe("BrowserToolbar history menu from the keyboard", () => {
+  beforeAll(async () => {
+    const { primeRadix } = await import("@/components/ui/radix-loader");
+    await primeRadix();
+  });
+
+  it("opens on ArrowDown with the most recent entry focused, while Enter still navigates", async () => {
+    const onBack = vi.fn();
+    const { getByTestId, findByRole } = renderToolbar({
+      canGoBack: true,
+      onBack,
+      navSnapshot: {
+        entries: [
+          { index: 0, url: "http://localhost:5173/", title: "Home" },
+          { index: 1, url: "http://localhost:5173/pricing", title: "Pricing" },
+        ],
+        activeIndex: 1,
+        canGoBack: true,
+        canGoForward: false,
+      },
+    });
+    const back = getByTestId("browser-back");
+    fireEvent.click(back, { detail: 0 });
+    expect(onBack).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(back, { key: "ArrowDown" });
+    const menu = await findByRole("menu");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(menu.querySelector('[role="menuitem"]'))
+    );
+  });
+});

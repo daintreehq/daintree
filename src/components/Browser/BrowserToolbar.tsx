@@ -177,6 +177,7 @@ export function BrowserToolbar({
     back: null,
     forward: null,
   });
+  const historyOpenedByKeyRef = useRef(false);
 
   const clearLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
@@ -557,8 +558,9 @@ export function BrowserToolbar({
     </button>
   );
 
-  // Chrome's history list: long-press or right-click the button. Right-click
-  // is also the keyboard path, through the context-menu key and Shift+F10.
+  // Chrome's history list: long-press or right-click the button, or ArrowDown
+  // from the keyboard (Shift+F10 and the context-menu key reach it too).
+  // Enter and Space stay navigation, so the button is not a menu button.
   const historyMenu = (dir: "back" | "forward") => {
     const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
     if (entries.length === 0) return null;
@@ -578,6 +580,14 @@ export function BrowserToolbar({
           align="start"
           className="min-w-[220px] max-w-[28rem]"
           aria-label={dir === "back" ? "Back history" : "Forward history"}
+          onOpenAutoFocus={(e) => {
+            if (!historyOpenedByKeyRef.current) return;
+            historyOpenedByKeyRef.current = false;
+            e.preventDefault();
+            (e.currentTarget as HTMLElement | null)
+              ?.querySelector<HTMLElement>('[role="menuitem"]')
+              ?.focus();
+          }}
           onCloseAutoFocus={(e) => {
             e.preventDefault();
             navButtonRefs.current[dir]?.focus({ preventScroll: true });
@@ -612,6 +622,14 @@ export function BrowserToolbar({
                   navButtonRefs.current[dir] = el;
                 }}
                 onPointerDown={(e) => handlePointerDown(dir, e)}
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowDown") return;
+                  const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
+                  if (entries.length === 0) return;
+                  e.preventDefault();
+                  historyOpenedByKeyRef.current = true;
+                  setLongPressDir(dir);
+                }}
                 onContextMenu={(e) => {
                   const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
                   if (entries.length === 0) return;
