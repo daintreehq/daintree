@@ -52,10 +52,10 @@ const ACCENT_FILL_VARIANTS = new Set(["default", "glow", "vibrant"]);
 // refactor stopped matching and the contract went blind. Lower them deliberately, in the
 // same commit that removes the footers.
 const MIN_FOOTERS_INSPECTED = 24;
-// 51, down from 53: the file close guard, the create-folder dialog and the command
-// picker's error dialog moved onto the footer's action props, which this walk
-// doesn't count as hand-written buttons.
-const MIN_BUTTONS_INSPECTED = 51;
+// 49, down from 53: the file close guard, the create-folder, update-cwd and
+// command picker error dialogs moved onto the footer's action props, which this
+// walk doesn't count as hand-written buttons.
+const MIN_BUTTONS_INSPECTED = 49;
 
 function tsxFiles(dir: string, found: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

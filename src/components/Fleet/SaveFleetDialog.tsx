@@ -94,7 +94,12 @@ export function SaveFleetDialog({
       kind === "snapshot"
         ? { kind: "snapshot" as const, name: trimmed }
         : { kind: "predicate" as const, name: trimmed, scope: ruleScope, stateFilter: ruleState };
-    await actionService.dispatch("fleet.saveNamedFleet", args, { source: "user" });
+    try {
+      await actionService.dispatch("fleet.saveNamedFleet", args, { source: "user" });
+    } catch {
+      // Reported by the dispatcher; the unchanged list below reads as a failure.
+    }
+    // Always unlocks: the dialog can't be dismissed while this is set.
     setSaving(false);
     // The action rolls its in-memory append back when the write fails, so a
     // new id surviving the await is the success signal. Keep the draft on
