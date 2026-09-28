@@ -18,6 +18,7 @@ import { extractInspectUrl } from "@/lib/agentInstall";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { CountBadge } from "@/components/ui/badge";
 
 export interface AgentIdentity {
   name: string;
@@ -100,11 +101,7 @@ function OnboardingCard({
         compact={compact}
       />
       <div className="flex items-center gap-2 shrink-0">
-        {presetCount > 1 && (
-          <span className="text-3xs text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded">
-            {presetCount} presets
-          </span>
-        )}
+        {presetCount > 1 && <CountBadge>{presetCount} presets</CountBadge>}
         {installed ? (
           <span className="text-2xs text-text-secondary font-medium">Installed</span>
         ) : (

@@ -114,6 +114,8 @@ import { logError } from "@/utils/logger";
 import { useWorktreeSidebarKeyboard, type SidebarKeyboardItem } from "./useWorktreeSidebarKeyboard";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import type { WorktreeActions } from "@/hooks/useWorktreeActions";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { CountBadge } from "@/components/ui/badge";
 
 const LazyNewWorktreeDialog = lazyWithPreload(
   () => import("@/components/Worktree/NewWorktreeDialog"),
@@ -324,9 +326,12 @@ function renderSidebarFlatItem(
         <div
           role="rowheader"
           aria-colspan={1}
-          className="px-4 py-2 text-3xs font-medium text-text-secondary uppercase tracking-wide"
+          className={cn(LIST_LABEL_CLASS, "flex items-center gap-1.5 px-4 py-2")}
         >
-          {item.displayName} ({item.count})
+          {item.displayName}
+          {/* The pill is for the eye; the name keeps its "(n)" for a screen reader. */}
+          <CountBadge aria-hidden="true">{item.count}</CountBadge>
+          <span className="sr-only"> ({item.count})</span>
         </div>
       </div>
     );

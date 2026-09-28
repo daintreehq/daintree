@@ -53,14 +53,10 @@ import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSear
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge, CountBadge } from "@/components/ui/badge";
 
-// Provenance badge — where the archive came from. Deliberately the quietest
-// thing in the row: it is trivia next to whether the plugin is actually running.
-const ROW_BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
-
-const SECTION_HEADER_CLASS =
-  "px-3 text-3xs font-medium uppercase tracking-wider text-text-secondary select-none";
+const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
 // How long the result count waits for typing to pause before it is announced.
 // Announcing every intermediate count queues a sentence per keystroke.
@@ -210,10 +206,8 @@ function PluginRow({
                   {blurb}
                 </span>
               )}
-              {plugin.devMode && <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>Dev</span>}
-              {!plugin.isBuiltin && (
-                <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>{sourceLabel}</span>
-              )}
+              {plugin.devMode && <Badge size="xs">Dev</Badge>}
+              {!plugin.isBuiltin && <Badge size="xs">{sourceLabel}</Badge>}
             </span>
           </span>
         </button>
@@ -987,9 +981,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                     <section key={id} aria-labelledby={headingId} className="space-y-1">
                       <h3 id={headingId} className={SECTION_HEADER_CLASS}>
                         {label}{" "}
-                        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
+                        <CountBadge
+                          className="ml-1.5"
+                          label={`${groupPlugins.length} ${groupPlugins.length === 1 ? "plugin" : "plugins"}`}
+                        >
                           {groupPlugins.length}
-                        </span>
+                        </CountBadge>
                       </h3>
                       <ul role="list" className="space-y-1">
                         {groupPlugins.map((plugin) => (

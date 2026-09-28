@@ -38,6 +38,7 @@ import {
   toRepoOperationState,
   type RepoOperationState,
 } from "@/components/Git/repoOperationCopy";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const REBASE_ACTION_LABEL: Record<RebaseAction, string> = {
   pick: "pick",
@@ -112,7 +113,7 @@ function RebaseSequenceRail({ entries }: { entries: RebaseEntry[] }) {
     <div className="border-b border-divider" data-testid="conflict-rebase-sequence">
       <div className={REVIEW_HUB_STICKY_BAND}>
         <div className="px-4 py-2 bg-overlay-subtle flex items-center">
-          <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
+          <span className={SECTION_LABEL_CLASS}>
             Rebase sequence
             <span className={REVIEW_HUB_COUNT_CHIP}>{display.length}</span>
           </span>
@@ -588,7 +589,7 @@ export function ConflictPanel({
       <div className="border-b border-divider">
         <div className={REVIEW_HUB_STICKY_BAND}>
           <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
-            <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
+            <span className={SECTION_LABEL_CLASS}>
               Conflicted
               <span className={REVIEW_HUB_COUNT_CHIP}>{conflictCount}</span>
             </span>
@@ -702,7 +703,10 @@ export function ConflictPanel({
             <button
               type="button"
               onClick={() => setShowResolved((v) => !v)}
-              className="w-full flex items-center gap-1.5 px-4 py-1.5 text-2xs font-semibold uppercase tracking-wider text-text-secondary hover:text-text-primary hover:bg-overlay-subtle transition-colors"
+              className={cn(
+                SECTION_LABEL_CLASS,
+                "w-full flex items-center gap-1.5 px-4 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
+              )}
               aria-expanded={showResolved}
               aria-controls={resolvedListId}
               data-testid="conflict-resolved-toggle"

@@ -12,6 +12,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 const TYPE_BADGES: Record<string, string> = {
   terminal: "Terminal",
@@ -102,12 +103,9 @@ function RecipeListItem({
         </span>
         <div className="flex items-center gap-1 shrink-0">
           {uniqueTypes.map((type) => (
-            <span
-              key={type}
-              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-overlay-medium text-text-secondary text-2xs"
-            >
+            <Badge size="xs" key={type}>
               {type}
-            </span>
+            </Badge>
           ))}
         </div>
       </div>

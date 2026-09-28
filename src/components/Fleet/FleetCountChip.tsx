@@ -20,6 +20,8 @@ import { FleetWorktreeDots } from "./FleetWorktreeDots";
 import { renderPaneStateBadge } from "./renderPaneStateBadge";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge } from "@/components/ui/badge";
 
 interface FleetCountChipProps {
   armedCount: number;
@@ -222,9 +224,7 @@ export function FleetCountChip({
       >
         {popoverMode === "list" ? (
           <>
-            <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
-              Fleet terminals
-            </div>
+            <div className={cn(LIST_LABEL_CLASS, "px-2 py-1")}>Fleet terminals</div>
             <ul className="flex flex-col overflow-y-auto">
               {armOrder.length === 0 ? (
                 <li className="px-2 py-1 text-xs leading-[inherit] text-text-secondary">None</li>
@@ -272,12 +272,9 @@ export function FleetCountChip({
                         )}
                         <span className="truncate">{title}</span>
                         {id === focusedId && (
-                          <span
-                            className="shrink-0 text-3xs uppercase tracking-wide text-text-secondary"
-                            data-testid={`fleet-row-primary-${id}`}
-                          >
+                          <Badge size="xs" data-testid={`fleet-row-primary-${id}`}>
                             Primary
-                          </span>
+                          </Badge>
                         )}
                       </button>
                       {sendFailed && (
@@ -330,9 +327,7 @@ export function FleetCountChip({
                 <ArrowLeft aria-hidden="true" />
                 <span>Back</span>
               </Button>
-              <span className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-                Add panes
-              </span>
+              <span className={LIST_LABEL_CLASS}>Add panes</span>
             </div>
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-daintree-border/50 px-1 pt-2">

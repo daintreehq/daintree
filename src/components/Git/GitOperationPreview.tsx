@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge, COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
 /**
  * The parts every git confirm preview is built from — push, pull-and-rebase,
@@ -75,9 +77,7 @@ export function SummaryRow({
 }) {
   return (
     <div className="flex items-baseline gap-2">
-      <dt className="text-3xs uppercase tracking-wider text-text-secondary shrink-0 w-16">
-        {label}
-      </dt>
+      <dt className="text-text-secondary shrink-0 w-16">{label}</dt>
       <dd className="flex-1 min-w-0">
         {aside ? (
           <span className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
@@ -98,12 +98,26 @@ export function SummaryRow({
  * Wraps rather than truncates: which branch and which repository is the one
  * fact on these surfaces that must never be shortened, and a long fork ref
  * across three lines beats an ellipsis in the middle of the repository name.
+ *
+ * The same box as `BranchBadge`, which names the branch in a surface's chrome;
+ * this one is the value a confirmation asks about, so it takes primary ink.
  */
-export function RefChip({ value }: { value: string }) {
+export function RefChip({
+  value,
+  "data-testid": testId,
+}: {
+  value: string;
+  "data-testid"?: string;
+}) {
   return (
-    <span className="inline-flex items-baseline px-1.5 py-0.5 rounded-lg bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono text-text-primary break-words">
+    <Badge
+      size="sm"
+      tone="outline"
+      data-testid={testId}
+      className="min-w-0 max-w-full shrink items-baseline whitespace-normal break-words font-mono text-text-primary"
+    >
       {value}
-    </span>
+    </Badge>
   );
 }
 
@@ -146,19 +160,13 @@ export function PreviewSectionHeading({
 }) {
   return (
     <div className={cn("px-3 py-2", SECTION_DIVIDER)}>
-      <span
-        role="heading"
-        aria-level={3}
-        className="text-2xs font-semibold uppercase tracking-wider text-text-secondary break-words"
-      >
+      <span role="heading" aria-level={3} className={cn(SECTION_LABEL_CLASS, "break-words")}>
         {label}
         {refName && (
           <span className="font-mono font-medium normal-case tracking-normal"> {refName}</span>
         )}
         {count !== undefined && count > 0 && (
-          <span className="ml-1.5 tabular-nums bg-tint/10 rounded-lg px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
-            {count}
-          </span>
+          <span className={cn(COUNT_BADGE_CLASS, "ml-1.5")}>{count}</span>
         )}
       </span>
     </div>

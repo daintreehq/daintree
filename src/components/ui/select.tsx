@@ -8,6 +8,7 @@ import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loade
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { menuRowPointerMove } from "./menu-row-hover-focus";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 /**
@@ -315,14 +316,7 @@ const SelectLabel = React.forwardRef<
   if (!radix) return null;
   const Label = radix.SelectPrimitive.Label;
   return (
-    <Label
-      ref={ref}
-      className={cn(
-        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary",
-        className
-      )}
-      {...props}
-    />
+    <Label ref={ref} className={cn(LIST_LABEL_CLASS, "px-2.5 py-1.5", className)} {...props} />
   );
 });
 SelectLabel.displayName = "SelectLabel";

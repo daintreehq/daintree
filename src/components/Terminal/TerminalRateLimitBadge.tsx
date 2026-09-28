@@ -6,6 +6,8 @@ import {
   useRateLimitObservationStore,
 } from "@/store/rateLimitObservationStore";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { cn } from "@/lib/utils";
+import { HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE } from "./terminalHeaderChip";
 
 /**
  * Ambient header chip on a pane whose agent printed a rate-limit banner
@@ -30,7 +32,7 @@ function RateLimitChip({ observedAt }: { observedAt: number }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded-full border border-divider"
+          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
           role="status"
           aria-live="off"
           data-testid="terminal-rate-limit-badge"

@@ -48,6 +48,7 @@ import {
 } from "./terminalStateConfig";
 import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * Column tracks shared by the header and every row, so each section sits on
@@ -449,11 +450,7 @@ export function WorktreeOverviewRow({
                     {title}
                   </span>
                 </TruncatedTooltip>
-                {isCurrent && (
-                  <span className="shrink-0 rounded-[var(--radius-xs)] border border-border-default px-1 text-3xs leading-4 text-text-secondary">
-                    Current
-                  </span>
-                )}
+                {isCurrent && <Badge size="xs">Current</Badge>}
                 {exception && (
                   <span className="flex shrink-0 items-center gap-1 text-2xs font-medium text-status-error">
                     <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />

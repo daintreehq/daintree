@@ -14,6 +14,7 @@ import { actionService } from "@/services/ActionService";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidPastTimestamp } from "@/utils/timestamps";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const MAX_VISIBLE_FILES = 100;
 
@@ -46,8 +47,7 @@ const NARRATIVE_RAIL_SIDEBAR_NUDGE = "ml-0.5";
 // and `text-muted` has no contrast floor on the darkest palettes — 2.22:1 on
 // namib, where it drops out of the rail entirely. The 10px uppercase size and
 // the tracking already do the de-emphasis.
-const NARRATIVE_LABEL =
-  "flex items-center gap-1 text-3xs font-medium uppercase tracking-[0.06em] text-text-secondary";
+const NARRATIVE_LABEL = cn(LIST_LABEL_CLASS, "flex items-center gap-1");
 
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;

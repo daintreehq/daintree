@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { cn } from "@/lib/utils";
-import { Badge, badgeVariants } from "../badge";
+import { Badge, CountBadge, badgeVariants } from "../badge";
 import {
   expectNarrowTransition,
   expectNoUnfocusedAccent,
@@ -148,5 +148,25 @@ describe("badgeVariants", () => {
     expect(colours).toContain("text-state-waiting");
     expect(colours.some((token) => token.startsWith("bg-"))).toBe(true);
     expect(colours.filter((token) => /^text-/.test(token))).toEqual(["text-state-waiting"]);
+  });
+});
+
+describe("CountBadge", () => {
+  // A bare numeral is not an accessible name: with a label, what is spoken is
+  // the label and the numeral is for the eye only.
+  it("speaks its label instead of the bare numeral", () => {
+    const { container } = render(<CountBadge label="3 plugins">3</CountBadge>);
+    const badge = container.querySelector('[data-slot="count-badge"]')!;
+    const spoken = Array.from(badge.querySelectorAll("*"))
+      .filter((el) => el.children.length === 0 && !el.closest('[aria-hidden="true"]'))
+      .map((el) => el.textContent)
+      .join("");
+    expect(spoken).toBe("3 plugins");
+    expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe("3");
+  });
+
+  it("renders the count as-is when there is nothing more to say", () => {
+    const { container } = render(<CountBadge>7</CountBadge>);
+    expect(container.querySelector('[data-slot="count-badge"]')?.textContent).toBe("7");
   });
 });

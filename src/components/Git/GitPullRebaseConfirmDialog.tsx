@@ -419,7 +419,7 @@ function GitPullRebaseConfirmDialogInner() {
         {isMeasured && behind > 0 && (
           <>
             <PreviewSectionHeading
-              label="Incoming from"
+              label="Incoming commits from"
               refName={upstreamLabel ?? undefined}
               count={behind}
             />

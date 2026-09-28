@@ -17,6 +17,7 @@ import {
 } from "@/utils/destructiveSessionConfirm";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
+import { Badge } from "@/components/ui/badge";
 
 interface DeletedWorktreeCardProps {
   worktree: DeletedWorktree;
@@ -195,9 +196,7 @@ export function DeletedWorktreeCard({
             >
               {worktree.title}
             </span>
-            <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-secondary">
-              Deleted
-            </span>
+            <Badge size="xs">Deleted</Badge>
           </span>
           <div className="flex items-center gap-2 shrink-0">
             {hasCountdown && (
@@ -252,13 +251,13 @@ export function DeletedWorktreeCard({
           {hold !== undefined && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span
-                  className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-secondary"
+                <Badge
+                  size="xs"
                   data-testid="deleted-worktree-countdown-hold"
                   data-hold-reason={worktree.holdReason}
                 >
                   {hold.label}
-                </span>
+                </Badge>
               </TooltipTrigger>
               <TooltipContent side="top">{hold.tooltip}</TooltipContent>
             </Tooltip>

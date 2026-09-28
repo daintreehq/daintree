@@ -14,13 +14,10 @@ import {
   type ProjectPluginInfo,
   type ProjectPluginState,
 } from "@shared/types/plugin";
+import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge, CountBadge } from "@/components/ui/badge";
 
-/** Same badge vocabulary as the installed rows — origin is a badge, not a colour. */
-const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
-
-const SECTION_HEADER_CLASS =
-  "px-3 text-3xs font-medium uppercase tracking-wider text-text-secondary select-none";
+const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
 const STATE_BADGE: Record<Exclude<ProjectPluginState, "active">, string> = {
   staged: "Staged",
@@ -110,10 +107,8 @@ function ProjectPluginRow({
                   {plugin.id}
                 </span>
               )}
-              {plugin.state !== "active" && (
-                <span className={cn(BADGE_CLASS, "shrink-0")}>{STATE_BADGE[plugin.state]}</span>
-              )}
-              <span className={cn(BADGE_CLASS, "shrink-0")}>Project</span>
+              {plugin.state !== "active" && <Badge size="xs">{STATE_BADGE[plugin.state]}</Badge>}
+              <Badge size="xs">Project</Badge>
             </span>
           </span>
         </button>
@@ -161,9 +156,12 @@ export function ProjectPluginSection({
           drops under Chromium 146 + VoiceOver (LESSON #9006). */}
       <h3 id="plugin-category-this-project" className={SECTION_HEADER_CLASS}>
         This project{" "}
-        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
+        <CountBadge
+          className="ml-1.5"
+          label={`${plugins.length} ${plugins.length === 1 ? "plugin" : "plugins"}`}
+        >
           {plugins.length}
-        </span>
+        </CountBadge>
       </h3>
       <ul role="list" className="space-y-1">
         {plugins.map((plugin) => (
@@ -224,15 +222,13 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             {plugin.version && (
               <span className="text-xs font-normal text-text-secondary">v{plugin.version}</span>
             )}
-            <span className={BADGE_CLASS}>Project</span>
-            {plugin.state !== "active" && (
-              <span className={BADGE_CLASS}>{STATE_BADGE[plugin.state]}</span>
-            )}
+            <Badge size="xs">Project</Badge>
+            {plugin.state !== "active" && <Badge size="xs">{STATE_BADGE[plugin.state]}</Badge>}
             {plugin.loadError && (
-              <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
-                <AlertCircle className="w-3 h-3" aria-hidden="true" />
+              <Badge size="xs" tone="error">
+                <AlertCircle aria-hidden="true" />
                 Error
-              </span>
+              </Badge>
             )}
           </div>
           {plugin.description && (
@@ -242,7 +238,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
       </div>
 
       <div className="space-y-2">
-        <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Source</h4>
+        <h4 className={SECTION_LABEL_CLASS}>Source</h4>
         <p className="font-mono text-2xs text-text-secondary break-all">
           .daintree/plugins/{plugin.dirName}
         </p>
@@ -284,9 +280,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
 
       {granted.length > 0 && (
         <div className="space-y-2">
-          <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-            Declared capabilities
-          </h4>
+          <h4 className={SECTION_LABEL_CLASS}>Declared capabilities</h4>
           <p className="text-2xs text-text-secondary leading-relaxed">
             What the plugin says it uses. Daintree doesn&apos;t sandbox project plugins, so this is
             a description of intent, not a limit on it — the only control is turning the
@@ -306,7 +300,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
 
       {logs.lines && logs.lines.length > 0 && (
         <div className="space-y-2">
-          <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Logs</h4>
+          <h4 className={SECTION_LABEL_CLASS}>Logs</h4>
           <PluginLogsSection {...logs} />
         </div>
       )}
@@ -343,9 +337,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
           // plugin's name, so "Enable for this project" read as enabling this
           // plugin — the scope lived only in the small print below the buttons.
           <div className="space-y-2 pt-2">
-            <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-              All plugins in this project
-            </h4>
+            <h4 className={SECTION_LABEL_CLASS}>All plugins in this project</h4>
             {enabled ? (
               <>
                 <p className="text-2xs text-text-secondary leading-relaxed">

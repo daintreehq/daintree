@@ -5,6 +5,8 @@ import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirm
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import type { PluginCapabilityConsentDecision } from "@shared/types/pluginCapabilityConsent";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
+import { cn } from "@/lib/utils";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 /**
  * Singleton dialog driven by the just-in-time capability consent queue (#10524).
@@ -76,9 +78,7 @@ export function PluginCapabilityConfirmDialog() {
       >
         <div className="space-y-3">
           <div>
-            <div className="text-2xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
-              Capability
-            </div>
+            <div className={cn(SECTION_LABEL_CLASS, "mb-1")}>Capability</div>
             <ul>
               <CapabilityRow capability={current.capability} />
             </ul>
@@ -86,9 +86,7 @@ export function PluginCapabilityConfirmDialog() {
 
           {current.declaredCapabilities.length > 0 && (
             <div>
-              <div className="text-2xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
-                All declared capabilities
-              </div>
+              <div className={cn(SECTION_LABEL_CLASS, "mb-1")}>All declared capabilities</div>
               <ul className="space-y-1.5">
                 {current.declaredCapabilities.map((cap) => (
                   <CapabilityRow key={cap} capability={cap} />

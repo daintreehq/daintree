@@ -33,7 +33,12 @@ import type {
   SubagentProvider,
 } from "@shared/types/ipc/agentSubagents";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
-import { HEADER_CHIP_FOCUS_CLASS as CHIP_FOCUS_CLASS } from "./terminalHeaderChip";
+import {
+  HEADER_CHIP_CLASS,
+  HEADER_CHIP_FOCUS_CLASS as CHIP_FOCUS_CLASS,
+  HEADER_CHIP_SURFACE,
+} from "./terminalHeaderChip";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const TONE_CLASSES: Record<"error" | "waiting" | "muted", string> = {
   error: "text-status-error",
@@ -88,9 +93,7 @@ function TranscriptBody({
       )}
       {transcript.messages.map((message, index) => (
         <div key={`${transcript.subagentId}-${index}`} className="flex flex-col gap-0.5">
-          <span className="text-3xs uppercase tracking-wider text-text-secondary">
-            {message.role === "task" ? "Task" : "Reply"}
-          </span>
+          <span className={LIST_LABEL_CLASS}>{message.role === "task" ? "Task" : "Reply"}</span>
           <p className="text-xs text-text-primary whitespace-pre-wrap break-words">
             {message.text}
           </p>
@@ -321,7 +324,9 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
             <button
               type="button"
               className={cn(
-                "inline-flex items-center gap-1 shrink-0 text-xs font-sans bg-overlay-soft px-1.5 py-0.5 rounded-full border border-divider hover:bg-overlay-medium transition-colors",
+                HEADER_CHIP_CLASS,
+                HEADER_CHIP_SURFACE,
+                "hover:bg-overlay-medium transition-colors",
                 // The chip borrows the waiting hue only while a child is
                 // blocked on the user — the one thing worth seeing from the
                 // header without opening anything — and keeps it under the

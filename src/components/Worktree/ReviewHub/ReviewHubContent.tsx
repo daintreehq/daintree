@@ -33,15 +33,7 @@ import {
 } from "@/lib/fileListWindowing";
 import type { VirtuosoHandle } from "react-virtuoso";
 
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import {
-  RefreshCw,
-  CircleCheck,
-  ArrowUpFromLine,
-  ChevronRight,
-  AlertTriangle,
-  GitBranch,
-} from "lucide-react";
+import { RefreshCw, CircleCheck, ArrowUpFromLine, ChevronRight, AlertTriangle } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -120,6 +112,9 @@ import {
   sumChurn,
 } from "./reviewHubUtils";
 import { isGeneratedFile } from "../generatedFileClassifier";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { BranchBadge } from "@/components/ui/BranchBadge";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * Floor for the dialog-hosted body, so the pane stops resizing itself around
@@ -1893,22 +1888,12 @@ export function ReviewHubContent({
                 Review & commit
               </h2>
             )}
-            {status?.currentBranch && (
-              <TruncatedTooltip content={status.currentBranch}>
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs text-text-secondary font-mono truncate max-w-[200px]">
-                  <GitBranch className="w-3 h-3 shrink-0" />
-                  <span className="truncate">{status.currentBranch}</span>
-                </span>
-              </TruncatedTooltip>
-            )}
+            {status?.currentBranch && <BranchBadge branch={status.currentBranch} />}
             {status?.currentBranch && isProtectedBranch(status.currentBranch.toLowerCase()) && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-status-warning/10 border border-status-warning/30 text-2xs text-status-warning shrink-0"
-                data-testid="review-hub-protected-branch-chip"
-              >
-                <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+              <Badge size="sm" tone="warning" data-testid="review-hub-protected-branch-chip">
+                <AlertTriangle aria-hidden="true" />
                 <span>Protected</span>
-              </span>
+              </Badge>
             )}
             <PrStatusChip
               hasRemote={status?.hasRemote}
@@ -2130,8 +2115,11 @@ export function ReviewHubContent({
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
                     <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
-                      <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
-                        Changed vs {mainBranch}
+                      <span className={SECTION_LABEL_CLASS}>
+                        Changed vs{" "}
+                        <span className="font-mono font-medium normal-case tracking-normal">
+                          {mainBranch}
+                        </span>
                         <span className={REVIEW_HUB_COUNT_CHIP}>
                           {sortedBaseBranchFiles.length} file
                           {sortedBaseBranchFiles.length !== 1 ? "s" : ""}

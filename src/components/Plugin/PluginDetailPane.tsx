@@ -37,6 +37,8 @@ import {
   type PluginInstallSource,
 } from "@shared/types/plugin";
 import { PluginDatabasesSection } from "./PluginDatabasesSection";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge } from "@/components/ui/badge";
 
 /** Provenance source → short badge label (built-in / file / URL / catalog). */
 export const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
@@ -49,9 +51,6 @@ export const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
 export function pluginLabel(plugin: LoadedPluginInfo): string {
   return plugin.manifest.displayName ?? plugin.manifest.name;
 }
-
-const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
 
 /**
  * Declared capabilities in the order {@link BUILT_IN_PLUGIN_CAPABILITIES} defines
@@ -136,7 +135,7 @@ function PluginCapabilityList({
 function PluginContributedCommands({ commands }: { commands: PluginActionContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Commands</h4>
+      <h4 className={SECTION_LABEL_CLASS}>Commands</h4>
       <ul className="space-y-2">
         {commands.map((command) => (
           <li key={command.id} className="text-xs">
@@ -167,7 +166,7 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
 function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Panels</h4>
+      <h4 className={SECTION_LABEL_CLASS}>Panels</h4>
       <ul className="space-y-2">
         {panels.map((panel) => (
           <li key={panel.id} className="text-xs">
@@ -194,7 +193,7 @@ function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
 function PluginContributedAgents({ agents }: { agents: PluginAgentContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Agents</h4>
+      <h4 className={SECTION_LABEL_CLASS}>Agents</h4>
       <ul className="space-y-2">
         {agents.map((agent) => (
           <li key={agent.id} className="text-xs">
@@ -221,9 +220,7 @@ function PluginContributedAgents({ agents }: { agents: PluginAgentContribution[]
 function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-        Contributors
-      </h4>
+      <h4 className={SECTION_LABEL_CLASS}>Contributors</h4>
       <ul className="space-y-2">
         {authors.map((author, index) => {
           const { name, url, email, role } = author;
@@ -437,30 +434,28 @@ export function PluginDetailPane({
               <span className="text-xs font-normal text-text-secondary">
                 v{plugin.manifest.version}
               </span>
-              {categoryLabel && <span className={BADGE_CLASS}>{categoryLabel}</span>}
-              <span className={BADGE_CLASS}>{sourceLabel}</span>
+              {categoryLabel && <Badge size="xs">{categoryLabel}</Badge>}
+              <Badge size="xs">{sourceLabel}</Badge>
               {plugin.blocklisted === true && (
-                <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
-                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                <Badge size="xs" tone="error">
+                  <AlertCircle aria-hidden="true" />
                   Blocked
-                </span>
+                </Badge>
               )}
               {plugin.blocklisted !== true && plugin.disabled === true && (
-                <span className={BADGE_CLASS}>Disabled</span>
+                <Badge size="xs">Disabled</Badge>
               )}
               {plugin.devMode && (
                 // The live generation, not just "Dev": it is the one fact that
                 // says whether the running backend and the mounted view came
                 // out of the same build (#12277).
-                <span className={BADGE_CLASS}>
+                <Badge size="xs">
                   {runtimeStatus?.viewGeneration != null
                     ? `Dev · gen ${runtimeStatus.viewGeneration}`
                     : "Dev"}
-                </span>
+                </Badge>
               )}
-              {restartRequired && (
-                <span className={`${BADGE_CLASS} text-text-secondary`}>Restart required</span>
-              )}
+              {restartRequired && <Badge size="xs">Restart required</Badge>}
             </div>
             {plugin.manifest.tagline && (
               <p className="text-sm text-text-secondary mt-1">{plugin.manifest.tagline}</p>
@@ -671,9 +666,7 @@ export function PluginDetailPane({
               thing to do with it is paste it somewhere. */}
             {(plugin.originalUrl || plugin.devMode) && (
               <div>
-                <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">
-                  Source
-                </p>
+                <p className={SECTION_LABEL_CLASS}>Source</p>
                 {/* A dev plugin's origin is the checkout it is running from, and
                   without it an author cannot tell WHICH working copy is loaded
                   — the one fact the Dev badge implies but never states. A

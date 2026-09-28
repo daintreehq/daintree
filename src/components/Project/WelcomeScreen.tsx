@@ -37,6 +37,7 @@ import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface WelcomeScreenProps {
   gettingStarted: GettingStartedChecklistState;
@@ -208,10 +209,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               nudge below reports progress and offers optional setup. */}
           <div className="w-full">
             {hasProjects && (
-              <h3
-                id="quick-actions-heading"
-                className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3"
-              >
+              <h3 id="quick-actions-heading" className={cn(SECTION_LABEL_CLASS, "mb-3")}>
                 Quick actions
               </h3>
             )}
@@ -309,9 +307,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               is up, so the two never compete for the same screen. */}
           {visibleShortcutTips.length > 0 && !showChecklist && (
             <div className="w-full">
-              <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
-                Keyboard shortcuts
-              </h3>
+              <h3 className={cn(SECTION_LABEL_CLASS, "mb-3")}>Keyboard shortcuts</h3>
               <div className="grid grid-cols-2 gap-x-8 gap-y-2 @min-[1800px]/welcome:gap-x-10">
                 {visibleShortcutTips.map(({ label, actionId }) => {
                   const combo = keybindingService.getEffectiveCombo(actionId);
@@ -453,9 +449,7 @@ function TopProjects({
     <div className="w-full">
       {/* "Your projects", not "Recent projects": the order follows the switcher's
           Other-band sort mode, so no fixed order-word belongs in the heading. */}
-      <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
-        Your projects
-      </h3>
+      <h3 className={cn(SECTION_LABEL_CLASS, "mb-3")}>Your projects</h3>
       <div className="space-y-1">
         {projects.map((project) => (
           <button
@@ -718,10 +712,7 @@ function InlineChecklist({
   return (
     <section className="w-full" aria-labelledby="welcome-getting-started-heading">
       <div className="flex items-center gap-3 mb-3">
-        <h3
-          id="welcome-getting-started-heading"
-          className="text-xs font-medium text-text-secondary uppercase tracking-wider"
-        >
+        <h3 id="welcome-getting-started-heading" className={SECTION_LABEL_CLASS}>
           Getting started
         </h3>
         <span className="text-3xs text-text-secondary font-mono tabular-nums @min-[1920px]/welcome:text-xs">

@@ -14,6 +14,8 @@ import { isPtyPanel } from "@shared/types/panel";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { notify } from "@/lib/notify";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
 const SYNC_MODE_POLL_MS = 250;
 /**
@@ -37,15 +39,6 @@ const SLOW_LOAD_MS = 5000;
 const NONE = "—";
 const UNKNOWN = "Unknown";
 const UNAVAILABLE = "Unavailable";
-
-/**
- * Section header treatment, matching `GitPushConfirmDialog` and `McpConfirmDialog`.
- *
- * Uppercase micro-label rather than sentence-case prose: it is a rail marker, not a
- * sentence, and at 11px it reads as structure instead of competing with the rows for
- * the same tab stop of the eye.
- */
-const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 
 /**
  * The label rail.
@@ -226,7 +219,7 @@ function ChipRow({ label, items, pending = false, fallback = NONE }: ChipRowProp
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className={MICRO_LABEL}>{title}</h3>
+      <h3 className={SECTION_LABEL_CLASS}>{title}</h3>
       <dl className={cn(ROW_GRID, "text-sm")}>{children}</dl>
     </section>
   );
@@ -289,7 +282,7 @@ function DisclosureGroup({
          */}
         <span
           className={cn(
-            MICRO_LABEL,
+            SECTION_LABEL_CLASS,
             "group-hover:text-text-primary transition-colors duration-150 ease-out"
           )}
         >
@@ -302,7 +295,7 @@ function DisclosureGroup({
          * kept in that family rather than given a look of its own. The hidden noun is
          * what stops a screen reader announcing a bare "10" as if it were a badge.
          */}
-        <span className="ml-1.5 tabular-nums bg-tint/10 rounded-lg px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-text-secondary">
+        <span className={cn(COUNT_BADGE_CLASS, "ml-1.5")}>
           {count}
           <span className="sr-only"> rows</span>
         </span>

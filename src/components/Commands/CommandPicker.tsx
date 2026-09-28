@@ -6,6 +6,7 @@ import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { paletteSummary } from "@/lib/paletteSummary";
 import type { CommandManifestEntry, CommandCategory } from "@shared/types/commands";
+import { Badge } from "@/components/ui/badge";
 
 interface CommandPickerProps {
   isOpen: boolean;
@@ -305,12 +306,9 @@ export function CommandPicker({
                 </span>
                 {/* Only where it is true: an unavailable row opens nothing. */}
                 {cmd.hasBuilder && cmd.enabled && (
-                  <span
-                    aria-hidden="true"
-                    className="shrink-0 rounded-[var(--radius-sm)] bg-overlay-medium px-1.5 py-px text-3xs text-text-secondary"
-                  >
+                  <Badge size="xs" aria-hidden="true">
                     Opens form
-                  </span>
+                  </Badge>
                 )}
               </div>
               <div id={summaryId} className="truncate text-xs text-text-secondary">

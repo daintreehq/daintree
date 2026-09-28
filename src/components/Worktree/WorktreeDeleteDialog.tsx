@@ -38,6 +38,7 @@ import type { WorktreeTeardownPreview } from "@shared/types/worktree";
 import { cn } from "@/lib/utils";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface WorktreeDeleteDialogProps {
   isOpen: boolean;
@@ -1034,7 +1035,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   id={changesHeadingId}
                   role="heading"
                   aria-level={3}
-                  className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+                  className={SECTION_LABEL_CLASS}
                 >
                   Uncommitted work
                 </span>
@@ -1105,7 +1106,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   id={submodulesHeadingId}
                   role="heading"
                   aria-level={3}
-                  className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+                  className={SECTION_LABEL_CLASS}
                 >
                   Inside submodules
                 </span>
@@ -1216,9 +1217,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               offering a way through that does not exist. */}
           {!isBlocked && (
             <fieldset className="space-y-3">
-              <legend className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
-                Options
-              </legend>
+              <legend className={SECTION_LABEL_CLASS}>Options</legend>
 
               <label className="flex items-start gap-2 cursor-pointer">
                 <input
@@ -1307,7 +1306,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 id={consequencesHeadingId}
                 role="heading"
                 aria-level={3}
-                className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+                className={SECTION_LABEL_CLASS}
               >
                 What will happen
               </span>

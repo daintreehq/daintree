@@ -5,6 +5,8 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
+import { cn } from "@/lib/utils";
+import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface RecipeRunnerListProps {
   sections: RecipeSections;
@@ -120,10 +122,7 @@ export function RecipeRunnerList({
         // another way to launch anything. Naming the band and shrinking the
         // input to a filter says what its scope actually is.
         <div className="mb-2 flex items-center gap-3 px-1">
-          <span
-            id="recipe-band-label"
-            className="shrink-0 text-2xs font-medium uppercase tracking-wide text-text-secondary"
-          >
+          <span id="recipe-band-label" className={cn(SECTION_LABEL_CLASS, "shrink-0")}>
             Recipes
           </span>
           <SearchField
@@ -186,7 +185,7 @@ export function RecipeRunnerList({
               <>
                 <div
                   id="section-pinned"
-                  className="px-3 pt-1 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
+                  className={cn(LIST_LABEL_CLASS, "px-3 pt-1 pb-0.5")}
                   role="presentation"
                 >
                   Pinned
@@ -200,7 +199,7 @@ export function RecipeRunnerList({
               <>
                 <div
                   id="section-recent"
-                  className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
+                  className={cn(LIST_LABEL_CLASS, "px-3 pt-2 pb-0.5")}
                   role="presentation"
                 >
                   Recent
@@ -214,7 +213,7 @@ export function RecipeRunnerList({
               <>
                 <div
                   id="section-all"
-                  className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
+                  className={cn(LIST_LABEL_CLASS, "px-3 pt-2 pb-0.5")}
                   role="presentation"
                 >
                   All

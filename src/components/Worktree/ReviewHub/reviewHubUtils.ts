@@ -3,6 +3,8 @@ import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { isGeneratedFile } from "../generatedFileClassifier";
+import { cn } from "@/lib/utils";
+import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
 export type DiffMode = "working-tree" | "base-branch";
 
@@ -375,8 +377,7 @@ export const REVIEW_HUB_STICKY_BAND = "sticky top-0 z-10 bg-surface-canvas";
  * wash for every section so a header never reads as more or less urgent than
  * its neighbour purely because its chip was tinted differently.
  */
-export const REVIEW_HUB_COUNT_CHIP =
-  "ml-1.5 tabular-nums bg-tint/10 rounded-sm px-1 py-0.5 text-3xs font-medium normal-case tracking-normal";
+export const REVIEW_HUB_COUNT_CHIP = cn(COUNT_BADGE_CLASS, "ml-1.5");
 
 /**
  * Disabled treatment for the hub's full-width primary CTAs (Commit, Push,

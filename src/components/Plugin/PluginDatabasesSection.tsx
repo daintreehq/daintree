@@ -1,4 +1,5 @@
 import type { PluginDatabaseContribution } from "@shared/types/plugin";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 /**
  * The SQLite files a plugin declares. Named in full because a project database
@@ -17,9 +18,7 @@ export function PluginDatabasesSection({
 }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-        Databases
-      </h4>
+      <h4 className={SECTION_LABEL_CLASS}>Databases</h4>
       <ul className="space-y-2">
         {databases.map((database) => (
           <li key={database.id} className="text-xs">

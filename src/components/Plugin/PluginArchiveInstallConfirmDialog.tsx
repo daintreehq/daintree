@@ -10,6 +10,8 @@ import { BUILT_IN_PLUGIN_CAPABILITIES } from "@shared/types/plugin";
 import type { BuiltInPluginCapability, PluginAuthor } from "@shared/types/plugin";
 import { CAPABILITY_META, CapabilityRow, type CapabilitySeverity } from "./capabilityMeta";
 import { PluginGlyphTile, pluginIconForIdentity } from "./pluginIcons";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge } from "@/components/ui/badge";
 
 // Read-time gate: a double-clicked archive opens this dialog without the user
 // asking for it, so the primary button stays disabled long enough that a click
@@ -195,9 +197,9 @@ function ArchiveIdentityCard({ intent }: { intent: PendingPluginArchiveInstall }
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium text-text-primary truncate">{label}</span>
-            <span className="inline-block shrink-0 px-1.5 py-0.5 rounded-sm text-3xs font-mono tabular-nums bg-overlay-subtle border border-daintree-border/50 text-text-secondary max-w-[10rem] truncate">
-              v{manifest.version}
-            </span>
+            <Badge size="xs" tone="outline" className="max-w-[10rem] font-mono tabular-nums">
+              <span className="truncate">v{manifest.version}</span>
+            </Badge>
           </div>
           <div className="mt-0.5 text-2xs font-mono text-text-secondary truncate">
             {manifest.name}
@@ -235,7 +237,7 @@ function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[]
   if (recipes.count === 0) return null;
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Recipes</h4>
+      <h4 className={SECTION_LABEL_CLASS}>Recipes</h4>
       <p className="text-xs text-text-secondary">
         Adds {recipes.count} launch {recipes.count === 1 ? "recipe" : "recipes"}, available in every
         project. Each starts terminals that run commands or agents.
@@ -289,9 +291,7 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
 
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-        Permissions
-      </h4>
+      <h4 className={SECTION_LABEL_CLASS}>Permissions</h4>
       {granted.length === 0 ? (
         <p className="text-xs text-text-secondary">No special permissions</p>
       ) : (

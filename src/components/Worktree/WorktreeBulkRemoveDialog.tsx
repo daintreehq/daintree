@@ -24,6 +24,8 @@ import {
   type BulkRemoveTarget,
   type UseWorktreeBulkRemoveReturn,
 } from "./useWorktreeBulkRemove";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { CountBadge } from "@/components/ui/badge";
 
 /**
  * When the long-wait hint appears. The design system puts a "still working"
@@ -46,8 +48,6 @@ const BULK_PREVIEW_FILE_LIMIT = 5;
 
 /** Max at-risk commit rows per submodule on a blocked target. */
 const BULK_COMMIT_LIMIT = 3;
-
-const SECTION_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 
 /** The detail block under a target's name, aligned past the branch glyph. */
 const DETAIL = "ml-5.5 mt-1 space-y-1.5";
@@ -388,10 +388,12 @@ function Section({
   return (
     <section aria-labelledby={id} data-testid={testId}>
       <div className="flex items-baseline justify-between gap-2">
-        <span id={id} role="heading" aria-level={3} className={SECTION_LABEL}>
+        <span id={id} role="heading" aria-level={3} className={SECTION_LABEL_CLASS}>
           {label}
         </span>
-        <span className="text-2xs tabular-nums text-text-secondary">{count}</span>
+        <CountBadge label={`${count} ${count === 1 ? "worktree" : "worktrees"}`}>
+          {count}
+        </CountBadge>
       </div>
       {children}
     </section>

@@ -142,6 +142,7 @@ import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { ActionId } from "@shared/types/actions";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
 
 /**
  * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
@@ -1407,7 +1408,13 @@ function PanelHeaderComponent({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
-                    className="min-w-[7ch] max-w-[120px] inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-3xs font-medium leading-none text-text-primary select-none @max-[420px]/header:hidden"
+                    className={cn(
+                      HEADER_CHIP_CLASS,
+                      // Mono like every other branch in the app, and never
+                      // uppercased: refs are case-sensitive. Yields three times
+                      // faster than the title, which is what names the pane.
+                      "min-w-[7ch] max-w-[120px] shrink-[3] font-mono text-text-primary select-none @max-[420px]/header:hidden"
+                    )}
                     style={
                       {
                         backgroundColor:

@@ -9,6 +9,8 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { cn } from "@/lib/utils";
 import { parseEnvPaste, type ParseEnvResult } from "@/utils/parseEnvPaste";
 import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
 type ConflictResolution = "keep" | "overwrite";
 type Step = "paste" | "conflicts";
@@ -87,9 +89,7 @@ function lineRange(text: string, line: number): [number, number] {
 const PREVIEW_FRAME = "rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04] text-xs";
 const PREVIEW_STRIP =
   "px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between gap-2";
-const PREVIEW_CAPTION = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
-const PREVIEW_COUNT =
-  "ml-1.5 tabular-nums bg-tint/10 rounded-[var(--radius-sm)] px-1 py-0.5 text-3xs font-medium normal-case tracking-normal";
+const PREVIEW_COUNT = cn(COUNT_BADGE_CLASS, "ml-1.5");
 
 function collapsePairs(result: ParseEnvResult): Record<string, string> {
   const out: Record<string, string> = {};
@@ -158,7 +158,7 @@ function ConflictSide({
   const isEmpty = value === "";
   return (
     <>
-      <dt className="text-3xs uppercase tracking-wide text-text-secondary">{label}</dt>
+      <dt className="text-2xs text-text-secondary">{label}</dt>
       <dd
         className={cn(
           // BOTH sides read at the audited 4.5:1 tier. The losing value is
@@ -523,7 +523,7 @@ export function ImportEnvDialog({
                   role="heading"
                   aria-level={4}
                   aria-label={`Conflicts ${conflicts.length}`}
-                  className={PREVIEW_CAPTION}
+                  className={SECTION_LABEL_CLASS}
                 >
                   Conflicts
                   <span className={PREVIEW_COUNT}>{conflicts.length}</span>

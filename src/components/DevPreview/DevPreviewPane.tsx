@@ -46,6 +46,7 @@ import { blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 import { buildDevPreviewProxyOrigin } from "@shared/utils/devPreviewProxy";
 import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
+import { Badge } from "@/components/ui/badge";
 
 async function captureWebviewSessionStorage(
   webviewElement: Electron.WebviewTag | null
@@ -1033,11 +1034,15 @@ export function DevPreviewPane({
             )}
           >
             {viewportPreset && effectiveViewport && (
-              <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-3xs font-medium bg-surface/90 text-text-secondary border border-overlay/50">
+              <Badge
+                size="xs"
+                tone="outline"
+                className="absolute top-1 left-1/2 z-10 -translate-x-1/2 bg-surface/90"
+              >
                 {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
                 {effectiveViewport.height}
                 {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
-              </div>
+              </Badge>
             )}
             {showEmptyState ? (
               <DevPreviewEmptyStates
