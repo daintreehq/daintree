@@ -438,7 +438,7 @@ function WaitingSingleItem({
             button on hover/focus, so no row reserves an empty action column. */}
         <span
           id={ageId}
-          className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out motion-reduce:transition-none group-hover/row:opacity-0 group-focus-within/row:opacity-0"
+          className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out group-hover/row:opacity-0 group-focus-within/row:opacity-0"
         >
           {terminal.lastStateChange != null && (
             <LiveTimeAgo
@@ -450,7 +450,7 @@ function WaitingSingleItem({
         </span>
       </button>
 
-      <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
+      <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

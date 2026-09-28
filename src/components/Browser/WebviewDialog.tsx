@@ -5,7 +5,15 @@ import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
-import { UI_ENTER_DURATION, UI_ENTER_EASING, UI_SCRIM_EASING } from "@/lib/animationUtils";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  getUiTransitionDuration,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+  UI_SCRIM_EASING,
+} from "@/lib/animationUtils";
 
 /**
  * `ScrollShadow` reads its fade colour from this variable, and the card is the surface the
@@ -19,15 +27,26 @@ const CARD_STYLE: CSSProperties & Record<"--scroll-shadow-color", string> = {
   transitionTimingFunction: UI_ENTER_EASING,
 };
 
+const CARD_EXIT_STYLE: CSSProperties & Record<"--scroll-shadow-color", string> = {
+  ...CARD_STYLE,
+  transitionDuration: `${UI_EXIT_DURATION}ms`,
+  transitionTimingFunction: UI_EXIT_EASING,
+};
+
 /**
- * Enters like every AppDialog: the scrim fades, the card rises 4px and settles from
- * 98% while it fades, starting from `@starting-style` in the first painted frame.
- * There is no exit: the guest is answered the instant a button is pressed, and the
- * card that would linger through a fade-out still carries the `aria-modal` four
- * input owners key off (see below), so it leaves at once.
+ * Moves like every AppDialog: the scrim fades, the card rises 4px and settles from
+ * 98% while it fades in, from `@starting-style` in the first painted frame, and
+ * reverses on the exit tier. The guest is answered the instant a button is pressed,
+ * and the card stops being a dialog at that moment — `role` and the `aria-modal`
+ * four input owners key off (see below) go at once — so the fade-out is only a
+ * picture, inert, holding nothing.
  */
 const SCRIM_STYLE: CSSProperties = {
   transitionDuration: `${UI_ENTER_DURATION}ms`,
+  transitionTimingFunction: UI_SCRIM_EASING,
+};
+const SCRIM_EXIT_STYLE: CSSProperties = {
+  transitionDuration: `${UI_EXIT_DURATION}ms`,
   transitionTimingFunction: UI_SCRIM_EASING,
 };
 
@@ -56,6 +75,16 @@ interface WebviewDialogProps {
 }
 
 export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
+  // The last request stays on screen through the exit fade; the guest has
+  // already had its answer by then.
+  const [shown, setShown] = useState<WebviewDialogRequest | null>(dialog);
+  if (dialog && dialog !== shown) setShown(dialog);
+  const view = dialog ?? shown;
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen: dialog !== null,
+    animationDuration: getUiTransitionDuration("exit"),
+    syncEnter: true,
+  });
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const okRef = useRef<HTMLButtonElement>(null);
@@ -162,17 +191,22 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
     [handleOk]
   );
 
-  if (!dialog) return null;
+  if (!shouldRender || !view) return null;
+  const closing = dialog === null;
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-medium p-4 transition-opacity starting:opacity-0"
-      style={SCRIM_STYLE}
+      data-visible={isVisible}
+      // Once answered the guest is gone: what remains is a picture of the card
+      // fading out, which takes no pointer and no keys.
+      inert={closing || undefined}
+      className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-medium p-4 transition-opacity starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+      style={isVisible ? SCRIM_STYLE : SCRIM_EXIT_STYLE}
       onKeyDown={handleEscape}
     >
       <div
         ref={panelRef}
-        role="dialog"
+        role={closing ? undefined : "dialog"}
         // Strictly speaking this overstates the scope — the dialog blocks one pane, not
         // the app, and ARIA reads `aria-modal` as "everything else is hidden". It stays
         // because four consumers key off `[role="dialog"][aria-modal="true"]` to know a
@@ -184,7 +218,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
         // action instead of the focused button — the exact regression #11106 fixed.
         // Narrowing the scope properly means giving those four a signal that is not
         // `aria-modal`; that is a cross-cutting change, not this component's to make.
-        aria-modal="true"
+        aria-modal={closing ? undefined : "true"}
         // Named by Daintree's own header, described by the guest's message. Pointing the
         // name at the message would make the dialog's accessible name whatever the page
         // chose to put in alert() — so a screen reader would announce a page's
@@ -193,8 +227,9 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
         aria-labelledby={titleId}
         aria-describedby={messageId}
         tabIndex={-1}
-        className="bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] w-full max-w-md max-h-full flex flex-col overflow-hidden transition-[opacity,translate,scale] starting:opacity-0 starting:translate-y-1 starting:scale-[0.98] motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none"
-        style={CARD_STYLE}
+        className="bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] w-full max-w-md max-h-full flex flex-col overflow-hidden transition-[opacity,translate,scale] starting:opacity-0 starting:translate-y-1 starting:scale-[0.98] data-[visible=false]:opacity-0 data-[visible=false]:translate-y-1 data-[visible=false]:scale-[0.98] motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none data-[visible=false]:motion-reduce:translate-none data-[visible=false]:motion-reduce:scale-none"
+        data-visible={isVisible}
+        style={isVisible ? CARD_STYLE : CARD_EXIT_STYLE}
       >
         {/* The only line on this surface Daintree wrote. Everything below it is the
             page's. Carries no focusable control on purpose: adding one would change the
@@ -208,10 +243,10 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
               keeps the identifying tail visible at any pane width; a character budget
               tuned to one width cannot. */}
           <p id={titleId} className="text-xs text-text-secondary min-w-0">
-            {dialog.origin ? (
+            {view.origin ? (
               <>
                 Message from{" "}
-                <span className="font-mono text-text-primary break-all">{dialog.origin}</span>
+                <span className="font-mono text-text-primary break-all">{view.origin}</span>
               </>
             ) : (
               "Message from this page"
@@ -235,10 +270,10 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
               // at /70.
               className="text-sm text-text-primary whitespace-pre-wrap break-words"
             >
-              {dialog.message}
+              {view.message}
             </p>
 
-            {dialog.type === "prompt" && (
+            {view.type === "prompt" && (
               <>
                 {/* The page supplies a message, never a field label. Naming the input
                     after that message would hand a form control an arbitrarily long,
@@ -262,7 +297,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
         </ScrollShadow>
 
         <div className="px-4 py-3 border-t border-border-strong bg-surface-panel flex items-center justify-end gap-2 shrink-0">
-          {dialog.type !== "alert" && (
+          {view.type !== "alert" && (
             <Button
               variant="ghost"
               onClick={handleCancel}

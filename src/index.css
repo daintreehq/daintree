@@ -852,7 +852,7 @@ body,
 
 .animate-hint-fade-in {
   opacity: 0;
-  animation: hint-fade-in 200ms ease-out forwards;
+  animation: hint-fade-in var(--duration-200) ease-out forwards;
   will-change: opacity;
 }
 
@@ -1390,7 +1390,6 @@ body,
   .animate-pulse-delayed,
   .animate-pulse-immediate,
   .animate-skeleton-shimmer,
-  .animate-hint-fade-in,
   .animate-badge-bump,
   .animate-action-row-bump,
   .animate-activity-blip,

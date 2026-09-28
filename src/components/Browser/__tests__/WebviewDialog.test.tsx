@@ -330,3 +330,33 @@ describe("WebviewDialog keyboard handling", () => {
     expect(onRespond).toHaveBeenCalledExactlyOnceWith(true);
   });
 });
+
+describe("WebviewDialog exit", () => {
+  // The card fades out after the guest is answered, but from that moment it
+  // must stop being a dialog: four input owners key off `[role="dialog"]
+  // [aria-modal="true"]`, and a lingering claim would hold the keyboard.
+  it("drops its dialog role and modality the moment it closes, then unmounts", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(
+        <WebviewDialog dialog={baseConfirm} onRespond={vi.fn()} />
+      );
+      expect(container.querySelector('[role="dialog"][aria-modal="true"]')).not.toBeNull();
+
+      rerender(<WebviewDialog dialog={null} onRespond={vi.fn()} />);
+      expect(container.querySelector('[role="dialog"]')).toBeNull();
+      expect(container.querySelector('[aria-modal="true"]')).toBeNull();
+      const fading = container.firstElementChild;
+      expect(fading).not.toBeNull();
+      expect(fading?.hasAttribute("inert")).toBe(true);
+      expect(container.textContent).toContain(baseConfirm.message);
+
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(container.firstElementChild).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

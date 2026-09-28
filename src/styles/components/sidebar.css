@@ -259,18 +259,12 @@ html[data-dragging="true"]
    on the spot it was going to occupy, which reads as lag rather than as
    motion. The backplate keeps the 150ms state-change tier — by the time it
    paints, the pointer has committed to the grip, and there is nothing to
-   catch up with. */
+   catch up with. Both are fades, so reduced motion leaves them as they are. */
 [data-worktree-row-drag-handle] {
   transition:
     opacity var(--duration-75) var(--ease-out-expo),
     color var(--duration-150) var(--ease-out-expo),
     background-color var(--duration-150) var(--ease-out-expo);
-}
-
-@variant reduce-motion {
-  [data-worktree-row-drag-handle] {
-    transition: none;
-  }
 }
 
 /* A session row's grip, in the card's Active sessions list: the card grip's
@@ -297,12 +291,6 @@ html[data-dragging="true"]
 [data-deleted-worktree-id] [data-session-grip] {
   opacity: 1;
   pointer-events: auto;
-}
-
-@variant reduce-motion {
-  [data-session-grip] {
-    transition: none;
-  }
 }
 
 .sidebar-action-button:hover {

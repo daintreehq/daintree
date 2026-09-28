@@ -483,7 +483,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
       {children}
       <div
         aria-hidden="true"
-        className="palette-loading-bar transition-opacity motion-reduce:transition-none"
+        className="palette-loading-bar transition-opacity"
         data-loading={isLoading ? "true" : "false"}
         style={{
           opacity: isLoading ? 1 : 0,

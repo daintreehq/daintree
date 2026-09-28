@@ -948,13 +948,14 @@ export function AppLayout({
           <div
             className={cn(
               "relative h-full shrink-0 overflow-clip",
-              !reduceAnimations &&
-                !isSidebarResizing &&
+              // Reduced motion (either preference) snaps the width and dissolves
+              // the panel in instead, on the same tier.
+              !isSidebarResizing &&
                 !isSidebarWidthHydrating &&
                 (showSidebar
-                  ? "transition-[width] duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
-                  : "transition-[width] duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-none"),
-              !showSidebar && "pointer-events-none"
+                  ? "transition-[width] duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-opacity"
+                  : "transition-[width] duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-opacity"),
+              !showSidebar && "pointer-events-none motion-reduce:opacity-0"
             )}
             onTransitionEnd={handleSidebarTransitionEnd}
             style={{
@@ -1023,12 +1024,13 @@ export function AppLayout({
             <div
               className={cn(
                 "absolute top-0 right-0 h-full overflow-hidden",
-                !reduceAnimations &&
-                  !isAssistantResizing &&
+                // Reduced motion snaps the slide and dissolves the panel in
+                // instead, on the same tier, like the sidebar.
+                !isAssistantResizing &&
                   (showAssistant
-                    ? "transition-transform duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
-                    : "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-none"),
-                !showAssistant && "pointer-events-none"
+                    ? "transition-transform duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-opacity"
+                    : "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-opacity"),
+                !showAssistant && "pointer-events-none motion-reduce:opacity-0"
               )}
               style={{
                 width: layout.helpPanelWidth,
@@ -1111,7 +1113,7 @@ export function AppLayout({
               <div
                 inert={!themeBrowserOpen || undefined}
                 data-visible={themeBrowserVisible}
-                className="fixed bottom-0 z-40 pointer-events-auto transition-[translate,opacity] starting:translate-x-[100%] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:translate-x-[100%] data-[visible=false]:opacity-0 motion-reduce:transition-opacity motion-reduce:translate-none"
+                className="fixed bottom-0 z-40 pointer-events-auto transition-[translate,opacity] starting:translate-x-[100%] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:translate-x-[100%] data-[visible=false]:opacity-0 motion-reduce:transition-opacity motion-reduce:translate-none data-[visible=false]:motion-reduce:translate-none"
                 style={{
                   top: OVERLAY_TOP_OFFSET,
                   right: "var(--right-obstruction-offset, 0px)",

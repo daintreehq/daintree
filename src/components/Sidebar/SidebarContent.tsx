@@ -1848,7 +1848,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             inset, so a 4px gap on top spent width the 200px minimum does not
             have — the cluster crowded the "Worktrees" landmark it sits beside. */}
         <div className="flex shrink-0 items-center gap-0.5">
-          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 motion-reduce:transition-none flex items-center gap-0.5">
+          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 flex items-center gap-0.5">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

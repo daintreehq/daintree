@@ -17,7 +17,8 @@ import type { CliAvailability } from "@shared/types";
 import { useAgentSetupPoll } from "./useAgentSetupPoll";
 import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ArrowRight, Check, Sun, Moon, FolderOpen } from "lucide-react";
-import { AnimatePresence, m, useReducedMotion, type Variants } from "framer-motion";
+import { AnimatePresence, m, type Variants } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Plug } from "@/components/icons";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import {
@@ -520,7 +521,7 @@ export function AgentSetupWizard({
   const isOpenRef = useRef(isOpen);
   const initRef = useRef(false);
   const directionRef = useRef<1 | -1>(1);
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
 
   useEffect(() => {
     isOpenRef.current = isOpen;

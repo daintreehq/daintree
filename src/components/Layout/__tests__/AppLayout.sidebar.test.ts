@@ -251,11 +251,16 @@ describe("AppLayout drag-resize transition gating — issue #7627", () => {
   });
 
   it("gates both width transitions on the resize state, preserving them otherwise", () => {
-    // The 250ms ease-out-expo transition is kept (it animates collapse/expand
+    // The panel-tier width transition is kept (it animates collapse/expand
     // and double-click reset) but suppressed during active drag-resize so the
     // edge tracks the cursor without the per-mousemove ease.
-    expect(source).toMatch(/!reduceAnimations\s*&&\s*!isSidebarResizing\s*&&/);
-    expect(source).toMatch(/!reduceAnimations\s*&&\s*!isAssistantResizing\s*&&/);
+    expect(source).toMatch(/!isSidebarResizing\s*&&/);
+    expect(source).toMatch(/!isAssistantResizing\s*&&/);
+    // Reduced motion (the OS setting or the in-app one, both through the
+    // `motion-reduce:` variant) never interpolates the width.
+    for (const width of source.match(/"transition-\[width\][^"]*"/g) ?? []) {
+      expect(width).toMatch(/motion-reduce:transition-(none|opacity)/);
+    }
     // The transition string must remain specific to width — never widened to
     // bare `transition` or `transition-all`. Past lesson #4738.
     expect(source).toContain("transition-[width]");
@@ -532,9 +537,7 @@ describe("AppLayout sidebar-width hydration transition gating — issue #10321",
   it("gates the sidebar width transition on the hydration flag alongside the resize guard", () => {
     // The new flag must join the existing gate, not replace it — drag-resize
     // suppression (#7627) and reduced-motion must still hold.
-    expect(source).toMatch(
-      /!reduceAnimations\s*&&\s*!isSidebarResizing\s*&&\s*!isSidebarWidthHydrating\s*&&/
-    );
+    expect(source).toMatch(/!isSidebarResizing\s*&&\s*!isSidebarWidthHydrating\s*&&/);
   });
 
   it("clears the hydration flag in both the restore success and failure paths", () => {

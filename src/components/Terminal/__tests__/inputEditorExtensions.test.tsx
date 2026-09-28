@@ -1826,21 +1826,34 @@ describe("chipEntranceTheme", () => {
     }
   });
 
-  it("disables the animation under prefers-reduced-motion", () => {
+  // Reduced motion keeps the fade and drops the rise: the override swaps to a
+  // keyframe that animates opacity alone, never to `animation: none`.
+  function expectFadeOnly(rule: string, label: string) {
+    const name = /animation:\s*([\w-]+)/.exec(rule)?.[1];
+    expect(name, `${label} keeps an animation`).toBeTruthy();
+    expect(name).not.toBe("none");
+    const css = readGeneratedCss([chipEntranceTheme]);
+    const keyframes = extractAtRuleBody(css, `@keyframes ${name}`);
+    expect(keyframes, `${label} keyframe`).toContain("opacity");
+    expect(keyframes, `${label} keyframe moves`).not.toMatch(/transform|translate|scale/);
+  }
+
+  it("keeps only the fade under prefers-reduced-motion", () => {
     const css = readGeneratedCss([chipEntranceTheme]);
     const reducedBlock = extractAtRuleBody(css, "@media (prefers-reduced-motion: reduce)");
     for (const selector of ALL_CHIP_SELECTORS) {
-      const rule = extractRuleBody(reducedBlock, selector);
-      expect(rule, `${selector} reduced-motion override`).toContain("animation: none");
+      expectFadeOnly(
+        extractRuleBody(reducedBlock, selector),
+        `${selector} reduced-motion override`
+      );
     }
   });
 
-  it("disables the animation under body[data-reduce-animations='true']", () => {
+  it("keeps only the fade under body[data-reduce-animations='true']", () => {
     const css = readGeneratedCss([chipEntranceTheme]);
     for (const selector of ALL_CHIP_SELECTORS) {
       const composed = `body[data-reduce-animations="true"] ${selector}`;
-      const rule = extractRuleBody(css, composed);
-      expect(rule, `${composed} override`).toContain("animation: none");
+      expectFadeOnly(extractRuleBody(css, composed), `${composed} override`);
     }
   });
 });

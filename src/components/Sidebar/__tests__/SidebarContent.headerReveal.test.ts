@@ -76,8 +76,13 @@ describe("SidebarContent header reveal — issue #6964", () => {
     expect(classNames.every((cls) => cls.includes("SIDEBAR_HEADER_ACTION"))).toBe(true);
   });
 
-  it("respects prefers-reduced-motion via motion-reduce:transition-none", () => {
-    expect(source).toContain("motion-reduce:transition-none");
+  it("keeps the reveal's fade under reduced motion", () => {
+    // The reveal is opacity and visibility only — not motion — so it must not
+    // be switched off under reduced motion.
+    const reveal = source.match(/className="([^"]*group-hover\/header:visible[^"]*)"/)?.[1];
+    expect(reveal).toBeTruthy();
+    expect(reveal).toMatch(/transition-\[opacity,visibility\]/);
+    expect(reveal).not.toMatch(/motion-reduce:/);
   });
 
   it("delegates the refresh spin to SpinningIcon driven by the raw refresh flag (#11323)", () => {

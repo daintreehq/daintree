@@ -202,14 +202,6 @@
     outline-offset: -2px;
   }
 
-  @variant reduce-motion {
-    .search-field,
-    .search-field::before,
-    .search-field-clear {
-      transition: none;
-    }
-  }
-
   @media (prefers-contrast: more) {
     /* One control, one border: the generic "border on every native form control"
        rule would give the inner input a square box inside the rounded field. */

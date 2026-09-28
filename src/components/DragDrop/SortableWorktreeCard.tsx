@@ -161,7 +161,7 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
       )}
       <div role="gridcell">
         <div
-          className="h-full transition-opacity duration-150 motion-reduce:transition-none"
+          className="h-full transition-opacity duration-150 ease-out"
           style={{ opacity: isDragging ? DRAG_GHOST_OPACITY : undefined }}
         >
           {children({
