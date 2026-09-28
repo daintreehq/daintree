@@ -60,7 +60,7 @@ import {
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { copyWorktreeValue } from "./WorktreeCard/copyWorktreeValue";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   CONTEXT_COMPONENTS,
@@ -528,16 +528,14 @@ export function WorktreeCard({
     void copyContextWithFeedback(worktree.id, "context-menu", { modified: true }, "worktree-card");
   };
 
-  const { copy: copyWorktreePath } = useCopyWithFeedback();
   const handleCopyPath = () => {
-    void copyWorktreePath(worktree.path);
+    copyWorktreeValue("Path", worktree.path);
   };
 
-  const { copy: copyBranchName } = useCopyWithFeedback({ announcement: "Branch name copied" });
   const handleCopyBranchName = () => {
     const branch = copyableBranchName(worktree);
     if (!branch) return;
-    void copyBranchName(branch);
+    copyWorktreeValue("Branch name", branch);
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
