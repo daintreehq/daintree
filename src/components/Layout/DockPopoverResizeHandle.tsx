@@ -17,11 +17,11 @@ export function DockPopoverResizeHandle({ handleProps, isResizing }: Props) {
       {...handleProps}
       className={cn(
         "group/resize absolute top-0 inset-x-0 h-2 z-20 flex items-center justify-center cursor-row-resize",
-        // Neutral hover/focus differentiation — the accent is reserved for
-        // load-bearing focus anchors, not a secondary resize affordance
-        // (Accent Color Restraint). Keyboard focus is conveyed by the lifted
-        // indicator line plus the neutral overlay.
-        "transition-colors focus-visible:outline-hidden focus-visible:bg-overlay-medium",
+        // Hover stays neutral. Keyboard focus wears the same inset ring and
+        // neutral lift as the sidebar and panel resize handles — the ring is
+        // the focus anchor, not a second accent on the affordance itself.
+        "outline-hidden transition-colors focus-visible:bg-overlay-medium",
+        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
         // Hover styling is off while resizing, or it outranks the drag state.
         isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
       )}

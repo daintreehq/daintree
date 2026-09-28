@@ -206,7 +206,8 @@ export function QuickRunToggle({ expanded, onToggle }: QuickRunToggleProps) {
         expanded
           ? "bg-overlay-soft text-text-primary"
           : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary",
-        "focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:text-text-primary"
+        "focus-visible:bg-overlay-medium focus-visible:text-text-primary",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       )}
     >
       <span>

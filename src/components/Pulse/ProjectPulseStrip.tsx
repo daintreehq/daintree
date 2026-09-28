@@ -171,7 +171,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
           ref={collapseButtonRef}
           type="button"
           onClick={collapse}
-          className="inline-flex items-center gap-1 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+          className="inline-flex items-center gap-1 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           aria-expanded={true}
         >
           <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
@@ -214,7 +214,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       // surface — so the two now share a visual language instead of each having
       // their own. Both accessibility media modes still draw their own button
       // boundary, so nothing is lost where a boundary is load-bearing.
-      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
     >
       <Activity className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
       <span className="shrink-0 text-xs font-medium text-text-secondary">Project pulse</span>

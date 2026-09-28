@@ -2,10 +2,11 @@
  * The keyboard ring every focusable control in a terminal pane's header wears —
  * the chips beside the title as well as the pane's own buttons (`PanelHeader`
  * spells the same recipe inline). Outline rather than ring so it survives
- * forced colours, and offset so it clears the chip's own border.
+ * forced colours, and inset because both hosts clip: the pane header's title
+ * group and the assistant footer are `overflow-hidden` with no room outside.
  */
 export const HEADER_CHIP_FOCUS_CLASS =
-  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary";
+  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";
 
 /**
  * Every chip in a pane header's row — finished, hibernated, queued, driven-by,

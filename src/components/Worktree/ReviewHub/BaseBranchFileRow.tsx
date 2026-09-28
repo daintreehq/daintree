@@ -48,8 +48,8 @@ export function BaseBranchFileRow({
           type="button"
           onClick={onClick}
           className={cn(
-            "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+            "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded px-1 text-left",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
           )}
         >
           <span
@@ -106,7 +106,7 @@ export function BaseBranchFileRow({
               onBadgeClick
                 ? "hover:bg-status-warning/25 transition-colors cursor-pointer"
                 : "cursor-default",
-              "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
             )}
           >
             {unresolvedDecoration!.badge}

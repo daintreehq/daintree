@@ -307,7 +307,7 @@ export function CommitRows({
   return (
     <ScrollShadow
       className={cn(SECTION_DIVIDER, compact ? "max-h-[132px]" : "max-h-[180px]")}
-      scrollClassName="group/commits scroll-py-8"
+      scrollClassName="group/commits scroll-py-8 focus-visible:-outline-offset-2"
       tabIndex={0}
       role="region"
       aria-label={label}

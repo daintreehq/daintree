@@ -1104,7 +1104,7 @@ function PanelHeaderComponent({
       data-fleet-previewed={isFleetPreviewed || undefined}
       data-pane-chrome=""
       className={cn(
-        "@container/header text-xs transition-colors relative overflow-hidden group select-none",
+        "@container/header text-xs transition-colors relative overflow-hidden group select-none focus-visible:-outline-offset-2",
         isMaximized
           ? "h-10 bg-surface-sidebar border-border-default"
           : location === "dock"
@@ -1295,7 +1295,7 @@ function PanelHeaderComponent({
                         // default so it matches the controls beside it.
                         "text-xs font-medium font-sans select-none transition-colors block truncate min-w-[6ch] min-h-6 leading-6 rounded-sm",
                         onTitleChange &&
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
                         isFocused || isSelected ? "text-text-primary" : "text-text-secondary",
                         onTitleChange && "cursor-text hover:text-text-primary",
                         isPinged &&
@@ -1353,7 +1353,7 @@ function PanelHeaderComponent({
                     data-testid="panel-fleet-failure-dot"
                     // The mark stays an 8px dot; the button around it is the
                     // 24px target. -mx-1 keeps its footprint in the row at 16px.
-                    className="-mx-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                    className="-mx-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                   >
                     <span
                       className="status-mark h-2 w-2 rounded-full bg-status-error"

@@ -26,7 +26,7 @@ import {
 export const PR_CHECKS_OPEN_ATTR = "data-pr-checks-open";
 
 const FOCUS_RING =
-  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary";
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
 // The primitive transitions every property; these only ever change colour.
 const FOOTER_BUTTON_MOTION = "transition-colors";
@@ -398,7 +398,8 @@ function ChecksList({
               className={cn(
                 "flex w-full items-center gap-2.5 mt-0.5 px-2 py-1.5 rounded-md text-left",
                 "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors cursor-pointer",
-                FOCUS_RING
+                FOCUS_RING,
+                "focus-visible:-outline-offset-2"
               )}
             >
               <ChevronRight

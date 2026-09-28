@@ -430,11 +430,11 @@ export function FileTreeView({
       {...(rowContextMenu ? { "data-row-menu": "" } : {})}
       onKeyDown={handleKeyDown}
       onPointerDown={handlePointerDown}
-      // Focus styling is deliberately left to the global `*:focus-visible`
-      // ring: this container is the tree's only focus target (rows are
-      // virtualized and never take focus), so suppressing its outline would
-      // leave keyboard navigation with no visible anchor at all.
-      className="h-full min-h-0 w-full overflow-hidden"
+      // Focus styling is the global `*:focus-visible` ring, drawn inset: this
+      // container is the tree's only focus target (rows are virtualized and
+      // never take focus), and it fills a clipped pane edge to edge, so an
+      // outside ring would be painted straight into the clip.
+      className="h-full min-h-0 w-full overflow-hidden focus-visible:-outline-offset-2"
     >
       <Virtuoso<FlatTreeRow, TreeContext>
         ref={virtuosoRef}

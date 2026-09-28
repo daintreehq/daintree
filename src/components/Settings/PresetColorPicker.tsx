@@ -105,7 +105,7 @@ export function PresetColorPicker({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-border-strong focus-visible:ring-accent-primary focus-visible:outline-hidden transition-shadow"
+              className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-border-strong transition-shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               aria-label={ariaLabel}
               data-testid="preset-color-picker-trigger"
             >
@@ -137,7 +137,7 @@ export function PresetColorPicker({
                 key={c}
                 type="button"
                 className={cn(
-                  "w-5 h-5 rounded-full border border-border-default/60 relative focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
+                  "w-5 h-5 rounded-full border border-border-default/60 relative focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   "hover:scale-110 transition-transform"
                 )}
                 style={{ backgroundColor: c }}

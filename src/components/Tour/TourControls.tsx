@@ -67,7 +67,7 @@ function ChapterSegment({
           ref={ref}
           type="button"
           aria-label={`Chapter ${index + 1}: ${title}`}
-          className="group flex h-6 min-w-0 flex-1 cursor-pointer items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+          className="group flex h-6 min-w-0 flex-1 cursor-pointer items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           onClick={() => player.goTo(index, { autoplay: true })}
         >
           <span className={segmentBar(played)} />
@@ -123,7 +123,7 @@ function CurrentSegment({
       aria-valuemax={Math.floor(duration)}
       aria-valuenow={Math.floor(time)}
       aria-valuetext={`${spokenTime(time)} of ${spokenTime(duration)}`}
-      className="group flex h-6 min-w-0 flex-[5] cursor-pointer touch-none items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+      className="group flex h-6 min-w-0 flex-[5] cursor-pointer touch-none items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         seekTo(event);

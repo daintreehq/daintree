@@ -939,7 +939,7 @@ export function BrowserPane({
             <button
               type="button"
               onClick={() => void handleApproveHost()}
-              className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-info/20 hover:bg-status-info/30 text-text-primary transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
+              className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-info/20 hover:bg-status-info/30 text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Allow
             </button>
@@ -968,7 +968,7 @@ export function BrowserPane({
                     key={example}
                     type="button"
                     onClick={() => handleNavigate(`http://${example}`)}
-                    className="px-3 py-1.5 text-xs font-mono text-text-secondary bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
+                    className="px-3 py-1.5 text-xs font-mono text-text-secondary bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   >
                     {example}
                   </button>
@@ -1021,7 +1021,7 @@ export function BrowserPane({
                   <button
                     type="button"
                     onClick={handleOpenExternal}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   >
                     <ExternalLink className="h-3.5 w-3.5 text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors" />
                     <span className="text-xs text-text-secondary group-hover:text-text-primary transition-colors">

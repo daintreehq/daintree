@@ -159,7 +159,7 @@ const ConsoleRow = memo(function ConsoleRow({
     <div
       tabIndex={0}
       className={cn(
-        "group/row flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-overlay-subtle",
+        "group/row flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-overlay-subtle focus-visible:-outline-offset-2",
         style.row
       )}
       style={indentPx > 0 ? { paddingLeft: `${8 + indentPx}px` } : undefined}

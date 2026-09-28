@@ -413,7 +413,7 @@ function LocalCommitRow({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={handleCopyHash}
                   className={cn(
-                    "ml-auto shrink-0 flex items-center gap-1 px-1 font-mono text-xs text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded-[var(--radius-sm)]",
+                    "ml-auto shrink-0 flex items-center gap-1 px-1 font-mono text-xs text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]",
                     isCopied && "text-text-primary"
                   )}
                   aria-label={`Copy hash ${commit.shortHash}`}

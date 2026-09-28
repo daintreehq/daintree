@@ -357,7 +357,7 @@ export function ContentGridEmptyState({
                         <button
                           type="button"
                           onClick={handleOpenProjectSettings}
-                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-text-secondary opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-text-secondary opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                           aria-label="Project settings"
                         >
                           <Settings className="h-3.5 w-3.5" />

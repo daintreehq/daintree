@@ -219,7 +219,7 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
       data-filter-chip="true"
       className={cn(
         "inline-flex items-center rounded-full border px-2 py-0.5 text-2xs transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
         isActive
           ? "border-text-secondary bg-filter-selected-bg-strong font-medium text-text-primary"
           : isUnavailable

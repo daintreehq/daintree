@@ -63,7 +63,7 @@ export const ScrollPill = forwardRef<HTMLButtonElement, ScrollPillProps>(
           // explicitly or the slide snaps and only the fade animates.
           "transition-[opacity,translate]",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
           isVisible ? "opacity-100 translate-y-0" : hiddenTransform,
           className
         )}

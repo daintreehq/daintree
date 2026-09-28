@@ -54,7 +54,7 @@ function QuickAction({
       onKeyDown={onKeyDown}
       tabIndex={tabIndex}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="launcher-press group inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-border-subtle px-2.5 py-1.5 text-sm text-text-secondary transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-soft hover:border-border-default hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+      className="launcher-press group inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-border-subtle px-2.5 py-1.5 text-sm text-text-secondary transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-soft hover:border-border-default hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
     >
       <span className="shrink-0">{icon}</span>
       <span className="truncate">{label}</span>
