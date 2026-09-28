@@ -1683,9 +1683,14 @@ export function NavItem({
 
 function MatchBadge({ count }: { count: number }) {
   return (
-    <span aria-hidden="true" className={cn(COUNT_BADGE_CLASS, "ml-auto")}>
-      {count}
-    </span>
+    <>
+      <span aria-hidden="true" className={cn(COUNT_BADGE_CLASS, "ml-auto")}>
+        {count}
+      </span>
+      <span className="sr-only">
+        , {count} matching {count === 1 ? "setting" : "settings"}
+      </span>
+    </>
   );
 }
 

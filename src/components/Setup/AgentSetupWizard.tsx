@@ -38,7 +38,7 @@ import type { AppColorScheme } from "@shared/types/appTheme";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
-import { Badge } from "@/components/ui/badge";
+import { Badge, CountBadge } from "@/components/ui/badge";
 
 const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
 
@@ -1394,9 +1394,7 @@ export function CompleteStep({
                 </BrandMark>
                 <span className="text-sm text-text-primary font-medium">{agent.name}</span>
                 {presetCount > 1 && (
-                  <Badge tone="info" size="xs" data-testid="preset-count-badge">
-                    {presetCount} presets
-                  </Badge>
+                  <CountBadge data-testid="preset-count-badge">{presetCount} presets</CountBadge>
                 )}
                 {shortcut && <KbdChord shortcut={shortcut} className="ml-auto" />}
               </div>

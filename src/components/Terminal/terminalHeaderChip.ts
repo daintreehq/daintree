@@ -14,9 +14,13 @@ export const HEADER_CHIP_FOCUS_CLASS =
  * one height instead of three sizes jostling beside the title. A chip keeps its
  * own ink and, where it says something (the hibernated dash, the worktree's
  * colour), its own edge; the size, padding and shape are not negotiable.
+ *
+ * 11px, one step under the pane title and the same size as the resource
+ * readout at the end of the row, so metadata never outweighs the name it
+ * annotates.
  */
 export const HEADER_CHIP_CLASS =
-  "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs leading-4";
+  "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-2xs leading-4";
 
 /** The neutral surface most header chips sit on. */
 export const HEADER_CHIP_SURFACE = "border-divider bg-overlay-soft text-text-secondary";

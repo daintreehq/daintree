@@ -231,7 +231,7 @@ function IdentityRow({
 }) {
   return (
     <div className="flex items-baseline gap-2 text-xs">
-      <span className={cn(SECTION_LABEL_CLASS, "shrink-0 w-[5.5rem]")}>{label}</span>
+      <span className="shrink-0 w-[5.5rem] text-text-secondary">{label}</span>
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         <span
           className={cn("min-w-0 break-all text-text-primary", mono && "font-mono text-2xs")}
@@ -287,7 +287,7 @@ function ChangeNotice({ reason, tier }: { reason: string; tier: PluginMcpDangerT
         <div
           className={cn(
             SECTION_LABEL_CLASS,
-            isRaisedDanger ? "text-status-danger/80" : "text-status-warning/80"
+            isRaisedDanger ? "text-status-danger" : "text-status-warning"
           )}
         >
           {heading}

@@ -97,7 +97,12 @@ function FilterSection({
           >
             <span className="flex min-w-0 flex-1 items-center gap-1.5">
               <span className="shrink-0">{title}</span>
-              {hasActive && <CountBadge>{activeCount}</CountBadge>}
+              {hasActive && (
+                <>
+                  <CountBadge aria-hidden="true">{activeCount}</CountBadge>
+                  <span className="sr-only">, {activeCount} active</span>
+                </>
+              )}
               {!isOpen && summary && (
                 <span
                   ref={summaryRef}

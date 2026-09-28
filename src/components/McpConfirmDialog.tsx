@@ -416,7 +416,7 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
 
   return (
     <div className="flex items-baseline gap-2 text-xs">
-      <span className={cn(SECTION_LABEL_CLASS, "shrink-0")}>Requested by</span>
+      <span className="shrink-0 text-text-secondary">Requested by</span>
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <Icon
           aria-hidden="true"

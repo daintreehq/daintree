@@ -34,13 +34,7 @@ import {
 import type { VirtuosoHandle } from "react-virtuoso";
 
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import {
-  RefreshCw,
-  CircleCheck,
-  ArrowUpFromLine,
-  ChevronRight,
-  AlertTriangle,
-} from "lucide-react";
+import { RefreshCw, CircleCheck, ArrowUpFromLine, ChevronRight, AlertTriangle } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -1895,11 +1889,7 @@ export function ReviewHubContent({
                 Review & commit
               </h2>
             )}
-            {status?.currentBranch && (
-              <TruncatedTooltip content={status.currentBranch}>
-                <BranchBadge branch={status.currentBranch} />
-              </TruncatedTooltip>
-            )}
+            {status?.currentBranch && <BranchBadge branch={status.currentBranch} />}
             {status?.currentBranch && isProtectedBranch(status.currentBranch.toLowerCase()) && (
               <Badge size="sm" tone="warning" data-testid="review-hub-protected-branch-chip">
                 <AlertTriangle aria-hidden="true" />
@@ -2126,7 +2116,10 @@ export function ReviewHubContent({
                   <div className={REVIEW_HUB_STICKY_BAND}>
                     <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
                       <span className={SECTION_LABEL_CLASS}>
-                        Changed vs {mainBranch}
+                        Changed vs{" "}
+                        <span className="font-mono font-medium normal-case tracking-normal">
+                          {mainBranch}
+                        </span>
                         <span className={REVIEW_HUB_COUNT_CHIP}>
                           {sortedBaseBranchFiles.length} file
                           {sortedBaseBranchFiles.length !== 1 ? "s" : ""}

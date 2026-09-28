@@ -10,9 +10,12 @@ import { cn } from "@/lib/utils";
  *
  * `rounded-sm` (6px), never the repo's bare `rounded` (10px): at pill height
  * that reads as a lozenge and loses the badge's squared-off edge.
+ *
+ * Forced colors paints every fill as Canvas, which would leave two neighbouring
+ * tags reading as one run of words, so each keeps a border there.
  */
 const badgeVariants = cva(
-  "inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors duration-150 ease-out [&_svg]:shrink-0",
+  "inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors duration-150 ease-out [&_svg]:shrink-0 forced-colors:border forced-colors:border-[CanvasText]",
   {
     variants: {
       size: {

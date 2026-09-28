@@ -7,7 +7,7 @@ import { categoryIconFor, PluginIconTile } from "./pluginIcons";
 import { pluginLabel } from "./PluginDetailPane";
 import { groupPluginsByCategory } from "./pluginGrouping";
 import { pluginSignalFor } from "./pluginStatus";
-import { Badge } from "@/components/ui/badge";
+import { Badge, CountBadge } from "@/components/ui/badge";
 
 const CARD_GRID_CLASS = "grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]";
 
@@ -161,7 +161,7 @@ export function PluginCatalog({
             <div className="flex items-center gap-2">
               <CategoryIcon className="w-4 h-4 text-text-secondary" aria-hidden="true" />
               <h4 className="text-sm font-medium text-text-primary">{category.label}</h4>
-              <span className="text-2xs text-text-secondary">{sectionPlugins.length}</span>
+              <CountBadge>{sectionPlugins.length}</CountBadge>
             </div>
             <p className="text-xs text-text-secondary mt-0.5">{category.blurb}</p>
             <div className={cn("mt-3", CARD_GRID_CLASS)}>

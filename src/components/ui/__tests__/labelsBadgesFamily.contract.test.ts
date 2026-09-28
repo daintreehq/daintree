@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from "fs";
 import path from "path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { COUNT_BADGE_CLASS } from "../badge";
+import { COUNT_BADGE_CLASS, badgeVariants } from "../badge";
 import { PALETTE_SECTION_LABEL_CLASS } from "../paletteRowStyles";
 import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "../sectionLabel";
 import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
@@ -108,6 +108,18 @@ describe("section label family", () => {
     expect(offenders(isMicroLabel, ["src/components/ui/sectionLabel.ts"])).toEqual(
       MICRO_LABEL_EXCEPTIONS
     );
+  });
+});
+
+describe("word badge family", () => {
+  // Forced colors paints every fill as Canvas; without an edge two neighbouring
+  // tags read as one run of words.
+  it("keeps an edge under forced colors in every tone", () => {
+    for (const tone of ["neutral", "outline", "error", "warning", "success", "info"] as const) {
+      expect(
+        tokens(badgeVariants({ tone })).some((x) => x.startsWith("forced-colors:border"))
+      ).toBe(true);
+    }
   });
 });
 

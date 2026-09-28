@@ -1411,8 +1411,9 @@ function PanelHeaderComponent({
                     className={cn(
                       HEADER_CHIP_CLASS,
                       // Mono like every other branch in the app, and never
-                      // uppercased: refs are case-sensitive.
-                      "min-w-[7ch] max-w-[120px] shrink font-mono text-text-primary select-none @max-[420px]/header:hidden"
+                      // uppercased: refs are case-sensitive. Yields three times
+                      // faster than the title, which is what names the pane.
+                      "min-w-[7ch] max-w-[120px] shrink-[3] font-mono text-text-primary select-none @max-[420px]/header:hidden"
                     )}
                     style={
                       {

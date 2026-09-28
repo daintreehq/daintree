@@ -15,7 +15,7 @@ import {
   type ProjectPluginState,
 } from "@shared/types/plugin";
 import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
-import { Badge } from "@/components/ui/badge";
+import { Badge, CountBadge } from "@/components/ui/badge";
 
 const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
@@ -155,10 +155,7 @@ export function ProjectPluginSection({
           existed because this lived inside a listbox, where a role="group" label
           drops under Chromium 146 + VoiceOver (LESSON #9006). */}
       <h3 id="plugin-category-this-project" className={SECTION_HEADER_CLASS}>
-        This project{" "}
-        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
-          {plugins.length}
-        </span>
+        This project <CountBadge className="ml-1.5">{plugins.length}</CountBadge>
       </h3>
       <ul role="list" className="space-y-1">
         {plugins.map((plugin) => (

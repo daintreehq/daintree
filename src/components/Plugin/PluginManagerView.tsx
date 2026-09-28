@@ -54,7 +54,7 @@ import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
-import { Badge } from "@/components/ui/badge";
+import { Badge, CountBadge } from "@/components/ui/badge";
 
 const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
@@ -980,10 +980,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   return (
                     <section key={id} aria-labelledby={headingId} className="space-y-1">
                       <h3 id={headingId} className={SECTION_HEADER_CLASS}>
-                        {label}{" "}
-                        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
-                          {groupPlugins.length}
-                        </span>
+                        {label} <CountBadge className="ml-1.5">{groupPlugins.length}</CountBadge>
                       </h3>
                       <ul role="list" className="space-y-1">
                         {groupPlugins.map((plugin) => (
