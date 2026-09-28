@@ -260,6 +260,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 ) {
   const isDragging = useIsDragging();
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const titleRef = useRef<HTMLSpanElement>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Compose, never replace: TerminalPane forwards its own ref here and observes
   // the same node for resize/visibility. A callback ref may return a React 19
@@ -342,10 +343,21 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // dropdown/context-menu's focus restoration steals focus from the input
   // immediately after we grab it, the input fires `onBlur`, and editing ends
   // before the user sees it. 200ms covers Tier 2-fast palette/menu exit.
+  // Only until the user takes over: a key or a click in the field cancels it, or
+  // a fast F2-then-type would have its first characters (or its caret move)
+  // re-selected and eaten by the next keystroke.
   useEffect(() => {
-    if (titleEditing.isEditingTitle && titleInputRef.current) {
+    const input = titleInputRef.current;
+    if (titleEditing.isEditingTitle && input) {
       const timer = setTimeout(() => titleInputRef.current?.select(), 200);
-      return () => clearTimeout(timer);
+      const cancel = () => clearTimeout(timer);
+      input.addEventListener("keydown", cancel);
+      input.addEventListener("pointerdown", cancel);
+      return () => {
+        cancel();
+        input.removeEventListener("keydown", cancel);
+        input.removeEventListener("pointerdown", cancel);
+      };
     }
     return undefined;
   }, [titleEditing.isEditingTitle]);
@@ -574,14 +586,19 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 
   const handleTitleInputKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // Enter and Escape unmount the field; hand focus back to the title so a
+      // keyboard rename ends where it started rather than on the body.
+      const returnFocus = () => requestAnimationFrame(() => titleRef.current?.focus());
       if (e.key === "Enter") {
         // Don't intercept Enter while an IME composition is being committed.
         if (e.nativeEvent.isComposing) return;
         e.preventDefault();
         commitTitle({ allowReset: true });
+        returnFocus();
       } else if (e.key === "Escape") {
         titleEditing.stopEditing();
         titleEditing.setEditingValue(title);
+        returnFocus();
       }
     },
     [commitTitle, title, titleEditing]
@@ -689,6 +706,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isEditingTitle={titleEditing.isEditingTitle}
           editingValue={titleEditing.editingValue}
           titleInputRef={titleInputRef}
+          titleRef={titleRef}
           onEditingValueChange={titleEditing.setEditingValue}
           onTitleDoubleClick={handleTitleDoubleClick}
           onTitleKeyDown={handleTitleKeyDown}
