@@ -391,6 +391,52 @@ describe("settings splits", () => {
     // A remote window edits this machine's value, so the key is this machine's.
     expect(STORE_KEY_OWNERSHIP.keepAwake).toBe("device");
   });
+
+  it("opens a forge page the host builds in this machine's browser", async () => {
+    const forward = vi.fn(() => "https://github.com/acme/widgets/pull/7");
+    const { invoke, listener } = setup(forward, () => undefined);
+    await invoke(CHANNELS.FORGE_OPEN_PR, [{ cwd: "/home/greg/widgets", prNumber: 7 }]);
+    expect(forward).toHaveBeenCalledWith(CHANNELS.FORGE_OPEN_PR, [
+      { cwd: "/home/greg/widgets", prNumber: 7 },
+    ]);
+    expect(listener).not.toHaveBeenCalled();
+    expect(mocks.openExternal).toHaveBeenCalledWith("https://github.com/acme/widgets/pull/7", {
+      activate: true,
+    });
+    expect(HYBRID_HOST_LEGS).toContain(CHANNELS.FORGE_OPEN_PR);
+  });
+
+  it("won't open a forge page on a scheme this machine doesn't open", async () => {
+    mocks.openExternal.mockClear();
+    const { invoke } = setup(
+      vi.fn(() => "file:///etc/passwd"),
+      () => undefined
+    );
+    await expect(invoke(CHANNELS.FORGE_OPEN_REPO, [{ cwd: "/home/greg/widgets" }])).rejects.toThrow(
+      /not allowed/
+    );
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("says so when the host sends no forge page to open", async () => {
+    mocks.openExternal.mockClear();
+    const { invoke } = setup(
+      vi.fn(() => undefined),
+      () => undefined
+    );
+    await expect(invoke(CHANNELS.FORGE_OPEN_ISSUES, ["/home/greg/widgets"])).rejects.toThrow(
+      /without a URL/
+    );
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("saves a plugin audit export on this machine, never behind a dialog on the host", async () => {
+    const forward = vi.fn();
+    const { invoke } = setup(forward, () => true);
+    await expect(invoke(CHANNELS.PLUGIN_EXPORT_AUDIT_LOG, [[]])).resolves.toBe(true);
+    expect(forward).not.toHaveBeenCalled();
+    expect(getChannelLocality(CHANNELS.PLUGIN_EXPORT_AUDIT_LOG)).toBe("hybrid");
+  });
 });
 
 describe("project activation", () => {

@@ -53,6 +53,8 @@ interface Run {
   remotePage: Page | null;
   windowless: ElectronApplication | null;
   killedMaster: number | null;
+  /** The terminal test 3 starts, which the Host's restart in test 4 loses. */
+  firstTerminalId: string | null;
 }
 
 const run = {
@@ -61,6 +63,7 @@ const run = {
   hostId: "",
   remotePage: null,
   killedMaster: null,
+  firstTerminalId: null,
 } as unknown as Run;
 
 const timings: Record<string, number> = {};
@@ -414,6 +417,7 @@ test.describe.serial("Remote hosts: a windowless Host started with --host-mode",
     await runTerminalCommand(page, panel, 'echo "home=$HOME"; echo "headless=$((12*12))"');
     await waitForTerminalText(panel, "headless=144", 30_000);
     expect(await getTerminalText(panel)).toContain(`home=${run.sshd.home}`);
+    run.firstTerminalId = await panel.getAttribute("data-panel-id");
   });
 
   test("4. after the windowless Host restarts, the panes are still there and a new terminal works", async () => {
@@ -470,15 +474,22 @@ test.describe.serial("Remote hosts: a windowless Host started with --host-mode",
     await waitForTerminalText(last, "again=169", 30_000);
   });
 
-  // Known gap, found by this spec: a windowless Host has no renderer to bring
-  // its terminals back after a restart, and the Shell's reconnect resync marks
-  // the vanished one only by `runtimeStatus: "exited"` in the store, which the
-  // pane does not render (its exited look is driven by the PTY exit stream).
-  // The pane keeps its old buffer and a live-looking prompt while the host
-  // answers "terminal not found" to every keystroke.
-  test.fixme("5. a terminal lost in a windowless Host restart is shown as ended, with a way to restart it", async () => {
+  test("5. a terminal lost in the windowless Host restart reads as ended, and restarts on the Host", async () => {
     const top = run.remotePage!;
-    const first = top.locator("[data-panel-id]").first();
-    await expect(first).toContainText(/ended|not found|exited/i, { timeout: 30_000 });
+    expect(run.firstTerminalId).toBeTruthy();
+    const lost = top.locator(`[data-panel-id="${run.firstTerminalId}"]`);
+    await waitForTerminalText(lost, "The host no longer has this terminal", 30_000);
+    await expect(lost.getByText("[exited]", { exact: true })).toBeVisible({ timeout: 10_000 });
+
+    const overflowBtn = lost.locator(SEL.panel.overflowMenu).first();
+    await lost.hover();
+    await overflowBtn.click();
+    await top.locator(SEL.panel.restart).first().click();
+    await top.locator(SEL.panel.restartConfirm).first().click();
+
+    await expect(lost.getByText("[exited]", { exact: true })).toHaveCount(0, { timeout: 30_000 });
+    await waitForTerminalReady(top, lost, 60_000);
+    await runTerminalCommand(top, lost, 'echo "revived=$((14*14))"');
+    await waitForTerminalText(lost, "revived=196", 30_000);
   });
 });

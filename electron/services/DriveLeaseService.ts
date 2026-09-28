@@ -1,3 +1,4 @@
+import { app } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { LOCAL_CLIENT_ID } from "../ipc/endpoint.js";
 import type { ClientEndpoint, ClientRef, EndpointRegistry } from "../ipc/endpoint.js";
@@ -12,6 +13,7 @@ import {
   type LeaseTargetResolvers,
 } from "./driveLeaseTargets.js";
 import { getPtyClient } from "../window/serviceRefs.js";
+import { createFileReservationStore } from "./driveLeaseReservations.js";
 import type { DriveLeaseHolder, DriveLeaseState } from "../../shared/types/remoteHosts.js";
 import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
 import type { DriveLeaseEvent, DriveLeaseView } from "../../shared/types/ipc/driveLease.js";
@@ -22,6 +24,14 @@ import type { DriveLeaseEvent, DriveLeaseView } from "../../shared/types/ipc/dri
  * it back, short enough that nobody else waits long on a machine that went.
  */
 export const DEFAULT_DRIVE_LEASE_RELEASE_GRACE_MS = 15_000;
+
+/**
+ * How long a project stays reserved, after this app starts, for the Shell that
+ * drove it before a restart. Longer than the ordinary grace: that Shell only
+ * learns the Host is back on its next reconnect attempt, which backs off to
+ * 30 s (LinkClient), and then has to handshake and reopen its view.
+ */
+export const DEFAULT_RESTORED_RESERVATION_GRACE_MS = 45_000;
 
 type LeaseRegistry = Pick<EndpointRegistry, "get" | "getForProject" | "getRemote" | "onChange">;
 
@@ -35,7 +45,33 @@ export interface DriveLeaseServiceOptions {
    * PtyClient.
    */
   applyDriveLeases?: (leases: PtyHostDriveLease[]) => void;
+  /**
+   * Where the remote holders are kept across a restart of this app, so a Shell
+   * whose Host restarted under it finds its projects still reserved for it
+   * rather than taken by whichever window opened them first. None by default.
+   */
+  reservations?: DriveLeaseReservationStore;
+  restoredReservationGraceMs?: number;
 }
+
+/** A remote client that held a project's lease when this app last ran. */
+export interface DriveLeaseReservation {
+  clientId: string;
+  clientName: string;
+}
+
+export interface DriveLeaseReservationStore {
+  load(): Record<string, DriveLeaseReservation>;
+  save(reservations: Record<string, DriveLeaseReservation>): void;
+}
+
+/**
+ * A reserved lease's holder endpoint when the app started with the holder
+ * already away: no endpoint has this id, and no pty-host connection has id 0
+ * (a local view's is its positive WebContents id, a remote view's negative).
+ */
+const RESTORED_HOLDER_ENDPOINT_PREFIX = "restored:";
+const RESTORED_HOLDER_CONNECTION = 0;
 
 interface ProjectLease {
   holder: DriveLeaseHolder;
@@ -69,6 +105,9 @@ export class DriveLeaseService {
   private readonly releaseGraceMs: number;
   private readonly now: () => number;
   private readonly applyDriveLeases: (leases: PtyHostDriveLease[]) => void;
+  private readonly reservations: DriveLeaseReservationStore | null;
+  private readonly restoredReservationGraceMs: number;
+  private savedReservations = "";
   private readonly leases = new Map<string, ProjectLease>();
   private readonly clients = new Map<string, ClientRef>();
   /** Remote endpoints whose link is down: kept by the session, but nobody is there. */
@@ -86,8 +125,77 @@ export class DriveLeaseService {
     this.now = options.now ?? Date.now;
     this.applyDriveLeases =
       options.applyDriveLeases ?? ((leases) => getPtyClient()?.setDriveLeases(leases));
+    this.reservations = options.reservations ?? null;
+    this.restoredReservationGraceMs =
+      options.restoredReservationGraceMs ?? DEFAULT_RESTORED_RESERVATION_GRACE_MS;
+    this.restoreReservations();
     this.offRegistry = this.registry.onChange(() => this.queueReconcile());
     this.queueReconcile();
+  }
+
+  /**
+   * Each project a remote client held when this app last ran starts out held
+   * for that client, away, inside a grace long enough for its Shell to
+   * reconnect: coming back takes it straight back, and otherwise it goes to
+   * whoever is there once the grace runs out, as when a holder's link drops.
+   */
+  private restoreReservations(): void {
+    if (!this.reservations) return;
+    let restored: Record<string, DriveLeaseReservation>;
+    try {
+      restored = this.reservations.load();
+    } catch (error) {
+      console.error("[DriveLease] Couldn't read the reserved leases:", error);
+      return;
+    }
+    for (const [projectId, reservation] of Object.entries(restored)) {
+      const holder: DriveLeaseHolder = {
+        leaseId: this.nextLeaseId++,
+        endpointId: `${RESTORED_HOLDER_ENDPOINT_PREFIX}${reservation.clientId}`,
+        clientId: reservation.clientId,
+        clientName: reservation.clientName,
+        isHostLocal: false,
+        acquiredAt: this.now(),
+      };
+      const lease: ProjectLease = {
+        holder,
+        holderHandle: RESTORED_HOLDER_CONNECTION,
+        releaseTimer: null,
+      };
+      lease.releaseTimer = setTimeout(
+        () => this.release(projectId, holder.leaseId),
+        this.restoredReservationGraceMs
+      );
+      lease.releaseTimer.unref?.();
+      this.leases.set(projectId, lease);
+    }
+    this.savedReservations = JSON.stringify(this.remoteHolders());
+    this.publishDriveLeases();
+  }
+
+  private remoteHolders(): Record<string, DriveLeaseReservation> {
+    const out: Record<string, DriveLeaseReservation> = {};
+    const projectIds = [...this.leases.keys()].sort();
+    for (const projectId of projectIds) {
+      const { holder } = this.leases.get(projectId)!;
+      if (holder.clientId === LOCAL_CLIENT_ID) continue;
+      out[projectId] = { clientId: holder.clientId, clientName: holder.clientName };
+    }
+    return out;
+  }
+
+  private saveReservations(): void {
+    if (!this.reservations || this.disposed) return;
+    const next = this.remoteHolders();
+    const serialized = JSON.stringify(next);
+    if (serialized === this.savedReservations) return;
+    try {
+      this.reservations.save(next);
+      // Only once written: a failed save is tried again on the next change.
+      this.savedReservations = serialized;
+    } catch (error) {
+      console.error("[DriveLease] Couldn't save the reserved leases:", error);
+    }
   }
 
   /**
@@ -392,6 +500,7 @@ export class DriveLeaseService {
 
   private publish(projectId: string, holder: DriveLeaseHolder | null): void {
     this.publishDriveLeases();
+    this.saveReservations();
     for (const endpoint of this.registry.getForProject(projectId)) {
       const event: DriveLeaseEvent = {
         type: "changed",
@@ -544,8 +653,17 @@ export function mayWriteProjectState(
 let service: DriveLeaseService | null = null;
 
 export function getDriveLeaseService(): DriveLeaseService {
-  service ??= new DriveLeaseService();
+  service ??= new DriveLeaseService({ reservations: defaultReservationStore() });
   return service;
+}
+
+function defaultReservationStore(): DriveLeaseReservationStore | undefined {
+  try {
+    return createFileReservationStore(app.getPath("userData"));
+  } catch {
+    // No app paths (a unit test's mocked electron): leases just don't outlive the process.
+    return undefined;
+  }
 }
 
 /**

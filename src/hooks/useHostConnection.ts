@@ -183,6 +183,7 @@ function applyLease(lease: DriveLeaseView): void {
           driverName: driver,
           projectId: lease.projectId,
           hostLocal: lease.viewerIsHostLocal,
+          driverIsHostScreen: lease.holder?.isHostLocal === true,
         }
   );
 }

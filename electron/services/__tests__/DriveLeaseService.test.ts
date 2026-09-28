@@ -387,3 +387,230 @@ describe("DriveLeaseService", () => {
     expect(service.getDriveTarget("empty")).toEqual({ kind: "vacant" });
   });
 });
+
+describe("DriveLeaseService across a restart of this app", () => {
+  function memoryStore(initial: Record<string, { clientId: string; clientName: string }> = {}) {
+    const saved: Array<Record<string, { clientId: string; clientName: string }>> = [];
+    return {
+      saved,
+      store: {
+        load: () => initial,
+        save: (next: Record<string, { clientId: string; clientName: string }>) => {
+          saved.push(next);
+        },
+      },
+    };
+  }
+
+  const RESTORED_GRACE_MS = GRACE_MS * 3;
+
+  function restarted(initial: Record<string, { clientId: string; clientName: string }>) {
+    const memory = memoryStore(initial);
+    const next = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      restoredReservationGraceMs: RESTORED_GRACE_MS,
+      now: () => 1_000,
+      applyDriveLeases: (leases) => leaseTables.push(leases),
+      reservations: memory.store,
+    });
+    return { next, memory };
+  }
+
+  const greg = { clientId: "shell-launch-1", clientName: "greg-mbp" };
+  const noteClient = (endpoint: FakeEndpoint, clientId: string, clientName: string) =>
+    service.noteEndpointClient(endpoint.endpointId, {
+      clientId,
+      clientName,
+      platform: "darwin",
+      kind: "remote",
+    });
+
+  it("keeps the remote holders it grants, and forgets a project once this machine drives it", async () => {
+    service.dispose();
+    const memory = memoryStore();
+    service = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      now: () => 1_000,
+      applyDriveLeases: (leases) => leaseTables.push(leases),
+      reservations: memory.store,
+    });
+    const laptop = remote("s1:e1", "shell-launch-1");
+    const hostWindow = local(1);
+    registry.add(laptop);
+    service.noteEndpointClient(laptop.endpointId, {
+      clientId: "shell-launch-1",
+      clientName: "greg-mbp",
+      platform: "darwin",
+      kind: "remote",
+    });
+    await settle();
+    expect(memory.saved.at(-1)).toEqual({
+      p: { clientId: "shell-launch-1", clientName: "greg-mbp" },
+    });
+
+    registry.add(hostWindow);
+    await settle();
+    service.takeOver("p", hostWindow);
+    expect(memory.saved.at(-1)).toEqual({});
+  });
+
+  it("holds a project for the Shell that drove it, so this machine's window can't take it on start", async () => {
+    service.dispose();
+    const { next } = restarted({ p: { clientId: "shell-launch-1", clientName: "greg-mbp" } });
+    service = next;
+    const hostWindow = local(1);
+    registry.add(hostWindow);
+    await settle();
+
+    expect(service.getHolder("p")).toMatchObject({
+      clientId: "shell-launch-1",
+      clientName: "greg-mbp",
+      isHostLocal: false,
+    });
+    expect(service.getDriveTarget("p").kind).toBe("reserved");
+    expect(service.isDriving("p", hostWindow)).toBe(false);
+    // Nobody's terminal input reaches it while it waits: no connection has id 0.
+    expect(leaseTables.at(-1)).toEqual([
+      expect.objectContaining({ projectId: "p", holderConnection: 0 }),
+    ]);
+
+    // The Shell comes back inside the grace and simply carries on.
+    const laptop = remote("s2:e1", "shell-launch-1");
+    registry.add(laptop);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+    expect(service.isDriving("p", laptop)).toBe(true);
+  });
+
+  it("gives the project to whoever is there once the grace runs out", async () => {
+    service.dispose();
+    const { next, memory } = restarted({
+      p: { clientId: "shell-launch-1", clientName: "greg-mbp" },
+    });
+    service = next;
+    const hostWindow = local(1);
+    registry.add(hostWindow);
+    await settle();
+    expect(service.isDriving("p", hostWindow)).toBe(false);
+
+    // Past the ordinary grace it still waits: the Shell may be deep in its backoff.
+    vi.advanceTimersByTime(GRACE_MS + 1);
+    expect(service.isDriving("p", hostWindow)).toBe(false);
+
+    vi.advanceTimersByTime(RESTORED_GRACE_MS - GRACE_MS);
+    expect(service.getHolder("p")).toMatchObject({ endpointId: "local:1", isHostLocal: true });
+    expect(service.isDriving("p", hostWindow)).toBe(true);
+    expect(memory.saved.at(-1)).toEqual({});
+  });
+
+  it("lets this machine's window take it over explicitly while it waits", async () => {
+    service.dispose();
+    const { next } = restarted({ p: { clientId: "shell-launch-1", clientName: "greg-mbp" } });
+    service = next;
+    const hostWindow = local(1);
+    registry.add(hostWindow);
+    await settle();
+
+    service.takeOver("p", hostWindow);
+    expect(service.isDriving("p", hostWindow)).toBe(true);
+    vi.advanceTimersByTime(RESTORED_GRACE_MS + 1);
+    expect(service.getHolder("p")?.endpointId).toBe("local:1");
+  });
+
+  it("keeps it from another Shell that attaches first, and hands it back to the one that drove", async () => {
+    service.dispose();
+    const { next } = restarted({ p: greg });
+    service = next;
+    const other = remote("s9:e1", "shell-launch-2");
+    registry.add(other);
+    noteClient(other, "shell-launch-2", "ana-mbp");
+    await settle();
+    expect(service.isDriving("p", other)).toBe(false);
+    expect(service.getHolder("p")?.clientId).toBe("shell-launch-1");
+
+    const back = remote("s2:e1", "shell-launch-1");
+    registry.add(back);
+    noteClient(back, "shell-launch-1", "greg-mbp");
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+    expect(service.isDriving("p", other)).toBe(false);
+    expect(leaseTables.at(-1)).toEqual([
+      expect.objectContaining({ projectId: "p", holderConnection: back.handle }),
+    ]);
+  });
+
+  it("gives it to the Shell that waited once the grace runs out; the old driver returning late observes", async () => {
+    service.dispose();
+    const { next } = restarted({ p: greg });
+    service = next;
+    const other = remote("s9:e1", "shell-launch-2");
+    registry.add(other);
+    await settle();
+
+    vi.advanceTimersByTime(RESTORED_GRACE_MS + 1);
+    expect(service.getHolder("p")?.endpointId).toBe("s9:e1");
+
+    const late = remote("s2:e1", "shell-launch-1");
+    registry.add(late);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s9:e1");
+    expect(service.isDriving("p", late)).toBe(false);
+  });
+
+  it("tries a failed save again on the next change", async () => {
+    service.dispose();
+    const saved: unknown[] = [];
+    let failNext = true;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    service = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      applyDriveLeases: (leases) => leaseTables.push(leases),
+      reservations: {
+        load: () => ({}),
+        save: (next) => {
+          if (failNext) {
+            failNext = false;
+            throw new Error("ENOSPC");
+          }
+          saved.push(next);
+        },
+      },
+    });
+    const laptop = remote("s1:e1", "shell-launch-1");
+    registry.add(laptop);
+    await settle();
+    expect(saved).toEqual([]);
+
+    // Same client, same name, a new endpoint: nothing new to say, but the file is behind.
+    laptop.close();
+    const again = remote("s1:e2", "shell-launch-1");
+    registry.add(again);
+    await settle();
+    expect(saved.at(-1)).toEqual({
+      p: { clientId: "shell-launch-1", clientName: "shell-launch-1" },
+    });
+    errors.mockRestore();
+  });
+
+  it("starts with nothing held when the store can't be read", async () => {
+    service.dispose();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    service = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      applyDriveLeases: (leases) => leaseTables.push(leases),
+      reservations: {
+        load: () => {
+          throw new Error("EACCES");
+        },
+        save: () => {},
+      },
+    });
+    expect(service.getState("p").holder).toBeNull();
+    expect(errors).toHaveBeenCalled();
+    errors.mockRestore();
+  });
+});

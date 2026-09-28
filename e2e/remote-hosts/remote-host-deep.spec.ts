@@ -828,7 +828,7 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     await waitForTerminalText(panel, "post-outage=81", 30_000);
   });
 
-  test("14. the Host crashes and restarts: the Shell says so, then reattaches", async () => {
+  test("14. the Host crashes and restarts: the Shell says so, reattaches, and still drives", async () => {
     const page = run.remotePage!;
     const hostPid = run.a.app.process().pid!;
     process.kill(hostPid, "SIGKILL");
@@ -869,8 +869,24 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     timings.reattachAfterHostRestartMs = Date.now() - upAt;
     const top = (await topViewPage(run.b.app))!;
     expect(await viewHostId(top)).toBe(run.hostId);
-    // The restarted Host's own window opened the project first, so it drives now.
+    // The Shell drove when the Host went down, and the restarted Host held the
+    // project for it: its own window opening the project first takes nothing.
     const driven = top.locator(SEL.remoteHosts.drivenElsewhereBanner);
+    await expect(driven).toHaveCount(0);
+    await openTerminal(top);
+    {
+      const panels = top.locator("[data-panel-id]");
+      const kept = panels.nth((await panels.count()) - 1);
+      await waitForTerminalReady(top, kept, 60_000);
+      await runTerminalCommand(top, kept, 'echo "kept=$((10*10))"');
+      await waitForTerminalText(kept, "kept=100", 30_000);
+    }
+    // The Host's own window can still take it over when someone there wants to.
+    const hostTop = await topViewPage(run.a.app);
+    expect(hostTop, "the restarted Host has no project view").toBeTruthy();
+    const hostTaken = hostTop!.locator('[role="status"]:has-text("Being driven from")');
+    await expect(hostTaken).toBeVisible({ timeout: 30_000 });
+    await hostTaken.getByRole("button", { name: "Take back" }).click();
     await expect(driven).toBeVisible({ timeout: 30_000 });
     // A terminal asked for while observing is refused in words, not wire format.
     await openTerminal(top);

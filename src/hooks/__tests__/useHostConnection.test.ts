@@ -334,6 +334,7 @@ describe("host connection sync", () => {
       driverName: "greg-mbp",
       projectId: "proj-1",
       hostLocal: false,
+      driverIsHostScreen: false,
     });
 
     emitLease({ type: "changed", state: leaseView(null, true, "other") });

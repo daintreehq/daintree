@@ -1087,19 +1087,23 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "forge:open-issues": {
     args: [cwd: string, query?: string, state?: string];
-    result: void;
+    /** The page's URL for a caller on another machine, whose Shell opens it; nothing here. */
+    result: string | undefined;
   };
   "forge:open-prs": {
     args: [cwd: string, query?: string, state?: string];
-    result: void;
+    /** The page's URL for a caller on another machine, whose Shell opens it; nothing here. */
+    result: string | undefined;
   };
   "forge:open-commits": {
     args: [cwd: string, branch?: string];
-    result: void;
+    /** The page's URL for a caller on another machine, whose Shell opens it; nothing here. */
+    result: string | undefined;
   };
   "forge:open-issue": {
     args: [payload: { cwd: string; issueNumber: number }];
-    result: void;
+    /** The page's URL for a caller on another machine, whose Shell opens it; nothing here. */
+    result: string | undefined;
   };
   "forge:get-issue-url": {
     args: [payload: { cwd: string; issueNumber: number }];

@@ -16,6 +16,7 @@ import {
   type HostDescriptor,
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { HybridSplit } from "../../ipc/endpoint.js";
 import type { IpcContext } from "../../ipc/types.js";
@@ -362,6 +363,24 @@ const copyHostPath: HybridSplit = async ({ args }) => {
   clipboard.writeText(targetPath);
 };
 
+/**
+ * A forge page opens in this machine's browser: the host builds the URL from
+ * its own checkout and forge config, answers a remote caller with it instead of
+ * opening it on its own screen, and it is checked here like any URL we open.
+ */
+const openForgePage: HybridSplit = async ({ hostId, remote }) => {
+  const url = await remote();
+  if (typeof url !== "string") {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: "The host answered a forge page open without a URL",
+      userMessage: `${hostLabel(hostId)} didn't send a page to open here.`,
+    });
+  }
+  await openExternalUrl(url);
+  return undefined;
+};
+
 const openOnHost = refuse(
   (host) => `This file is on ${host}, not this computer. Use Copy host path instead.`
 );
@@ -398,7 +417,14 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   // The records arrive from the renderer; the save dialog and file are this machine's.
   [CHANNELS.MCP_SERVER_EXPORT_AUDIT_LOG]: localOnly,
   [CHANNELS.FORGE_AUDIT_EXPORT_LOG]: localOnly,
+  [CHANNELS.PLUGIN_EXPORT_AUDIT_LOG]: localOnly,
   [CHANNELS.ARTIFACT_SAVE_TO_FILE]: artifactSaveToFile,
+  [CHANNELS.FORGE_OPEN_PR]: openForgePage,
+  [CHANNELS.FORGE_OPEN_PRS]: openForgePage,
+  [CHANNELS.FORGE_OPEN_ISSUE]: openForgePage,
+  [CHANNELS.FORGE_OPEN_ISSUES]: openForgePage,
+  [CHANNELS.FORGE_OPEN_COMMITS]: openForgePage,
+  [CHANNELS.FORGE_OPEN_REPO]: openForgePage,
   [CHANNELS.SYSTEM_OPEN_IN_EDITOR]: openInEditor,
   [CHANNELS.SYSTEM_OPEN_PATH]: openOnHost,
   [CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER]: copyHostPath,
@@ -455,4 +481,11 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.NOTIFICATION_SETTINGS_SET,
   CHANNELS.NOTIFICATION_SYNC_WATCHED,
   CHANNELS.NOTIFICATION_SESSION_MUTE_SET,
+  // Answer a remote caller with the page's URL, for its Shell to open.
+  CHANNELS.FORGE_OPEN_PR,
+  CHANNELS.FORGE_OPEN_PRS,
+  CHANNELS.FORGE_OPEN_ISSUE,
+  CHANNELS.FORGE_OPEN_ISSUES,
+  CHANNELS.FORGE_OPEN_COMMITS,
+  CHANNELS.FORGE_OPEN_REPO,
 ];

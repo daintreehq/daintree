@@ -300,12 +300,13 @@ export const CHANNEL_LOCALITY = {
   "forge:list-prs": "host",
   "forge:mark-pr-ready-for-review": "host",
   "forge:merge-pr": "host",
-  "forge:open-commits": "host",
-  "forge:open-issue": "host",
-  "forge:open-issues": "host",
-  "forge:open-pr": "host",
-  "forge:open-prs": "host",
-  "forge:open-repo": "host",
+  // The URL is the host's to build, the browser the caller's (see the split).
+  "forge:open-commits": "hybrid",
+  "forge:open-issue": "hybrid",
+  "forge:open-issues": "hybrid",
+  "forge:open-pr": "hybrid",
+  "forge:open-prs": "hybrid",
+  "forge:open-repo": "hybrid",
   "forge:preview-credential-import": "host",
   "forge:rate-limit-changed": "host",
   "forge:remove-issue-label": "host",
@@ -562,7 +563,8 @@ export const CHANNEL_LOCALITY = {
   "plugin:context-menu-items": "host",
   "plugin:dispatch-action-request": "shell",
   "plugin:dispatch-action-response": "shell",
-  "plugin:export-audit-log": "host",
+  // The records arrive from the renderer; the save dialog and file are the caller's.
+  "plugin:export-audit-log": "hybrid",
   // Snapshots a host plugin's databases through a save dialog parented to the
   // caller's window: the dialog is the Shell's, the data is the host's, and
   // with no split registered a remote window is refused rather than opening a
