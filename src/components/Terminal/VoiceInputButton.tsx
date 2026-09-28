@@ -354,8 +354,7 @@ export function VoiceInputButton({
                 ? "bg-[color-mix(in_oklab,var(--ib-fg)_12%,transparent)] text-[var(--ib-fg)] hover:bg-[color-mix(in_oklab,var(--ib-fg)_18%,transparent)]"
                 : status === "error"
                   ? cn("text-activity-waiting", COMPOSER_CONTROL_HOVER_BG_CLASS)
-                  : cn(COMPOSER_CONTROL_TEXT_CLASS, COMPOSER_CONTROL_HOVER_BG_CLASS),
-              disabled && !isActive && "pointer-events-none opacity-40"
+                  : cn(COMPOSER_CONTROL_TEXT_CLASS, COMPOSER_CONTROL_HOVER_BG_CLASS)
             )}
             aria-label={
               !isConfigured
@@ -389,7 +388,7 @@ export function VoiceInputButton({
             )}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom">{tooltipText}</TooltipContent>
+        <TooltipContent side="top">{tooltipText}</TooltipContent>
       </Tooltip>
     </div>
   );
