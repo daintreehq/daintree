@@ -159,20 +159,13 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Git status letter ?, the notation git itself paints green",
     },
   ],
-  "src/components/Layout/DockedTabGroup.tsx": [
+  "src/components/Layout/DockActivityCue.tsx": [
     {
       category: "transient",
       signature: "text-status-success",
       expectedOccurrences: 1,
-      rationale: "Finished cue on a docked group; the cue decays rather than standing",
-    },
-  ],
-  "src/components/Layout/DockedTerminalItem.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Finished cue on a docked terminal; the cue decays rather than standing",
+      rationale:
+        "Finished cue shared by docked terminals and groups; the cue decays rather than standing",
     },
   ],
   "src/components/Notifications/NotificationCenterEntry.tsx": [
@@ -624,5 +617,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 71;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 73;
+export const EXPECTED_STATUS_SUCCESS_SITES = 70;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 72;
