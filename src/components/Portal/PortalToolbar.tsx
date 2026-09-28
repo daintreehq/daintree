@@ -315,6 +315,8 @@ export function PortalToolbar({
   const tablistRef = useRef<HTMLDivElement>(null);
   // The control row is a toolbar like every pane toolbar: one tab stop, arrow
   // keys between its buttons. The tab strip below keeps its own tablist.
+  // Unavailable buttons are aria-disabled, not disabled, so they keep their
+  // place in that arrow-key order.
   const controlsRef = useRef<HTMLDivElement>(null);
   const onControlsKeyDown = useToolbarRoving(controlsRef);
   const [overflow, setOverflow] = useState({ before: false, after: false });
@@ -410,8 +412,10 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onGoBack}
-              disabled={!hasActiveUrl}
+              onClick={() => {
+                if (hasActiveUrl) onGoBack?.();
+              }}
+              aria-disabled={!hasActiveUrl || undefined}
               aria-label="Go back"
               className={iconButtonClass}
             >
@@ -424,8 +428,10 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onGoForward}
-              disabled={!hasActiveUrl}
+              onClick={() => {
+                if (hasActiveUrl) onGoForward?.();
+              }}
+              aria-disabled={!hasActiveUrl || undefined}
               aria-label="Go forward"
               className={iconButtonClass}
             >
@@ -438,8 +444,10 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onReload}
-              disabled={!hasActiveUrl}
+              onClick={() => {
+                if (hasActiveUrl) onReload?.();
+              }}
+              aria-disabled={!hasActiveUrl || undefined}
               aria-label="Reload"
               className={iconButtonClass}
             >
@@ -452,8 +460,10 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onCopyUrl}
-              disabled={!activeTabId || !hasActiveUrl}
+              onClick={() => {
+                if (activeTabId && hasActiveUrl) onCopyUrl?.();
+              }}
+              aria-disabled={!activeTabId || !hasActiveUrl || undefined}
               aria-label="Copy URL"
               className={iconButtonClass}
             >
@@ -466,8 +476,10 @@ export function PortalToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onOpenExternal}
-              disabled={!activeTabId || !hasActiveUrl}
+              onClick={() => {
+                if (activeTabId && hasActiveUrl) onOpenExternal?.();
+              }}
+              aria-disabled={!activeTabId || !hasActiveUrl || undefined}
               aria-label="Open in external browser"
               className={iconButtonClass}
             >
