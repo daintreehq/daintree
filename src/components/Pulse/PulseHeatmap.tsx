@@ -153,6 +153,8 @@ function PulseHeatmapCell({
           }}
           className={cn(
             "pulse-heat-cell relative overflow-hidden rounded-[2px] shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
+            // Cells sit 3px apart, so an outside ring would land on the neighbours.
+            "focus-visible:-outline-offset-2",
             cell.isMostRecentActive && "ring-1 ring-daintree-text/25 ring-offset-1"
           )}
           aria-label={`${formatted}: ${getCountText(cell)}`}

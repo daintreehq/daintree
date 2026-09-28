@@ -428,6 +428,12 @@ type FocusRingAllowlistEntry = {
 
 const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
+    file: "src/components/Plugin/PluginViewContent.tsx",
+    fragment: "empty:outline-hidden",
+    reason:
+      "The status wrapper is where focus is rescued to, and it keeps the global ring whenever it holds a status; only while it is empty (zero height) is the outline dropped, since a solid outline there is a stray stripe with nothing to point at",
+  },
+  {
     file: "src/components/Settings/PresetSelector.tsx",
     fragment: "overflow-y-auto max-h-80 focus:outline-hidden",
     reason:
@@ -787,7 +793,7 @@ describe("focus-ring fallback contract", () => {
 
     throw new Error(
       `Found ${violations.length} bare \`outline-hidden\` use(s) with no element-owned focus indicator. ` +
-        `Add a same-element focus fallback (e.g. \`focus-visible:ring-2 focus-visible:ring-accent-primary\`) ` +
+        `Add a same-element focus fallback (e.g. \`focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary\`) ` +
         `or, if the element is non-interactive and delegates focus, add an ALLOWLIST entry with a rationale ` +
         `in src/config/__tests__/focusRingFallback.contract.test.ts:\n${detail}${more}`
     );

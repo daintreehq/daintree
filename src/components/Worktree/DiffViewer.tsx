@@ -1595,7 +1595,7 @@ function FileDiff({
           <div
             id={diffRegionId}
             ref={regionRef}
-            className="diff-file-centered"
+            className="diff-file-centered focus-visible:-outline-offset-2"
             tabIndex={0}
             role="region"
             aria-label={relPath || "Diff"}
@@ -1615,7 +1615,7 @@ function FileDiff({
             <div
               id={diffRegionId}
               ref={nativeScrollerRef}
-              className="diff-file-scroll"
+              className="diff-file-scroll focus-visible:-outline-offset-2"
               data-proxy-active={(usesNativeHScrollProxy && hasHOverflow) || undefined}
               tabIndex={0}
               role="region"

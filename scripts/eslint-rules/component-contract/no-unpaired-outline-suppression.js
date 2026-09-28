@@ -94,7 +94,7 @@ export default {
     schema: [],
     messages: {
       unpaired:
-        "`{{token}}` removes the focus indicator with nothing painted in its place: the element still takes keyboard focus, but nothing shows where that focus is. Add an element-owned focus treatment (e.g. `focus-visible:ring-2 focus-visible:ring-accent-primary`). Elements that delegate focus to a wrapper opt out with `// eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- <reason>`.",
+        "`{{token}}` removes the focus indicator with nothing painted in its place: the element still takes keyboard focus, but nothing shows where that focus is. Add an element-owned focus treatment (e.g. `focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary`). Elements that delegate focus to a wrapper opt out with `// eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- <reason>`.",
       unsafeOutlineNone:
         "`outline-none` emits a bare `outline-style: none` in Tailwind v4, which leaves forced-colors mode with no outline to recolour. Use `outline-hidden`, which keeps the transparent outline v3 painted. Genuine exceptions opt out with `// eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- <reason>`.",
     },

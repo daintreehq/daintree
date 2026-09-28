@@ -267,10 +267,13 @@ export function VoiceInputButton({
     >
       {showOrbit && (
         <>
+          {/* The orbit sits above the button: its band is the same outer 2px the
+              inset keyboard ring uses, and the moving arc has to stay readable
+              while the mic holds focus. */}
           {/* Static track — same mask technique as arc for consistent antialiasing */}
           <span
             ref={trackRef}
-            className="absolute inset-0 rounded-full pointer-events-none"
+            className="absolute inset-0 z-10 rounded-full pointer-events-none"
             style={{
               opacity: 0.08,
               background: `var(--theme-accent-primary)`,
@@ -285,7 +288,7 @@ export function VoiceInputButton({
           {/* Rotating wrapper */}
           <div
             ref={wrapperRef}
-            className="absolute inset-0 pointer-events-none"
+            className="absolute inset-0 z-10 pointer-events-none"
             style={{ willChange: "transform" }}
           >
             {/* Arc ring */}

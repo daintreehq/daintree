@@ -404,7 +404,7 @@ export function TerminalHeaderContent({
           <TooltipTrigger asChild>
             <div
               className={cn(
-                "inline-flex items-center gap-1.5 px-1 text-2xs font-mono shrink-0 rounded-sm tabular-nums",
+                "inline-flex items-center gap-1.5 px-1 py-0.5 text-2xs font-mono shrink-0 rounded-sm tabular-nums",
                 HEADER_CHIP_FOCUS_CLASS
               )}
               role="status"

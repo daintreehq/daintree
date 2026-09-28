@@ -1104,7 +1104,7 @@ function PanelHeaderComponent({
       data-fleet-previewed={isFleetPreviewed || undefined}
       data-pane-chrome=""
       className={cn(
-        "@container/header text-xs transition-colors relative overflow-hidden group select-none",
+        "@container/header text-xs transition-colors relative overflow-hidden group select-none focus-visible:-outline-offset-2",
         isMaximized
           ? "h-10 bg-surface-sidebar border-border-default"
           : location === "dock"

@@ -1131,8 +1131,11 @@ export function makePluginViewContent(
         {/* Focusable so the rescue below has somewhere to put focus when the
             content it was inside goes inert. The ring is deliberately NOT
             suppressed: focus arrives here programmatically, and a visible ring
-            is what tells the user where it went. */}
-        <div ref={statusRef} tabIndex={-1}>
+            is what tells the user where it went. Only while the status is
+            empty does it go, since a solid outline on a zero-height box is a
+            stray accent stripe. */}
+        {/* eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- only while empty: a solid ring on a zero-height focus park is a stray stripe */}
+        <div ref={statusRef} tabIndex={-1} className="empty:outline-hidden">
           {/* Worker state, which a plugin the user switched off does not have —
               and a "Plugin stopped / Restart" line over the explanation below
               would offer to restart something nobody asked to run. The wrapper
