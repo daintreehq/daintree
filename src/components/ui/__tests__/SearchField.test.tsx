@@ -164,6 +164,17 @@ describe("search inside a dismissable layer", () => {
     expect(onClear).not.toHaveBeenCalled();
   });
 
+  it("puts the caret in the popover field when its strip is pressed", () => {
+    render(
+      <PopoverSearchField aria-label="Find" value="x" onChange={() => {}} onClear={() => {}} />
+    );
+    const input = screen.getByLabelText("Find");
+    const strip = input.parentElement!;
+    expect(strip.tagName).not.toBe("LABEL");
+    fireEvent.pointerDown(strip);
+    expect(document.activeElement).toBe(input);
+  });
+
   it("offers the popover field's clear control only while there is a query", () => {
     const onClear = vi.fn();
     const { rerender } = render(
