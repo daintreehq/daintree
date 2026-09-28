@@ -1189,10 +1189,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <AppDialog
         isOpen={pm.showUrlDialog}
-        onClose={() => {
-          if (pm.isInstalling) return;
-          pm.closeUrlDialog();
-        }}
+        onClose={pm.closeUrlDialog}
+        // Locked while the install runs; the X says so instead of looking live.
+        dismissible={!pm.isInstalling}
         size="sm"
         zIndex="nested"
         initialFocus="first"

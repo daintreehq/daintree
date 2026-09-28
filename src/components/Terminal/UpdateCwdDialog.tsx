@@ -225,6 +225,9 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
       isOpen={isOpen}
       onClose={onClose}
       size="md"
+      // Locked while the restart runs, like every dialog mid-action: the X
+      // stays and reads as unavailable.
+      dismissible={!busy}
       // The field takes focus itself, with its value selected.
       initialFocus="none"
       restoreFocusTo={restoreFocusToTerminal}
@@ -328,14 +331,16 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         </FormGrid>
       </AppDialog.Body>
 
-      <AppDialog.Footer>
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button variant="contrast" onClick={() => void handleUpdate()} loading={showBusy}>
-          Restart terminal
-        </Button>
-      </AppDialog.Footer>
+      <AppDialog.Footer
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: busy }}
+        primaryAction={{
+          label: "Restart terminal",
+          onClick: () => void handleUpdate(),
+          loading: showBusy,
+          // Locked from the press; the spinner waits out the Doherty gate.
+          disabled: busy && !showBusy,
+        }}
+      />
     </AppDialog>
   );
 }

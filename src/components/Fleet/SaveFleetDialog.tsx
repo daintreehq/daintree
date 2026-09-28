@@ -113,6 +113,7 @@ export function SaveFleetDialog({
       isOpen={isOpen}
       onClose={onClose}
       size="sm"
+      dismissible={!saving}
       initialFocus="none"
       restoreFocusTo={restoreFocusTo}
       data-testid="fleet-save-dialog"
@@ -230,7 +231,7 @@ export function SaveFleetDialog({
               ? "Name the fleet to save it"
               : undefined
         }
-        secondaryAction={{ label: "Cancel", onClick: onClose }}
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: saving }}
         primaryAction={{
           label: "Save fleet",
           onClick: () => void submit(),
