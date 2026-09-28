@@ -764,10 +764,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               : [
                   {
                     id: "restart",
-                    label: isRestarting ? "Restarting…" : "Restart",
+                    label: "Restart",
                     variant: "primary",
                     onClick: () => setIsRestartConfirmOpen(true),
-                    disabled: isRestarting,
+                    loading: isRestarting,
                   },
                 ]
           }

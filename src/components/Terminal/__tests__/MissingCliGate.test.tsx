@@ -279,11 +279,16 @@ describe("MissingCliGate", () => {
     // Two independent stops, asserted separately — a disabled button alone
     // would hide a missing guard, and the guard alone would let a
     // programmatic/Enter-during-transition press through.
-    it("disables the control while a probe is in flight", () => {
+    // Busy, not unavailable: the rotating glyph carries it, and the control
+    // keeps keyboard focus instead of being natively disabled.
+    it("marks the control busy while a probe is in flight", () => {
       cliStore.state.isRefreshing = true;
       renderGate({ detail: detail({ state: "missing" }) });
 
-      expect(screen.getByText("Re-check").closest("button")?.disabled).toBe(true);
+      const button = screen.getByText("Re-check").closest("button")!;
+      expect(button.getAttribute("aria-busy")).toBe("true");
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      expect(button.disabled).toBe(false);
     });
 
     it("refuses a second probe even when the disabled control is bypassed", async () => {

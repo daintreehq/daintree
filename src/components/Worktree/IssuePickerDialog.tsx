@@ -470,7 +470,7 @@ export function IssuePickerDialog({
       >
         {isLinked && (
           <Button variant="ghost" onClick={handleDetach} className="text-text-secondary mr-auto">
-            <Link2Off className="w-4 h-4 mr-2" aria-hidden="true" />
+            <Link2Off aria-hidden="true" />
             Unlink issue #{currentIssueNumber}
           </Button>
         )}

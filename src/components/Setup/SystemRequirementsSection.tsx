@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, CircleCheck, Loader2, RotateCw, CircleX } from "lucide-react";
 import { m, useReducedMotion } from "framer-motion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -23,7 +23,24 @@ export function SystemRequirementsSection({
   const [userExpanded, setUserExpanded] = useState(false);
   const prefersReducedMotion = useReducedMotion();
 
-  const isExpanded = userExpanded || hasFatalFailure;
+  // The last settled answer, held while a re-check runs. `hasFatalFailure`
+  // reads false mid-check, and following it would unmount the failure panel —
+  // and the "Check again" button that has focus — until the result is back.
+  const [shownFatal, setShownFatal] = useState(hasFatalFailure);
+  if (allDone && shownFatal !== hasFatalFailure) setShownFatal(hasFatalFailure);
+
+  const isExpanded = userExpanded || shownFatal;
+
+  // A re-check that clears the failure folds the panel and removes "Check
+  // again" with focus still on it. Hand focus to the disclosure that replaces
+  // it. Removal fires no blur, so the flag is still set when the swap lands.
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const checkAgainFocusedRef = useRef(false);
+  useEffect(() => {
+    if (shownFatal || !checkAgainFocusedRef.current) return;
+    checkAgainFocusedRef.current = false;
+    toggleRef.current?.focus();
+  }, [shownFatal]);
 
   useEffect(() => {
     onFatalFailureChange(hasFatalFailure);
@@ -107,10 +124,11 @@ export function SystemRequirementsSection({
     <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30">
       {/* While a required tool is missing the panel cannot fold, so the row is
           a heading rather than a disclosure that would do nothing. */}
-      {hasFatalFailure ? (
+      {shownFatal ? (
         <div className="flex items-center gap-2.5 w-full px-3 py-2.5">{headerSummary}</div>
       ) : (
         <button
+          ref={toggleRef}
           type="button"
           onClick={() => setUserExpanded((v) => !v)}
           aria-expanded={isExpanded}
@@ -171,7 +189,7 @@ export function SystemRequirementsSection({
             </Skeleton>
           )}
 
-          {allDone && hasFatalFailure && (
+          {shownFatal && (
             <div
               role="alert"
               aria-live="assertive"
@@ -201,26 +219,39 @@ export function SystemRequirementsSection({
               <Button
                 variant="outline"
                 size="xs"
-                onClick={() => void runCheck()}
-                disabled={isChecking}
-                className="shrink-0 gap-1.5 text-xs"
+                onClick={() => {
+                  if (!isChecking) void runCheck();
+                }}
+                onFocus={() => {
+                  checkAgainFocusedRef.current = true;
+                }}
+                onBlur={() => {
+                  checkAgainFocusedRef.current = false;
+                }}
+                // Busy, not unavailable: the rotating glyph says so, and the
+                // button keeps keyboard focus rather than dropping it to <body>.
+                aria-busy={isChecking || undefined}
+                aria-disabled={isChecking || undefined}
+                className="shrink-0"
               >
                 <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
-                {isChecking ? "Checking…" : "Check again"}
+                Check again
               </Button>
             </div>
           )}
 
-          {!(allDone && hasFatalFailure) && (
+          {!shownFatal && (
             <Button
               variant="outline"
               size="xs"
-              onClick={() => void runCheck()}
-              disabled={isChecking}
-              className="gap-1.5 text-xs"
+              onClick={() => {
+                if (!isChecking) void runCheck();
+              }}
+              aria-busy={isChecking || undefined}
+              aria-disabled={isChecking || undefined}
             >
               <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
-              {isChecking ? "Checking…" : "Re-check"}
+              Re-check
             </Button>
           )}
         </div>

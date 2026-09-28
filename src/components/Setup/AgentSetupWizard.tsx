@@ -1017,7 +1017,7 @@ export function AgentSetupWizard({
               onClick={isSaving ? undefined : handleAppearanceContinue}
             >
               Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <ArrowRight aria-hidden="true" />
             </Button>
           )}
           {state.step.type === "agents" && (
@@ -1028,7 +1028,7 @@ export function AgentSetupWizard({
               onClick={agentsContinueBlocked ? undefined : handleAgentsContinue}
             >
               Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <ArrowRight aria-hidden="true" />
             </Button>
           )}
           {state.step.type === "privacy" && (
@@ -1039,7 +1039,7 @@ export function AgentSetupWizard({
               onClick={isSaving ? undefined : handlePrivacyContinue}
             >
               Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <ArrowRight aria-hidden="true" />
             </Button>
           )}
           {state.step.type === "cli" &&
@@ -1051,7 +1051,7 @@ export function AgentSetupWizard({
                 onClick={isInstalling ? undefined : handleCliContinue}
               >
                 Continue
-                <ArrowRight className="w-4 h-4 ml-1" />
+                <ArrowRight aria-hidden="true" />
               </Button>
             ) : (
               <Button
@@ -1075,7 +1075,7 @@ export function AgentSetupWizard({
               onClick={isSaving ? undefined : handlePermissionsContinue}
             >
               Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <ArrowRight aria-hidden="true" />
             </Button>
           )}
           {/* Completion resolves to the forward move, matching CloneRepoDialog's
@@ -1090,7 +1090,7 @@ export function AgentSetupWizard({
                 onClick={handleOpenProject}
                 data-testid="complete-step-open-project"
               >
-                <FolderOpen className="w-4 h-4 mr-1" />
+                <FolderOpen aria-hidden="true" />
                 Open a project
               </Button>
             ) : hasInstalledAgents ? (
@@ -1099,7 +1099,7 @@ export function AgentSetupWizard({
                 onClick={handleLaunchAgent}
                 data-testid="complete-step-launch-agent"
               >
-                <Sparkles className="w-4 h-4 mr-1" />
+                <Sparkles aria-hidden="true" />
                 Launch an agent
               </Button>
             ) : (

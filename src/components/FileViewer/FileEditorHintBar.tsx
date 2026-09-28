@@ -96,9 +96,6 @@ export function FileEditorHintBar({
       <Button
         variant="subtle"
         size="xs"
-        // `xs` ships `text-3xs`, which is a chip size. This row is `text-xs`
-        // and the action reads as part of it.
-        className="text-xs"
         onClick={onAction}
         loading={pending}
         data-testid="file-editor-hint-action"

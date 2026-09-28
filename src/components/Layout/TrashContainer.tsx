@@ -572,8 +572,8 @@ export function TrashContainer({
               </div>
               <Button
                 variant="ghost-danger"
-                size="sm"
-                className="shrink-0 text-2xs h-auto py-0.5 px-1.5"
+                size="xs"
+                className="shrink-0"
                 onClick={() => {
                   // Hand the surface over to the confirm rather than stacking
                   // on top of it: this popover is anchored to the toolbar and

@@ -159,14 +159,14 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
             <p className="text-xs text-text-secondary">{sanitizeIpcError(loadMoreError)}</p>
             <Button
               id={`github-${type}-load-more`}
-              variant="ghost"
-              size="sm"
+              variant="outline"
+              size="xs"
               onClick={isTokenError ? onOpenSettings : onLoadMore}
-              className={cn("mt-1 h-6 text-xs", isLoadMoreActive && "bg-overlay-highlight")}
+              className={cn("mt-1", isLoadMoreActive && "bg-overlay-highlight")}
             >
               {isTokenError ? (
                 <>
-                  <Settings className="h-3 w-3" />
+                  <Settings aria-hidden="true" />
                   Open GitHub settings
                 </>
               ) : (
@@ -1538,22 +1538,22 @@ export function GitHubResourceList({
                 )}
                 {isTokenError ? (
                   <Button
-                    variant="ghost"
-                    size="sm"
+                    variant="outline"
+                    size="xs"
                     onClick={handleOpenGitHubSettings}
-                    className="ml-auto h-6 text-xs shrink-0"
+                    className="ml-auto shrink-0"
                   >
-                    <Settings className="h-3 w-3" />
+                    <Settings aria-hidden="true" />
                     Settings
                   </Button>
                 ) : (
                   <Button
-                    variant="ghost"
-                    size="sm"
+                    variant="outline"
+                    size="xs"
                     onClick={handleRetry}
-                    className="ml-auto h-6 text-xs shrink-0"
+                    className="ml-auto shrink-0"
                   >
-                    <RefreshCw className="h-3 w-3" />
+                    <RefreshCw aria-hidden="true" />
                     Retry
                   </Button>
                 )}

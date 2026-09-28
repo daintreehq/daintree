@@ -1204,7 +1204,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         COMPOSER_CONTROL_TEXT_CLASS,
                         COMPOSER_CONTROL_HOVER_BG_CLASS,
                         COMPOSER_CONTROL_FOCUS_CLASS,
-                        "disabled:pointer-events-none disabled:opacity-40"
+                        "disabled:pointer-events-none disabled:opacity-50"
                       )}
                       aria-label="Attach files"
                     >

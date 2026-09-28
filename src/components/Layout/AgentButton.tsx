@@ -665,7 +665,7 @@ export function AgentButton({
                       // glyph sits at its leading edge so it reads as part of
                       // the mark beside it rather than centred between agents.
                       "h-8 w-6 p-0 pl-0.5 flex items-center justify-start",
-                      "aria-disabled:opacity-60 aria-disabled:cursor-not-allowed"
+                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                     )}
                     aria-label={chevronTooltip}
                   >

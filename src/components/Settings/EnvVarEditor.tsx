@@ -1005,18 +1005,16 @@ export function EnvVarEditor({
                 ) : (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className={cn(
-                          ENV_CELL_ACTION,
-                          "text-status-error hover:text-status-error hover:bg-status-error/10"
-                        )}
+                      <Button
+                        variant="ghost-danger"
+                        size="icon-xs"
+                        className="[&_svg]:size-3.5"
                         aria-label={`Delete ${trimmedKey || "unnamed variable"} (row ${rowIndex + 1})`}
                         onClick={() => handleRemove(row.rowId)}
                         data-testid="env-editor-remove"
                       >
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
+                        <Trash2 aria-hidden="true" />
+                      </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">Delete variable</TooltipContent>
                   </Tooltip>

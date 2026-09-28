@@ -525,7 +525,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
-                              variant="ghost-danger"
+                              variant="ghost"
                               size="icon-xs"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -620,15 +620,14 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     Setup didn't finish. Re-run when you're ready.
                   </span>
                   <Button
-                    variant="ghost-danger"
+                    variant="outline"
                     size="xs"
                     onClick={handleRetrySetup}
-                    disabled={isRetryingSetup}
-                    className="shrink-0 px-2 text-xs"
-                    aria-label="Retry setup"
+                    loading={isRetryingSetup}
+                    className="shrink-0 shadow-none inset-shadow-none"
                   >
                     <RotateCcw aria-hidden="true" />
-                    {isRetryingSetup ? "Retrying…" : "Retry setup"}
+                    Retry setup
                   </Button>
                 </div>
                 {hasLifecycleDetails && (
@@ -671,22 +670,20 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 : "Setup was skipped, and its commands are approved now"}
             </span>
             <Button
-              variant="ghost"
+              variant="outline"
               size="xs"
               onClick={commandsNeedApproval ? handleReviewCommands : handleRetrySetup}
-              disabled={!commandsNeedApproval && (isRetryingSetup || lifecycleState === "running")}
-              className="shrink-0 px-2 text-xs text-status-warning hover:text-status-warning focus-visible:text-status-warning"
+              loading={!commandsNeedApproval && isRetryingSetup}
+              disabled={!commandsNeedApproval && lifecycleState === "running"}
+              className="shrink-0 shadow-none inset-shadow-none"
             >
               {commandsNeedApproval ? (
-                <ShieldAlert className="w-3 h-3" aria-hidden="true" />
+                // The row's own signal: an approval is waiting on the user.
+                <ShieldAlert className="text-status-warning" aria-hidden="true" />
               ) : (
-                <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                <RotateCcw aria-hidden="true" />
               )}
-              {commandsNeedApproval
-                ? "Review commands"
-                : isRetryingSetup
-                  ? "Starting…"
-                  : "Run setup"}
+              {commandsNeedApproval ? "Review commands" : "Run setup"}
             </Button>
           </div>
         )}
@@ -773,11 +770,11 @@ export function WorktreeDeleteErrorBanner({
         <div className="flex flex-wrap items-center gap-2">
           {onRetry && (
             <Button
-              variant="ghost-danger"
+              variant="outline"
               size="xs"
               onClick={handleRetryClick}
               data-testid="worktree-delete-retry"
-              className="px-2 text-xs ring-1 ring-status-error/30"
+              className="shadow-none inset-shadow-none"
             >
               Retry
             </Button>
@@ -788,7 +785,6 @@ export function WorktreeDeleteErrorBanner({
               size="xs"
               onClick={handleDismissClick}
               data-testid="worktree-delete-dismiss"
-              className="px-2 text-xs"
             >
               Dismiss
             </Button>
@@ -860,11 +856,11 @@ export function WorktreeIssueErrorBanner({
         <div className="flex flex-wrap items-center gap-2">
           {onRetry && (
             <Button
-              variant="ghost-danger"
+              variant="outline"
               size="xs"
               onClick={handleRetryClick}
               data-testid="worktree-issue-retry"
-              className="px-2 text-xs ring-1 ring-status-error/30"
+              className="shadow-none inset-shadow-none"
             >
               Retry
             </Button>
@@ -875,7 +871,6 @@ export function WorktreeIssueErrorBanner({
               size="xs"
               onClick={handleDismissClick}
               data-testid="worktree-issue-dismiss"
-              className="px-2 text-xs"
             >
               Dismiss
             </Button>

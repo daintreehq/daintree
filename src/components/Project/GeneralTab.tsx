@@ -845,9 +845,9 @@ export function GeneralTab({
                   variant="contrast"
                   size="sm"
                   onClick={() => void handleEnableInRepoSettings()}
-                  disabled={inRepoEnabling}
+                  loading={inRepoEnabling}
                 >
-                  {inRepoEnabling ? "Enabling…" : "Confirm and enable"}
+                  Confirm and enable
                 </Button>
               </div>
             </div>

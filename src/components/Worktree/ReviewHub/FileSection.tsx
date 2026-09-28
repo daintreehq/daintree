@@ -500,7 +500,7 @@ export function FileSection({
             {shownCount > 0 && (
               <Button
                 variant="ghost"
-                size="sm"
+                size="xs"
                 onClick={onBulkAction}
                 // min-w holds the trailing rail still. The label legitimately
                 // changes width as its scope changes, and without a floor every
@@ -511,10 +511,10 @@ export function FileSection({
                 // justify-start so the glyph keeps the same x in both stacked
                 // sections; the ghost button has no chrome at rest, so the
                 // reserved trailing space is invisible.
-                className="h-5 px-1.5 text-3xs shrink-0 min-w-[9rem] justify-start"
+                className="shrink-0 min-w-[9rem] justify-start"
                 data-testid={bulkActionTestId}
               >
-                <BulkActionIcon className="w-3 h-3 mr-1" />
+                <BulkActionIcon aria-hidden="true" />
                 {bulkLabel}
               </Button>
             )}

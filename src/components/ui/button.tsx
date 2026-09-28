@@ -61,7 +61,7 @@ const buttonVariants = cva(
       size: {
         default: "h-8 px-4 py-1.5 gap-2 text-sm [&_svg]:size-4",
         sm: "h-7 px-3 py-1 gap-1.5 text-xs [&_svg]:size-3.5",
-        xs: "h-6 px-2.5 py-0.5 gap-1 text-3xs leading-none [&_svg]:size-3",
+        xs: "h-6 px-2.5 py-0.5 gap-1 text-2xs leading-none [&_svg]:size-3",
         lg: "h-9 px-6 py-2 gap-2.5 text-sm [&_svg]:size-4",
         icon: "h-8 w-8 text-sm [&_svg]:size-4",
         "icon-sm": "h-7 w-7 text-sm [&_svg]:size-3.5",
@@ -133,6 +133,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       disabled,
       children,
       "aria-disabled": ariaDisabled,
+      "aria-busy": ariaBusy,
       ...props
     },
     ref
@@ -168,15 +169,22 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         className={cn(
           buttonVariants({ variant, size: resolvedSize }),
           loading && "pointer-events-none",
-          className
+          className,
+          // Busy outranks unavailable: a caller's own disabled dimming (the
+          // `disabled:`/`aria-disabled:` 50%) would fade the spinner it overlays.
+          loading && "disabled:opacity-100 aria-disabled:opacity-100"
         )}
         ref={ref}
-        disabled={disabled}
+        // Never natively disabled while busy — that would drop keyboard focus to
+        // <body> mid-operation. `loading` already vetoes activation.
+        disabled={loading ? undefined : disabled}
         onClick={handleClick}
         {...props}
         // Component-owned loading state — placed after the prop spread so a
         // consumer can't silently desync the announced ARIA state.
-        aria-busy={loading || undefined}
+        // A consumer's own busy signal (a rotating refresh glyph) passes through
+        // when the primitive isn't loading.
+        aria-busy={loading || ariaBusy || undefined}
         aria-disabled={resolvedAriaDisabled}
         data-loading={loading || undefined}
         // A durable hook for the forced-colors rule in index.css. In

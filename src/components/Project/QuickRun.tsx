@@ -930,9 +930,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                           // beside it made two marks compete for the same job.
                           // A high-contrast neutral reads as the primary
                           // action and stays theme-aware by construction.
-                          runTarget
-                            ? "text-text-primary hover:bg-overlay-medium"
-                            : "cursor-not-allowed text-text-muted"
+                          "text-text-primary enabled:hover:bg-overlay-medium",
+                          "disabled:opacity-50 disabled:cursor-not-allowed"
                         )}
                         // Not "Run command": that is the footer toggle's name,
                         // and two controls sharing it read as one to a

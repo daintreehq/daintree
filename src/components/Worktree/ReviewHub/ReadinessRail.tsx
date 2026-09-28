@@ -158,7 +158,7 @@ function ReadinessOverflow({
           size="xs"
           data-testid="review-readiness-overflow"
           aria-label={`${items.length} more: ${items.map((i) => i.label).join(", ")}`}
-          className="shrink-0 h-6 px-1.5 gap-0.5 text-2xs font-normal"
+          className="shrink-0 px-1.5 font-normal"
         >
           {items.length} more
           <ChevronDown aria-hidden="true" />

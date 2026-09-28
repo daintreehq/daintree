@@ -91,6 +91,23 @@ describe("Button loading state", () => {
     expect(button.getAttribute("aria-disabled")).toBe("true");
   });
 
+  // Busy outranks unavailable: a caller that also passes `disabled`, or its own
+  // disabled dimming, must neither drop focus nor fade the spinner.
+  it("stays focusable and undimmed when loading and disabled together", () => {
+    const { container } = render(
+      <Button loading disabled className="aria-disabled:opacity-50 disabled:opacity-40">
+        Save
+      </Button>
+    );
+    const button = container.querySelector("button")!;
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    const dimming = button.className
+      .split(/\s+/)
+      .filter((c) => /^(aria-)?disabled:opacity-/.test(c));
+    expect(dimming.every((c) => c.endsWith("opacity-100"))).toBe(true);
+  });
+
   it("scales the spinner with the button size variant", () => {
     const sm = render(
       <Button loading size="sm">
@@ -133,6 +150,11 @@ describe("Button loading state", () => {
     const button = container.querySelector("button")!;
     expect(button.getAttribute("aria-busy")).toBe("true");
     expect(button.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("passes a consumer's aria-busy through when not loading", () => {
+    const { container } = render(<Button aria-busy>Refresh</Button>);
+    expect(container.querySelector("button")!.getAttribute("aria-busy")).toBe("true");
   });
 
   it("preserves consumer aria-disabled when not loading", () => {
@@ -264,7 +286,7 @@ describe("link variant", () => {
 
   it("keeps a type size on every boxed size, so moving it off the base changed nothing", () => {
     for (const size of ["default", "sm", "xs", "lg", "icon", "icon-sm", "icon-xs"] as const) {
-      expect(buttonVariants({ size }), size).toMatch(/(?:^|\s)text-(sm|xs|3xs)(?:\s|$)/);
+      expect(buttonVariants({ size }), size).toMatch(/(?:^|\s)text-(sm|xs|2xs|3xs)(?:\s|$)/);
     }
   });
 

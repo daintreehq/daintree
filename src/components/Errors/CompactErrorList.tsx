@@ -213,7 +213,7 @@ function ErrorOverflow({
             // boundary the card's own overlay controls draw.
             onClick={(e) => e.stopPropagation()}
             // Past the glyph column, so the count reads as part of the list above.
-            className="ml-3.5 text-xs"
+            className="ml-3.5"
           >
             {errors.length} more {errors.length === 1 ? "error" : "errors"}
             <ChevronDown

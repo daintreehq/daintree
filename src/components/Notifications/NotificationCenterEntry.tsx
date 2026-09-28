@@ -442,11 +442,9 @@ export function NotificationCenterEntry({
                           )
                       : undefined
                   }
-                  // A list row takes the inline banner's trims: no raised
-                  // shadow, and the 11px label, since the xs size's 10px is
-                  // too small to be the thing the user acts on.
+                  // A list row takes the inline banner's trim: no raised shadow.
                   className={cn(
-                    "px-2 text-2xs shadow-none inset-shadow-none",
+                    "px-2 shadow-none inset-shadow-none",
                     !isAvailable && ARIA_DISABLED_CLASSES
                   )}
                 >

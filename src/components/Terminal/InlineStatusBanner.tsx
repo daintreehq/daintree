@@ -557,14 +557,11 @@ export function InlineStatusBanner({
                 ? "primary"
                 : "secondary"
             }
-            size={action.iconOnly ? (isInline ? "icon-xs" : "icon-sm") : "sm"}
+            size={action.iconOnly ? (isInline ? "icon-xs" : "icon-sm") : isInline ? "xs" : "sm"}
             // A raised, shadowed button reads louder than a routine one-line
-            // notice should; the ring alone marks it as a control. `sm` type
-            // on the `xs` height: the `xs` size's 10px label is too small to
-            // be the one thing on the row the user acts on.
+            // notice should; the ring alone marks it as a control.
             className={cn(
               isInline && "shadow-none inset-shadow-none",
-              isInline && !action.iconOnly && "h-6 px-2.5",
               action.disabled && !action.loading && ARIA_DISABLED_INERT_CLASSES
             )}
             // `aria-disabled`, not `disabled`: most of these flip while the

@@ -336,9 +336,9 @@ export function RecipeManager({
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon"
+                  size="icon-sm"
                   onClick={() => onEditRecipe(recipe)}
-                  className="h-7 w-7 text-text-secondary hover:text-text-primary"
+                  className="text-text-secondary hover:text-text-primary"
                   aria-label={`Edit recipe ${recipe.name}`}
                 >
                   <Pencil />
@@ -353,8 +353,8 @@ export function RecipeManager({
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-text-secondary hover:text-text-primary data-[state=open]:bg-overlay-raised"
+                    size="icon-sm"
+                    className="text-text-secondary hover:text-text-primary data-[state=open]:bg-overlay-raised"
                     aria-label={
                       exported
                         ? `Recipe ${recipe.name} exported to clipboard`

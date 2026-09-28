@@ -3,7 +3,6 @@ import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import type { GitPushDestination } from "@shared/types/git";
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, AlertTriangle } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -451,6 +450,7 @@ export function CommitPanel({
 
   const onMac = isMac();
   const primaryLabel = hasRemote ? "Commit & push" : "Commit";
+  const primaryBusy = hasRemote ? pendingAction === "commit-push" || isPushing : isCommitting;
   const primaryKeyshortcuts = comboToAriaKeyshortcuts(PRIMARY_SHORTCUT, onMac);
   const pushTarget = pushTargetBranch ?? destinationLabel;
   const stagedSummary = `${formatFileCount(stagedCount)} staged`;
@@ -739,6 +739,7 @@ export function CommitPanel({
               if (actionsBusy) return;
               void handleCommit();
             }}
+            loading={pendingAction === "commit"}
             aria-disabled={!canCommit || actionsBusy || undefined}
             aria-describedby={statusId}
             // Opacity, as the Button primitive's own disabled state does: a ghost has
@@ -746,11 +747,7 @@ export function CommitPanel({
             // secondary resting ink to read as unavailable.
             className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed forced-colors:aria-disabled:text-[GrayText]"
           >
-            {pendingAction === "commit" ? (
-              <Spinner size="sm" className="mr-1.5" />
-            ) : (
-              <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-            )}
+            <GitCommit aria-hidden="true" />
             Commit
           </Button>
         )}
@@ -763,15 +760,12 @@ export function CommitPanel({
           aria-disabled={!canCommit || actionsBusy || undefined}
           aria-describedby={statusId}
           aria-keyshortcuts={primaryKeyshortcuts}
-          className={cn("flex-1", DISABLED_CTA_CLASSES)}
+          loading={primaryBusy}
+          // Busy keeps the CTA's own fill under the spinner; the inset treatment
+          // is for "can't commit", not "committing".
+          className={cn("flex-1", !primaryBusy && DISABLED_CTA_CLASSES)}
         >
-          {(hasRemote ? pendingAction === "commit-push" || isPushing : isCommitting) ? (
-            <Spinner size="sm" className="mr-1.5" />
-          ) : hasRemote ? (
-            <ArrowUpFromLine className="w-3.5 h-3.5 mr-1.5" />
-          ) : (
-            <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-          )}
+          {hasRemote ? <ArrowUpFromLine aria-hidden="true" /> : <GitCommit aria-hidden="true" />}
           {primaryLabel}
         </Button>
       </div>

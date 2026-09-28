@@ -179,10 +179,10 @@ export function SafeModeBanner() {
         actions={[
           {
             id: "restart",
-            label: isRestarting ? "Restarting…" : "Restart normally",
+            label: "Restart normally",
             variant: "primary",
             onClick: () => setIsConfirmOpen(true),
-            disabled: isRestarting,
+            loading: isRestarting,
           },
         ]}
         onClose={dismiss}

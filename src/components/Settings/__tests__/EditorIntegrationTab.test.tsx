@@ -325,7 +325,11 @@ describe("EditorIntegrationTab", () => {
       const testButton = await renderTabForTestButton();
       fireEvent.click(testButton);
 
-      await waitFor(() => expect(screen.getByRole("button", { name: "Testing…" })).toBeDefined());
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Test saved editor" }).getAttribute("aria-busy")
+        ).toBe("true")
+      );
       expect(screen.queryByText("Open requested")).toBeNull();
 
       await act(async () => {

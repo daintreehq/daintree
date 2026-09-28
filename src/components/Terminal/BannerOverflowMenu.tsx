@@ -50,14 +50,24 @@ export function BannerOverflowMenu({
           const isDanger = item.variant === "danger" || item.variant === "dangerFilled";
           // Lucide icons forward any SVG attribute; the banner type only names className.
           const Icon = item.icon as React.ComponentType<React.SVGProps<SVGSVGElement>> | undefined;
+          // Busy mirrors Button `loading`: announced and refused, but not Radix
+          // `disabled`, which would drop the row out of roving focus.
           return (
             <DropdownMenuItem
               key={item.id}
               destructive={isDanger}
-              disabled={item.disabled || item.loading}
+              disabled={item.loading ? undefined : item.disabled}
               aria-label={item.ariaLabel}
               aria-busy={item.loading || undefined}
-              onSelect={() => item.onClick()}
+              aria-disabled={item.loading || item.disabled || undefined}
+              className={item.loading ? "pointer-events-none" : undefined}
+              onSelect={(event) => {
+                if (item.loading) {
+                  event.preventDefault();
+                  return;
+                }
+                item.onClick();
+              }}
             >
               {item.loading ? (
                 <span data-menu-icon className="mr-2 flex h-3.5 w-3.5 items-center justify-center">

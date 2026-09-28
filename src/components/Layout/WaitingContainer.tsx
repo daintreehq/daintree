@@ -455,7 +455,7 @@ function WaitingSingleItem({
           <TooltipTrigger asChild>
             <Button
               variant="ghost-danger"
-              size="icon-xs"
+              size="icon-sm"
               className="pointer-events-auto transition-colors"
               onClick={() => onKill(terminal.id)}
               aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}

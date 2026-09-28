@@ -231,6 +231,14 @@ export function AgentCliStep({
     installableIds.length === 1
       ? `Install ${AGENT_REGISTRY[installableIds[0]!]?.name ?? "agent"}`
       : "Install selected agents";
+  // The label chosen when the batch started, held until it ends: the installable
+  // set shrinks as agents finish, and a busy button keeps its accessible name.
+  const [batchLabel, setBatchLabel] = useState<string | null>(null);
+  const [wasBatchRunning, setWasBatchRunning] = useState(isBatchRunning);
+  if (wasBatchRunning !== isBatchRunning) {
+    setWasBatchRunning(isBatchRunning);
+    if (!isBatchRunning) setBatchLabel(null);
+  }
 
   const updateAgent = useAgentSettingsStore((s) => s.updateAgent);
   const agentSettings = useAgentSettingsStore((s) => s.settings?.agents);
@@ -421,22 +429,18 @@ export function AgentCliStep({
       {(hasInstallableAgents || isBatchRunning) && (
         <Button
           variant={hasUsableSelection ? "outline" : "contrast"}
-          disabled={isBatchRunning}
-          onClick={() => void handleInstallAll(installableIds)}
+          loading={isBatchRunning}
+          onClick={() => {
+            // Taken at the press: the handler starts marking agents installing
+            // before the next render could read the label.
+            setBatchLabel(installAllLabel);
+            void handleInstallAll(installableIds);
+          }}
           className="w-full"
           data-testid="agent-cli-install-primary"
         >
-          {isBatchRunning ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Installing…
-            </>
-          ) : (
-            <>
-              <Download className="w-4 h-4" />
-              {installAllLabel}
-            </>
-          )}
+          <Download aria-hidden="true" />
+          {batchLabel ?? installAllLabel}
         </Button>
       )}
 

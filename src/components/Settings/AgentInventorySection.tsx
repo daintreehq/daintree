@@ -166,8 +166,8 @@ export function AgentInventorySection({
       action={
         <>
           {known && installed > 0 && wizardButton}
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={isRefreshing}>
-            {isRefreshing ? "Checking…" : "Re-check"}
+          <Button size="sm" variant="outline" onClick={onRefresh} loading={isRefreshing}>
+            Re-check
           </Button>
         </>
       }
