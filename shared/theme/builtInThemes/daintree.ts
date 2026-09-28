@@ -17,7 +17,7 @@ export const theme: BuiltInThemeSource = {
       //
       // ONE HUE FAMILY. Every rung is a warm near-neutral: grid and sidebar
       // carry the umber cast below, and canvas, panel and elevated sit at
-      // C ≤ 0.002, where the measured hue is rounding noise rather than a
+      // C ≤ 0.0025, where the measured hue is rounding noise rather than a
       // colour. The ladder used to change family halfway up — grid and sidebar
       // at OKLCH H 107, then canvas, panel and elevated at H 286, three stock
       // Tailwind zincs — so the five planes were two different neutrals glued
@@ -152,8 +152,8 @@ export const theme: BuiltInThemeSource = {
     // it because that pair is `appliesTo: "light"`, so no dark theme is audited
     // against it at all.
     //
-    // Solid rather than alpha-derived: an alpha text colour bakes into
-    // `color-mix()` and its contrast cannot be recovered downstream.
+    // Solid rather than alpha-derived: an alpha text colour's contrast depends
+    // on whatever backdrop it lands on, so no single value can be audited.
     //
     // Landed at 3.6:1 on the worst surface (panel-elevated) up to 4.9:1 on the
     // grid — the house's 3:1 tier with room to spare, not the 4.5:1 body-text
