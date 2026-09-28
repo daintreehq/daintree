@@ -7,7 +7,7 @@ import { _electron as electron } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo, removePathSync } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getFirstGridPanel, openTerminal } from "../helpers/panels";
+import { clickToolbarButton, getFirstGridPanel, openTerminal } from "../helpers/panels";
 import {
   getTerminalText,
   runTerminalCommand,
@@ -466,9 +466,16 @@ test.describe.serial("Remote hosts: a windowless Host started with --host-mode",
     for (const id of idsBefore) {
       await expect(top.locator(`[data-panel-id="${id}"]`)).toHaveCount(1, { timeout: 30_000 });
     }
-    await openTerminal(top);
+    // The view has just come back: wait for its toolbar, so the click lands on
+    // the button rather than falling back to a shortcut in an unfocused window.
+    await expect(top.getByRole("toolbar", { name: "Main toolbar" })).toBeVisible({
+      timeout: 30_000,
+    });
     const panels = top.locator("[data-panel-id]");
-    const last = panels.nth((await panels.count()) - 1);
+    const before = await panels.count();
+    const route = await clickToolbarButton(top, SEL.toolbar.openTerminal);
+    await expect(panels, `new terminal via ${route}`).toHaveCount(before + 1, { timeout: 30_000 });
+    const last = panels.nth(before);
     await waitForTerminalReady(top, last, 60_000);
     await runTerminalCommand(top, last, 'echo "again=$((13*13))"');
     await waitForTerminalText(last, "again=169", 30_000);
