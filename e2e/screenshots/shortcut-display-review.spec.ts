@@ -66,9 +66,7 @@ test.afterAll(async () => {
 
 async function settle(page: Page, locator: ReturnType<Page["locator"]>, label: string) {
   await expect(locator.first(), `${label}: surface never appeared`).toBeVisible();
-  await expect
-    .poll(() => locator.first().evaluate((el) => getComputedStyle(el).opacity))
-    .toBe("1");
+  await expect.poll(() => locator.first().evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
   await page.evaluate(() => document.fonts.ready);
   // Let entry animations finish; opacity alone misses a scale-in.
   await page.waitForTimeout(350);
