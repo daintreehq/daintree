@@ -1017,6 +1017,24 @@ body,
   }
 }
 
+/* Shortcut recorder chord window — drains along the field's bottom edge while
+ * the recorder waits for a second stroke. Its length is the chord window, so
+ * the duration comes from the component (--chord-window, CHORD_TIMEOUT_MS)
+ * rather than a shared tier, and it runs linear because the bar is a clock. */
+@keyframes chord-window-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.animate-chord-window {
+  transform-origin: left;
+  animation: chord-window-drain var(--chord-window) linear forwards;
+}
+
 /* All-clear flash: subtle full-screen overlay when all agents complete */
 @keyframes all-clear-flash {
   0% {
@@ -1418,6 +1436,12 @@ body,
 
   /* The countdown still runs; the draining ring is motion, so it holds full. */
   .tour-countdown-ring {
+    animation: none;
+  }
+
+  /* Same for the recorder's chord window: the wait still ends on time, and the
+   * bar holds full as a static "still listening" mark instead of draining. */
+  .animate-chord-window {
     animation: none;
   }
 
@@ -2602,6 +2626,13 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   }
 
   [data-trash-meter] > * {
+    background-color: CanvasText;
+    forced-color-adjust: none;
+  }
+
+  /* The recorder's chord window is only a background, which forced colors
+   * would repaint as the field's own Canvas. */
+  [data-chord-window] {
     background-color: CanvasText;
     forced-color-adjust: none;
   }
