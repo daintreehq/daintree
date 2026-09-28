@@ -77,6 +77,7 @@ import {
   Globe,
   Info,
   Link,
+  CircleStop,
   Clock,
   Lock,
   Maximize2,
@@ -1184,7 +1185,7 @@ export function TerminalContextMenu({
             Trash dev preview
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <OctagonX className={ICON_CLASS} aria-hidden="true" />
+            <CircleStop className={ICON_CLASS} aria-hidden="true" />
             Stop dev server
           </ContextMenuItem>
         </ContextMenuContent>
