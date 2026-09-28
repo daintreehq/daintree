@@ -26,15 +26,39 @@ export function validateRegexTerm(
   }
 }
 
-function rgbaToHex(value: string): string | null {
+function parseRgb(value: string): { rgb: [number, number, number]; alpha: number } | null {
+  const hex = value.match(/^#([0-9a-fA-F]{6})$/);
+  if (hex) {
+    const n = parseInt(hex[1]!, 16);
+    return { rgb: [(n >> 16) & 255, (n >> 8) & 255, n & 255], alpha: 1 };
+  }
   const match = value.match(
-    /^rgba?\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*(?:,\s*[\d.]+%?\s*)?\)$/
+    /^rgba?\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*(?:,\s*([\d.]+)(%?)\s*)?\)$/
   );
   if (!match) return null;
-  const r = Math.min(255, Math.max(0, parseInt(match[1]!, 10)));
-  const g = Math.min(255, Math.max(0, parseInt(match[2]!, 10)));
-  const b = Math.min(255, Math.max(0, parseInt(match[3]!, 10)));
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+  const channel = (raw: string) => Math.min(255, Math.max(0, parseInt(raw, 10)));
+  let alpha = match[4] === undefined ? 1 : parseFloat(match[4]);
+  if (match[5] === "%") alpha /= 100;
+  return {
+    rgb: [channel(match[1]!), channel(match[2]!), channel(match[3]!)],
+    alpha: Number.isFinite(alpha) ? Math.min(1, Math.max(0, alpha)) : 1,
+  };
+}
+
+function toHex([r, g, b]: [number, number, number]): string {
+  return `#${[r, g, b].map((c) => Math.round(c).toString(16).padStart(2, "0")).join("")}`;
+}
+
+// xterm decorations only take opaque #RRGGBB, so a translucent match wash has to
+// be flattened. Dropping the alpha instead painted every match in the wash's
+// full-strength colour, identical to the active match and louder than the text.
+function flattenOver(value: string, backdrop: string): string | null {
+  const fg = parseRgb(value);
+  if (!fg) return null;
+  const bg = parseRgb(backdrop);
+  if (fg.alpha >= 1 || !bg) return toHex(fg.rgb);
+  const blend = (i: 0 | 1 | 2) => fg.rgb[i] * fg.alpha + bg.rgb[i] * (1 - fg.alpha);
+  return toHex([blend(0), blend(1), blend(2)]);
 }
 
 export function getSearchDecorationColors(): SearchDecorationOptions {
@@ -54,7 +78,10 @@ export function getSearchDecorationColors(): SearchDecorationOptions {
   };
 
   const bgValue = styles.getPropertyValue("--theme-search-highlight-background").trim();
-  const matchColor = rgbaToHex(bgValue) ?? FALLBACK_MATCH_COLOR;
+  const backdrop =
+    styles.getPropertyValue("--theme-terminal-background").trim() ||
+    styles.getPropertyValue("--theme-surface-canvas").trim();
+  const matchColor = flattenOver(bgValue, backdrop) ?? FALLBACK_MATCH_COLOR;
   // search-highlight-text is a solid hex by design — suitable for xterm's active-match background
   const activeColor = read("--theme-search-highlight-text", FALLBACK_ACTIVE_MATCH_COLOR);
 

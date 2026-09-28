@@ -9,7 +9,11 @@ import {
 afterEach(() => {
   document.documentElement.style.removeProperty("--theme-search-highlight-background");
   document.documentElement.style.removeProperty("--theme-search-highlight-text");
+  document.documentElement.style.removeProperty("--theme-terminal-background");
+  document.documentElement.style.removeProperty("--theme-surface-canvas");
 });
+
+const channels = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 
 describe("validateRegexTerm", () => {
   it("validates a simple valid regex", () => {
@@ -139,15 +143,45 @@ describe("getSearchDecorationColors", () => {
     expect(colors.activeMatchColorOverviewRuler).toMatch(/^#[0-9a-fA-F]{6}$/);
   });
 
-  it("converts rgba search-highlight-background to solid hex for matchBackground", () => {
+  it("flattens a translucent match wash over the terminal background instead of dropping its alpha", () => {
     document.documentElement.style.setProperty(
       "--theme-search-highlight-background",
       "rgba(54, 206, 148, 0.20)"
     );
-    document.documentElement.style.setProperty("--theme-search-highlight-text", "#5F8B6D");
+    document.documentElement.style.setProperty("--theme-terminal-background", "#1a1b18");
+    document.documentElement.style.setProperty("--theme-search-highlight-text", "#36ce94");
     const colors = getSearchDecorationColors();
-    expect(colors.matchBackground).toBe("#36ce94");
-    expect(colors.matchOverviewRuler).toBe("#36ce94");
+    // Every match must stay distinguishable from the one active match.
+    expect(colors.matchBackground).not.toBe(colors.activeMatchBackground);
+    expect(colors.matchOverviewRuler).toBe(colors.matchBackground);
+    const wash = [54, 206, 148];
+    const backdrop = channels("#1a1b18");
+    channels(colors.matchBackground).forEach((c, i) => {
+      const lo = Math.min(wash[i]!, backdrop[i]!);
+      const hi = Math.max(wash[i]!, backdrop[i]!);
+      expect(c).toBeGreaterThanOrEqual(lo);
+      expect(c).toBeLessThanOrEqual(hi);
+      // A 20% wash sits nearer the backdrop than the full-strength colour.
+      expect(Math.abs(c - backdrop[i]!)).toBeLessThanOrEqual(Math.abs(c - wash[i]!));
+    });
+  });
+
+  it("flattens over the canvas when the terminal background is not set", () => {
+    document.documentElement.style.setProperty(
+      "--theme-search-highlight-background",
+      "rgba(255, 255, 255, 0.5)"
+    );
+    document.documentElement.style.setProperty("--theme-surface-canvas", "#000000");
+    expect(getSearchDecorationColors().matchBackground).toBe("#808080");
+  });
+
+  it("passes an opaque match colour through unchanged", () => {
+    document.documentElement.style.setProperty(
+      "--theme-search-highlight-background",
+      "rgb(10, 20, 30)"
+    );
+    document.documentElement.style.setProperty("--theme-terminal-background", "#ffffff");
+    expect(getSearchDecorationColors().matchBackground).toBe("#0a141e");
   });
 
   it("reads search-highlight-text directly as active match color", () => {
