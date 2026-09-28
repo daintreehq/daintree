@@ -438,7 +438,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   return (
     <div className="flex h-full flex-col bg-surface-canvas">
       {/* Toolbar */}
-      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-overlay bg-surface shrink-0">
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 py-1 border-b border-overlay bg-surface shrink-0">
         <span className={cn(LIST_LABEL_CLASS, "mr-1")}>Console</span>
 
         <SegmentedRadioGroup

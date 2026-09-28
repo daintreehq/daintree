@@ -97,6 +97,12 @@ const SHOTS: Shot[] = [
     frame: drawer,
   },
   {
+    name: "drawer-console-tight",
+    query: "scene=drawer&tab=console&width=360",
+    ready: consoleReady,
+    frame: drawer,
+  },
+  {
     name: "drawer-tab-focus",
     query: "scene=drawer&tab=console",
     ready: consoleReady,
