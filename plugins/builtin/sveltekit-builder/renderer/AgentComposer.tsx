@@ -528,7 +528,7 @@ export function AgentComposer({
             // than by the others going bare. Its thumb needs stable geometry so
             // the control does not shrink; the wrapper keeps any overflow
             // inside the column instead of past the drawer's edge.
-            <div className="w-fit min-w-0 max-w-full overflow-hidden">
+            <div className="flex w-fit min-w-0 max-w-full overflow-hidden">
               <SegmentedRadioGroup
                 // Default density is 28px, matching the destination picker in the
                 // footer and the property rows above: a 24px track read as a

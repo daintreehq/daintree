@@ -177,10 +177,13 @@ export function GitHubResourceListSkeleton({
             <div
               key={tab.id}
               className={cn(
-                "flex-1 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)] text-center border",
+                // The boundary is an inset shadow, not a border: the live thumb's
+                // border sits on an absolutely positioned layer, so a border here
+                // would make the skeleton 2px taller than what replaces it.
+                "flex-1 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)] text-center",
                 tab.id === "open"
-                  ? "bg-overlay-medium border-text-secondary text-text-primary"
-                  : "border-transparent text-text-secondary"
+                  ? "bg-overlay-medium text-text-primary shadow-[inset_0_0_0_1px_var(--color-text-secondary)]"
+                  : "text-text-secondary"
               )}
             >
               {tab.label}

@@ -236,6 +236,20 @@ describe("useToolbarRoving with a radiogroup in the row", () => {
     expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Bravo" }));
   });
 
+  it("keeps a focused but unchecked segment in the row, so its keys still move on", async () => {
+    await renderRow("b");
+    // Focus restored to a segment that is not the checked one — a rejected pick,
+    // or an owner handing focus back to the group's first control.
+    screen.getByRole("radio", { name: "Alpha" }).focus();
+    // Bravo is still the group's own stop; the row must not end up with two.
+    expect(tabStops()).toEqual([screen.getByRole("radio", { name: "Alpha" })]);
+
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "before" }));
+    expect(tabStops()).toHaveLength(1);
+  });
+
   it("moves the selection inside the group, then hands the row on at its edges", async () => {
     await renderRow("b");
     const group = screen.getByRole("radiogroup", { name: "Mode" });

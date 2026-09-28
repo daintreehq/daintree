@@ -9,16 +9,21 @@ import { useCallback, useEffect, useRef, type RefObject } from "react";
 const CONTROL_SELECTOR = 'button:not([disabled]), [role="button"]:not([aria-disabled="true"])';
 
 /**
- * A radiogroup is ONE toolbar item, not one per segment: its own roving stop
- * (the checked segment, or the first enabled one when that is disabled or
- * nothing matches) stands for the whole group. The group answers the arrows
- * inside itself and hands Left/Right back at its edges, so the row still loops.
+ * A radiogroup is ONE toolbar item, not one per segment. While focus is inside
+ * the group, the focused segment stands for it — focus can sit on an unchecked
+ * one after a restore or a rejected pick, and the row must still hear its keys.
+ * Otherwise the group's own roving stop does: the checked segment, or the first
+ * enabled one when that is disabled or nothing matches. The group answers the
+ * arrows inside itself and hands Left/Right back at its edges, so the row still
+ * loops.
  */
 function isToolbarItem(element: HTMLElement): boolean {
   if (element.getAttribute("role") !== "radio") return true;
   const group = element.closest('[role="radiogroup"]');
   if (!group) return true;
   const radios = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]:not([disabled])'));
+  const focused = radios.find((radio) => radio === document.activeElement);
+  if (focused) return element === focused;
   const checked = radios.find((radio) => radio.getAttribute("aria-checked") === "true");
   return element === (checked ?? radios[0]);
 }
