@@ -67,6 +67,7 @@ const collectDiagnosticsWithKeysMock = vi.hoisted(() =>
 // sum to zero on 2 of 3 platforms, so the handlers must use workingSetSize. A
 // fixture with populated privateBytes would pass even if that bug regressed.
 const appMock = vi.hoisted(() => ({
+  getPath: vi.fn((_name: string) => "/userData"),
   getAppMetrics: vi.fn(() => [
     {
       pid: 100,
@@ -118,10 +119,14 @@ const statMock = vi.hoisted(() =>
   )
 );
 const existsSyncMock = vi.hoisted(() => vi.fn<(path: string) => boolean>(() => false));
+const readdirMock = vi.hoisted(() =>
+  vi.fn<(path: string) => Promise<string[]>>(() => Promise.resolve([]))
+);
 
 vi.mock("node:fs", () => ({
   promises: {
     readFile: readFileMock,
+    readdir: readdirMock,
     chmod: chmodMock,
     stat: statMock,
   },
@@ -238,6 +243,7 @@ describe("registerDiagnosticsHandlers", () => {
     existsSyncMock.mockReturnValue(false);
     statMock.mockResolvedValue({ mtimeMs: Date.now() });
     readFileMock.mockResolvedValue("log line");
+    readdirMock.mockResolvedValue([]);
     // The metrics handlers read through a 5s shared cache; clear it so each
     // test's mocked getAppMetrics (incl. per-test throw overrides) actually runs.
     resetAppMetricsSnapshotForTesting();
@@ -736,6 +742,146 @@ describe("registerDiagnosticsHandlers", () => {
       );
 
       expect(readPaths()).toContain(logPath("daintree.log.1"));
+    });
+  });
+
+  describe("save-bundle crash records and pty-host logs", () => {
+    const crashesDir = path.normalize("/userData/crashes");
+    const appendedNames = () =>
+      archiverMock().append.mock.calls.map((c: unknown[]) => (c[1] as { name: string }).name);
+    const appendedContent = (name: string) =>
+      archiverMock().append.mock.calls.find(
+        (c: unknown[]) => (c[1] as { name: string }).name === name
+      )?.[0] as string | undefined;
+
+    async function saveBundle(logs: boolean, timeWindowStartMs: number | null): Promise<void> {
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/diagnostics.zip",
+        canceled: false,
+      });
+      registerDiagnosticsHandlers(deps);
+      await getHandlerFn("system:save-diagnostics-bundle")(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs },
+          replacements: [{ find: "/Users/alice", replace: "~" }],
+          timeWindowStartMs,
+        }
+      );
+    }
+
+    beforeEach(() => {
+      readdirMock.mockImplementation((dir: string) =>
+        Promise.resolve(
+          path.normalize(dir) === crashesDir
+            ? ["crash-1000-a.json", "renderer-gone-6000-b.json", "crash-7000-c.json", "notes.txt"]
+            : ["daintree.log", "pty-host.log", "pty-host-shard1.log", "other.log"]
+        )
+      );
+      readFileMock.mockImplementation((p: string) => {
+        const file = path.basename(p);
+        if (file === "crash-1000-a.json")
+          return Promise.resolve(JSON.stringify({ timestamp: 1000 }));
+        if (file === "renderer-gone-6000-b.json") {
+          return Promise.resolve(
+            JSON.stringify({
+              event: "renderer-gone",
+              reason: "killed",
+              exitCode: 15,
+              timestamp: 6000,
+            })
+          );
+        }
+        if (file === "crash-7000-c.json") {
+          return Promise.resolve(
+            JSON.stringify({
+              timestamp: 7000,
+              errorStack: "at /Users/alice/app.js",
+              recentActions: [{ actionId: "terminal.sendText", args: { text: "secret prompt" } }],
+            })
+          );
+        }
+        return Promise.resolve(`log for ${file}`);
+      });
+    });
+
+    it("adds in-window crash records by their own timestamp and every pty-host log", async () => {
+      // mtime says everything is recent; only the record timestamp may exclude.
+      statMock.mockResolvedValue({ mtimeMs: 9000 });
+      await saveBundle(true, 5000);
+
+      const names = appendedNames();
+      expect(names).toContain("crashes/renderer-gone-6000-b.json");
+      expect(names).toContain("crashes/crash-7000-c.json");
+      expect(names).not.toContain("crashes/crash-1000-a.json");
+      expect(names).not.toContain("crashes/notes.txt");
+      expect(names).toContain("pty-host.log");
+      expect(names).toContain("pty-host-shard1.log");
+      expect(names).not.toContain("other.log");
+    });
+
+    it("drops breadcrumb args and applies replacements to crash records", async () => {
+      await saveBundle(true, null);
+
+      const content = appendedContent("crashes/crash-7000-c.json") ?? "";
+      expect(content).toContain("terminal.sendText");
+      expect(content).not.toContain("secret prompt");
+      expect(content).not.toContain("/Users/alice");
+      expect(appendedNames()).toContain("crashes/crash-1000-a.json");
+    });
+
+    it("skips a pty-host log last written before the window", async () => {
+      statMock.mockImplementation((p: string) =>
+        Promise.resolve({ mtimeMs: path.basename(p) === "pty-host-shard1.log" ? 1000 : 9000 })
+      );
+      await saveBundle(true, 5000);
+
+      expect(appendedNames()).toContain("pty-host.log");
+      expect(appendedNames()).not.toContain("pty-host-shard1.log");
+    });
+
+    it("drops undated records from a windowed bundle and malformed breadcrumbs always", async () => {
+      readdirMock.mockImplementation((dir: string) =>
+        Promise.resolve(
+          path.normalize(dir) === crashesDir ? ["crash-1-undated.json", "crash-2-odd.json"] : []
+        )
+      );
+      readFileMock.mockImplementation((p: string) =>
+        Promise.resolve(
+          path.basename(p) === "crash-1-undated.json"
+            ? JSON.stringify({ errorMessage: "no timestamp" })
+            : JSON.stringify({
+                timestamp: 9000,
+                recentActions: { args: { text: "secret prompt" } },
+              })
+        )
+      );
+
+      await saveBundle(true, 5000);
+      expect(appendedNames()).not.toContain("crashes/crash-1-undated.json");
+      expect(appendedContent("crashes/crash-2-odd.json")).not.toContain("secret prompt");
+
+      archiverMock().append.mockClear();
+      await saveBundle(true, null);
+      expect(appendedNames()).toContain("crashes/crash-1-undated.json");
+    });
+
+    it("still saves the bundle when the userData path is unavailable", async () => {
+      appMock.getPath.mockImplementationOnce(() => {
+        throw new Error("no userData");
+      });
+      await saveBundle(true, null);
+
+      expect(appendedNames()).toContain("pty-host.log");
+      expect(appendedNames().some((n) => n.startsWith("crashes/"))).toBe(false);
+    });
+
+    it("leaves crash records and pty-host logs out when logs are excluded", async () => {
+      await saveBundle(false, null);
+
+      expect(appendedNames()).toEqual(["diagnostics.json"]);
+      expect(readdirMock).not.toHaveBeenCalled();
     });
   });
 

@@ -125,6 +125,7 @@ import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
+import { initializeProcessDeathLogger } from "./services/ProcessDeathLogger.js";
 import {
   readLastActiveProjectIdSync,
   readOpenWindowsManifestSync,
@@ -365,6 +366,9 @@ if (!gotTheLock) {
   // is already pulled into the eager graph via AppHydrationService,
   // CrashRecoveryService, and the ipc/handlers/app/* handlers.
   initializeGpuCrashMonitor();
+  // Before any window or utility process exists, so no child death goes
+  // unlogged — including an external kill of several children at once.
+  initializeProcessDeathLogger();
 
   const windowRegistry = new WindowRegistry();
   setWindowRegistry(windowRegistry);

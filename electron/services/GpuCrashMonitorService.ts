@@ -131,17 +131,8 @@ class GpuCrashMonitorService {
     const alreadyHasAngleFallback = isGpuAngleFallbackByFlag(userDataPath);
 
     app.on("child-process-gone", async (_event, details) => {
-      if (details.type !== "GPU") {
-        if (details.reason !== "clean-exit" && details.reason !== "killed") {
-          logger.warn("gpu-non-crash-exit-detected", {
-            type: details.type,
-            reason: details.reason,
-            exitCode: details.exitCode,
-            name: details.name,
-          });
-        }
-        return;
-      }
+      // Non-GPU deaths are logged by ProcessDeathLogger.
+      if (details.type !== "GPU") return;
       if (details.reason === "clean-exit" || details.reason === "killed") return;
 
       // Sliding window: prune crashes older than the window and push the

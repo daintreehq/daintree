@@ -14,6 +14,7 @@ import {
 import type { PluginIdentity } from "../../../shared/types/plugin.js";
 import type { PluginHostToWorkerMessage } from "../../../shared/types/pluginDevWorker.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
+import { noteTerminationIntent } from "../processTerminationIntent.js";
 
 const logger = createLogger("main:PluginDevWorker");
 
@@ -259,6 +260,7 @@ export class PluginDevWorkerHost extends EventEmitter {
       this.disposeTimer = setTimeout(() => {
         this.disposeTimer = null;
         if (this.child) {
+          noteTerminationIntent({ serviceName: this.serviceName }, "dispose backstop");
           try {
             this.child.kill();
           } catch (error) {
@@ -402,6 +404,7 @@ export class PluginDevWorkerHost extends EventEmitter {
         this.readyResolve = null;
       }
       this.expectingExit = true;
+      noteTerminationIntent({ serviceName: this.serviceName }, "failed to start");
       try {
         child.kill();
       } catch {

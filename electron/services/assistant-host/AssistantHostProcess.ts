@@ -5,6 +5,7 @@ import type {
   AssistantHostSessionDescriptor,
 } from "../../../shared/types/ipc/assistantHost.js";
 import { parseAssistantHostEvent } from "../../schemas/ipc.js";
+import { noteTerminationIntent } from "../processTerminationIntent.js";
 
 export interface AssistantHostProcessOptions {
   /** Absolute path to the package's `dist/host.js` (see `resolveHostEntry`). */
@@ -133,6 +134,7 @@ export class AssistantHostProcess {
       // Already gone; fall through to the kill backstop.
     }
     const killTimer = setTimeout(() => {
+      noteTerminationIntent({ serviceName: this.opts.serviceName }, "shutdown backstop");
       try {
         child.kill();
       } catch {
