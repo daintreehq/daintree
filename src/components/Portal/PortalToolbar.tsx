@@ -737,7 +737,6 @@ export function PortalToolbar({
                     className={iconButtonClass}
                     aria-label="New Tab"
                     aria-keyshortcuts={newTabAriaShortcut}
-                    aria-haspopup="menu"
                   >
                     <Plus className={PANE_TOOLBAR_ICON_CLASS} />
                   </button>
