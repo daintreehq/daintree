@@ -3,9 +3,10 @@
  *
  * Motion cannot be judged from a resting frame, so every step here triggers a
  * surface, waits for the transitions and keyframes it starts, pauses them all
- * through the Web Animations API and seeks them to the same fraction of their
- * run before the PNG is written. The frame shows where the surface is part way
- * through entering: how far it has risen or scaled, how far it has faded in.
+ * through the Web Animations API and seeks them all to the same moment, a
+ * fraction of the longest one's run, before the PNG is written. The frame shows
+ * where the surface is part way through entering: how far it has risen or
+ * scaled, how far it has faded in.
  *
  * The whole sequence runs twice, first with motion on and then with the in-app
  * "Reduce UI animations" setting on, set through its real action
@@ -141,13 +142,24 @@ async function freeze(page: Page, t0: number, fraction: number): Promise<AnimRec
         lastCount = picked.length;
         if (performance.now() > deadline) break;
       }
+      // One shared moment for every animation the trigger started, a fraction
+      // of the longest one's run, so staged motion (a fade followed by a
+      // delayed 0s snap) is frozen as it appears together, not each part at
+      // its own fraction.
+      const end = Math.max(
+        0,
+        ...picked.map((a) => {
+          const timing = a.effect!.getComputedTiming();
+          return (Number(timing.delay) || 0) + (Number(timing.duration) || 0);
+        })
+      );
       const records = [];
       for (const a of picked) {
         a.pause();
         const timing = a.effect!.getComputedTiming();
         const duration = Number(timing.duration) || 0;
         const delay = Number(timing.delay) || 0;
-        a.currentTime = delay + duration * fraction;
+        a.currentTime = end * fraction;
         const effect = a.effect as KeyframeEffect;
         const name =
           (a as unknown as { transitionProperty?: string }).transitionProperty ??
