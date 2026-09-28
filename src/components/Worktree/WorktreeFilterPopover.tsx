@@ -121,7 +121,7 @@ function FilterSection({
             <ChevronDown
               data-animated-chevron
               className={cn(
-                "w-3.5 h-3.5 shrink-0 transition-transform",
+                "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
                 isOpen ? "transform rotate-180" : ""
               )}
             />

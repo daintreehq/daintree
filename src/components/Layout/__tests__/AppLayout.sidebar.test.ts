@@ -258,8 +258,15 @@ describe("AppLayout drag-resize transition gating — issue #7627", () => {
     expect(source).toMatch(/!isAssistantResizing\s*&&/);
     // Reduced motion (the OS setting or the in-app one, both through the
     // `motion-reduce:` variant) never interpolates the width.
+    // Either it drops the width transition outright, or (the closing leg) it
+    // stages it as a 0s snap after the fade.
     for (const width of source.match(/"transition-\[width\][^"]*"/g) ?? []) {
-      expect(width).toMatch(/motion-reduce:transition-(none|opacity)/);
+      const staged = /motion-reduce:\[transition-property:opacity,width\]/.test(width);
+      if (staged) {
+        expect(width).toMatch(/motion-reduce:\[transition-duration:[^,\]]+,0s\]/);
+      } else {
+        expect(width).toMatch(/motion-reduce:transition-(none|opacity)/);
+      }
     }
     // The transition string must remain specific to width — never widened to
     // bare `transition` or `transition-all`. Past lesson #4738.

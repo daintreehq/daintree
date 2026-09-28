@@ -1361,7 +1361,7 @@ body,
 }
 
 .overlay-motion-drop[data-state="open"] {
-  animation: overlay-drop-down var(--duration-200) var(--ease-out-expo);
+  animation: overlay-drop-down var(--duration-200) var(--ease-spring-critical);
 }
 
 .overlay-motion-drop[data-state="open"][data-side="top"] {

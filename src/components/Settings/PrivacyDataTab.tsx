@@ -463,7 +463,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                                 aria-hidden="true"
                                 data-animated-chevron
                                 className={cn(
-                                  "transition-transform duration-150",
+                                  "transition-transform duration-150 ease-out",
                                   showAllEvents && "rotate-90"
                                 )}
                               />

@@ -329,7 +329,7 @@ function CommandRow({
             <ChevronRight
               data-animated-chevron
               className={cn(
-                "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+                "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
                 isExpanded && "rotate-90"
               )}
               aria-hidden="true"

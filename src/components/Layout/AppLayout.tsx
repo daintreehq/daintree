@@ -948,13 +948,15 @@ export function AppLayout({
           <div
             className={cn(
               "relative h-full shrink-0 overflow-clip",
-              // Reduced motion (either preference) snaps the width and dissolves
-              // the panel in instead, on the same tier.
+              // Reduced motion (either preference) never interpolates the width.
+              // Opening snaps it and dissolves the panel in; closing fades the
+              // panel out first, then snaps the width once the fade is done
+              // (a 0s width transition delayed by the exit tier).
               !isSidebarResizing &&
                 !isSidebarWidthHydrating &&
                 (showSidebar
                   ? "transition-[width] duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-opacity"
-                  : "transition-[width] duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-opacity"),
+                  : "transition-[width] duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:[transition-property:opacity,width] motion-reduce:[transition-duration:var(--duration-120),0s] motion-reduce:[transition-delay:0s,var(--duration-120)]"),
               !showSidebar && "pointer-events-none motion-reduce:opacity-0"
             )}
             onTransitionEnd={handleSidebarTransitionEnd}
@@ -1024,12 +1026,12 @@ export function AppLayout({
             <div
               className={cn(
                 "absolute top-0 right-0 h-full overflow-hidden",
-                // Reduced motion snaps the slide and dissolves the panel in
-                // instead, on the same tier, like the sidebar.
+                // Reduced motion never slides it: like the sidebar, it dissolves
+                // in, and on close fades out before it snaps off-canvas.
                 !isAssistantResizing &&
                   (showAssistant
                     ? "transition-transform duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-opacity"
-                    : "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-opacity"),
+                    : "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:[transition-property:opacity,transform] motion-reduce:[transition-duration:var(--duration-120),0s] motion-reduce:[transition-delay:0s,var(--duration-120)]"),
                 !showAssistant && "pointer-events-none motion-reduce:opacity-0"
               )}
               style={{

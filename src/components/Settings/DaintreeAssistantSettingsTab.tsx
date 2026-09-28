@@ -1380,7 +1380,7 @@ export function DaintreeAssistantSettingsTab() {
               <ChevronRight
                 data-animated-chevron
                 className={cn(
-                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150",
+                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150 ease-out",
                   advancedDiagnosticsOpen ? "rotate-90" : "rotate-0"
                 )}
                 aria-hidden="true"
@@ -1743,7 +1743,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
           <ChevronRight
             data-animated-chevron
             className={cn(
-              "w-3.5 h-3.5 transition-transform duration-150",
+              "w-3.5 h-3.5 transition-transform duration-150 ease-out",
               isOpen ? "rotate-90" : "rotate-0"
             )}
             aria-hidden="true"
