@@ -452,24 +452,24 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                         )}
                         {entry.events && entry.events.length > 0 && (
                           <>
-                            <button
-                              type="button"
+                            <Button
+                              variant="link"
                               onClick={() => setShowAllEvents((v) => !v)}
                               aria-expanded={showAllEvents}
                               aria-controls="privacy-analytics-events"
-                              className="inline-flex items-center gap-1 text-xs font-medium text-text-primary rounded-[var(--radius-sm)] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="text-xs"
                             >
                               <ChevronRight
                                 aria-hidden="true"
                                 data-animated-chevron
                                 className={cn(
-                                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150",
+                                  "transition-transform duration-150",
                                   showAllEvents && "rotate-90"
                                 )}
                               />
                               {showAllEvents ? "Hide" : "Show"} the {entry.events.length} analytics
                               events
-                            </button>
+                            </Button>
                             {showAllEvents && (
                               <ul id="privacy-analytics-events" className="flex flex-wrap gap-1.5">
                                 {entry.events.map((name) => (

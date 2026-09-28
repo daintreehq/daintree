@@ -236,22 +236,22 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
               {(url || email) && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                   {url && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="link"
                       onClick={() => void systemClient.openExternal(url)}
-                      className="text-2xs text-text-secondary hover:text-text-primary hover:underline break-all"
+                      className="whitespace-normal break-all text-left text-2xs"
                     >
                       {url}
-                    </button>
+                    </Button>
                   )}
                   {email && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="link"
                       onClick={() => void systemClient.openExternal(`mailto:${email}`)}
-                      className="text-2xs text-text-secondary hover:text-text-primary hover:underline break-all"
+                      className="whitespace-normal break-all text-left text-2xs"
                     >
                       {email}
-                    </button>
+                    </Button>
                   )}
                 </div>
               )}

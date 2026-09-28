@@ -1731,7 +1731,7 @@ describe("NotificationCenter — bulk mark-read with Undo", () => {
     expect(loginHeader).toBeTruthy();
 
     // Mark read button is always visible (not gated on hover).
-    const markReadBtn = within(loginHeader!).getByText("Mark read");
+    const markReadBtn = within(loginHeader!).getByRole("button", { name: "Mark read" });
     expect(markReadBtn.className).not.toContain("invisible");
 
     await act(async () => {

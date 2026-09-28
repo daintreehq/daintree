@@ -173,14 +173,13 @@ function SectionRow({ section }: { section: ConfigBundlePreviewSection }) {
           {added.length > MAX_NAMED && (
             <>
               {hiddenAdded === 0 && " "}
-              <button
-                type="button"
+              <Button
+                variant="link"
                 aria-expanded={showAllAdded}
-                className="rounded-[var(--radius-sm)] text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 onClick={() => setShowAllAdded((open) => !open)}
               >
                 {showAllAdded ? "show fewer" : `${hiddenAdded} more`}
-              </button>
+              </Button>
             </>
           )}
         </p>

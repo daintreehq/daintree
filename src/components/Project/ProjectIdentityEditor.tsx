@@ -6,6 +6,7 @@ import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { useProjectStore } from "@/store/projectStore";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import type { Project } from "@shared/types";
+import { Button } from "@/components/ui/button";
 
 interface ProjectIdentityEditorProps {
   project: Project;
@@ -286,14 +287,15 @@ export function ProjectIdentityEditor({
               </p>
             )}
             {suggestion && (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => handleEmojiSelect(suggestion)}
-                className="-ml-1 flex min-h-6 items-center gap-1.5 self-start rounded-[var(--radius-md)] px-1 py-0.5 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary"
+                className="-ml-1 gap-1.5 self-start px-1 text-xs"
               >
                 <span className="text-base leading-none">{suggestion}</span>
                 <span>Use suggested icon</span>
-              </button>
+              </Button>
             )}
           </div>
           <EmojiPicker

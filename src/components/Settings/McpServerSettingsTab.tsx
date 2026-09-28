@@ -698,7 +698,7 @@ export function McpServerSettingsTab() {
               type="button"
               onClick={() => setBearersExpanded((v) => !v)}
               aria-expanded={bearersExpanded}
-              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-subtle transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
               <ChevronRight
                 data-animated-chevron
@@ -747,7 +747,7 @@ export function McpServerSettingsTab() {
               type="button"
               onClick={() => setHelpBearersExpanded((v) => !v)}
               aria-expanded={helpBearersExpanded}
-              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-subtle transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
               <ChevronRight
                 data-animated-chevron
@@ -954,18 +954,15 @@ export function McpServerSettingsTab() {
                         <span className="flex-1 truncate">
                           {showApiKey ? status.apiKey : MASKED_KEY}
                         </span>
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={() => setShowApiKey((v) => !v)}
-                          className="shrink-0 text-text-secondary hover:text-text-primary transition-colors"
+                          className="shrink-0 -mr-1 [&_svg]:size-3.5"
                           aria-label={showApiKey ? "Hide API key" : "Show API key"}
                         >
-                          {showApiKey ? (
-                            <EyeOff className="h-3.5 w-3.5" />
-                          ) : (
-                            <Eye className="h-3.5 w-3.5" />
-                          )}
-                        </button>
+                          {showApiKey ? <EyeOff /> : <Eye />}
+                        </Button>
                       </div>
                       <Button
                         variant="outline"

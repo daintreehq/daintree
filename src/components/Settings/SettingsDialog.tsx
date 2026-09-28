@@ -29,6 +29,7 @@ import { SearchField } from "@/components/ui/SearchField";
 import { KbdChord } from "@/components/ui/Kbd";
 import { ArrowLeftRight, TriangleAlert } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import {
   DropdownMenu,
@@ -940,9 +941,8 @@ function SettingsDialogInner({
                     <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                     <p className="min-w-0 flex-1 py-px">
                       The setting you opened only appears when{" "}
-                      <button
-                        type="button"
-                        className="rounded-sm font-medium text-text-primary underline underline-offset-2 hover:decoration-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                      <Button
+                        variant="link"
                         onClick={() => {
                           const parent = SETTINGS_SEARCH_INDEX.find(
                             (e) => e.id === hiddenSettingBanner.settingId
@@ -960,7 +960,7 @@ function SettingsDialogInner({
                         }}
                       >
                         {midSentenceLabel(hiddenSettingBanner.label)}
-                      </button>{" "}
+                      </Button>{" "}
                       is on
                     </p>
                     <DismissButton

@@ -5,6 +5,7 @@ import { Sprout } from "@/components/icons";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
+import { Button } from "@/components/ui/button";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useIsDockPopoverChild } from "@/components/ui/DockPopoverChildContext";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
@@ -364,17 +365,9 @@ function MoveToWorktreePickerBody({
             query={deferredQuery}
             emptyMessage="No worktrees"
             noMatchContent={
-              <button
-                type="button"
-                onClick={clearSearch}
-                className={cn(
-                  "rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary transition-colors",
-                  "hover:bg-overlay-subtle hover:text-text-primary",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                )}
-              >
+              <Button variant="subtle" size="sm" onClick={clearSearch}>
                 Clear search
-              </button>
+              </Button>
             }
           />
         )}

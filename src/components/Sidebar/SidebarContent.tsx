@@ -59,8 +59,6 @@ import {
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
-import { labelWithShortcut } from "@/lib/kbdShortcut";
-import { isMac } from "@/lib/platform";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation, DeletedWorktree } from "@/store/worktreeStore";
@@ -135,10 +133,6 @@ const LazyRecipeManager = lazy(() =>
 );
 
 const SIDEBAR_DEFER_FILTER_MIN_WORKTREES = 60;
-
-function formatButtonTitle(label: string, shortcut?: string | null): string {
-  return labelWithShortcut(label, shortcut, isMac());
-}
 
 const NO_MATCH_QUERY_MAX = 40;
 
@@ -2062,22 +2056,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 title={`No ${QUICK_STATE_LABELS[quickStateFilter].toLowerCase()} worktrees`}
                 action={
                   <>
-                    <button
-                      type="button"
-                      onClick={() => setQuickStateFilter("all")}
-                      className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
-                    >
+                    <Button variant="subtle" size="sm" onClick={() => setQuickStateFilter("all")}>
                       Show all worktrees
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onOpenOverview}
-                      className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
-                      title={formatButtonTitle("Open overview", overviewShortcut)}
-                      aria-keyshortcuts={overviewAriaShortcut}
-                    >
-                      Open overview
-                    </button>
+                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          onClick={onOpenOverview}
+                          className="ml-1"
+                          aria-keyshortcuts={overviewAriaShortcut}
+                        >
+                          Open overview
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {createTooltipContent("Open overview", overviewShortcut)}
+                      </TooltipContent>
+                    </Tooltip>
                   </>
                 }
               />
@@ -2094,22 +2091,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               }
               action={
                 <>
-                  <button
-                    type="button"
-                    onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
-                  >
+                  <Button variant="subtle" size="sm" onClick={clearAllFilters}>
                     Show all worktrees
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onOpenOverview}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
-                    title={formatButtonTitle("Open overview", overviewShortcut)}
-                    aria-keyshortcuts={overviewAriaShortcut}
-                  >
-                    Open overview
-                  </button>
+                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="subtle"
+                        size="sm"
+                        onClick={onOpenOverview}
+                        className="ml-1"
+                        aria-keyshortcuts={overviewAriaShortcut}
+                      >
+                        Open overview
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipContent("Open overview", overviewShortcut)}
+                    </TooltipContent>
+                  </Tooltip>
                 </>
               }
             />
@@ -2128,22 +2128,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               }
               action={
                 <>
-                  <button
-                    type="button"
-                    onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
-                  >
+                  <Button variant="subtle" size="sm" onClick={clearAllFilters}>
                     Show all worktrees
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onOpenOverview}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
-                    title={formatButtonTitle("Open overview", overviewShortcut)}
-                    aria-keyshortcuts={overviewAriaShortcut}
-                  >
-                    Open overview
-                  </button>
+                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="subtle"
+                        size="sm"
+                        onClick={onOpenOverview}
+                        className="ml-1"
+                        aria-keyshortcuts={overviewAriaShortcut}
+                      >
+                        Open overview
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipContent("Open overview", overviewShortcut)}
+                    </TooltipContent>
+                  </Tooltip>
                 </>
               }
             />

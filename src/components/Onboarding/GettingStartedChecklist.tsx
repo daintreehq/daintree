@@ -206,7 +206,7 @@ export function GettingStartedChecklist({
                 onClick={onToggleCollapse}
                 aria-expanded={!collapsed}
                 aria-controls={CHECKLIST_BODY_ID}
-                className="flex items-center gap-2 text-left flex-1 min-w-0"
+                className="flex items-center gap-2 text-left flex-1 min-w-0 cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               >
                 <h4 className="font-medium leading-tight text-xs text-text-primary">
                   Getting started
@@ -331,7 +331,7 @@ export function GettingStartedChecklist({
               className={cn(
                 "w-full text-left px-2 py-1 rounded-[var(--radius-xs)]",
                 "text-3xs text-text-secondary transition-colors duration-150",
-                "hover:text-text-primary hover:bg-tint/10",
+                "cursor-pointer hover:text-text-primary hover:bg-overlay-subtle",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               )}
             >

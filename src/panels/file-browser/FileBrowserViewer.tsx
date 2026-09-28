@@ -975,13 +975,9 @@ export function FileBrowserViewer({
               : { description: "It'll show up here." })}
             action={
               canRevealDotfiles ? (
-                <button
-                  type="button"
-                  onClick={onShowDotfiles}
-                  className="text-xs underline underline-offset-2"
-                >
+                <Button variant="subtle" size="sm" onClick={onShowDotfiles}>
                   Show dotfiles
-                </button>
+                </Button>
               ) : undefined
             }
           />

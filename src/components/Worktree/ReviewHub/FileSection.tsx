@@ -579,13 +579,13 @@ export function FileSection({
             hiddenGeneratedMatches !== 1 ? "s" : ""
           } hidden`}
           action={
-            <button
-              type="button"
+            <Button
+              variant="subtle"
+              size="sm"
               onClick={() => setView((prev) => ({ ...prev, showGenerated: true }))}
-              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Show generated files
-            </button>
+            </Button>
           }
         />
       ) : view.filterQuery ? (
@@ -594,13 +594,9 @@ export function FileSection({
           scale="sidebar"
           title={`No ${emptyFilteredNoun} matching "${truncateFilterQuery(view.filterQuery)}"`}
           action={
-            <button
-              type="button"
-              onClick={clearFilter}
-              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
-            >
+            <Button variant="subtle" size="sm" onClick={clearFilter}>
               Clear filter
-            </button>
+            </Button>
           }
         />
       ) : !view.showGenerated && allFiles.some((f) => isGeneratedFile(f.path)) ? (
@@ -609,13 +605,13 @@ export function FileSection({
           scale="sidebar"
           title={emptyGeneratedTitle}
           action={
-            <button
-              type="button"
+            <Button
+              variant="subtle"
+              size="sm"
               onClick={() => setView((prev) => ({ ...prev, showGenerated: true }))}
-              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Show generated files
-            </button>
+            </Button>
           }
         />
       ) : (

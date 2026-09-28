@@ -9,6 +9,7 @@ import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { WorktreeDetails } from "../WorktreeDetails";
 import { WorktreeActivityChip } from "./WorktreeActivityChip";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import {
@@ -273,7 +274,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 // to stay attached to the body it just revealed. A divider
                 // there cuts the two apart and they read as separate
                 // components.
-                "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+                "cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                 density.row,
                 "gap-1.5"
               )}
@@ -367,7 +368,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   id={`${detailsId}-button`}
                   aria-label="Show details"
                   className={cn(
-                    "absolute inset-0 rounded-[var(--radius-lg)]",
+                    "absolute inset-0 cursor-pointer rounded-[var(--radius-lg)]",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                   )}
                 />
@@ -507,16 +508,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourceResume && onResourceResume && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onResourceResume();
                               }}
-                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-text-secondary hover:text-text-primary hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="shrink-0"
                               aria-label="Resume resource"
                             >
-                              <Play className="w-3 h-3" />
-                            </button>
+                              <Play />
+                            </Button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom">Resume resource</TooltipContent>
                         </Tooltip>
@@ -524,16 +527,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourcePause && onResourcePause && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button
+                            <Button
+                              variant="ghost-danger"
+                              size="icon-xs"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onResourcePause();
                               }}
-                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="shrink-0"
                               aria-label="Pause resource"
                             >
-                              <Square className="w-3 h-3" />
-                            </button>
+                              <Square />
+                            </Button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom">Pause resource</TooltipContent>
                         </Tooltip>
@@ -541,16 +546,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourceConnect && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button
+                            <Button
+                              variant="ghost-info"
+                              size="icon-xs"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onResourceConnect!();
                               }}
-                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="shrink-0"
                               aria-label="Connect to resource"
                             >
-                              <Plug className="w-3 h-3" />
-                            </button>
+                              <Plug />
+                            </Button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom">Connect to resource</TooltipContent>
                         </Tooltip>
@@ -615,25 +622,21 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   <span className="text-xs text-text-muted truncate">
                     Setup didn't finish. Re-run when you're ready.
                   </span>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost-danger"
+                    size="xs"
                     onClick={handleRetrySetup}
                     disabled={isRetryingSetup}
-                    className={cn(
-                      "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
-                      "text-status-error hover:bg-status-error/10",
-                      "disabled:opacity-50 disabled:cursor-not-allowed",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
-                    )}
+                    className="shrink-0 px-2 text-xs"
                     aria-label="Retry setup"
                   >
-                    <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                    <RotateCcw aria-hidden="true" />
                     {isRetryingSetup ? "Retrying…" : "Retry setup"}
-                  </button>
+                  </Button>
                 </div>
                 {hasLifecycleDetails && (
                   <details className="text-xs">
-                    <summary className="flex items-center gap-1 text-text-muted cursor-pointer select-none">
+                    <summary className="flex items-center gap-1 rounded-[var(--radius-xs)] text-text-secondary cursor-pointer select-none transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
                       <ChevronDown className="w-3 h-3" aria-hidden="true" />
                       Show details
                     </summary>
@@ -670,16 +673,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   : "Repository commands need your approval to run"
                 : "Setup was skipped, and its commands are approved now"}
             </span>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={commandsNeedApproval ? handleReviewCommands : handleRetrySetup}
               disabled={!commandsNeedApproval && (isRetryingSetup || lifecycleState === "running")}
-              className={cn(
-                "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
-                "text-status-warning hover:bg-status-warning/10",
-                "disabled:opacity-50 disabled:cursor-not-allowed",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
-              )}
+              className="shrink-0 px-2 text-xs text-status-warning hover:text-status-warning focus-visible:text-status-warning"
             >
               {commandsNeedApproval ? (
                 <ShieldAlert className="w-3 h-3" aria-hidden="true" />
@@ -691,7 +690,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 : isRetryingSetup
                   ? "Starting…"
                   : "Run setup"}
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -776,24 +775,26 @@ export function WorktreeDeleteErrorBanner({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {onRetry && (
-            <button
-              type="button"
+            <Button
+              variant="ghost-danger"
+              size="xs"
               onClick={handleRetryClick}
               data-testid="worktree-delete-retry"
-              className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="px-2 text-xs ring-1 ring-status-error/30"
             >
               Retry
-            </button>
+            </Button>
           )}
           {onDismiss && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={handleDismissClick}
               data-testid="worktree-delete-dismiss"
-              className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="px-2 text-xs"
             >
               Dismiss
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -861,24 +862,26 @@ export function WorktreeIssueErrorBanner({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {onRetry && (
-            <button
-              type="button"
+            <Button
+              variant="ghost-danger"
+              size="xs"
               onClick={handleRetryClick}
               data-testid="worktree-issue-retry"
-              className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="px-2 text-xs ring-1 ring-status-error/30"
             >
               Retry
-            </button>
+            </Button>
           )}
           {onDismiss && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={handleDismissClick}
               data-testid="worktree-issue-dismiss"
-              className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="px-2 text-xs"
             >
               Dismiss
-            </button>
+            </Button>
           )}
         </div>
       </div>

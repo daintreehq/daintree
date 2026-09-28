@@ -93,17 +93,18 @@ export function CustomPresetChrome({
                 placeholder="Preset name"
               />
             ) : (
-              <button
+              <Button
                 ref={renameButtonRef}
-                type="button"
-                className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:underline underline-offset-2 text-left"
+                variant="ghost"
+                size="sm"
+                className="-mx-2 h-auto px-2 py-0.5 text-sm text-text-primary justify-start"
                 onClick={() => onStartEdit(selectedPreset)}
                 aria-label={`Edit ${selectedPreset.name}`}
                 title="Rename"
               >
                 <span>{selectedPreset.name}</span>
-                <Pencil size={12} className="text-text-secondary" aria-hidden="true" />
-              </button>
+                <Pencil className="text-text-secondary" aria-hidden="true" />
+              </Button>
             )}
           </span>
         }

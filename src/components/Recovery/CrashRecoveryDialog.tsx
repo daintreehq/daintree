@@ -277,14 +277,14 @@ export function CrashRecoveryDialog({
             <>
               <div className="border border-border-default rounded-lg overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 bg-overlay-soft border-b border-border-default">
-                  <button
-                    type="button"
+                  <Button
+                    variant="link"
                     onClick={toggleAll}
-                    className="cursor-pointer text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
+                    className="text-xs"
                     data-testid="toggle-all-button"
                   >
                     {allSelected ? "Deselect all" : "Select all"}
-                  </button>
+                  </Button>
                   <span className="text-xs tabular-nums text-text-secondary">
                     {selectedCount} of {panels.length} selected
                   </span>
@@ -352,7 +352,7 @@ export function CrashRecoveryDialog({
                 type="button"
                 onClick={handleRestoreAll}
                 disabled={resolving}
-                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-accent-primary hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-border-strong hover:bg-overlay-subtle text-left transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
                 data-testid="restore-button"
               >
                 <div className="mt-0.5 h-5 w-5 rounded-full bg-overlay-medium flex items-center justify-center shrink-0">
@@ -378,7 +378,7 @@ export function CrashRecoveryDialog({
                 type="button"
                 onClick={() => setShowFreshConfirm(true)}
                 disabled={resolving || showFreshConfirm}
-                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-daintree-border/80 hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-border-strong hover:bg-overlay-subtle text-left transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
                 data-testid="fresh-button"
               >
                 <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-text/10 flex items-center justify-center shrink-0">
@@ -419,7 +419,8 @@ export function CrashRecoveryDialog({
             <button
               type="button"
               onClick={() => setDetailsOpen((o) => !o)}
-              className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
+              aria-expanded={detailsOpen}
+              className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               data-testid="details-toggle"
             >
               <span className="font-medium">Error details</span>
@@ -483,7 +484,6 @@ export function CrashRecoveryDialog({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-xs h-7"
                     onClick={handleOpenLogFile}
                     data-testid="open-log-button"
                   >
@@ -495,7 +495,6 @@ export function CrashRecoveryDialog({
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="text-xs h-7"
                       onClick={() => copyStack(crash.entry.errorStack!)}
                       data-testid="copy-stack-button"
                     >
@@ -507,7 +506,6 @@ export function CrashRecoveryDialog({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-xs h-7"
                     onClick={() => setShowReportPreview((o) => !o)}
                     data-testid="report-button"
                   >
@@ -576,7 +574,6 @@ export function CrashRecoveryDialog({
                       <Button
                         variant="contrast"
                         size="sm"
-                        className="text-xs h-7"
                         onClick={() => void handleSubmitReport()}
                         disabled={submitting}
                         data-testid="submit-report-button"
@@ -587,7 +584,6 @@ export function CrashRecoveryDialog({
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="text-xs h-7"
                         onClick={() => setShowReportPreview(false)}
                         data-testid="cancel-report-button"
                       >

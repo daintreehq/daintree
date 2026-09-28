@@ -869,7 +869,7 @@ describe("ReviewHub", () => {
       // "dist/bundle.js" matches the query and exists; it is hidden as
       // generated. Blaming the filter here names the wrong cause and offers a
       // recovery that cannot bring it back.
-      const reveal = await screen.findByText("Show generated files", { selector: "button" });
+      const reveal = await screen.findByRole("button", { name: "Show generated files" });
       expect(reveal).toBeTruthy();
       expect(screen.queryByText("Clear filter")).toBeNull();
 

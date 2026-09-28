@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
 import { Check, Folder } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
 import { basename, dirname, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -411,13 +412,9 @@ export function DiffFileSidebar({
             scale="sidebar"
             title="No files match the filter"
             action={
-              <button
-                type="button"
-                onClick={() => setFilter("")}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
-              >
+              <Button variant="subtle" size="sm" onClick={() => setFilter("")}>
                 Clear filter
-              </button>
+              </Button>
             }
           />
         )}
