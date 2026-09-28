@@ -164,6 +164,23 @@ describe("WorktreePlacementRow", () => {
     expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
+  it("stops blocking local Create once it leaves the dialog with another host chosen", () => {
+    const onElsewhereChange = vi.fn();
+    const { unmount } = render(
+      <WorktreePlacementRow
+        projectId="p1"
+        rootPath={ROOT}
+        getDraft={getDraft}
+        onLeave={vi.fn()}
+        onElsewhereChange={onElsewhereChange}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
+    expect(onElsewhereChange).toHaveBeenLastCalledWith(true);
+    unmount();
+    expect(onElsewhereChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("stays open, ready to retry, when the host's dialog is closed without creating it", async () => {
     const onLeave = vi.fn();
     render(

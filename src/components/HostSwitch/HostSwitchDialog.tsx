@@ -15,6 +15,8 @@ import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
@@ -875,20 +877,23 @@ export function HostSwitchDialog({
       <AppDialog.Footer hint={hint}>
         <div className="flex shrink-0 items-center gap-3">
           {busy ? (
-            <Button variant="ghost" size="sm" onClick={cancelRunning}>
+            <Button variant="ghost" onClick={cancelRunning}>
               Cancel
             </Button>
           ) : (
-            <Button variant="ghost" size="sm" onClick={justSwitch}>
+            <Button variant="ghost" onClick={justSwitch}>
               Just switch host
             </Button>
           )}
           {primary && (
             <Button
               variant="contrast"
-              size="sm"
-              onClick={primary.onClick}
-              disabled={busy || primary.disabled === true}
+              onClick={() => {
+                if (busy || primary.disabled === true) return;
+                primary.onClick();
+              }}
+              aria-disabled={busy || primary.disabled === true || undefined}
+              className={cn((busy || primary.disabled === true) && ARIA_DISABLED_CLASSES)}
             >
               {primary.label}
             </Button>

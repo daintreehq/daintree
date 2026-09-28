@@ -6,6 +6,8 @@ import type { HostId } from "@shared/types/remoteHosts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
@@ -361,19 +363,22 @@ export function HostAddProjectDialog({
       <AppDialog.Footer hint={hint}>
         <div className="flex shrink-0 items-center gap-3">
           {busy ? (
-            <Button variant="ghost" size="sm" onClick={cancel}>
+            <Button variant="ghost" onClick={cancel}>
               Cancel
             </Button>
           ) : (
-            <Button variant="ghost" size="sm" onClick={onClose}>
+            <Button variant="ghost" onClick={onClose}>
               Close
             </Button>
           )}
           <Button
             variant="contrast"
-            size="sm"
-            onClick={() => void clone()}
-            disabled={busy || !ready}
+            onClick={() => {
+              if (busy || !ready) return;
+              void clone();
+            }}
+            aria-disabled={busy || !ready || undefined}
+            className={cn((busy || !ready) && ARIA_DISABLED_CLASSES)}
           >
             Clone and open
           </Button>

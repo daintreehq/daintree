@@ -2660,7 +2660,12 @@ function ProjectPaletteInner({
             />
           </>
         )}
-        <OtherHostsSection options={hostOptions} activeIndex={hostCursor} onChosen={onClose} />
+        <OtherHostsSection
+          options={hostOptions}
+          activeIndex={hostCursor}
+          onChosen={onClose}
+          onHoverIndex={setHostCursor}
+        />
       </AppPaletteDialog.Body>
 
       {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (

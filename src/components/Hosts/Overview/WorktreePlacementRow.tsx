@@ -107,6 +107,8 @@ export function WorktreePlacementRow({
   useEffect(() => (visible ? startHostMetricsFeed() : undefined), [visible]);
   const elsewhere = visible && chosen !== windowHostId;
   useEffect(() => onElsewhereChange?.(elsewhere), [elsewhere, onElsewhereChange]);
+  // Gone from the dialog, it chooses no other host: local Create must not stay blocked.
+  useEffect(() => () => onElsewhereChange?.(false), [onElsewhereChange]);
 
   if (!visible) return null;
 
