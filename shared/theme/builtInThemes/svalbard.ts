@@ -181,8 +181,6 @@ export const theme: BuiltInThemeSource = {
     "review-commit-input-bg": "#FAFCFE",
     // Small-chrome gradient between two audited near-white stops; label ink
     // holds 7.3:1 on the darker stop.
-    "settings-kbd-bg": "linear-gradient(180deg, #FBFDFE, #E6EEF4)",
-    "settings-kbd-border": "#C5CFD6",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",
     "settings-nav-active-shadow": "none",

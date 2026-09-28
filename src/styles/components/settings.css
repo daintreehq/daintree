@@ -104,11 +104,6 @@
   }
 }
 
-.settings-kbd {
-  background: var(--settings-kbd-bg, var(--theme-surface-input));
-  border-color: var(--settings-kbd-border, var(--theme-border-default));
-}
-
 @media (prefers-contrast: more) {
   /* The active nav row is carried by a low-delta neutral fill, which in the mode whose
      whole point is stronger state contrast reads exactly as faintly as it does by

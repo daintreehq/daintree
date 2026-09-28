@@ -560,19 +560,6 @@ Individual settings are grouped in cards:
 
 In Bondi: `#FEFEFE` — nearly pure white cards on the slightly off-white dialog body.
 
-### Keyboard Shortcut Badges
-
-Key badges in the settings:
-
-```css
-.settings-kbd {
-  background: var(--settings-kbd-bg, var(--theme-surface-input));
-  border: 1px solid var(--settings-kbd-border, var(--theme-border-default));
-}
-```
-
-Small rounded rectangles showing key combinations like `Cmd+K`.
-
 ---
 
 ## 9. Project Pulse

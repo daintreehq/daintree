@@ -344,7 +344,6 @@ export const theme: BuiltInThemeSource = {
     "settings-dialog-bg": "#0E0C0B",
     "settings-card-bg": "#15120F",
     "settings-list-item-bg": "#15120F",
-    "settings-kbd-bg": "#0A0908",
     "settings-search-bg": "#0A0908",
     "settings-search-muted": "#9E978B",
     "settings-sidebar-bg": "rgba(7,6,5,0.50)",

@@ -315,8 +315,6 @@ export const EXTENSION_KEYS = [
   // Settings tab
   "settings-card-bg",
   "settings-dialog-bg",
-  "settings-kbd-bg",
-  "settings-kbd-border",
   "settings-list-item-bg",
   "settings-meta-fg",
   "settings-meta-size",

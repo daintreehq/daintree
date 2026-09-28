@@ -132,7 +132,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#111919",
     "pulse-ring-offset": "#050809",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #222C2B 25%, #2D3837 50%, #222C2B 75%)",
-    "settings-kbd-bg": "#222C2B",
     "settings-nav-active-bg": "rgba(58,183,197,0.10)",
     "settings-nav-active-shadow": "inset 0 0 0 1px rgba(58,183,197,0.20)",
     "settings-nav-hover-bg": "rgba(211,230,228,0.05)",
