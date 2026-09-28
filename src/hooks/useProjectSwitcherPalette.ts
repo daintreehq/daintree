@@ -15,6 +15,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { compareProjectsByMode, type OtherProjectsSortMode } from "@/lib/projectSort";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { notify } from "@/lib/notify";
+import { copyPathWithFeedback } from "@/lib/copyPathFeedback";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { logError } from "@/utils/logger";
@@ -930,7 +931,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const openRelocation = useProjectRelocationStore((state) => state.open);
   const projectStats = useProjectStatsStore((state) => state.stats);
 
-  const { copy: copyToClipboard } = useCopyWithFeedback();
+  const { copy: copyToClipboard } = useCopyWithFeedback({ announcement: "Path copied" });
 
   const scratches = useScratchStore((state) => state.scratches);
   const currentScratch = useScratchStore((state) => state.currentScratch);
@@ -1974,13 +1975,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   );
 
   const copyPath = useCallback(
-    (path: string) => {
-      void copyToClipboard(path).then((ok) => {
-        if (ok) {
-          notify({ type: "info", title: "Path copied", message: path, transient: true });
-        }
-      });
-    },
+    (path: string) => copyPathWithFeedback(copyToClipboard, path),
     [copyToClipboard]
   );
 

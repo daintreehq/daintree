@@ -356,9 +356,14 @@
    * lift lives on the ::before overlay below — stacked OVER the pill's own
    * background (a near-transparent wash by default, an opaque near-white capsule
    * on light themes) rather than replacing it. Replacing erased the capsule fill
-   * on hover; layering preserves it. Press-scale is owned by the base Button cva,
-   * so transform stays out of the transition. */
+   * on hover; layering preserves it. The pill is a raw button, so it states the
+   * base Button cva's press snap itself (below); transform stays out of the
+   * transition so the snap is instant both ways, as on its toolbar siblings. */
   transition: color 150ms ease-out;
+}
+
+.toolbar-project-pill:active {
+  transform: scale(0.98);
 }
 
 /* Surface-lift overlay. Sits above the pill's background fill but below its
@@ -430,19 +435,26 @@
   transition: color 150ms ease;
 }
 
+.toolbar-project-meta {
+  --_fg: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
+  color: var(--_fg);
+  transition: color 150ms ease-out;
+}
+
 /* The hover, armed and pressed overlays brighten the fill under the chip's own
  * translucent wash, and on several dark themes secondary text falls under 4.5:1
- * against that composite. The branch steps up the text ramp while the pill is
- * lifted, which also reads as the whole pill answering the pointer. */
+ * against that composite. The branch and the switcher chevron step up the text
+ * ramp together while the pill is lifted, which also reads as the whole pill
+ * answering the pointer. */
 .toolbar-project-pill:hover .toolbar-project-chip,
 .toolbar-project-pill:active .toolbar-project-chip,
 .toolbar-project-pill[aria-expanded="true"] .toolbar-project-chip,
-.toolbar-project-pill[data-state="open"] .toolbar-project-chip {
+.toolbar-project-pill[data-state="open"] .toolbar-project-chip,
+.toolbar-project-pill:hover .toolbar-project-meta,
+.toolbar-project-pill:active .toolbar-project-meta,
+.toolbar-project-pill[aria-expanded="true"] .toolbar-project-meta,
+.toolbar-project-pill[data-state="open"] .toolbar-project-meta {
   --_fg: var(--theme-text-primary);
-}
-
-.toolbar-project-meta {
-  color: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
 }
 
 /* The chip drops as a single step at 700px. The previous two-stage degradation
