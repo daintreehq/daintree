@@ -1536,11 +1536,7 @@ function FileDiff({
               </Tooltip>
             )}
             {rawText && (
-              <CopyButton
-                text={rawText}
-                aria-label="Copy file diff"
-                tooltipSide="bottom"
-              />
+              <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
             )}
             {absolutePath && (
               <Tooltip>

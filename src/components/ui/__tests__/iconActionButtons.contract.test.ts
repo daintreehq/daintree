@@ -26,12 +26,10 @@ const SCAN_ROOTS = [path.join(REPO_ROOT, "src")];
 const PRIMITIVES = new Set(["src/components/ui/CopyButton.tsx"]);
 
 const SURVIVORS: Record<string, string> = {
-  // Pane toolbars and find bars: the `toolbar-icon-button` family and its 16px
+  // Pane toolbars: the `toolbar-icon-button` family and its 16px
   // glyphs. Their copy ticks follow the neutral rule; the buttons are the
   // toolbar's own.
   "src/components/Browser/BrowserToolbar.tsx": "pane toolbar (address-bar copy)",
-  "src/components/Browser/FindBar.tsx": "pane find bar",
-  "src/components/Terminal/TerminalSearchBar.tsx": "pane find bar",
   "src/components/Portal/PortalToolbar.tsx": "portal toolbar and its tab strip",
   "src/components/Portal/DevServerDashboard.tsx": "portal toolbar family",
   // Tab strips close their tabs with the tab's own control.
