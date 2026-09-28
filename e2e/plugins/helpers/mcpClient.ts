@@ -37,7 +37,9 @@ export class McpHttpClient {
 
   constructor(
     readonly url: string,
-    private readonly bearer: string
+    private readonly bearer: string,
+    /** Sent on every request, e.g. the workspace binding an agent launch carries. */
+    private readonly extraHeaders: Record<string, string> = {}
   ) {}
 
   private async post(message: Record<string, unknown>): Promise<unknown> {
@@ -47,6 +49,7 @@ export class McpHttpClient {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
         Authorization: `Bearer ${this.bearer}`,
+        ...this.extraHeaders,
         ...(this.sessionId ? { "Mcp-Session-Id": this.sessionId } : {}),
         "MCP-Protocol-Version": "2025-06-18",
       },
