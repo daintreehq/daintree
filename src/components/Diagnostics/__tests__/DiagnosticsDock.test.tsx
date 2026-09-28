@@ -160,7 +160,7 @@ describe("DiagnosticsDock — roving tabindex on the tab strip", () => {
     for (const tab of ["problems", "logs", "events", "telemetry", "perf", "whySlow"] as const) {
       useDiagnosticsStore.setState({ activeTab: tab });
       const { container, unmount } = render(<DiagnosticsDock />);
-      const panel = container.querySelector<HTMLElement>('[role="tabpanel"]');
+      const panel = container.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden])');
       expect(panel?.tabIndex).toBe(0);
       unmount();
     }
@@ -274,6 +274,53 @@ describe("DiagnosticsDock — separator keyboard resize", () => {
   });
 });
 
+describe("DiagnosticsDock — focus on close", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  function renderWithOpener() {
+    const utils = render(
+      <>
+        <button type="button">opener</button>
+        <DiagnosticsDock />
+      </>
+    );
+    const opener = utils.getByText("opener");
+    const tab = utils.container.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')!;
+    opener.focus();
+    tab.focus();
+    expect(document.activeElement).toBe(tab);
+    return { opener, tab };
+  }
+
+  it("hands focus back to where it came from when it closes around it", () => {
+    const { opener } = renderWithOpener();
+    act(() => useDiagnosticsStore.getState().closeDock());
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("forgets the origin once focus drops out of the dock onto nothing", async () => {
+    const { opener, tab } = renderWithOpener();
+    // A click on an unfocusable surface blurs the tab with no new target.
+    tab.blur();
+    await Promise.resolve();
+    act(() => useDiagnosticsStore.getState().closeDock());
+    expect(document.activeElement).not.toBe(opener);
+  });
+
+  it("leaves focus alone when the keyboard had already left the dock", () => {
+    const { opener } = renderWithOpener();
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    act(() => useDiagnosticsStore.getState().closeDock());
+    expect(document.activeElement).toBe(elsewhere);
+    expect(document.activeElement).not.toBe(opener);
+    elsewhere.remove();
+  });
+});
+
 describe("DiagnosticsDock — badge cap", () => {
   beforeEach(() => {
     resetStores();
@@ -294,25 +341,27 @@ describe("DiagnosticsDock — badge cap", () => {
     });
   }
 
+  const badgeIn = (container: HTMLElement) =>
+    container.querySelector('[id="diagnostics-problems-tab"] [data-slot="badge"]');
+
   it("shows exact count when errors <= 99", () => {
     setErrors(99);
     const { container } = render(<DiagnosticsDock />);
-    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
-    expect(badge?.textContent).toBe("99");
+    expect(badgeIn(container)?.querySelector('[aria-hidden="true"]')?.textContent).toBe("99");
   });
 
-  it("caps at 99+ when errors >= 100", () => {
+  it("caps the numeral at 99+ but says the exact count", () => {
     setErrors(100);
     const { container } = render(<DiagnosticsDock />);
-    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
-    expect(badge?.textContent).toBe("99+");
+    const badge = badgeIn(container);
+    expect(badge?.querySelector('[aria-hidden="true"]')?.textContent).toBe("99+");
+    expect(badge?.querySelector(".sr-only")?.textContent).toBe("100 errors");
   });
 
   it("shows no badge when error count is zero", () => {
     setErrors(0);
     const { container } = render(<DiagnosticsDock />);
-    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
-    expect(badge).toBeNull();
+    expect(badgeIn(container)).toBeNull();
   });
 });
 

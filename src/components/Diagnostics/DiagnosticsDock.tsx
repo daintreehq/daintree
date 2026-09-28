@@ -1,8 +1,10 @@
-import { useCallback, useRef, useState, useEffect, useLayoutEffect } from "react";
+import { useCallback, useRef, useState, useEffect, useLayoutEffect, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import { TabErrorCount, UnderlineTabs } from "@/components/ui/UnderlineTabs";
 import {
   useDiagnosticsStore,
   type DiagnosticsTab,
@@ -32,47 +34,6 @@ import { signalDiagnosticsDockLayoutChange } from "@/lib/diagnosticsDockLayout";
 import { DIAGNOSTICS_DOCK_REGION_ID } from "./regionIds";
 
 export { DIAGNOSTICS_DOCK_REGION_ID };
-
-interface TabButtonProps {
-  tab: DiagnosticsTab;
-  label: string;
-  isActive: boolean;
-  onClick: () => void;
-  badge?: number;
-}
-
-function TabButton({ tab, label, isActive, onClick, badge }: TabButtonProps) {
-  return (
-    <button
-      id={`diagnostics-${tab}-tab`}
-      data-tab={tab}
-      onClick={onClick}
-      tabIndex={isActive ? 0 : -1}
-      className={cn(
-        "px-3 py-1.5 text-sm font-medium transition-colors relative rounded-[var(--radius-md)]",
-        "hover:text-text-primary hover:bg-overlay-soft",
-        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-sidebar",
-        isActive ? "text-text-primary" : "text-text-secondary"
-      )}
-      role="tab"
-      aria-selected={isActive}
-      aria-controls={`diagnostics-${tab}-panel`}
-    >
-      {label}
-      {badge !== undefined && badge > 0 && (
-        <span className="ml-1.5 rounded-full bg-status-error/25 px-1.5 py-0.5 text-xs tabular-nums text-text-primary">
-          {badge > 99 ? "99+" : badge}
-        </span>
-      )}
-      {isActive && (
-        <div
-          aria-hidden="true"
-          className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-text-primary"
-        />
-      )}
-    </button>
-  );
-}
 
 interface DiagnosticsDockProps {
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
@@ -110,7 +71,11 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
   const resizeStartY = useRef(0);
   const resizeStartHeight = useRef(0);
   const outerRef = useRef<HTMLDivElement>(null);
-  const tablistRef = useRef<HTMLDivElement>(null);
+  // Where the keyboard came from when it entered the dock, and whether it is
+  // still inside. Removing the dock drops that focus on <body>, so a close from
+  // inside — its own X or a shortcut — hands it back to where it came from.
+  const focusOriginRef = useRef<HTMLElement | null>(null);
+  const focusInsideRef = useRef(false);
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
@@ -176,43 +141,6 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       setActiveTab(tab);
     },
     [setActiveTab]
-  );
-
-  const handleTablistKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      const container = tablistRef.current;
-      if (!container) return;
-
-      const tabButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-      const focusedIndex = tabButtons.indexOf(document.activeElement as HTMLButtonElement);
-      if (focusedIndex === -1) return;
-
-      let nextIndex: number | null = null;
-      switch (e.key) {
-        case "ArrowRight":
-          nextIndex = (focusedIndex + 1) % tabButtons.length;
-          break;
-        case "ArrowLeft":
-          nextIndex = (focusedIndex - 1 + tabButtons.length) % tabButtons.length;
-          break;
-        case "Home":
-          nextIndex = 0;
-          break;
-        case "End":
-          nextIndex = tabButtons.length - 1;
-          break;
-        default:
-          return;
-      }
-
-      e.preventDefault();
-      const nextTab = tabButtons[nextIndex];
-      if (!nextTab) return;
-      nextTab.focus();
-      const tabId = nextTab.dataset.tab as DiagnosticsTab | undefined;
-      if (tabId) selectTab(tabId);
-    },
-    [selectTab]
   );
 
   useEffect(() => {
@@ -307,10 +235,65 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     restoreHeight();
   }, [setHeight]);
 
+  useLayoutEffect(() => {
+    if (isOpen || !focusInsideRef.current) return;
+    focusInsideRef.current = false;
+    const origin = focusOriginRef.current;
+    focusOriginRef.current = null;
+    if (origin?.isConnected && document.activeElement === document.body) {
+      origin.focus({ preventScroll: true });
+    }
+  }, [isOpen]);
+
+  const handleFocusCapture = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!focusInsideRef.current) {
+      const from = e.relatedTarget;
+      focusOriginRef.current =
+        from instanceof HTMLElement && !e.currentTarget.contains(from) ? from : null;
+    }
+    focusInsideRef.current = true;
+  };
+
+  const handleBlurCapture = (e: React.FocusEvent<HTMLDivElement>) => {
+    const to = e.relatedTarget;
+    if (to instanceof Node) {
+      if (!e.currentTarget.contains(to)) focusInsideRef.current = false;
+      return;
+    }
+    // Focus went nowhere: a click on something unfocusable, or the dock being
+    // removed around it. Only the first means the keyboard left; closing is
+    // settled by the layout effect before this microtask runs.
+    const dock = e.currentTarget;
+    queueMicrotask(() => {
+      if (dock.isConnected) focusInsideRef.current = false;
+    });
+  };
+
   if (!isOpen) return null;
 
-  const tabs: { id: DiagnosticsTab; label: string; badge?: number }[] = [
-    { id: "problems", label: "Problems", badge: errorCount },
+  const renderPanel = (tab: DiagnosticsTab) => {
+    switch (tab) {
+      case "problems":
+        return <ProblemsContent onRetry={onRetry} onCancelRetry={onCancelRetry} />;
+      case "logs":
+        return <LogsContent />;
+      case "events":
+        return <EventsContent />;
+      case "telemetry":
+        return <TelemetryContent />;
+      case "perf":
+        return <PerfContent />;
+      case "whySlow":
+        return <WhySlowContent />;
+    }
+  };
+
+  const tabs: { id: DiagnosticsTab; label: string; trailing?: ReactNode }[] = [
+    {
+      id: "problems",
+      label: "Problems",
+      trailing: errorCount > 0 ? <TabErrorCount count={errorCount} /> : undefined,
+    },
     { id: "logs", label: "Logs" },
     { id: "events", label: "Events" },
     { id: "telemetry", label: "Telemetry" },
@@ -331,6 +314,8 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       data-resizing={isResizing ? "true" : undefined}
       role="region"
       aria-label="Diagnostics dock"
+      onFocusCapture={handleFocusCapture}
+      onBlurCapture={handleBlurCapture}
     >
       <div
         className={cn(
@@ -361,27 +346,19 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
         />
       </div>
 
-      <div className="flex items-center justify-between px-4 h-10 border-b border-[var(--dock-border)] bg-daintree-sidebar/50 shrink-0">
-        <div
-          ref={tablistRef}
-          className="flex items-center gap-2"
-          role="tablist"
+      <div className="flex h-8 shrink-0 items-stretch justify-between border-b border-overlay bg-surface-sidebar/50 px-2">
+        <UnderlineTabs
+          tabs={tabs}
+          activeId={activeTab}
+          onChange={selectTab}
           aria-label="Diagnostics tabs"
-          onKeyDown={handleTablistKeyDown}
-        >
-          {tabs.map((tab) => (
-            <TabButton
-              key={tab.id}
-              tab={tab.id}
-              label={tab.label}
-              isActive={activeTab === tab.id}
-              onClick={() => selectTab(tab.id)}
-              badge={tab.badge}
-            />
-          ))}
-        </div>
+          tabId={(id) => `diagnostics-${id}-tab`}
+          panelId={(id) => `diagnostics-${id}-panel`}
+          density="strip"
+          className="min-w-0 overflow-x-auto scrollbar-none"
+        />
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 pl-2">
           {activeTab === "problems" && <ProblemsActions />}
           {activeTab === "logs" && <LogsActions />}
           {activeTab === "events" && <EventsActions />}
@@ -389,13 +366,15 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={closeDock}
-                className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-daintree-text/60 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                className="[&_svg]:size-3.5"
                 aria-label="Close diagnostics dock"
               >
-                <X className="w-4 h-4" />
-              </button>
+                <X />
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">Close diagnostics dock</TooltipContent>
           </Tooltip>
@@ -403,71 +382,29 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {activeTab === "problems" && (
-          <div
-            id="diagnostics-problems-panel"
-            role="tabpanel"
-            tabIndex={0}
-            aria-labelledby="diagnostics-problems-tab"
-            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <ProblemsContent onRetry={onRetry} onCancelRetry={onCancelRetry} />
-          </div>
-        )}
-        {activeTab === "logs" && (
-          <div
-            id="diagnostics-logs-panel"
-            role="tabpanel"
-            tabIndex={0}
-            aria-labelledby="diagnostics-logs-tab"
-            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <LogsContent />
-          </div>
-        )}
-        {activeTab === "events" && (
-          <div
-            id="diagnostics-events-panel"
-            role="tabpanel"
-            tabIndex={0}
-            aria-labelledby="diagnostics-events-tab"
-            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <EventsContent />
-          </div>
-        )}
-        {activeTab === "telemetry" && (
-          <div
-            id="diagnostics-telemetry-panel"
-            role="tabpanel"
-            tabIndex={0}
-            aria-labelledby="diagnostics-telemetry-tab"
-            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <TelemetryContent />
-          </div>
-        )}
-        {activeTab === "perf" && (
-          <div
-            id="diagnostics-perf-panel"
-            role="tabpanel"
-            tabIndex={0}
-            aria-labelledby="diagnostics-perf-tab"
-            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <PerfContent />
-          </div>
-        )}
-        {activeTab === "whySlow" && (
-          <div
-            id="diagnostics-whySlow-panel"
-            role="tabpanel"
-            tabIndex={0}
-            aria-labelledby="diagnostics-whySlow-tab"
-            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <WhySlowContent />
-          </div>
+        {tabs.map(({ id }) =>
+          id === activeTab ? (
+            <div
+              key={id}
+              id={`diagnostics-${id}-panel`}
+              role="tabpanel"
+              tabIndex={0}
+              aria-labelledby={`diagnostics-${id}-tab`}
+              className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            >
+              {renderPanel(id)}
+            </div>
+          ) : (
+            // Every tab's aria-controls has to resolve, so the inactive panels
+            // stay as empty hidden stubs rather than disappearing.
+            <div
+              key={id}
+              id={`diagnostics-${id}-panel`}
+              role="tabpanel"
+              aria-labelledby={`diagnostics-${id}-tab`}
+              hidden
+            />
+          )
         )}
       </div>
     </div>

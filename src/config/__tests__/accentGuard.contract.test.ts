@@ -157,6 +157,13 @@ const DURABLE_ALLOWLIST = new Set([
   // open, where the keyboard is). Recorded in interaction-state-recipes.md.
   // Owned here once so the four hosts carry no accent of their own.
   "src/components/ui/document-tab.tsx",
+
+  // The horizontal tab strip (settings subtabs, the diagnostics dock and the
+  // dev preview's output drawer): the active tab's 2px underline, the
+  // documented "Settings Nav Active" recipe. It is each strip's one selection
+  // mark and the only accent in its arrow-key domain beside the focus ring.
+  // Owned here once so none of the three hosts carries an accent of its own.
+  "src/components/ui/UnderlineTabs.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all
@@ -170,7 +177,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Layout/DockedTabGroup.tsx",
     "src/components/Layout/DockedTerminalItem.tsx",
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
-    "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",

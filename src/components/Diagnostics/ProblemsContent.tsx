@@ -140,6 +140,7 @@ function ErrorRow({
             aria-controls={detailsId}
           >
             <ChevronRight
+              data-animated-chevron
               aria-hidden="true"
               className={cn(
                 "mt-0.5 h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
