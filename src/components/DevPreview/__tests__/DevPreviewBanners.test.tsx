@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render as rtlRender, screen, type RenderOptions } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "../DevPreviewBanners";
 import type { UseDevServerReturn } from "@/hooks/useDevServer";
+
+// The overflow trigger explains itself through the shared Tooltip.
+const render = (ui: ReactElement, options?: RenderOptions) =>
+  rtlRender(ui, { wrapper: TooltipProvider, ...options });
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
