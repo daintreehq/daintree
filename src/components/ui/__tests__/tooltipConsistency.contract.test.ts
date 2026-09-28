@@ -31,6 +31,12 @@ const SCAN_ROOTS = [
 const FORBIDDEN_CONTENT_CLASS =
   /(^|\s)(max-w-(?!xs(\s|$))\S+|w-\[\S+|font-(medium|semibold|bold)|text-text-(secondary|muted)|text-(center|right))(?=\s|$)/;
 
+/** Components whose named prop lands on the TooltipContent they render. */
+const FORWARDED_CONTENT_CLASS: Record<string, string> = {
+  TruncatedTooltip: "contentClassName",
+  DismissButton: "tooltipClassName",
+};
+
 /** Files whose buttons explain themselves only through `Tooltip`. */
 const TOOLTIP_ONLY_FILES = [
   "src/components/HelpPanel/HelpSessionTabs.tsx",
@@ -118,10 +124,16 @@ describe("tooltip consistency", () => {
     let inspected = 0;
     for (const source of sources) {
       walk(source, (node) => {
-        if (!isOpening(node) || node.tagName.getText() !== "TooltipContent") return;
-        inspected++;
-        if (attribute(node, "sideOffset")) violations.push(`${where(source, node)} sideOffset`);
-        const className = attribute(node, "className");
+        if (!isOpening(node)) return;
+        const tag = node.tagName.getText();
+        // Wrappers that forward a class straight onto their TooltipContent.
+        const forwarded = FORWARDED_CONTENT_CLASS[tag];
+        if (tag !== "TooltipContent" && !forwarded) return;
+        if (tag === "TooltipContent") {
+          inspected++;
+          if (attribute(node, "sideOffset")) violations.push(`${where(source, node)} sideOffset`);
+        }
+        const className = attribute(node, forwarded ?? "className");
         if (!className?.initializer) return;
         for (const text of stringsIn(className.initializer)) {
           const match = FORBIDDEN_CONTENT_CLASS.exec(text);
