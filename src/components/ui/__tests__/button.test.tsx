@@ -3,6 +3,9 @@ import { render, fireEvent } from "@testing-library/react";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { describe, expect, it, vi } from "vitest";
+import { getOverlayContrastWarnings } from "@shared/theme/colorValidator";
+import { BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
+import type { AppColorScheme } from "@shared/theme/types";
 
 import { Button, buttonVariants } from "../button";
 
@@ -192,6 +195,29 @@ describe("Button loading state", () => {
       expect(spinner).toBeTruthy();
       expect(spinner.querySelector("svg")).toBeTruthy();
     }
+  });
+});
+
+describe("ghost hover fill", () => {
+  const hoverToken = () => {
+    const match = /(?:^|\s)hover:bg-([a-z-]+)(?:\s|$)/.exec(buttonVariants({ variant: "ghost" }));
+    expect(match, "ghost has no hover fill").toBeTruthy();
+    return match![1] ?? "";
+  };
+
+  // The ghost hover is the most-used interactive fill in the app, so it has to
+  // be a token the theme validator holds to a perceptible floor. A weak value
+  // for that token must be reported; if the ghost moves to a token the
+  // validator does not read, the weak value goes unreported and this fails.
+  it("uses the overlay token the theme validator floors", () => {
+    const token = hoverToken();
+    const base = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.type === "light")!;
+    const scheme = (value: string): AppColorScheme => ({
+      ...base,
+      tokens: { ...base.tokens, [token]: value },
+    });
+    expect(getOverlayContrastWarnings(scheme("rgba(0, 0, 0, 0.01)"))).toHaveLength(1);
+    expect(getOverlayContrastWarnings(scheme("rgba(0, 0, 0, 0.3)"))).toHaveLength(0);
   });
 });
 

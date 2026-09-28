@@ -19,10 +19,10 @@ This document maps each interactive component role to its canonical Tailwind cla
 **Role:** Secondary toolbar buttons, icon-only buttons where minimal visual weight needed.
 
 ```tsx
-"hover:bg-overlay-soft hover:text-text-primary focus-visible:text-text-primary";
+"hover:bg-overlay-hover hover:text-text-primary focus-visible:text-text-primary";
 ```
 
-**Usage:** Reach for `<Button variant="ghost">` rather than respelling this; a raw `<button>` carrying these classes still misses the primitive's focus outline, press snap, cursor and disabled treatment.
+**Usage:** Reach for `<Button variant="ghost">` rather than respelling this; a raw `<button>` carrying these classes still misses the primitive's focus outline, press snap, cursor and disabled treatment. The fill is `overlay-hover` rather than `overlay-soft` because it is the one overlay the theme validator floors (`getOverlayContrastWarnings`, 12% Weber over `surface-canvas`): `overlay-soft` measures 9.6–10.8% on every light theme, which is what kept sending callers to hand-rolled `tint/*` and `overlay-emphasis` hovers. `button.test.tsx` pins the ghost to whichever token the validator reads.
 
 ---
 
@@ -282,7 +282,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Select Trigger | `ui/select.tsx` (`selectTriggerVariants`) | Input chrome and outline ring |
 | Search Field | `ui/SearchField.tsx` + `styles/components/search-field.css` | Search field (neutral focus, no accent) |
 | Textarea | `ui/textarea.tsx` (`textareaVariants`) | Input focus with outline ring |
-| Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-soft |
+| Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-hover |
 | Button Link | `button.tsx` (`link` variant, `inline` size) | Underlined secondary text that inherits its sentence |
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |

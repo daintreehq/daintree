@@ -37,8 +37,12 @@ const buttonVariants = cva(
           "bg-text-primary text-text-inverse ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))] active:bg-[color-mix(in_oklab,var(--color-text-primary)_82%,var(--color-text-inverse))] active:shadow-none",
         secondary:
           "bg-secondary text-secondary-foreground ring-1 ring-tint/[0.08] shadow-[var(--theme-shadow-ambient)] hover:bg-secondary/90 active:shadow-none",
+        // `overlay-hover`, not `overlay-soft`: it is the one fill in the ladder
+        // the theme validator floors (`getOverlayContrastWarnings`), and soft
+        // measured 9.6-10.8% Weber on every light theme, below that 12% floor,
+        // which is what kept sending callers to hand-rolled `tint/*` hovers.
         ghost:
-          "text-text-secondary hover:bg-overlay-soft hover:text-text-primary focus-visible:text-text-primary",
+          "text-text-secondary hover:bg-overlay-hover hover:text-text-primary focus-visible:text-text-primary",
         // The one link treatment: secondary ink, underlined at rest so it never
         // relies on colour alone (WCAG 1.4.1), stepping up to primary on hover.
         // Sized `inline` by default — see `resolvedSize` below.
