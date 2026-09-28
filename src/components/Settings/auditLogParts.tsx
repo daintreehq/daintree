@@ -38,7 +38,9 @@ export function AuditFilterBar({ label, children }: { label: string; children: R
     <div
       role="search"
       aria-label={label}
-      className="grid grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_auto_auto] gap-2 px-4 py-3"
+      // Fixed tracks for the two selects: a trigger sizes to its current value,
+      // so an auto track would shift the bar on every pick.
+      className="grid grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)_9.5rem_8rem] gap-2 px-4 py-3"
     >
       {children}
     </div>
@@ -90,10 +92,7 @@ export function AuditFilterSelect<T extends string>({
         if (match) onChange(match.value);
       }}
     >
-      {/* A fixed width: a native select sized itself to its longest option, but
-          a trigger sizes to the current value and would shift the bar on every
-          pick. */}
-      <SelectTrigger density="compact" aria-label={ariaLabel} className="w-40">
+      <SelectTrigger density="compact" aria-label={ariaLabel}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
