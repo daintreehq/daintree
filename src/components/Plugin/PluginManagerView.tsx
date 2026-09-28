@@ -980,7 +980,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   return (
                     <section key={id} aria-labelledby={headingId} className="space-y-1">
                       <h3 id={headingId} className={SECTION_HEADER_CLASS}>
-                        {label} <CountBadge className="ml-1.5">{groupPlugins.length}</CountBadge>
+                        {label}{" "}
+                        <CountBadge
+                          className="ml-1.5"
+                          label={`${groupPlugins.length} ${groupPlugins.length === 1 ? "plugin" : "plugins"}`}
+                        >
+                          {groupPlugins.length}
+                        </CountBadge>
                       </h3>
                       <ul role="list" className="space-y-1">
                         {groupPlugins.map((plugin) => (

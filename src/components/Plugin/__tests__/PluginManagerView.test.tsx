@@ -1613,7 +1613,8 @@ describe("PluginManagerView", () => {
       // Sections render in PLUGIN_CATEGORIES order with empty ones omitted.
       const sectionHeaders = within(listbox)
         .getAllByRole("heading")
-        .map((el) => el.textContent?.replace(/\d+$/, "").trim());
+        // Strip the count badge: its numeral plus the "N plugins" it speaks.
+        .map((el) => el.textContent?.replace(/\d+\d+ plugins?$/, "").trim());
       expect(sectionHeaders).toEqual(["Forge providers", "Workspace", "Other"]);
     });
 

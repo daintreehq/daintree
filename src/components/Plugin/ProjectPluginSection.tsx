@@ -155,7 +155,13 @@ export function ProjectPluginSection({
           existed because this lived inside a listbox, where a role="group" label
           drops under Chromium 146 + VoiceOver (LESSON #9006). */}
       <h3 id="plugin-category-this-project" className={SECTION_HEADER_CLASS}>
-        This project <CountBadge className="ml-1.5">{plugins.length}</CountBadge>
+        This project{" "}
+        <CountBadge
+          className="ml-1.5"
+          label={`${plugins.length} ${plugins.length === 1 ? "plugin" : "plugins"}`}
+        >
+          {plugins.length}
+        </CountBadge>
       </h3>
       <ul role="list" className="space-y-1">
         {plugins.map((plugin) => (

@@ -161,7 +161,11 @@ export function PluginCatalog({
             <div className="flex items-center gap-2">
               <CategoryIcon className="w-4 h-4 text-text-secondary" aria-hidden="true" />
               <h4 className="text-sm font-medium text-text-primary">{category.label}</h4>
-              <CountBadge>{sectionPlugins.length}</CountBadge>
+              <CountBadge
+                label={`${sectionPlugins.length} ${sectionPlugins.length === 1 ? "plugin" : "plugins"}`}
+              >
+                {sectionPlugins.length}
+              </CountBadge>
             </div>
             <p className="text-xs text-text-secondary mt-0.5">{category.blurb}</p>
             <div className={cn("mt-3", CARD_GRID_CLASS)}>

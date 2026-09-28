@@ -82,25 +82,32 @@ function Badge({ className, size, tone, shape, ref, ...props }: BadgeProps) {
  * running on from its label, so the pill keeps a border there — the same fix
  * the inbox count already had in `index.css`.
  *
- * A bare numeral is not an accessible name: give it an `aria-label`, or hide it
- * and say the count in the text around it.
+ * A bare numeral is not an accessible name, and an `aria-label` on a plain
+ * span is not exposed. Pass `label` ("3 plugins") and the numeral becomes
+ * visual only while the label is what a screen reader says.
  */
 const COUNT_BADGE_CLASS =
   "inline-flex shrink-0 items-center justify-center rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums normal-case tracking-normal text-text-secondary forced-colors:border forced-colors:border-[CanvasText]";
 
 type CountBadgeProps = React.HTMLAttributes<HTMLSpanElement> & {
   ref?: React.Ref<HTMLSpanElement>;
+  /** What the count means, spoken in place of the bare numeral. */
+  label?: string;
 };
 
-function CountBadge({ className, ref, ...props }: CountBadgeProps) {
+function CountBadge({ className, ref, label, children, ...props }: CountBadgeProps) {
   // `data-slot` after the spread for the same reason as `Badge`.
   return (
-    <span
-      ref={ref}
-      className={cn(COUNT_BADGE_CLASS, className)}
-      {...props}
-      data-slot="count-badge"
-    />
+    <span ref={ref} className={cn(COUNT_BADGE_CLASS, className)} {...props} data-slot="count-badge">
+      {label === undefined ? (
+        children
+      ) : (
+        <>
+          <span aria-hidden="true">{children}</span>
+          <span className="sr-only">{label}</span>
+        </>
+      )}
+    </span>
   );
 }
 
