@@ -41,6 +41,7 @@ import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpAssistantAgentChooser } from "./HelpAssistantAgentChooser";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { HelpPanelFooter } from "./HelpPanelFooter";
+import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
@@ -48,6 +49,7 @@ import {
   selectOpenSlots,
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
+  HELP_PANEL_DEFAULT_WIDTH,
 } from "@/store/helpPanelStore";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import {
@@ -1002,6 +1004,10 @@ export function HelpPanel({
     };
   }, []);
 
+  const handleResetWidth = useCallback(() => {
+    setWidth(HELP_PANEL_DEFAULT_WIDTH);
+  }, [setWidth]);
+
   // Resize via keyboard.
   const handleResizeKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -1023,9 +1029,12 @@ export function HelpPanel({
       } else if (e.key === "End") {
         e.preventDefault();
         setWidth(HELP_PANEL_MAX_WIDTH);
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        handleResetWidth();
       }
     },
-    [width, setWidth]
+    [width, setWidth, handleResetWidth]
   );
 
   // Hide the panel without tearing down the agent or conversation.
@@ -1482,24 +1491,14 @@ export function HelpPanel({
       )}
       style={{ width: effectiveWidth }}
     >
-      {/* Resize handle */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize Daintree Assistant panel"
-        aria-controls="daintree-assistant-panel"
-        aria-valuenow={width}
-        aria-valuemin={HELP_PANEL_MIN_WIDTH}
-        aria-valuemax={HELP_PANEL_MAX_WIDTH}
-        tabIndex={isVisible ? 0 : -1}
-        className={cn(
-          "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10",
-          "hover:bg-overlay-soft active:bg-overlay-medium transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-          isResizing && "bg-overlay-medium"
-        )}
+      <HelpPanelResizeHandle
+        width={width}
+        isResizing={isResizing}
+        isVisible={isVisible}
+        controlsId="daintree-assistant-panel"
         onMouseDown={handleResizeStart}
         onKeyDown={handleResizeKeyDown}
+        onReset={handleResetWidth}
       />
 
       <HelpPanelHeader
