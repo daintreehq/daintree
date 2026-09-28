@@ -3,7 +3,7 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 
-import { HighlightedText, findMatchIndices } from "../HighlightedText";
+import { HighlightedText, findMatchIndices, substringMatchIndices } from "../HighlightedText";
 
 /**
  * The class the match wrapper carries, named once so these tests assert the
@@ -153,5 +153,54 @@ describe("findMatchIndices", () => {
 
   it("returns undefined when matches is undefined", () => {
     expect(findMatchIndices(undefined, "name")).toBeUndefined();
+  });
+});
+
+describe("substringMatchIndices", () => {
+  const marked = (text: string, query: string) => {
+    const [range] = substringMatchIndices(text, query) ?? [];
+    if (!range) throw new Error(`nothing matched "${query}" in "${text}"`);
+    return { start: range[0], run: text.slice(range[0], range[1] + 1) };
+  };
+
+  it("returns the first case-insensitive occurrence as one inclusive range", () => {
+    const text = "Fix/Retry-Backoff-retry";
+    const { start, run } = marked(text, "RETRY");
+    expect(run.toLowerCase()).toBe("retry");
+    expect(start).toBe(text.toLowerCase().indexOf("retry"));
+  });
+
+  it("trims the query the way the filters do", () => {
+    const text = "Open worktree palette";
+    expect(marked(text, "  worktree ").run).toBe("worktree");
+  });
+
+  it("marks nothing for an empty query or a miss", () => {
+    expect(substringMatchIndices("Save file", "")).toBeUndefined();
+    expect(substringMatchIndices("Save file", "   ")).toBeUndefined();
+    expect(substringMatchIndices("Save file", "worktree")).toBeUndefined();
+  });
+
+  it("maps the match back to the text when lowercasing changes its length", () => {
+    // "İ" lowercases to two code units, which shifts every offset after it in
+    // the lowered string. The mark must still land on the characters the
+    // filter matched, and a match inside the expanding character covers it.
+    for (const [text, query] of [
+      ["İstanbul office", "office"],
+      ["İstanbul office", "i̇st"],
+      ["Ärger İm Büro", "büro"],
+      // Final sigma lowers by context, so only the whole-string lowering the
+      // filters use finds this one.
+      ["ΟΣ İ", "ος"],
+    ] as const) {
+      const { run } = marked(text, query);
+      expect(run.toLowerCase()).toBe(query);
+    }
+  });
+
+  it("does not split a multi-word query into separately marked words", () => {
+    // The filters test the whole query, so "save terminal" matches nothing in
+    // "Save file" and nothing may be marked there.
+    expect(substringMatchIndices("Save file", "save terminal")).toBeUndefined();
   });
 });
