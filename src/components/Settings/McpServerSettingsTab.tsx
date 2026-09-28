@@ -698,7 +698,7 @@ export function McpServerSettingsTab() {
               type="button"
               onClick={() => setBearersExpanded((v) => !v)}
               aria-expanded={bearersExpanded}
-              className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-subtle transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
               <ChevronRight
                 data-animated-chevron
@@ -747,7 +747,7 @@ export function McpServerSettingsTab() {
               type="button"
               onClick={() => setHelpBearersExpanded((v) => !v)}
               aria-expanded={helpBearersExpanded}
-              className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-subtle transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
               <ChevronRight
                 data-animated-chevron

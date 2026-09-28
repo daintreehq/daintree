@@ -163,7 +163,7 @@ function ShortcutRow({
                 variant="subtle"
                 size="xs"
                 onClick={onEdit}
-                className="px-2 font-normal bg-transparent hover:bg-overlay-hover"
+                className="px-2 font-normal"
               >
                 {binding.effectiveCombo ? (
                   <>

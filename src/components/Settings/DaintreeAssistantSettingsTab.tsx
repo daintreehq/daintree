@@ -1373,7 +1373,7 @@ export function DaintreeAssistantSettingsTab() {
               aria-expanded={advancedDiagnosticsOpen}
               className={cn(
                 "w-full flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium",
-                "text-text-primary hover:bg-overlay-soft transition-colors",
+                "text-text-primary hover:bg-overlay-subtle transition-colors",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               )}
             >
@@ -1728,7 +1728,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
         aria-expanded={isOpen}
         className={cn(
           "w-full flex cursor-pointer items-center justify-between gap-3 px-4 py-2.5 text-xs",
-          "text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
+          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors",
           "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         )}
       >
