@@ -771,6 +771,22 @@ export class ProjectViewManager {
   }
 
   /**
+   * Crash hook for the startup view (#12954). `registerInitialView` claims the
+   * window's own app view without `setupViewHandlers` — that webContents
+   * already carries createWindow's listeners, and a second set would double
+   * every reload, Ctrl+Tab and port hand-off — so createWindow's
+   * render-process-gone calls this instead. Mirrors ProjectViewHandlers: only
+   * the active view owns the per-window port and the help-session pin.
+   * Returns whether the hook ran.
+   */
+  notifyActiveViewCrashed(wc: Electron.WebContents): boolean {
+    const projectId = this.webContentsToProject.get(wc.id);
+    if (!projectId || projectId !== this.activeProjectId) return false;
+    this.onViewCrashed?.(wc);
+    return true;
+  }
+
+  /**
    * Live workspace identity for a view's webContents, or `null` when the id is
    * unknown to this manager (#11536). Sender-scoped by construction — it walks
    * this manager's own reverse mapping, never `activeProjectId` or the global

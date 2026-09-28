@@ -2740,6 +2740,40 @@ describe("HelpSessionService", () => {
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
+    it("keeps the crash-time panelWasOpen when the reloaded renderer reports closed mid-capture (#12954)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 96,
+        projectId: "proj-crash",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-crash")).toBe(true);
+      service.reportPanelOpen("proj-crash", true);
+
+      const revoke = service.revokeByWebContentsId(96);
+      // A crash-reload keeps the WebContents: the fresh renderer mounts with
+      // the panel closed and reports it while gracefulKill is still pending.
+      service.reportPanelOpen("proj-crash", false);
+      resolveKill("agent-resume-id-crash");
+      await revoke;
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-crash", 0)
+      );
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-crash",
+          panelWasOpen: true,
+        })
+      );
+    });
+
     it("reportPanelOpen(false) clears a prior open report so a later eviction does not auto-resume (#10815)", async () => {
       mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-789");
 

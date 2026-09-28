@@ -560,20 +560,24 @@ if (!gotTheLock) {
         // reload re-issues a fresh port. Without this, a stale port keeps the
         // safety-timeout pause loop wedged for the entire reload window (#6244).
         if (win.isDestroyed()) return;
-        getPtyClient()?.disconnectMessagePort(win.id);
-        // Revoke help-session tokens pinned to the crashed WebContents (#9151).
-        // The renderer comes back with a brand-new (monotonic) WebContents id,
-        // so the old pin is now a tombstone — every CallTool would return
-        // SESSION_BINDING_GONE and the targeted tier-mismatch / revoked IPCs
-        // would silently no-op against the dead id. Mirrors the synchronous
-        // eviction-hook revoke (lesson #5009); `wc.id` is the dead id the
-        // session pinned at provision time.
-        const crashedWcId = wc.id;
-        import("./services/HelpSessionService.js")
-          .then(({ helpSessionService }) => helpSessionService.revokeByWebContentsId(crashedWcId))
-          .catch((err) => {
-            console.warn("[main] revokeByWebContentsId failed during crash:", err);
-          });
+        try {
+          getPtyClient()?.disconnectMessagePort(win.id);
+        } catch (err) {
+          console.warn("[main] disconnectMessagePort failed during crash:", err);
+        }
+        // Capture-revoke help sessions pinned to the crashed WebContents
+        // (#9151, #12954). A crash-reload keeps the same WebContents id, but
+        // the renderer that owned the assistant lane is gone and has no way
+        // back to the live PTY — left running, the next panel open would
+        // displace it with a hard kill and lose the conversation. Capturing
+        // here writes the pending-hibernation entry the reloaded renderer
+        // resumes from. (View recreation after OOM gets a new id instead;
+        // either way the old pin is finished.) Called directly, not through
+        // a dynamic import, so the capture placeholder is written before this
+        // hook returns and the reload is scheduled.
+        helpSessionService.revokeByWebContentsId(wc.id).catch((err) => {
+          console.warn("[main] revokeByWebContentsId failed during crash:", err);
+        });
       },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.

@@ -1664,6 +1664,10 @@ export class HelpSessionService {
     // and the real resume id would be dropped for the empty-sentinel placeholder,
     // silently demoting the resume to latest-conversation.
     let ownsCapture = false;
+    // Read once, at capture time. A crash-reloaded renderer mounts with the
+    // panel closed and reports that during the gracefulKill await (#12954);
+    // re-reading afterwards would lose the reopen the user was owed.
+    let panelWasOpen = false;
     if (opts?.captureHibernation && terminalId && this.ptyClient) {
       // #9639: write a placeholder resume entry SYNCHRONOUSLY (memory-first
       // via `set`) before the gracefulKill round-trip. The eviction path that
@@ -1677,7 +1681,7 @@ export class HelpSessionService {
       if (this.pendingHibernationStore) {
         this.pendingCapturesBySlotKey.set(slotKey, sessionId);
         ownsCapture = true;
-        const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
+        panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(slotKey, {
             agentId: record.agentId,
@@ -1766,7 +1770,6 @@ export class HelpSessionService {
       this.pendingCapturesBySlotKey.get(slotKey) === sessionId
     ) {
       if (capturedAgentSessionId) {
-        const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(slotKey, {
             agentId: record.agentId,

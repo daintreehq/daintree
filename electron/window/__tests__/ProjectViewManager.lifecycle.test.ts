@@ -234,6 +234,7 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
+  logError: vi.fn(),
   createLogger: vi.fn(() => ({
     debug: vi.fn(),
     info: vi.fn(),
@@ -1464,5 +1465,56 @@ describe("ProjectViewManager — presence change signal (#12597)", () => {
     setup.manager.views.delete("never-held");
 
     expect(observed).toEqual([]);
+  });
+});
+
+describe("ProjectViewManager — startup view crash hook (#12954)", () => {
+  beforeEach(() => {
+    nextWebContentsId = 500;
+    wcQueue.length = 0;
+    vi.clearAllMocks();
+    resetAppMetricsSnapshotForTesting();
+  });
+
+  afterEach(() => {
+    wcQueue.length = 0;
+    restoreSystemMemoryInfo();
+  });
+
+  it("leaves the startup view's listeners to createWindow, so a crash has one handler", () => {
+    const { initialWc } = createManager();
+    const registered = initialWc.on.mock.calls.map(([event]) => event);
+    expect(registered).not.toContain("render-process-gone");
+    expect(registered).not.toContain("did-finish-load");
+    expect(registered).not.toContain("before-input-event");
+  });
+
+  it("runs onViewCrashed for the claimed, active startup view", () => {
+    const setup = createManager();
+    const onViewCrashed = vi.fn();
+    setup.manager.onViewCrashed = onViewCrashed;
+
+    expect(setup.manager.notifyActiveViewCrashed(setup.initialWc as never)).toBe(true);
+    expect(onViewCrashed).toHaveBeenCalledTimes(1);
+    expect(onViewCrashed).toHaveBeenCalledWith(setup.initialWc);
+  });
+
+  it("skips a webContents the manager never claimed", () => {
+    const setup = createManager();
+    const onViewCrashed = vi.fn();
+    setup.manager.onViewCrashed = onViewCrashed;
+
+    expect(setup.manager.notifyActiveViewCrashed({ id: 9_999 } as never)).toBe(false);
+    expect(onViewCrashed).not.toHaveBeenCalled();
+  });
+
+  it("skips the startup view once it has been cached behind another project", async () => {
+    const setup = createManager();
+    await coldSwitch(setup, "proj-b", "/b");
+    const onViewCrashed = vi.fn();
+    setup.manager.onViewCrashed = onViewCrashed;
+
+    expect(setup.manager.notifyActiveViewCrashed(setup.initialWc as never)).toBe(false);
+    expect(onViewCrashed).not.toHaveBeenCalled();
   });
 });
