@@ -43,7 +43,10 @@ export interface DevPreviewChromeFixture {
     | "more-menu"
     | "zoom-popover"
     | "device-menu"
-    | "address-typed";
+    | "address-typed"
+    | "address-edited"
+    | "address-reverted"
+    | "address-left";
 }
 
 export const FIXTURES = {
@@ -169,6 +172,27 @@ export const FIXTURES = {
     canGoBack: true,
     isFocused: true,
     drive: "address-typed",
+  },
+  "address-edited": {
+    width: 900,
+    route: "/dashboard",
+    canGoBack: true,
+    isFocused: true,
+    drive: "address-edited",
+  },
+  "address-reverted": {
+    width: 900,
+    route: "/dashboard",
+    canGoBack: true,
+    isFocused: true,
+    drive: "address-reverted",
+  },
+  "address-left": {
+    width: 900,
+    route: "/dashboard",
+    canGoBack: true,
+    isFocused: true,
+    drive: "address-left",
   },
 } satisfies Record<string, DevPreviewChromeFixture>;
 

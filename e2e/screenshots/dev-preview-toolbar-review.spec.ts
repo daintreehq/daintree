@@ -160,6 +160,32 @@ async function drive(page: Page, fixture: FixtureName): Promise<void> {
       await expect(page.getByRole("option")).not.toHaveCount(0);
       break;
     }
+    case "address-edited":
+    case "address-reverted":
+    case "address-left": {
+      // Chrome's Escape ladder: close the list, put the address back selected,
+      // then hand focus to the page.
+      await address.click();
+      await address.fill("localhost:5173/dash");
+      await expect(page.getByRole("listbox")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(address).toHaveAttribute("aria-expanded", "false");
+      await expect(address).toHaveValue("localhost:5173/dash");
+      if (spec.drive === "address-edited") break;
+      await page.keyboard.press("Escape");
+      await expect(address).toHaveValue(/localhost:5173\/dashboard$/);
+      await expect(address).toBeFocused();
+      expect(
+        await address.evaluate(
+          (el: HTMLInputElement) => el.selectionStart === 0 && el.selectionEnd === el.value.length
+        )
+      ).toBe(true);
+      if (spec.drive === "address-reverted") break;
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("stand-in-page")).toBeFocused();
+      await expect(page.getByTestId("browser-address-display")).toBeVisible();
+      break;
+    }
     case "more-menu": {
       await page.getByRole("button", { name: "More page actions" }).click();
       await expect(page.getByRole("menu")).toBeVisible();
