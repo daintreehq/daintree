@@ -1134,30 +1134,36 @@ export function GitHubResourceList({
             </TooltipContent>
           </Tooltip>
           <Popover open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                aria-label={
-                  sortOrder === "created"
-                    ? `Sort ${type === "issue" ? "issues" : "pull requests"}`
-                    : `Sort ${type === "issue" ? "issues" : "pull requests"}, sorted by recently updated`
-                }
-                aria-haspopup="dialog"
-                aria-expanded={sortPopoverOpen}
-                title={sortOrder === "created" ? "Sort" : "Sort: recently updated"}
-                className={cn(
-                  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
-                  "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
-                  "transition-[background-color,color] duration-150 ease-out",
-                  // A non-default sort is a neutral lifted state, not a badge.
-                  // The old blue dot read as unread activity and said nothing
-                  // about which order was in force.
-                  sortOrder !== "created" && "bg-overlay-soft text-text-primary"
-                )}
-              >
-                <ArrowUpDown className="w-3.5 h-3.5" />
-              </button>
-            </PopoverTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={
+                      sortOrder === "created"
+                        ? `Sort ${type === "issue" ? "issues" : "pull requests"}`
+                        : `Sort ${type === "issue" ? "issues" : "pull requests"}, sorted by recently updated`
+                    }
+                    aria-haspopup="dialog"
+                    aria-expanded={sortPopoverOpen}
+                    className={cn(
+                      "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
+                      "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
+                      "transition-[background-color,color] duration-150 ease-out",
+                      // A non-default sort is a neutral lifted state, not a badge.
+                      // The old blue dot read as unread activity and said nothing
+                      // about which order was in force.
+                      sortOrder !== "created" && "bg-overlay-soft text-text-primary"
+                    )}
+                  >
+                    <ArrowUpDown className="w-3.5 h-3.5" />
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {sortOrder === "created" ? "Sort" : "Sort: recently updated"}
+              </TooltipContent>
+            </Tooltip>
             <PopoverContent
               align="end"
               className="w-48 p-3"
@@ -1240,28 +1246,32 @@ export function GitHubResourceList({
               keystroke and shoved the list down. A trigger that is always
               present at a fixed size is neither. */}
           <Popover open={selectionMenuOpen} onOpenChange={setSelectionMenuOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                disabled={loading || data.length === 0}
-                aria-label={`Select ${type === "issue" ? "issues" : "pull requests"}`}
-                aria-haspopup="dialog"
-                aria-expanded={selectionMenuOpen}
-                title="Select"
-                className={cn(
-                  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
-                  "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
-                  "transition-[background-color,color] duration-150 ease-out",
-                  // No lift while a selection is live: the bulk bar already
-                  // states the count, and a second membership signal here
-                  // would say the same thing twice.
-                  "disabled:cursor-default disabled:opacity-50",
-                  "disabled:hover:bg-transparent disabled:hover:text-text-secondary"
-                )}
-              >
-                <ListChecks className="w-3.5 h-3.5" />
-              </button>
-            </PopoverTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    disabled={loading || data.length === 0}
+                    aria-label={`Select ${type === "issue" ? "issues" : "pull requests"}`}
+                    aria-haspopup="dialog"
+                    aria-expanded={selectionMenuOpen}
+                    className={cn(
+                      "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
+                      "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
+                      "transition-[background-color,color] duration-150 ease-out",
+                      // No lift while a selection is live: the bulk bar already
+                      // states the count, and a second membership signal here
+                      // would say the same thing twice.
+                      "disabled:cursor-default disabled:opacity-50",
+                      "disabled:hover:bg-transparent disabled:hover:text-text-secondary"
+                    )}
+                  >
+                    <ListChecks className="w-3.5 h-3.5" />
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Select</TooltipContent>
+            </Tooltip>
             <PopoverContent
               align="end"
               className="w-56 p-3"

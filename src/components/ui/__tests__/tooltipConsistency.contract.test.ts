@@ -47,6 +47,8 @@ const TOOLTIP_ONLY_FILES = [
   "src/components/Project/GeneralTab.tsx",
   "src/components/Plugin/PluginManagerView.tsx",
   "src/components/Plugin/ProjectPluginSection.tsx",
+  "src/components/Terminal/UpdateCwdDialog.tsx",
+  "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
 ];
 
 const TOOLTIP_TRIGGER_TAGS = new Set(["TooltipTrigger", "TruncatedTooltip"]);
