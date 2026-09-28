@@ -39,6 +39,10 @@ beforeEach(() => {
 });
 
 describe("showPortalTabIfNoOverlay", () => {
+  beforeEach(() => {
+    portalStoreMock.getState.mockReturnValue({ isOpen: true });
+  });
+
   it("shows the tab when no overlay is active", async () => {
     await showPortalTabIfNoOverlay("tab-1", BOUNDS);
     expect(showMock).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
@@ -49,11 +53,19 @@ describe("showPortalTabIfNoOverlay", () => {
     await showPortalTabIfNoOverlay("tab-1", BOUNDS);
     expect(showMock).not.toHaveBeenCalled();
   });
+
+  it("skips the show when the Portal closed while the tab was being created", async () => {
+    // Opening the Assistant closes the Portal; a late show must not re-cover it.
+    portalStoreMock.getState.mockReturnValue({ isOpen: false });
+    await showPortalTabIfNoOverlay("tab-1", BOUNDS);
+    expect(showMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("activatePortalTab overlay guard", () => {
   beforeEach(() => {
     portalStoreMock.getState.mockReturnValue({
+      isOpen: true,
       tabs: [{ id: "tab-1", url: "https://example.com", partition: undefined }],
       createdTabs: new Set<string>(),
       setActiveTab: setActiveTabMock,

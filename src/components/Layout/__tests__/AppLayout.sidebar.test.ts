@@ -171,8 +171,8 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
   });
 
   it("publishes --right-obstruction-offset as max(portal, assistant) (issue #6629)", () => {
-    // Portal overlays Assistant when both are open, so the rightmost fixed
-    // obstruction is max(portal, assistant), not their sum. Toaster, popovers,
+    // Portal and Assistant are mutually exclusive; max(portal, assistant)
+    // rather than their sum keeps any overlap from double-counting. Toaster, popovers,
     // ReEntrySummary, GettingStartedChecklist, and the ThemeBrowser overlay
     // all read this var — they're body-portaled fixed elements that would
     // otherwise be hidden behind the wider of the two panels.
@@ -376,7 +376,7 @@ describe("AppLayout portal viewport coverage — issue #6629", () => {
     // Issue #6629: when the Assistant became a flex sibling of <main> in
     // PR #6620, the Portal (rendered as `absolute right-0` inside <main>)
     // stopped at the Assistant's left edge. Body-portaling with `position:
-    // fixed` lets the Portal escape <main>'s width and overlay the Assistant.
+    // fixed` lets the Portal escape <main>'s width and span the right edge.
     expect(source).toMatch(/\{layout\.portalOpen &&\s*\n\s*createPortal\(/);
     // Issue #11893: the top edge is driven by OVERLAY_TOP_OFFSET (toolbar height
     // plus the measured global-banner height) rather than a static top-12, which

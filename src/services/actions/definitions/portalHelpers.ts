@@ -24,17 +24,19 @@ export const clearPortalPendingIf = (kind: PortalPendingCloseKind): void => {
 export const getPortalBounds = () => getPortalPlaceholderBounds();
 
 /**
- * Show a portal tab only when no modal overlay owns the viewport. Reading
- * `overlayStack` at call time (after any awaits) keeps the portal WebContentsView
- * from covering an open modal. When suppressed, PortalVisibilityController's
- * overlay-clear effect re-shows the active tab once the overlay closes — no
- * pending-show bookkeeping needed here.
+ * Show a portal tab only when no modal overlay owns the viewport and the Portal
+ * is still open. Reading both at call time (after any awaits) keeps the portal
+ * WebContentsView from covering an open modal, or from reappearing over the
+ * Assistant after opening it closed the Portal mid-creation. When suppressed,
+ * PortalVisibilityController shows the active tab once the overlay clears or
+ * the Portal reopens — no pending-show bookkeeping needed here.
  */
 export const showPortalTabIfNoOverlay = async (
   tabId: string,
   bounds: { x: number; y: number; width: number; height: number }
 ): Promise<void> => {
   if (useUIStore.getState().overlayStack.length > 0) return;
+  if (!usePortalStore.getState().isOpen) return;
   await window.electron.portal.show({ tabId, bounds });
 };
 
