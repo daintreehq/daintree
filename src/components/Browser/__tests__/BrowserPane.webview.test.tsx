@@ -3,6 +3,8 @@ import { act, render } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserPaneProps } from "../BrowserPane";
 import { BrowserPane } from "../BrowserPane";
+import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
@@ -511,8 +513,8 @@ describe("BrowserPane webview lifecycle regression", () => {
     const status = getByRole("status");
     // Never busy: on a live region that would hold back its own message.
     expect(status.closest('[aria-busy="true"]')).toBeNull();
-    expect(status.getAttribute("aria-label")).toBe("Loading…");
-    expect(status.textContent).toContain("Loading…");
+    expect(status.getAttribute("aria-label")).toBe("Loading page");
+    expect(status.textContent).toContain("Loading page");
   });
 
   it("announces the slow-load escalation via a polite live region (#9964)", () => {
@@ -530,15 +532,17 @@ describe("BrowserPane webview lifecycle regression", () => {
       vi.advanceTimersByTime(401);
     });
 
-    const liveRegion = container.querySelector('[aria-live="polite"]');
+    const liveRegion = container.querySelector('[aria-live="polite"][aria-atomic="true"]');
     expect(liveRegion).not.toBeNull();
     expect(liveRegion?.textContent).toBe("");
 
+    // The same escalation ladder as every other pane load (SkeletonHint).
     act(() => {
-      vi.advanceTimersByTime(5000);
+      vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS);
     });
 
-    expect(liveRegion?.textContent).toContain("taking longer than usual");
+    expect(liveRegion?.textContent).toContain("Loading page");
+    expect(liveRegion?.textContent).toContain("Cancel option available");
   });
 
   it("removes the loading status region after did-stop-loading (#9964)", () => {
@@ -988,6 +992,27 @@ describe("BrowserPane webview lifecycle regression", () => {
         );
       }
 
+      it("copies the blocked address, as the dev preview's notice does", async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).electron.clipboard.writeText = writeText;
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://docs.example.com/guide");
+
+        await act(async () => {
+          findButton(container, "Copy URL")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+        });
+
+        expect(writeText).toHaveBeenCalledWith("https://docs.example.com/guide");
+        expect(findButton(container, "Copied")).toBeDefined();
+        act(() => {
+          vi.advanceTimersByTime(2000);
+        });
+        expect(findButton(container, "Copy URL")).toBeDefined();
+      });
+
       // Deferred on purpose: the old code cleared the notice synchronously, so a
       // test that only checks the end state would pass on the pre-fix build. The
       // load-bearing assertion is that the notice SURVIVES until the result lands.
@@ -1009,7 +1034,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
         // Still pending: the notice must not be torn down before we know the outcome.
         expect(container.textContent).toContain("oauth.provider.com");
-        expect(findButton(container, "Opening…")?.hasAttribute("disabled")).toBe(true);
+        expect(findButton(container, "Opening…")?.getAttribute("aria-disabled")).toBe("true");
 
         await act(async () => {
           resolveOpen({ ok: true, result: undefined });
@@ -1497,7 +1522,7 @@ describe("BrowserPane webview lifecycle regression", () => {
   });
 
   describe("slow-load and timeout escalation", () => {
-    it("shows slow-load message and Cancel after 5s of loading", () => {
+    it("shows the slow-load hint and Cancel once the load outlasts the first hint threshold", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
 
@@ -1506,15 +1531,52 @@ describe("BrowserPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-start-loading");
       });
 
-      // Before 5s, only spinner (no slow-load text)
-      expect(container.textContent).not.toContain("Taking longer than usual");
+      // The overlay mounts past the Doherty gate; its hint ladder starts then.
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      act(() => {
+        vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS - 1);
+      });
+      const cancel = () =>
+        Array.from(container.querySelectorAll("button")).find((b) =>
+          b.textContent?.includes("Cancel")
+        );
+      expect(cancel()).toBeUndefined();
 
       act(() => {
-        vi.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(1);
       });
 
-      expect(container.textContent).toContain("Taking longer than usual");
-      expect(container.textContent).toContain("Cancel");
+      expect(cancel()).toBeDefined();
+    });
+
+    it("starts the slow-load hint from zero when a new load replaces the stalled one", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      const cancel = () =>
+        Array.from(container.querySelectorAll("button")).find((b) =>
+          b.textContent?.includes("Cancel")
+        );
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      act(() => {
+        vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS);
+      });
+      expect(cancel()).toBeDefined();
+
+      // An auto-reload lands its start in the same render the old load ended in.
+      act(() => {
+        emitWebviewEvent(webview, "did-stop-loading");
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      expect(cancel()).toBeUndefined();
     });
 
     it("Cancel stops the webview and shows cancelled error", () => {
@@ -1527,7 +1589,10 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       act(() => {
-        vi.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      act(() => {
+        vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS);
       });
 
       const cancelButton = Array.from(container.querySelectorAll("button")).find((b) =>

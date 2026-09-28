@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { Spinner } from "@/components/ui/Spinner";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
@@ -37,7 +38,7 @@ import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadc
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
-import { Archive, Loader2 } from "lucide-react";
+import { Archive } from "lucide-react";
 import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -1095,9 +1096,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               <div
                 role="status"
                 aria-live="polite"
-                className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-daintree-bg/80 pointer-events-none"
+                className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-surface-canvas/80 pointer-events-none"
               >
-                <Loader2 className="h-4 w-4 animate-spin text-accent-primary" />
+                <Spinner className="text-text-secondary" />
                 <span className="text-xs text-text-secondary">Finishing dictation…</span>
               </div>
             )}

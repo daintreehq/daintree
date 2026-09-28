@@ -2988,6 +2988,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         }
       }
 
+      // Let the previous message's crossfade finish before reading the pane.
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+
       expect(container.textContent).toContain("Dev server unavailable");
       expect(container.textContent).not.toContain("reloads automatically");
       expect(container.textContent).toContain("Restart it or reload");

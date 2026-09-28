@@ -382,7 +382,7 @@ function MoveOrRenameProjectDialogInner({
     "Retry the check to continue"
   ) : preview === null ? (
     <>
-      {showLoading && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+      {showLoading && <Spinner size="sm" />}
       <span className="truncate">Checking what will change…</span>
     </>
   ) : hasBlockers ? (

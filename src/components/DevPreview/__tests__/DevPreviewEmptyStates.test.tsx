@@ -64,12 +64,12 @@ function runner(overrides: Partial<RunCommand> = {}): RunCommand {
 describe("DevPreviewEmptyStates", () => {
   it("renders the loading state while restarting", () => {
     render(<DevPreviewEmptyStates {...baseProps({ isRestarting: true })} />);
-    expect(screen.getByText(/restarting/i)).toBeTruthy();
+    expect(screen.getByRole("status", { name: /restarting/i })).toBeTruthy();
   });
 
   it("renders the loading state while installing dependencies", () => {
     render(<DevPreviewEmptyStates {...baseProps({ status: "installing" })} />);
-    expect(screen.getByText(/installing dependencies/i)).toBeTruthy();
+    expect(screen.getByRole("status", { name: /installing dependencies/i })).toBeTruthy();
   });
 
   it("renders the dev-server error state with a retry action", () => {
@@ -202,10 +202,12 @@ describe("DevPreviewEmptyStates — interaction contract", () => {
     }
   });
 
-  it("announces the state's title through a status region, not its actions", () => {
+  it("announces the state's title through a live region, not its actions", () => {
     for (const state of everyState) {
       const { unmount } = render(<DevPreviewEmptyStates {...baseProps(state)} />);
-      const status = screen.getByRole("status");
+      // A failure is an alert; every other state a polite status.
+      const status =
+        state.status === "error" ? screen.getByRole("alert") : screen.getByRole("status");
       expect((status.textContent ?? "").trim().length).toBeGreaterThan(0);
       expect(within(status).queryAllByRole("button")).toHaveLength(0);
       unmount();

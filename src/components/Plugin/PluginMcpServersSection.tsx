@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDeferredLoading } from "@/hooks";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AlertCircle, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { McpServerContribution } from "@shared/types/plugin";
 import type {
@@ -80,13 +81,14 @@ interface PluginMcpServersSectionProps {
 export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServersSectionProps) {
   const [servers, setServers] = useState<PluginMcpServerInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  // Past the Doherty threshold only, so a fast read never flashes bones — the
+  // bones' own delayed pulse is switched off in performance mode.
+  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [stderr, setStderr] = useState<Record<string, StderrState>>({});
   const [restarting, setRestarting] = useState<Record<string, boolean>>({});
   const [restartError, setRestartError] = useState<Record<string, string>>({});
-
-  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -195,7 +197,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
 
   // `isOpen` comes from committed render state, not from inside the updater:
   // React 19 only runs a functional updater synchronously on its eager-state
-  // path (no pending lanes). With the poll's setServers or useDeferredLoading's
+  // path (no pending lanes). With the poll's setServers or another update
   // timer in flight, the updater is deferred — so deriving `willOpen` inside it
   // left it stale, returned before getStderr() ran, and stranded the disclosure
   // on a perpetual "Loading output…". Keep the updater pure.
@@ -259,8 +261,14 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
   if (rows.length === 0) {
     return (
       <div className="space-y-3">
-        {showLoading && <p className="text-xs text-text-secondary">Loading…</p>}
-        {!loading && <p className="text-xs text-text-secondary">This plugin has no MCP servers.</p>}
+        {showLoading && (
+          <Skeleton label="Loading MCP servers" className="space-y-2">
+            <SkeletonBone immediate className="h-10 w-full rounded-[var(--radius-md)]" />
+          </Skeleton>
+        )}
+        {!loading && !error && (
+          <p className="text-xs text-text-secondary">This plugin has no MCP servers.</p>
+        )}
         {error && <SectionError message={error} />}
       </div>
     );

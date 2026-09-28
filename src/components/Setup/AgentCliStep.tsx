@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Spinner } from "@/components/ui/Spinner";
 import {
   CircleCheck,
   CircleDashed,
-  Loader2,
   ExternalLink,
   ChevronDown,
   ChevronRight,
@@ -316,7 +316,7 @@ export function AgentCliStep({
                     </span>
                   ) : isInstalling ? (
                     <span className="inline-flex items-center gap-1 text-2xs text-text-secondary font-medium">
-                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <Spinner size="xs" />
                       Installing
                     </span>
                   ) : isError ? (

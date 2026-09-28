@@ -1,4 +1,6 @@
 import React, { useCallback, useMemo, useSyncExternalStore } from "react";
+import { AlertTriangle } from "lucide-react";
+import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
@@ -214,14 +216,12 @@ export const GridPanel = React.memo(function GridPanel({
             onRemove={() => handleClose(true)}
           />
         ) : (
-          <div className="flex flex-1 items-center justify-center bg-surface-panel text-text-muted">
-            <div className="text-center">
-              <p className="text-sm font-medium">Unknown Panel Type</p>
-              <p className="text-xs mt-1 text-text-secondary">Kind: {kind}</p>
-              <p className="text-xs mt-2 text-text-secondary">
-                No component registered for this panel kind
-              </p>
-            </div>
+          <div className="relative flex-1 min-h-0">
+            <PaneState
+              icon={<AlertTriangle className="text-status-warning" />}
+              title="Unknown panel type"
+              description={`No component is registered for the "${kind}" panel kind.`}
+            />
           </div>
         )}
       </ContentPanel>

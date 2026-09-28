@@ -133,7 +133,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
               role="status"
               aria-live="polite"
             >
-              <Spinner size="lg" className="text-text-secondary" />
+              <Spinner size="xl" className="text-text-secondary" />
               <p className="text-sm text-text-secondary">Loading command…</p>
             </div>
           </AppDialog.Body>

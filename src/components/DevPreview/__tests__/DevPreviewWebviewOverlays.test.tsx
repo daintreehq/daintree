@@ -16,8 +16,8 @@ vi.mock("../../Browser/WebviewDialog", () => ({
 vi.mock("../../Browser/FindBar", () => ({
   FindBar: () => <div data-testid="find-bar" />,
 }));
-vi.mock("../DevPreviewLoadingState", () => ({
-  DevPreviewLoadingState: ({ phaseLabel }: { phaseLabel: string }) => (
+vi.mock("@/components/ui/PaneLoadingState", () => ({
+  PaneLoadingState: ({ phaseLabel }: { phaseLabel: string }) => (
     <div data-testid="loading-state">{phaseLabel}</div>
   ),
 }));

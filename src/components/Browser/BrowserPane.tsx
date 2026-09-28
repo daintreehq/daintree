@@ -5,9 +5,7 @@ import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { useWebviewEvents } from "@/hooks/useWebviewEvents";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
-import { AlertTriangle, ExternalLink, RotateCw, Square, XCircle } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
-import { Button } from "@/components/ui/button";
+import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { usePanelStore } from "@/store";
 import type { BrowserHistory, BrowserNavigationHistorySnapshot } from "@shared/types/browser";
@@ -29,6 +27,15 @@ import {
 } from "./historyUtils";
 import { actionService } from "@/services/ActionService";
 import { WebviewDialog } from "./WebviewDialog";
+import {
+  BrowserBlockedNavNotice,
+  BrowserEvictedPlaceholder,
+  BrowserFirstViewPlaceholder,
+  BrowserHostApprovalBar,
+  BrowserLoadErrorOverlay,
+  BrowserLoadingOverlay,
+  BrowserNoUrlState,
+} from "./BrowserPaneStates";
 import { FindBar } from "./FindBar";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
@@ -157,6 +164,10 @@ export function BrowserPane({
   const [zoomFactor, setZoomFactor] = useState<number>(() => clampZoom(initialZoom ?? 1.0));
 
   const [isLoading, setIsLoading] = useState(true);
+  // Keys the loading overlay, so a load that replaces another — an auto-reload
+  // after a crash lands in the same render as the previous load's end —
+  // starts its slow-load hint from zero.
+  const [loadAttempt, setLoadAttempt] = useState(0);
   // Doherty 400ms gate: skip loading affordances on fast loads to prevent flicker.
   const showLoadingOverlay = useDohertyGate(isLoading);
   const [loadError, setLoadError] = useState<LoadError | null>(null);
@@ -226,8 +237,6 @@ export function BrowserPane({
   }, [isWebviewReady]);
 
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [isSlowLoad, setIsSlowLoad] = useState(false);
-  const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const screenshotInFlightRef = useRef(false);
 
   const hasBeenVisible = useHasBeenVisible(id, location);
@@ -392,7 +401,6 @@ export function BrowserPane({
     webviewElement,
     isInitialRestoredLoadRef,
     lastSetUrlRef,
-    slowLoadTimeoutRef,
     loadTimeoutRef,
     evictingRef,
     projectId,
@@ -400,8 +408,8 @@ export function BrowserPane({
     zoomFactor,
     setIsWebviewReady,
     setIsLoading,
+    onLoadStart: () => setLoadAttempt((n) => n + 1),
     setLoadError,
-    setIsSlowLoad,
     setBlockedNav,
     setHistory,
     onRenderProcessGone: handleRenderProcessGone,
@@ -549,7 +557,6 @@ export function BrowserPane({
     setBlockedNav(null);
     setIsLoading(true);
     setLoadError(null);
-    setIsSlowLoad(false);
     setCrashState("none");
     setCrashDetails(null);
     crashTimestampsRef.current = [];
@@ -564,7 +571,6 @@ export function BrowserPane({
     crashReloadRef.current = () => {
       setIsLoading(true);
       setLoadError(null);
-      setIsSlowLoad(false);
       webviewRef.current?.reload();
     };
   }, []);
@@ -638,15 +644,10 @@ export function BrowserPane({
   }, [isEvicted]);
 
   const handleCancelLoad = useCallback(() => {
-    if (slowLoadTimeoutRef.current) {
-      clearTimeout(slowLoadTimeoutRef.current);
-      slowLoadTimeoutRef.current = null;
-    }
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
     }
-    setIsSlowLoad(false);
     setIsLoading(false);
     const webview = webviewRef.current;
     if (webview) {
@@ -661,7 +662,6 @@ export function BrowserPane({
 
   const handleRetryFromError = useCallback(() => {
     setLoadError(null);
-    setIsSlowLoad(false);
     setIsLoading(true);
     if (currentUrl) {
       // Swallow ERR_ABORTED-class rejections — see commitNavigation comment.
@@ -735,9 +735,6 @@ export function BrowserPane({
     return () => {
       if (blockedNavTimerRef.current) {
         clearTimeout(blockedNavTimerRef.current);
-      }
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
       }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -926,110 +923,26 @@ export function BrowserPane({
     >
       <div className="relative flex-1 min-h-0 flex flex-col bg-surface-canvas">
         {pendingApproval && (
-          <div
-            aria-live="assertive"
-            aria-atomic="true"
-            className="absolute top-0 left-0 right-0 z-20 flex items-center gap-2 px-3 py-1.5 text-xs bg-status-info/10 border-b border-status-info/30 text-text-primary"
-          >
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-info" />
-            <span className="truncate flex-1">
-              Allow browser panel to load{" "}
-              <span className="font-mono">{pendingApproval.hostname}</span>?
-            </span>
-            <button
-              type="button"
-              onClick={() => void handleApproveHost()}
-              className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-info/20 hover:bg-status-info/30 text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            >
-              Allow
-            </button>
-            <button
-              type="button"
-              onClick={handleDismissApproval}
-              className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
-              aria-label="Dismiss host approval"
-            >
-              ×
-            </button>
-          </div>
+          <BrowserHostApprovalBar
+            hostname={pendingApproval.hostname}
+            onAllow={() => void handleApproveHost()}
+            onDismiss={handleDismissApproval}
+          />
         )}
         {!hasValidUrl ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
-            <div className="flex flex-col items-center text-center max-w-md">
-              <h3 className="text-sm font-medium text-text-secondary mb-1">Browser</h3>
-              <p className="text-xs text-text-secondary mb-4 leading-relaxed">
-                Preview your local development server. Enter a URL in the address bar above —
-                localhost, LAN, Docker, and RFC-reserved TLDs (.local, .test, .internal) are all
-                supported.
-              </p>
-              <div className="flex flex-wrap justify-center gap-2">
-                {["localhost:3000", "localhost:5173", "localhost:8080"].map((example) => (
-                  <button
-                    key={example}
-                    type="button"
-                    onClick={() => handleNavigate(`http://${example}`)}
-                    className="px-3 py-1.5 text-xs font-mono text-text-secondary bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                  >
-                    {example}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <BrowserNoUrlState onNavigate={handleNavigate} />
         ) : !hasBeenVisible ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary">
-            <p className="text-xs text-text-secondary">
-              Browser will load when this panel is first viewed
-            </p>
-          </div>
+          <BrowserFirstViewPlaceholder />
         ) : isEvicted ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
-            <p className="text-xs text-text-secondary">Reclaimed for memory</p>
-          </div>
+          <BrowserEvictedPlaceholder />
         ) : (
           <>
             {loadError && (
-              <div
-                role="alert"
-                className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6"
-              >
-                <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-                <h3 className="text-sm font-medium text-text-secondary mb-1">
-                  {loadError.kind === "timeout"
-                    ? "Page load timed out"
-                    : loadError.kind === "cancelled"
-                      ? "Load cancelled"
-                      : loadError.kind === "cert"
-                        ? "Certificate error"
-                        : loadError.kind === "network"
-                          ? "Connection failed"
-                          : "Unable to display page"}
-                </h3>
-                <p className="text-xs text-text-secondary text-center mb-3 max-w-md">
-                  {loadError.message}
-                </p>
-                <div className="flex items-center gap-1">
-                  <Button
-                    onClick={handleRetryFromError}
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 px-2.5 py-1.5 group"
-                  >
-                    <RotateCw className="h-3.5 w-3.5" />
-                    <span className="text-xs">Retry</span>
-                  </Button>
-                  <button
-                    type="button"
-                    onClick={handleOpenExternal}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5 text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors" />
-                    <span className="text-xs text-text-secondary group-hover:text-text-primary transition-colors">
-                      Open in external browser
-                    </span>
-                  </button>
-                </div>
-              </div>
+              <BrowserLoadErrorOverlay
+                loadError={loadError}
+                onRetry={handleRetryFromError}
+                onOpenExternal={handleOpenExternal}
+              />
             )}
             {crashState === "crashed" && (
               <InlineStatusBanner
@@ -1098,72 +1011,26 @@ export function BrowserPane({
                   closeAriaLabel="Dismiss navigation notice"
                 />
               ) : (
-                <div
-                  aria-live="polite"
-                  aria-atomic="true"
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-text-primary"
-                >
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
-                  <span className="truncate flex-1">
-                    Navigation to external site blocked: {extractHostname(blockedNav.url)}
-                  </span>
-                  {blockedNav.canOpenExternal && (
-                    <button
-                      type="button"
-                      disabled={blockedNav.phase === "opening"}
-                      aria-busy={blockedNav.phase === "opening" || undefined}
-                      onClick={() =>
-                        void handleOpenBlockedExternal(blockedNav.noticeId, blockedNav.url)
-                      }
-                      className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-text-primary transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {blockedNav.phase === "opening" ? "Opening…" : "Open in external browser"}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setBlockedNav(null)}
-                    className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
-                    aria-label="Dismiss navigation notice"
-                  >
-                    ×
-                  </button>
-                </div>
+                <BrowserBlockedNavNotice
+                  key={blockedNav.noticeId}
+                  url={blockedNav.url}
+                  hostname={extractHostname(blockedNav.url)}
+                  canOpenExternal={blockedNav.canOpenExternal}
+                  opening={blockedNav.phase === "opening"}
+                  onOpenExternal={() =>
+                    void handleOpenBlockedExternal(blockedNav.noticeId, blockedNav.url)
+                  }
+                  onDismiss={() => setBlockedNav(null)}
+                />
               ))}
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
-              {showLoadingOverlay && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas z-10 gap-3">
-                  {/* The slow-load escalation announces via the sibling
-                      aria-live span below, never inside this status region
-                      (SkeletonHint pattern): nested live regions are spoken
-                      twice or not at all depending on the screen reader. */}
-                  <div role="status" aria-label="Loading…">
-                    <span className="sr-only">Loading…</span>
-                    <Spinner size="2xl" className="text-status-info" />
-                  </div>
-                  <span className="sr-only" aria-live="polite" aria-atomic="true">
-                    {isSlowLoad
-                      ? "Loading is taking longer than usual. Select Cancel to stop."
-                      : ""}
-                  </span>
-                  {isSlowLoad && (
-                    <>
-                      <p aria-hidden="true" className="text-xs text-text-secondary">
-                        Taking longer than usual…
-                      </p>
-                      <Button
-                        onClick={handleCancelLoad}
-                        variant="ghost"
-                        size="sm"
-                        className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
-                      >
-                        <Square className="h-3.5 w-3.5" />
-                        <span className="text-xs">Cancel</span>
-                      </Button>
-                    </>
-                  )}
-                </div>
+              {isLoading && (
+                <BrowserLoadingOverlay
+                  key={loadAttempt}
+                  isLoading={isLoading}
+                  onCancel={handleCancelLoad}
+                />
               )}
               {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview
