@@ -19,10 +19,7 @@ const SRC_ROOT = path.join(REPO_ROOT, "src");
 const PRIMITIVE = "src/components/ui/checkbox.tsx";
 
 /** Native checkboxes still waiting on the fix that owns their surface. Shrink only. */
-const NATIVE_ALLOWLIST = new Set<string>([
-  // The recipe editor's form is migrated with the rest of that form.
-  "src/components/TerminalRecipe/RecipeEditor.tsx",
-]);
+const NATIVE_ALLOWLIST = new Set<string>([]);
 
 function listSourceFiles(dir: string): string[] {
   const out: string[] = [];
