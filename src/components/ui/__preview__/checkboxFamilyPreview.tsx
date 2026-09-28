@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
+import { DndContext } from "@dnd-kit/core";
 import motionFeatures from "@/lib/motionFeatures";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { CliAvailability } from "@shared/types";
@@ -44,6 +45,7 @@ import { PluginManagerView } from "@/components/Plugin/PluginManagerView";
 import { AgentCliStep } from "@/components/Setup/AgentCliStep";
 import { CrashRecoveryDialog } from "@/components/Recovery/CrashRecoveryDialog";
 import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
+import { WorktreeCard } from "@/components/Worktree/WorktreeCard";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
@@ -52,6 +54,7 @@ import { SettingsChoicebox } from "@/components/Settings/SettingsChoicebox";
 import { SettingsCheckbox } from "@/components/Settings/SettingsCheckbox";
 import { FileBrowserVisibilitySettings } from "@/components/Settings/FileBrowserVisibilitySettings";
 import {
+  CARD_WORKTREES,
   CRASH,
   DIFF_FILES,
   DIFF_VIEWED_KEYS,
@@ -89,6 +92,7 @@ const { LazyMotion } = await import("framer-motion");
  *   agent-cli         AgentCliStep (not first run) — Skip permissions list
  *   crash-recovery    CrashRecoveryDialog — panel rows
  *   fleet-picker      FleetPickerContent — group glyphs and member checkboxes
+ *   worktree-card     WorktreeCard (grid, multi-select) — the corner "Select worktree" box
  *   settings-reset    Settings reset buttons, in a group and in the legacy grid
  *
  * Query parameters:
@@ -131,7 +135,13 @@ const PROJECT = {
 } as Project;
 
 const worktreeStore = createWorktreeStore();
-worktreeStore.setState({ worktrees: new Map(WORKTREES.map((w) => [w.id, w])) });
+// The grid cards join the store only on their own page, so no other section's
+// worktree lists grow two extra rows.
+worktreeStore.setState({
+  worktrees: new Map(
+    [...WORKTREES, ...(only === "worktree-card" ? CARD_WORKTREES : [])].map((w) => [w.id, w])
+  ),
+});
 setCurrentViewStore(worktreeStore);
 
 {
@@ -668,6 +678,56 @@ function FleetPickerSection() {
   );
 }
 
+function toCardState(s: (typeof CARD_WORKTREES)[number]): WorktreeState {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the card's own prop shape
+  return {
+    ...s,
+    worktreeChanges: s.worktreeChanges ?? null,
+    lastActivityTimestamp: s.lastActivityTimestamp ?? null,
+  } as unknown as WorktreeState;
+}
+
+/** Grid cell width of the worktree dashboard, so the card lays out as it does there. */
+const CARD_WIDTH = 320;
+
+function WorktreeCardSection() {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set([CARD_WORKTREES[1]!.id]));
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  return (
+    <Section shot="worktree-card" title="WorktreeCard (grid, multi-select) — Select worktree">
+      <DndContext>
+        {CARD_WORKTREES.map((w) => (
+          <Frame
+            key={w.id}
+            label={selected.has(w.id) ? "Selected" : "Unselected (box shows on hover/focus)"}
+            width={CARD_WIDTH}
+            surface="bg-surface-canvas"
+          >
+            <div className="p-2">
+              <WorktreeCard
+                worktree={toCardState(w)}
+                variant="grid"
+                isActive={false}
+                isFocused={false}
+                onSelect={noop}
+                onOpenEditor={noop}
+                isSelected={selected.has(w.id)}
+                onToggleSelect={() => toggle(w.id)}
+              />
+            </div>
+          </Frame>
+        ))}
+      </DndContext>
+    </Section>
+  );
+}
+
 const SELECT_OPTIONS = [
   { value: "auto", label: "Automatic" },
   { value: "always", label: "Always" },
@@ -882,6 +942,7 @@ const SECTIONS: Record<string, () => ReactNode> = {
   "crash-recovery": () => <CrashRecoverySection />,
   "fleet-picker": () => <FleetPickerSection />,
   "settings-reset": () => <SettingsResetSection />,
+  "worktree-card": () => <WorktreeCardSection />,
 };
 
 /** Sections that open a modal; the full sheet leaves them out so one never sits over another. */

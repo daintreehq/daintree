@@ -205,3 +205,71 @@ export const CRASH: PendingCrash = {
     },
   ],
 };
+
+const NOW = Date.now();
+const MIN = 60_000;
+
+function cardWorktree(
+  id: string,
+  branch: string,
+  issue: { number: number; title: string },
+  commit: string,
+  changes: Array<{ path: string; ins: number; del: number }>
+): WorktreeSnapshot {
+  const name = branch.split("/").pop()!;
+  const path = `/Users/you/Code/helios-dashboard-worktrees/${name}`;
+  const rows = changes.map((c) => ({
+    path: c.path,
+    status: "modified" as const,
+    insertions: c.ins,
+    deletions: c.del,
+  }));
+  return {
+    id,
+    worktreeId: id,
+    path,
+    name,
+    branch,
+    isCurrent: false,
+    isMainWorktree: false,
+    issueNumber: issue.number,
+    issueTitle: issue.title,
+    aheadCount: 2,
+    behindCount: 0,
+    baseBranchName: "develop",
+    lastActivityTimestamp: NOW - 6 * MIN,
+    createdAt: NOW - 60 * 24 * MIN,
+    worktreeChanges: {
+      worktreeId: id,
+      rootPath: path,
+      changes: rows,
+      changedFileCount: rows.length,
+      insertions: rows.reduce((n, c) => n + c.insertions, 0),
+      deletions: rows.reduce((n, c) => n + c.deletions, 0),
+      lastCommitMessage: commit,
+      lastCommitTimestampMs: NOW - 22 * MIN,
+      tracking: `origin/${branch}`,
+    },
+  } as WorktreeSnapshot;
+}
+
+/** Two grid cards for the multi-select corner checkbox: unselected first, so it is the one probed. */
+export const CARD_WORKTREES: WorktreeSnapshot[] = [
+  cardWorktree(
+    "wt-card-rate-limit",
+    "feature/issue-11962-rate-limit-banner",
+    { number: 11962, title: "Show a banner while the API is rate limiting us" },
+    "feat(net): surface the rate-limit window in the header bar",
+    [
+      { path: "src/net/rateLimit.ts", ins: 38, del: 4 },
+      { path: "src/components/Header/RateLimitBanner.tsx", ins: 62, del: 0 },
+    ]
+  ),
+  cardWorktree(
+    "wt-card-csv-export",
+    "bugfix/issue-11971-csv-export-encoding",
+    { number: 11971, title: "CSV export mangles non-ASCII customer names" },
+    "fix(export): write a UTF-8 BOM so Excel reads the file",
+    [{ path: "src/export/csv.ts", ins: 7, del: 2 }]
+  ),
+];

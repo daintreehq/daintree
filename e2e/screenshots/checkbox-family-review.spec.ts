@@ -86,6 +86,9 @@ const SHOTS: Shot[] = [
   { section: "crash-recovery", dialog: true, minControls: 4 },
   { section: "fleet-picker", minControls: 3 },
   { section: "settings-reset", minControls: 3 },
+  // Unselected card first: its box is hidden at rest, so the probe's hover and
+  // focus frames are the ones that show it revealed.
+  { section: "worktree-card", minControls: 2 },
 ];
 
 /** Resets are found by name — `includeHidden`, because the legacy ones sit `visibility: hidden` at rest. */
