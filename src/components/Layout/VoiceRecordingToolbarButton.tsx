@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -146,9 +147,13 @@ export function VoiceRecordingToolbarButton({
       const opacity = (0.45 + level * 0.55).toFixed(3);
       const opacityNum = Number(opacity);
 
+      // Reduced motion holds the arc still; its brightness still follows the
+      // voice, so the ring stays a live level meter without spinning. Read per
+      // frame so flipping either preference mid-dictation takes effect at once.
       const wrapper = wrapperRef.current;
       if (wrapper) {
-        wrapper.style.transform = `rotate(${angle}deg) translateZ(0)`;
+        const still = prefersReducedMotion();
+        wrapper.style.transform = `rotate(${still ? 0 : angle}deg) translateZ(0)`;
       }
 
       const ring = ringRef.current;
@@ -278,7 +283,7 @@ export function VoiceRecordingToolbarButton({
                         maskComposite: "exclude",
                         WebkitMaskComposite: "xor",
                         padding: `${BASE_THICKNESS}px`,
-                        transition: "opacity 80ms ease-out",
+                        transition: "opacity var(--duration-75) ease-out",
                       }}
                     />
                     <div

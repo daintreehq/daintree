@@ -51,7 +51,7 @@ export function FocusedSubLine({
           SECTION_TEXT_COLUMN,
           "opacity-0 delay-[30ms] data-[open]:opacity-100",
           "transition-opacity duration-150 ease-out",
-          "motion-reduce:transition-none motion-reduce:opacity-100 motion-reduce:delay-0"
+          "motion-reduce:delay-0"
         )}
         data-open={isVisible ? "" : undefined}
       >

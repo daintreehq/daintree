@@ -71,17 +71,13 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
   );
   const removeNotification = useNotificationStore((state) => state.removeNotification);
 
-  // Mirrors InlineStatusBanner.tsx — synchronous read at render time is the
-  // codebase precedent for non-SSR Electron consumers. Three signals collapse
-  // to one: the OS-level media query, plus two app-set body attributes that
-  // override it (settings → reduced-animations, perf governor → performance-mode).
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    ((typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches) ||
-      (typeof document !== "undefined" &&
-        (document.body.getAttribute("data-reduce-animations") === "true" ||
-          document.body.getAttribute("data-performance-mode") === "true")));
+  // The strip's height always snaps and its only transition is opacity, which
+  // reduced motion keeps (a fade is not motion, WCAG 2.3.3). So only
+  // performance mode, which suppresses every transition, skips the fade. Read
+  // synchronously at render time, like InlineStatusBanner.tsx.
+  const skipTransition =
+    typeof document !== "undefined" &&
+    document.body.getAttribute("data-performance-mode") === "true";
 
   // Two views of the same notification, deliberately out of step:
   //   - `presented` is what the strip draws. It lags `notification` only so the
@@ -93,7 +89,8 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
   //     the store before this component mounted.
   const [presented, setPresented] = useState<Notification | null>(notification ?? null);
   const [announced, setAnnounced] = useState<Notification | null>(null);
-  const [isVisible, setIsVisible] = useState(prefersReducedMotion && notification !== undefined);
+  const [isVisible, setIsVisible] = useState(skipTransition && notification !== undefined);
+  const [isLeaving, setIsLeaving] = useState(false);
   const exitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const entryFrameRef = useRef<number | null>(null);
   const swapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -144,10 +141,14 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
         swapTimeoutRef.current = null;
       }
       releaseFocus();
+      // Only a strip that was actually open holds its height to fade out; one
+      // cleared before its entry frame never opened, so it has nothing to fade.
+      setIsLeaving(isVisible);
       setIsVisible(false);
       if (exitTimeoutRef.current !== null) clearTimeout(exitTimeoutRef.current);
       exitTimeoutRef.current = setTimeout(() => {
         exitTimeoutRef.current = null;
+        setIsLeaving(false);
         setPresented(null);
         setAnnounced(null);
       }, BANNER_EXIT_DURATION);
@@ -159,6 +160,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       clearTimeout(exitTimeoutRef.current);
       exitTimeoutRef.current = null;
     }
+    setIsLeaving(false);
 
     const isReplacement = presented !== null && presented.id !== notification.id;
 
@@ -181,10 +183,10 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       entryFrameRef.current = null;
     }
     // A replacement arriving mid-exit re-opens the strip at once; so does
-    // anything under reduced motion, where the transition is zeroed anyway.
+    // anything under performance mode, where the transition is zeroed anyway.
     // A first entry opens on the next frame so the browser sees the collapsed
     // state before transitioning.
-    if (isReplacement || prefersReducedMotion) {
+    if (isReplacement || skipTransition) {
       setIsVisible(true);
     } else {
       entryFrameRef.current = requestAnimationFrame(() => {
@@ -279,14 +281,15 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       data-testid="grid-notification-bar"
       className={cn(
         // Height snaps rather than animates: easing the strip's height would
-        // resize every terminal beneath it on every frame.
+        // resize every terminal beneath it on every frame. It holds through the
+        // exit, so the fade-out paints before the strip collapses once, at the
+        // end.
         "grid-notification-wrapper shrink-0 overflow-hidden transition-[opacity]",
-        isVisible
-          ? "h-auto opacity-100 ease-[var(--ease-snappy)]"
-          : "h-0 opacity-0 ease-[var(--ease-exit)]"
+        isVisible || isLeaving ? "h-auto" : "h-0",
+        isVisible ? "opacity-100 ease-[var(--ease-snappy)]" : "opacity-0 ease-[var(--ease-exit)]"
       )}
       style={{
-        transitionDuration: prefersReducedMotion
+        transitionDuration: skipTransition
           ? "0ms"
           : `${isVisible ? BANNER_ENTER_DURATION : BANNER_EXIT_DURATION}ms`,
       }}

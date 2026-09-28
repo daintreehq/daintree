@@ -28,7 +28,7 @@ function DownloadProgress({ percent }: { percent: number }) {
         className="h-1 w-full rounded-full bg-tint/10 overflow-hidden"
       >
         <div
-          className="h-full rounded-full bg-text-secondary transition-[width] duration-300 ease-out"
+          className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
           style={{ width: `${pct}%` }}
         />
       </div>

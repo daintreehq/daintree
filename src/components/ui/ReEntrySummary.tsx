@@ -126,7 +126,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           // which `transform` in a transition list does NOT cover — list it
           // explicitly or the slide snaps and only the fade animates.
           "transition-[translate,opacity]",
-          "motion-reduce:transition-none motion-reduce:duration-0",
+          "motion-reduce:transition-opacity motion-reduce:translate-none",
           isVisible
             ? "pointer-events-auto translate-x-0 opacity-100"
             : "pointer-events-none translate-x-8 opacity-0",

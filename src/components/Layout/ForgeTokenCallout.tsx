@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+import { UI_ENTER_DURATION, UI_ENTER_EASING } from "@/lib/animationUtils";
 import type { ForgeTokenErrorKind } from "@/lib/forgeErrors";
 import {
   selectForgeProviderHealth,
@@ -262,8 +263,16 @@ export function ForgeTokenCallout({
       role="region"
       aria-label={COPY[reconnectKind](providerName)}
       // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-      className="app-no-drag fixed z-[calc(var(--z-modal)-1)] text-text-primary"
-      style={{ top: position.top, left: position.left, width: CALLOUT_WIDTH }}
+      // Drops from its anchor like a toolbar dropdown: 4px and 97% on the entry
+      // tier, from `@starting-style`. Reduced motion keeps the fade.
+      className="app-no-drag fixed z-[calc(var(--z-modal)-1)] text-text-primary origin-top transition-[opacity,translate,scale] starting:opacity-0 starting:-translate-y-1 starting:scale-[0.97] motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none"
+      style={{
+        top: position.top,
+        left: position.left,
+        width: CALLOUT_WIDTH,
+        transitionDuration: `${UI_ENTER_DURATION}ms`,
+        transitionTimingFunction: UI_ENTER_EASING,
+      }}
       onPointerDownCapture={() => {
         pointerRef.current = true;
       }}

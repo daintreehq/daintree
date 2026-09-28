@@ -198,7 +198,7 @@ export function EmptyState(props: EmptyStateProps) {
         <div
           key={`current-${generation}`}
           className={cn(
-            "[grid-area:1/1] flex flex-col items-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150",
+            "[grid-area:1/1] flex flex-col items-center animate-in fade-in [--tw-animation-duration:var(--duration-150)]",
             props.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
           )}
         >
@@ -214,7 +214,7 @@ export function EmptyState(props: EmptyStateProps) {
             // `aria-hidden` alone leaves it focusable via keyboard.
             inert
             className={cn(
-              "[grid-area:1/1] flex flex-col items-center pointer-events-none motion-safe:animate-out motion-safe:fade-out motion-safe:duration-100",
+              "[grid-area:1/1] flex flex-col items-center pointer-events-none animate-out fade-out [--tw-animation-duration:var(--duration-100)]",
               outgoing.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
             )}
             onAnimationEnd={handleExitEnd}

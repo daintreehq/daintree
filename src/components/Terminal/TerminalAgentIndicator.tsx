@@ -181,7 +181,7 @@ export function TerminalAgentIndicator({
               <> ({WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})</>
             )}
             {showStateDuration && (
-              <span className="motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150">
+              <span className="animate-in fade-in [--tw-animation-duration:var(--duration-150)]">
                 {" · "}
                 {formatElapsedDuration(now - lastStateChange!)}
               </span>

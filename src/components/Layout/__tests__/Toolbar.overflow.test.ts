@@ -221,17 +221,18 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       expect(triggerBlock).not.toContain("scale");
     });
 
-    it("keeps a timed (not none) display swap under reduced motion — lesson #6182", () => {
-      // Inside the @variant reduce-motion block the trigger must still toggle
-      // display (display 0s, not transition: none) so the discrete swap lands.
-      // Brace-walk the blocks rather than regexing across them: toolbar.css now
-      // has more than one reduce-motion block, and a lazy `[\s\S]*?` match would
-      // happily start in an earlier one and run out of it, proving nothing.
-      const trigger = extractAtRuleBlocks(css, "@variant reduce-motion").find((block) =>
-        block.includes("[data-toolbar-overflow-trigger]")
+    it("keeps its timed display swap under reduced motion, so the fade-out paints — lesson #6182", () => {
+      // The trigger only fades, so reduced motion has nothing to remove. A
+      // reduce-motion override that zeroed the display swap (`display 0s`)
+      // dropped it to display:none before its opacity exit could paint.
+      // Brace-walk the blocks rather than regexing across them.
+      for (const block of extractAtRuleBlocks(css, "@variant reduce-motion")) {
+        const rule = block.match(/\[data-toolbar-overflow-trigger\][^{]*\{[^{}]*\}/)?.[0] ?? "";
+        expect(rule).not.toMatch(/display\s+0s|transition:\s*none/);
+      }
+      expect(css).toMatch(
+        /\[data-toolbar-overflow-trigger\]\s*\{[^{}]*display\s+var\(--duration-\d+\)\s+allow-discrete/
       );
-      expect(trigger, "no reduce-motion block styles the overflow trigger").toBeDefined();
-      expect(trigger).toMatch(/\[data-toolbar-overflow-trigger\]\s*\{[^{}]*display\s+0s/);
     });
   });
 });

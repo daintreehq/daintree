@@ -150,11 +150,12 @@ describe("GridNotificationBar animation", () => {
       useNotificationStore.getState().reset();
     });
 
-    // Mid-exit: still mounted, collapsed, exit easing applied, content still visible.
+    // Mid-exit: still mounted and still full height, fading on the exit easing,
+    // content still visible. Collapsing here would clip the fade away.
     const exiting = getWrapper(container);
     expect(exiting).not.toBeNull();
     const exitingEl = exiting!;
-    expect(exitingEl.className).toContain("h-0");
+    expect(exitingEl.className).toContain("h-auto");
     expect(exitingEl.className).toContain("opacity-0");
     expect(exitingEl.className).toContain("ease-[var(--ease-exit)]");
     expect(exitingEl.style.transitionDuration).toBe(`${BANNER_EXIT_DURATION}ms`);
@@ -584,14 +585,51 @@ describe("GridNotificationBar swap delay", () => {
   });
 });
 
-describe("GridNotificationBar reduced motion", () => {
+describe("GridNotificationBar reduced motion keeps the fade", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    stubMatchMedia(true);
     useNotificationStore.getState().reset();
   });
 
   afterEach(() => {
+    document.body.removeAttribute("data-reduce-animations");
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  function wrapperDuration(): string | undefined {
+    useNotificationStore.getState().reset();
+    addGridBar({ message: "Fade" });
+    const { container, unmount } = render(<GridNotificationBar />);
+    const duration = getWrapper(container)?.style.transitionDuration;
+    unmount();
+    return duration;
+  }
+
+  it("fades on the same timing under the OS setting and the in-app toggle", () => {
+    stubMatchMedia(false);
+    const full = wrapperDuration();
+    expect(full).not.toBe("0ms");
+
+    stubMatchMedia(true);
+    expect(wrapperDuration()).toBe(full);
+
+    stubMatchMedia(false);
+    document.body.setAttribute("data-reduce-animations", "true");
+    expect(wrapperDuration()).toBe(full);
+  });
+});
+
+describe("GridNotificationBar performance mode", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    stubMatchMedia(false);
+    document.body.setAttribute("data-performance-mode", "true");
+    useNotificationStore.getState().reset();
+  });
+
+  afterEach(() => {
+    document.body.removeAttribute("data-performance-mode");
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
   });
@@ -615,7 +653,7 @@ describe("GridNotificationBar reduced motion", () => {
     expect(wrapper?.style.transitionDuration).toBe("0ms");
   });
 
-  it("still applies the 150ms swap delay even under reduced motion", () => {
+  it("still applies the 150ms swap delay even under performance mode", () => {
     const firstId = addGridBar({ message: "First" });
     const { container } = render(<GridNotificationBar />);
 
@@ -629,7 +667,7 @@ describe("GridNotificationBar reduced motion", () => {
     // Live region cleared immediately.
     expect(getLiveRegion(container)?.textContent).toBe("");
 
-    // Swap delay still applies — not gated on prefers-reduced-motion.
+    // Swap delay still applies — not gated on performance mode.
     act(() => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY - 1);
     });

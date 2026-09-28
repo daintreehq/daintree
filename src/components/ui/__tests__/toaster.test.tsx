@@ -1855,11 +1855,16 @@ describe("Toast stack motion (issue #9618)", () => {
 
     const toasts = screen.getAllByRole("status").map(toastShell);
     expect(toasts).toHaveLength(3);
-    const transforms = toasts.map((t) => t.style.transform);
-    for (const transform of transforms) {
-      expect(transform).not.toMatch(/scale|translateY/);
+    const motion = toasts.map((t) =>
+      [
+        t.style.transform,
+        ...t.className.split(/\s+/).filter((c) => /^(scale|translate|-translate)-/.test(c)),
+      ].join(" ")
+    );
+    for (const m of motion) {
+      expect(m).not.toMatch(/scale|translateY|translate-y/);
     }
-    expect(new Set(transforms).size).toBe(1);
+    expect(new Set(motion).size).toBe(1);
   });
 
   it("keeps backdrop-blur off the animated wrapper to avoid Chromium 146 flicker", async () => {
@@ -1873,12 +1878,12 @@ describe("Toast stack motion (issue #9618)", () => {
     // backdrop blur lives only on the inner card so the compositor doesn't drop
     // it mid-animation.
     const wrapper = toastShell(screen.getByRole("status"));
-    expect(wrapper.className).toContain("transition-[transform,opacity]");
+    expect(wrapper.className).toContain("transition-[translate,opacity]");
     expect(wrapper.className).not.toContain("backdrop-blur");
 
     const card = wrapper.firstElementChild as HTMLElement;
     expect(card.className).toContain("backdrop-blur-xl");
-    expect(card.className).not.toContain("transition-[transform,opacity]");
+    expect(card.className).not.toContain("transition-[translate,opacity]");
   });
 
   it("scopes the reduced-motion guard to the animated wrapper", async () => {
@@ -1889,9 +1894,9 @@ describe("Toast stack motion (issue #9618)", () => {
     });
 
     const wrapper = toastShell(screen.getByRole("status"));
-    expect(wrapper.className).toContain("motion-reduce:transition-none");
+    expect(wrapper.className).toContain("motion-reduce:translate-none");
     const card = wrapper.firstElementChild as HTMLElement;
-    expect(card.className).not.toContain("motion-reduce:transition-none");
+    expect(card.className).not.toContain("motion-reduce:");
   });
 });
 

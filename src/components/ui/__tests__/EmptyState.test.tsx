@@ -308,11 +308,11 @@ describe("EmptyState", () => {
   });
 
   describe("animation", () => {
-    it("applies motion-safe entry animation classes on the current cell", () => {
+    it("applies the entry fade classes on the current cell", () => {
       const { container } = render(
         <EmptyState variant="zero-data" scale="canvas" title="No items" />
       );
-      const inner = container.querySelector(".motion-safe\\:animate-in");
+      const inner = container.querySelector(".animate-in");
       expect(inner).toBeTruthy();
     });
 
@@ -338,7 +338,7 @@ describe("EmptyState", () => {
       );
       // No outgoing cell — only the current title is rendered.
       expect(screen.getByText('No matches for "fo"')).toBeTruthy();
-      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(0);
+      expect(container.querySelectorAll(".animate-out").length).toBe(0);
     });
 
     it("renders both outgoing and incoming cells during a variant flip", () => {
@@ -353,7 +353,7 @@ describe("EmptyState", () => {
       // Incoming cell mounted with the new title.
       expect(screen.getByText('No matches for "foo"')).toBeTruthy();
       // Exit-animation class is on the outgoing cell.
-      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(1);
+      expect(container.querySelectorAll(".animate-out").length).toBe(1);
     });
 
     it("wires onAnimationEnd on the outgoing cell to drive cleanup", () => {
@@ -369,14 +369,14 @@ describe("EmptyState", () => {
       rerender(
         <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' />
       );
-      const outgoing = container.querySelector(".motion-safe\\:animate-out");
+      const outgoing = container.querySelector(".animate-out");
       expect(outgoing).toBeTruthy();
       // React stores props on the fiber, not the DOM, so we can't introspect
       // `onAnimationEnd` directly. Instead, assert the structural contract:
       // outgoing cell carries the exit-animation class and is mounted in
       // the same grid cell as the incoming cell.
       expect(outgoing?.className).toContain("[grid-area:1/1]");
-      const incoming = container.querySelector(".motion-safe\\:animate-in");
+      const incoming = container.querySelector(".animate-in");
       expect(incoming?.className).toContain("[grid-area:1/1]");
     });
 
@@ -387,11 +387,11 @@ describe("EmptyState", () => {
       rerender(
         <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' />
       );
-      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(1);
+      expect(container.querySelectorAll(".animate-out").length).toBe(1);
       act(() => {
         vi.advanceTimersByTime(260);
       });
-      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(0);
+      expect(container.querySelectorAll(".animate-out").length).toBe(0);
       expect(screen.queryByText('No matches for "fo"')).toBeNull();
     });
 
@@ -410,7 +410,7 @@ describe("EmptyState", () => {
       expect(screen.getByText('No matches for "foo"')).toBeTruthy();
       expect(screen.getByText('No matches for "fooz"')).toBeTruthy();
       expect(screen.queryByText('No matches for "fo"')).toBeNull();
-      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(1);
+      expect(container.querySelectorAll(".animate-out").length).toBe(1);
     });
 
     it("marks the outgoing cell as aria-hidden", () => {
@@ -420,7 +420,7 @@ describe("EmptyState", () => {
       rerender(
         <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' />
       );
-      const outgoing = container.querySelector(".motion-safe\\:animate-out");
+      const outgoing = container.querySelector(".animate-out");
       expect(outgoing?.getAttribute("aria-hidden")).toBe("true");
     });
 
@@ -445,7 +445,7 @@ describe("EmptyState", () => {
           action={<button data-testid="fresh-action">Clear search</button>}
         />
       );
-      const outgoing = container.querySelector(".motion-safe\\:animate-out");
+      const outgoing = container.querySelector(".animate-out");
       expect(outgoing?.hasAttribute("inert")).toBe(true);
     });
   });
@@ -465,7 +465,7 @@ describe("EmptyState", () => {
       rerender(
         <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' instant />
       );
-      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(0);
+      expect(container.querySelectorAll(".animate-out").length).toBe(0);
       expect(screen.queryByText('No matches for "fo"')).toBeNull();
       expect(screen.getByText('No matches for "foo"')).toBeTruthy();
     });
@@ -543,11 +543,11 @@ describe("EmptyState", () => {
     }
     function getTitle(container: HTMLElement) {
       // The title is the first non-description paragraph in the current cell.
-      const current = container.querySelector('[class*="motion-safe\\:animate-in"]');
+      const current = container.querySelector('[class*="animate-in"]');
       return current?.querySelector("p") as HTMLElement | null;
     }
     function getDescription(container: HTMLElement) {
-      const current = container.querySelector('[class*="motion-safe\\:animate-in"]');
+      const current = container.querySelector('[class*="animate-in"]');
       const paragraphs = current?.querySelectorAll("p") ?? [];
       // The description is the second paragraph (title is the first).
       return (paragraphs[1] ?? null) as HTMLElement | null;
@@ -626,12 +626,8 @@ describe("EmptyState", () => {
       const { container: canvasContainer } = render(
         <EmptyState variant="zero-data" scale="canvas" title="No items" />
       );
-      const sidebarCell = sidebarContainer.querySelector<HTMLElement>(
-        '[class*="motion-safe\\:animate-in"]'
-      );
-      const canvasCell = canvasContainer.querySelector<HTMLElement>(
-        '[class*="motion-safe\\:animate-in"]'
-      );
+      const sidebarCell = sidebarContainer.querySelector<HTMLElement>('[class*="animate-in"]');
+      const canvasCell = canvasContainer.querySelector<HTMLElement>('[class*="animate-in"]');
       expect(canvasCell?.className).toContain("gap-3");
       // Sidebar cell keeps the pre-#9813 gap-2 (no gap-3 token).
       expect(sidebarCell?.className).not.toContain("gap-3");
@@ -666,8 +662,8 @@ describe("EmptyState", () => {
         <EmptyState variant="zero-data" scale="sidebar" title="A" />
       );
       rerender(<EmptyState variant="zero-data" scale="canvas" title="B" />);
-      const outgoing = container.querySelector<HTMLElement>(".motion-safe\\:animate-out");
-      const incoming = container.querySelector<HTMLElement>(".motion-safe\\:animate-in");
+      const outgoing = container.querySelector<HTMLElement>(".animate-out");
+      const incoming = container.querySelector<HTMLElement>(".animate-in");
       // Outgoing is the previous (sidebar) state — no canvas gap-3.
       expect(outgoing?.className).not.toContain("gap-3");
       // Incoming is the new (canvas) state — carries the canvas gap-3.

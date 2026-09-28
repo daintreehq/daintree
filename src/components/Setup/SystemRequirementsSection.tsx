@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Callout } from "@/components/ui/Callout";
-import { AlertTriangle, ChevronDown, CircleCheck, RotateCw, CircleX } from "lucide-react";
-import { m, useReducedMotion } from "framer-motion";
+import { AlertTriangle, ChevronRight, CircleCheck, RotateCw, CircleX } from "lucide-react";
+import { m } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
@@ -23,7 +24,7 @@ export function SystemRequirementsSection({
     useSystemHealthCheck();
 
   const [userExpanded, setUserExpanded] = useState(false);
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
 
   // The last settled answer, held while a re-check runs. `hasFatalFailure`
   // reads false mid-check, and following it would unmount the failure panel —
@@ -137,8 +138,10 @@ export function SystemRequirementsSection({
           aria-controls="system-requirements-panel"
           className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left cursor-pointer rounded-[var(--radius-md)] transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
-          <ChevronDown
-            className={`w-3.5 h-3.5 text-text-secondary shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
+          <ChevronRight
+            aria-hidden="true"
+            data-animated-chevron
+            className={`w-3.5 h-3.5 text-text-secondary shrink-0 transition-transform duration-150 ease-out ${isExpanded ? "rotate-90" : ""}`}
           />
           {headerSummary}
         </button>

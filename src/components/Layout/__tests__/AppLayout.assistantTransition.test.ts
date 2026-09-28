@@ -111,7 +111,7 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
   // ease-panel-minimize) — switched on showAssistant, not a symmetric 250ms.
   it("uses asymmetric panel-motion-tier timing switched on showAssistant", () => {
     // Anchor to the assistant region (first aria-hidden = the spacer) so the
-    // sidebar's legitimate symmetric 250ms width transition isn't captured.
+    // sidebar width transition isn't captured.
     const region = source.match(
       /aria-hidden[\s\S]*?onTransitionEnd=\{handleAssistantTransitionEnd\}/
     );

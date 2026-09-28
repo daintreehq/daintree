@@ -52,6 +52,22 @@ import type {
 import { logError } from "@/utils/logger";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
+import { UI_ENTER_DURATION, UI_ENTER_EASING } from "@/lib/animationUtils";
+
+/**
+ * The URL suggestions and the error callout drop from the address field the way
+ * a toolbar dropdown does: 4px down and up from 97% while fading, on the entry
+ * tier, from `@starting-style` in the first painted frame. Enter only — both
+ * unmount the moment they are dismissed (a navigation, a blur, a fixed URL), and
+ * the suggestions' rows are live targets that must not linger under the pointer.
+ * Reduced motion keeps the fade.
+ */
+const ANCHORED_ENTER_CLASS =
+  "origin-top transition-[opacity,translate,scale] starting:opacity-0 starting:-translate-y-1 starting:scale-[0.97] motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none";
+const ANCHORED_ENTER_STYLE = {
+  transitionDuration: `${UI_ENTER_DURATION}ms`,
+  transitionTimingFunction: UI_ENTER_EASING,
+};
 
 const LONG_PRESS_MS = 400;
 const COMPACT_ROW_WIDTH = 640;
@@ -922,7 +938,11 @@ export function BrowserToolbar({
               <div
                 id={errorId}
                 role="alert"
-                className="absolute left-0 mt-1 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10"
+                className={cn(
+                  "absolute left-0 mt-1 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10",
+                  ANCHORED_ENTER_CLASS
+                )}
+                style={ANCHORED_ENTER_STYLE}
               >
                 {error}
               </div>
@@ -934,7 +954,11 @@ export function BrowserToolbar({
               ref={dropdownRef}
               id={listboxId}
               role="listbox"
-              className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden p-1"
+              className={cn(
+                "absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden p-1",
+                ANCHORED_ENTER_CLASS
+              )}
+              style={ANCHORED_ENTER_STYLE}
             >
               {suggestions.map((entry, index) => {
                 const entryAddress = addressOf(entry.url);

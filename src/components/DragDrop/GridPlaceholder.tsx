@@ -25,7 +25,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
       className={cn(
         "flex h-full w-full flex-col overflow-hidden rounded-lg",
         DROP_SLOT_FRAME,
-        "animate-in fade-in duration-200",
+        "animate-in fade-in [--tw-animation-duration:var(--duration-200)]",
         className
       )}
       aria-hidden="true"

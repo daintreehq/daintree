@@ -537,16 +537,17 @@
   opacity: 0;
   transform: scale(0);
   transition:
-    display 120ms allow-discrete,
-    opacity 120ms ease,
-    transform 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
 }
 
 .toolbar-badge[data-visible="true"] {
   display: block;
   opacity: 1;
   transform: scale(1);
-  transition-duration: 200ms;
+  transition-duration: var(--duration-200);
+  transition-timing-function: var(--ease-spring-critical);
 
   @starting-style {
     opacity: 0;
@@ -560,14 +561,15 @@
   display: none;
   opacity: 0;
   transition:
-    display 120ms allow-discrete,
-    opacity 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit);
 }
 
 .toolbar-badge-chip[data-visible="true"] {
   display: block;
   opacity: 1;
-  transition-duration: 200ms;
+  transition-duration: var(--duration-200);
+  transition-timing-function: var(--ease-spring-critical);
 
   @starting-style {
     opacity: 0;
@@ -588,20 +590,20 @@
   display: none;
   opacity: 0;
   transition:
-    display 120ms allow-discrete,
-    opacity 120ms ease,
-    color 150ms ease-out,
-    background-color 150ms ease-out;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    color var(--duration-150) ease-out,
+    background-color var(--duration-150) ease-out;
 }
 
 [data-toolbar-overflow-trigger][data-visible="true"] {
   display: inline-flex;
   opacity: 1;
   transition:
-    display 200ms allow-discrete,
-    opacity 200ms ease,
-    color 150ms ease-out,
-    background-color 150ms ease-out;
+    display var(--duration-200) allow-discrete,
+    opacity var(--duration-200) var(--ease-spring-critical),
+    color var(--duration-150) ease-out,
+    background-color var(--duration-150) ease-out;
 
   @starting-style {
     opacity: 0;
@@ -616,9 +618,9 @@
   background-color: var(--overflow-badge-color);
   transition:
     --overflow-badge-color 150ms ease-out,
-    display 120ms allow-discrete,
-    opacity 120ms ease,
-    transform 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
 }
 
 /* WCAG 1.4.1: non-color shape differentiator per tier. Critical reads as a
@@ -655,9 +657,9 @@
   background-color: var(--problems-dot-color);
   transition:
     --problems-dot-color 150ms ease-out,
-    display 120ms allow-discrete,
-    opacity 120ms ease,
-    transform 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
 }
 
 .toolbar-problems-badge[data-visible="true"] {
@@ -677,36 +679,17 @@
  * "Reduce UI animations" toggle (`body[data-reduce-animations="true"]`).
  */
 @variant reduce-motion {
+  /* The pips scale in and out; the chips and the overflow trigger already
+   * only fade, so they keep their timing untouched. Only the scale goes. The
+   * display swap keeps its timed exit so the fade-out still paints before
+   * `display: none` lands (lesson #6182). */
+  .toolbar-badge[data-visible="true"],
   .toolbar-badge {
-    transition:
-      display 0s,
-      opacity 200ms ease,
-      transform 0s;
-  }
-
-  .toolbar-badge[data-visible="true"] {
     transform: none;
 
     @starting-style {
-      opacity: 0;
       transform: none;
     }
-  }
-
-  .toolbar-badge-chip {
-    transition:
-      display 0s,
-      opacity 200ms ease;
-  }
-
-  /* Keep a timed (not `none`) display swap so the discrete show/hide still
-   * completes (lesson #6182); the fade collapses to opacity-only. */
-  [data-toolbar-overflow-trigger] {
-    transition:
-      display 0s,
-      opacity 200ms ease,
-      color 150ms ease-out,
-      background-color 150ms ease-out;
   }
 }
 

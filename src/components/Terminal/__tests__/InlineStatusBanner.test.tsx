@@ -691,10 +691,9 @@ describe("InlineStatusBanner", () => {
     expect(root.className).not.toContain("transition-all");
   });
 
-  it("suppresses the entrance transition when data-reduce-animations is true", () => {
-    document.body.setAttribute("data-reduce-animations", "true");
-    try {
-      const { container } = render(
+  it("keeps the entrance fade but drops its slide when data-reduce-animations is true", () => {
+    const render250 = () =>
+      render(
         <InlineStatusBanner
           icon={Info}
           title="Animated"
@@ -702,9 +701,16 @@ describe("InlineStatusBanner", () => {
           animated={true}
           actions={[]}
         />
-      );
-      const root = container.firstElementChild as HTMLElement;
-      expect(root.className).not.toContain("duration-250");
+      ).container.firstElementChild as HTMLElement;
+    const full = render250().className.split(/\s+/);
+    document.body.setAttribute("data-reduce-animations", "true");
+    try {
+      const reduced = render250().className.split(/\s+/);
+      // Same entrance under either preference: reduced motion is handled by the
+      // app-aware `motion-reduce:` variant, never by dropping the transition.
+      expect(reduced).toEqual(full);
+      expect(reduced).toContain("motion-reduce:transition-opacity");
+      expect(reduced).toContain("motion-reduce:translate-none");
     } finally {
       document.body.removeAttribute("data-reduce-animations");
     }

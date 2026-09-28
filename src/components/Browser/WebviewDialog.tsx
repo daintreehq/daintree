@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
+import { UI_ENTER_DURATION, UI_ENTER_EASING, UI_SCRIM_EASING } from "@/lib/animationUtils";
 
 /**
  * `ScrollShadow` reads its fade colour from this variable, and the card is the surface the
@@ -14,6 +15,20 @@ import { FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
  */
 const CARD_STYLE: CSSProperties & Record<"--scroll-shadow-color", string> = {
   "--scroll-shadow-color": "var(--color-surface-dialog)",
+  transitionDuration: `${UI_ENTER_DURATION}ms`,
+  transitionTimingFunction: UI_ENTER_EASING,
+};
+
+/**
+ * Enters like every AppDialog: the scrim fades, the card rises 4px and settles from
+ * 98% while it fades, starting from `@starting-style` in the first painted frame.
+ * There is no exit: the guest is answered the instant a button is pressed, and the
+ * card that would linger through a fade-out still carries the `aria-modal` four
+ * input owners key off (see below), so it leaves at once.
+ */
+const SCRIM_STYLE: CSSProperties = {
+  transitionDuration: `${UI_ENTER_DURATION}ms`,
+  transitionTimingFunction: UI_SCRIM_EASING,
 };
 
 // Kept in sync with src/lib/accessibility.ts — this dialog cannot import from there
@@ -151,7 +166,8 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-medium p-4"
+      className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-medium p-4 transition-opacity starting:opacity-0"
+      style={SCRIM_STYLE}
       onKeyDown={handleEscape}
     >
       <div
@@ -177,7 +193,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
         aria-labelledby={titleId}
         aria-describedby={messageId}
         tabIndex={-1}
-        className="bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] w-full max-w-md max-h-full flex flex-col overflow-hidden"
+        className="bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] w-full max-w-md max-h-full flex flex-col overflow-hidden transition-[opacity,translate,scale] starting:opacity-0 starting:translate-y-1 starting:scale-[0.98] motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none"
         style={CARD_STYLE}
       >
         {/* The only line on this surface Daintree wrote. Everything below it is the
