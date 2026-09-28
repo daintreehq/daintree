@@ -265,6 +265,34 @@ async function captureWorktreeDialog(page: Page, theme: string): Promise<void> {
   const input = dialog.locator("input[type=text], input:not([type])").first();
   await keyboardFocus(page, input);
   await shot(page, `worktree-dialog-input-focus--${theme}.png`, dialog, 0);
+
+  // The base-branch picker holding a query: the popover search strip, its clear
+  // control, and what the first Escape does to the query and the picker.
+  await dialog.locator('button[role="combobox"][aria-haspopup="listbox"]').first().click();
+  const pickerInput = page.locator('[role="dialog"] input[role="combobox"]').last();
+  await pickerInput.waitFor({ state: "visible", timeout: 8000 });
+  await pickerInput.fill("ma");
+  await expect(pickerInput).toHaveValue("ma");
+  await settle(page, 400);
+  await shot(page, `branch-picker-query--${theme}.png`, dialog, 0);
+  await page.keyboard.press("Escape");
+  await settle(page, 300);
+  const pickerOpen = await pickerInput.isVisible().catch(() => false);
+  writeFileSync(
+    path.join(OUTPUT_DIR, `branch-picker-escape--${theme}.json`),
+    JSON.stringify(
+      {
+        pickerOpen,
+        valueAfterEscape: pickerOpen ? await pickerInput.inputValue() : null,
+        dialogOpen: await dialog.isVisible(),
+      },
+      null,
+      2
+    )
+  );
+  if (pickerOpen) await page.keyboard.press("Escape");
+  await settle(page, 300);
+
   for (let i = 0; i < 3 && (await dialog.isVisible().catch(() => false)); i++) {
     await page.keyboard.press("Escape");
     const discard = page.getByRole("button", { name: "Discard", exact: true });
