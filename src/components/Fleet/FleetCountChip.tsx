@@ -304,20 +304,18 @@ export function FleetCountChip({
                 })
               )}
             </ul>
-            <button
-              type="button"
-              onClick={() => setPopoverMode("picker")}
-              data-testid="fleet-armed-list-add-panes"
-              className={cn(
-                "mt-1 flex items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-xs leading-[inherit] text-text-secondary",
-                "hover:bg-tint/[0.08] hover:text-text-primary",
-                "border-t border-daintree-border/50 pt-2",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              )}
-            >
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Add panes…</span>
-            </button>
+            <div className="mt-1 border-t border-border-default/50 pt-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPopoverMode("picker")}
+                data-testid="fleet-armed-list-add-panes"
+                className="w-full justify-start gap-2 px-2 focus-visible:-outline-offset-2"
+              >
+                <Plus aria-hidden="true" />
+                <span>Add panes…</span>
+              </Button>
+            </div>
           </>
         ) : picker.acquired ? (
           <>

@@ -756,9 +756,8 @@ function FindingsList({ findings }: { findings: SlowdownFinding[] }) {
       </ul>
       {collapsible ? (
         <Button
-          variant="ghost"
-          size="xs"
-          className="self-start text-text-primary underline decoration-text-secondary underline-offset-2"
+          variant="link"
+          className="self-start text-xs"
           aria-expanded={showAll}
           aria-controls="why-slow-findings"
           onClick={() => setShowAll((v) => !v)}

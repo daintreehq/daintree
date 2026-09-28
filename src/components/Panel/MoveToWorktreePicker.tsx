@@ -365,12 +365,7 @@ function MoveToWorktreePickerBody({
             query={deferredQuery}
             emptyMessage="No worktrees"
             noMatchContent={
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={clearSearch}
-                className="px-2 text-xs focus-visible:-outline-offset-2"
-              >
+              <Button variant="subtle" size="sm" onClick={clearSearch}>
                 Clear search
               </Button>
             }

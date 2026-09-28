@@ -463,14 +463,14 @@ export function ImportEnvDialog({
                             {/* The line number is the way to the line: it
                                 selects it in the field, so the fix is typed
                                 over the problem rather than hunted for. */}
-                            <button
-                              type="button"
+                            <Button
+                              variant="link"
                               onClick={() => goToLine(e.line)}
                               aria-label={`Go to line ${e.line}`}
-                              className="shrink-0 rounded-xs font-mono text-2xs text-text-secondary underline decoration-dotted underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                              className="shrink-0 font-mono text-2xs"
                             >
                               Line {e.line}
-                            </button>
+                            </Button>
                             <span className="font-medium text-text-primary">{e.reason}</span>
                             {e.fix && <span className="text-text-secondary">{e.fix}</span>}
                           </div>

@@ -1904,8 +1904,8 @@ export function PilotView() {
             noMatchContent={
               bandFilter === "all" ? undefined : (
                 <Button
-                  variant="ghost"
-                  size="xs"
+                  variant="subtle"
+                  size="sm"
                   data-testid="pilot-clear-filter"
                   onClick={() => {
                     setBandFilter("all");
@@ -1915,7 +1915,6 @@ export function PilotView() {
                     // is no row to arrow to either.
                     searchRef.current?.focus();
                   }}
-                  className="px-2 text-xs focus-visible:-outline-offset-2"
                 >
                   Clear filter
                 </Button>
