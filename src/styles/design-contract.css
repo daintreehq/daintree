@@ -42,6 +42,32 @@
   }
 }
 
+/* Tailwind's own `motion-reduce:` and `motion-safe:` read only the OS media
+ * query, so every component guarding motion with them ignored the in-app
+ * "Reduce UI animations" toggle. These redefinitions add the body-attribute
+ * branch. They are the utility-class spelling: `&` is required here because a
+ * utility's rule is the element itself, which is exactly the form that does
+ * not work inside a top-level `@variant reduce-motion { }` block. Components
+ * use `motion-reduce:` / `motion-safe:`; CSS files use `@variant reduce-motion`.
+ * `:where()` keeps the added branch at zero specificity, so a guarded utility
+ * orders against its base exactly as the stock variant did. */
+@custom-variant motion-reduce {
+  @media (prefers-reduced-motion: reduce) {
+    @slot;
+  }
+  &:where(body[data-reduce-animations="true"] *) {
+    @slot;
+  }
+}
+
+@custom-variant motion-safe {
+  @media (prefers-reduced-motion: no-preference) {
+    &:where(:not(body[data-reduce-animations="true"] *)) {
+      @slot;
+    }
+  }
+}
+
 @theme inline {
   --color-*: initial;
 

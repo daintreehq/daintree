@@ -1199,7 +1199,7 @@ body,
 }
 
 .animate-fleet-bar-commit-flash::before {
-  animation: fleet-bar-commit-flash 140ms var(--ease-out-expo) 1 both;
+  animation: fleet-bar-commit-flash var(--duration-150) var(--ease-out-expo) 1 both;
   will-change: opacity;
 }
 
@@ -1226,7 +1226,7 @@ body,
   pointer-events: none;
   border-radius: inherit;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 35%, transparent);
-  animation: fleet-exit-pulse 220ms var(--ease-out-expo) 1 both;
+  animation: fleet-exit-pulse var(--duration-200) var(--ease-out-expo) 1 both;
   will-change: opacity;
   z-index: 2;
 }
@@ -1447,16 +1447,10 @@ body,
     will-change: auto;
   }
 
-  /* Content fade-in — drop the keyframe and snap to visible. */
-  .content-fade-in {
-    animation: none;
-    opacity: 1;
-  }
-
   /* Empty-grid launcher entry stagger — drop the keyframes and snap every
    * section to its resting state. The sections' `motion-safe:` utilities
-   * already cover the OS preference; this rule is what honours the in-app
-   * reduce-animations toggle, which `motion-safe:` cannot see. */
+   * cover both preferences too; this rule also clears the `opacity: 0` the
+   * stagger's `fill-mode-backwards` would otherwise hold. */
   .launcher-section-enter {
     animation: none;
     opacity: 1;
@@ -1530,16 +1524,6 @@ body,
     opacity: 0;
   }
 
-  /* Grid notification bar — keep the opacity fade (state cue) but drop the
-   * height interpolation so the bar appears/disappears without spatial motion.
-   * WCAG 2.3.3: opacity is not motion; height collapse is.
-   */
-  .grid-notification-wrapper {
-    transition-property: opacity;
-    transition-duration: var(--duration-200);
-    transition-timing-function: ease-out;
-  }
-
   /* Banner slot — drop the height interpolation under reduced motion so the
    * banner appears/disappears without spatial motion. WCAG 2.3.3.
    */
@@ -1564,8 +1548,12 @@ body,
     transition: none !important;
   }
 
+  /* Focused elements and buttons (below) keep only their opacity transition:
+   * the focus ring's outline motion and any press or hover interpolation go,
+   * but a focused palette card or a pill that is also a button still fades.
+   * `transition: none` here used to cancel those surfaces' fades too. */
   *:focus-visible {
-    transition: none !important;
+    transition-property: opacity !important;
   }
 
   .animate-activity-pulse,
@@ -1581,7 +1569,7 @@ body,
   [type="submit"]:not([data-state="open"]):not([data-state="closed"]),
   [type="reset"]:not([data-state="open"]):not([data-state="closed"]) {
     transform: none !important;
-    transition: none !important;
+    transition-property: opacity !important;
   }
 
   /* Radix overlay enter/exit (popover, dropdown, context-menu, select,
