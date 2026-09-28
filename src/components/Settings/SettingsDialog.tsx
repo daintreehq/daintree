@@ -24,7 +24,8 @@ import {
   usePreferencesStore,
   useSettingsStore,
 } from "@/store";
-import { X, Search, ChevronRight, ChevronDown, Info } from "lucide-react";
+import { Search, ChevronRight, ChevronDown, Info } from "lucide-react";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { SearchField } from "@/components/ui/SearchField";
 import { KbdChord } from "@/components/ui/Kbd";
 import { ArrowLeftRight, TriangleAlert } from "@/components/icons";
@@ -964,14 +965,10 @@ function SettingsDialogInner({
                       </button>{" "}
                       is on
                     </p>
-                    <button
-                      type="button"
+                    <DismissButton
                       aria-label="Dismiss"
                       onClick={() => setHiddenSettingBanner(null)}
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                    >
-                      <X className="h-3.5 w-3.5" aria-hidden="true" />
-                    </button>
+                    />
                   </div>
                 )}
                 {SETTINGS_REGISTRY.filter((e) => e.scope === "global").map((entry) => {

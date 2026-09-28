@@ -4,6 +4,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { PtyPanelData } from "@shared/types/panel";
 import { RunningTaskList, resetDismissedTasks } from "../RunningTaskList";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. The trigger renders its child
+// as-is; the content is dropped so tooltip text can't collide with queries.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const WORKTREE_ID = "wt-1";
 

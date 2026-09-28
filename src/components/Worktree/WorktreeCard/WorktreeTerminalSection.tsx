@@ -26,13 +26,13 @@ import {
   PanelTopClose,
   Plus,
   SquareTerminal,
-  X,
 } from "lucide-react";
 import {
   SortableWorktreeTerminal,
   getAccordionDragId,
 } from "@/components/DragDrop/SortableWorktreeTerminal";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
@@ -553,9 +553,8 @@ export function WorktreeTerminalSection({
                     border is the rows' own, so the text starts on their glyph
                     column. */}
                 <span>Click or drag across sessions to select</span>
-                <button
-                  type="button"
-                  className="-my-1 -mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+                <DismissButton
+                  className="-my-1 -mr-1.5"
                   aria-label="Dismiss hint"
                   onClick={(e) => {
                     // Dismissing the hint must not double as selecting the
@@ -564,9 +563,7 @@ export function WorktreeTerminalSection({
                     localStorage.setItem(FLEET_HINT_DISMISSED_KEY, "1");
                     setHintDismissed(true);
                   }}
-                >
-                  <X className="h-3 w-3" aria-hidden="true" />
-                </button>
+                />
               </div>
             )}
             <div

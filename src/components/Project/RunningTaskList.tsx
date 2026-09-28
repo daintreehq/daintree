@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { ChevronDown, X, Eye, RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
@@ -349,51 +351,54 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       {/* Actions */}
       <div className="hidden items-center gap-0.5 shrink-0 group-hover:flex group-focus-within:flex">
         {isActive && (
-          <button
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={(e) => {
               e.stopPropagation();
               onStop(terminal.id);
             }}
-            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-status-error"
+            className="[&_svg]:size-3.5 hover:text-status-error"
             aria-label="Stop task"
           >
-            <X className="h-3 w-3" />
-          </button>
+            <X aria-hidden="true" />
+          </Button>
         )}
         {status === "failed" && terminal.exitBehavior !== "restart" && (
-          <button
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={(e) => {
               e.stopPropagation();
               onRestart(terminal.id);
             }}
-            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
+            className="[&_svg]:size-3.5"
             aria-label="Restart task"
           >
-            <RotateCw className="h-3 w-3" />
-          </button>
+            <RotateCw aria-hidden="true" />
+          </Button>
         )}
         {(status === "failed" || status === "success") && (
-          <button
+          <DismissButton
             onClick={(e) => {
               e.stopPropagation();
               onDismiss(terminal.id, e.currentTarget, e.detail === 0);
             }}
-            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
             aria-label="Dismiss"
-          >
-            <X className="h-3 w-3" />
-          </button>
+          />
         )}
-        <button
+        <Button
+          variant="ghost"
+          size="icon-xs"
           onClick={(e) => {
             e.stopPropagation();
             onFocus(terminal.id);
           }}
-          className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
+          className="[&_svg]:size-3.5"
           aria-label="Focus terminal"
         >
-          <Eye className="h-3 w-3" />
-        </button>
+          <Eye aria-hidden="true" />
+        </Button>
       </div>
     </div>
   );

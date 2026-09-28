@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Info, AlertTriangle, XCircle, CheckCircle2, Pin } from "lucide-react";
+import { Info, AlertTriangle, XCircle, CheckCircle2, Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -163,15 +164,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
             >
               <Pin aria-hidden="true" className={cn(isPinned && "fill-current")} />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={state.dismiss}
-              aria-label="Dismiss summary"
-              className="[&_svg]:size-3.5"
-            >
-              <X aria-hidden="true" />
-            </Button>
+            <DismissButton onClick={state.dismiss} aria-label="Dismiss summary" />
           </div>
         </div>
 
