@@ -28,7 +28,9 @@ const OVERLAY_SLIDE =
  *
  * Exit is deliberately faster than enter (120ms against 200ms): a surface on
  * its way out is no longer the thing being looked at, and matching the two
- * makes dismissal feel like it lagged the click.
+ * makes dismissal feel like it lagged the click. The easings are the same pair
+ * as well: spring-critical in, the accelerating exit curve out, which is what
+ * `UI_ENTER_EASING` / `UI_EXIT_EASING` give the dialogs and FixedDropdown.
  *
  * Those numbers are the entry/exit tier, and they are the same numbers
  * `UI_ENTER_DURATION` / `UI_EXIT_DURATION` carry in `src/lib/animationUtils.ts`
@@ -37,6 +39,11 @@ const OVERLAY_SLIDE =
  * value; `radix-animation-classes.test.tsx` derives the expected class from
  * the constant so the two cannot drift apart silently.
  *
+ * Durations are `animation-duration-*`, not `duration-*`: the latter also sets
+ * `transition-duration`, and with no transition list of its own the surface
+ * then interpolated every property that changed under it (the Radix
+ * `transform-origin`, tooltip `visibility`).
+ *
  * Plain `join()` rather than `cn()` because there is nothing here to merge: no
  * conditional segments and no two tokens in the same conflict group. Every
  * consumer passes the result through `cn()` with its own `className` anyway,
@@ -44,7 +51,8 @@ const OVERLAY_SLIDE =
  */
 export const OVERLAY_MOTION_CLASS = [
   "data-[state=open]:animate-in data-[state=closed]:animate-out",
-  "data-[state=open]:duration-200 data-[state=closed]:duration-120",
+  "data-[state=open]:animation-duration-200 data-[state=closed]:animation-duration-120",
+  "data-[state=open]:ease-[var(--ease-spring-critical)] data-[state=closed]:ease-[var(--ease-exit)]",
   "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
   "data-[state=open]:zoom-in-97 data-[state=closed]:zoom-out-97",
   OVERLAY_SLIDE,
@@ -65,7 +73,7 @@ export const OVERLAY_MOTION_CLASS = [
 export const OVERLAY_DROP_MOTION_CLASS = "overlay-motion-drop";
 
 /**
- * Tooltips: the same slide and fade, quicker, and no zoom.
+ * Tooltips: the same slide, fade and easing pair, quicker, and no zoom.
  *
  * The two differences are the point rather than drift. A tooltip is a caption
  * that tracks the pointer across a toolbar, so 200ms in reads as lag on a
@@ -74,7 +82,7 @@ export const OVERLAY_DROP_MOTION_CLASS = "overlay-motion-drop";
  * shared language — direction, distance, the fade — comes from the same place.
  */
 export const TOOLTIP_MOTION_CLASS = [
-  "animate-in fade-in-0 duration-150",
-  "data-[state=closed]:animate-out data-[state=closed]:duration-100 data-[state=closed]:fade-out-0",
+  "animate-in fade-in-0 animation-duration-150 ease-[var(--ease-spring-critical)]",
+  "data-[state=closed]:animate-out data-[state=closed]:animation-duration-100 data-[state=closed]:fade-out-0 data-[state=closed]:ease-[var(--ease-exit)]",
   OVERLAY_SLIDE,
 ].join(" ");

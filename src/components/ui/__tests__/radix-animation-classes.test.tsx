@@ -14,7 +14,9 @@ import {
 } from "../overlayMotion";
 import {
   UI_ENTER_DURATION,
+  UI_ENTER_EASING,
   UI_EXIT_DURATION,
+  UI_EXIT_EASING,
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
 } from "@/lib/animationUtils";
@@ -163,12 +165,29 @@ describe("overlay motion is defined once and stays on its tiers", () => {
     // constant the dialogs animate on, and a Tailwind class a utility cannot
     // read it from. Deriving the class here is what makes retiming
     // `animationUtils.ts` fail loudly instead of desyncing the overlays.
-    expect(OVERLAY_MOTION_CLASS).toContain(`data-[state=${state}]:duration-${duration}`);
+    expect(OVERLAY_MOTION_CLASS).toContain(`data-[state=${state}]:animation-duration-${duration}`);
   });
 
   it.each([
-    ["enter", UI_PALETTE_ENTER_DURATION, "duration-"],
-    ["exit", UI_PALETTE_EXIT_DURATION, "data-[state=closed]:duration-"],
+    ["open", UI_ENTER_EASING],
+    ["closed", UI_EXIT_EASING],
+  ])("eases its %s state on the same curve the dialogs use", (state, easing) => {
+    // The class names a CSS token; the dialogs read the JS constant. Resolve
+    // the token from the design contract and compare curves, so the overlays
+    // and the dialogs cannot drift onto different easings.
+    const token = new RegExp(`data-\\[state=${state}\\]:ease-\\[var\\((--[\\w-]+)\\)\\]`).exec(
+      OVERLAY_MOTION_CLASS
+    )?.[1];
+    expect(token).toBeTruthy();
+    const contract = readFileSync(path.join(SRC_ROOT, "styles", "design-contract.css"), "utf8");
+    const value = new RegExp(`${token}:\\s*([^;]+);`).exec(contract)?.[1];
+    const normalize = (curve: string) => curve.replace(/\s+/g, "");
+    expect(normalize(value ?? "")).toBe(normalize(easing));
+  });
+
+  it.each([
+    ["enter", UI_PALETTE_ENTER_DURATION, "animation-duration-"],
+    ["exit", UI_PALETTE_EXIT_DURATION, "data-[state=closed]:animation-duration-"],
   ])("times its tooltip %s on the palette/tooltip tier", (_phase, duration, prefix) => {
     expect(TOOLTIP_MOTION_CLASS).toContain(`${prefix}${duration}`);
   });
