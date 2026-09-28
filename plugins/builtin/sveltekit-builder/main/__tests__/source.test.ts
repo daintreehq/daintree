@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import { activate } from "../index.js";
 import {
@@ -343,14 +343,19 @@ describe("sourceChanged", () => {
     const external = `${source}\n<!-- agent -->\n`;
     await fs.writeFile(sandbox.file(NATIVE), external);
     fire();
-    await settle();
-    expect(test.pushes().filter((push) => push.channel === PUSH_CHANNELS.sourceChanged)).toEqual([
-      {
-        channel: PUSH_CHANNELS.sourceChanged,
-        payload: { workspaceSessionId, file: NATIVE_IN_WORKTREE, revision: sha(external) },
-        panelId: "preview-1",
-      },
-    ]);
+    await vi.waitFor(
+      () =>
+        expect(
+          test.pushes().filter((push) => push.channel === PUSH_CHANNELS.sourceChanged)
+        ).toEqual([
+          {
+            channel: PUSH_CHANNELS.sourceChanged,
+            payload: { workspaceSessionId, file: NATIVE_IN_WORKTREE, revision: sha(external) },
+            panelId: "preview-1",
+          },
+        ]),
+      { timeout: 5000 }
+    );
   });
 });
 
@@ -379,16 +384,23 @@ describe("sourceChanged for a directory already watched", () => {
       return bytes;
     };
     await selectOne(observation(locationOf(cardSource, "<article", card), { tagName: "ARTICLE" }));
-    await settle();
 
+    // The reconcile re-reads the file from disk in the background, so a slow
+    // runner can still be mid-read after any fixed delay; wait for its push.
+    await vi.waitFor(
+      () =>
+        expect(
+          test.pushes().filter((push) => push.channel === PUSH_CHANNELS.sourceChanged)
+        ).toEqual([
+          {
+            channel: PUSH_CHANNELS.sourceChanged,
+            payload: { workspaceSessionId, file: `apps/site/${card}`, revision: sha(external) },
+            panelId: "preview-1",
+          },
+        ]),
+      { timeout: 5000 }
+    );
     expect(test.watchers).toHaveLength(1);
-    expect(test.pushes().filter((push) => push.channel === PUSH_CHANNELS.sourceChanged)).toEqual([
-      {
-        channel: PUSH_CHANNELS.sourceChanged,
-        payload: { workspaceSessionId, file: `apps/site/${card}`, revision: sha(external) },
-        panelId: "preview-1",
-      },
-    ]);
   });
 });
 
