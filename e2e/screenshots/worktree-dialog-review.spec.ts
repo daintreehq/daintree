@@ -16,8 +16,9 @@
  *   DAINTREE_SHOT_THEME   optional theme id (default: the app default)
  *   DAINTREE_SHOT_TAG     optional suffix so rounds sit side by side
  *   DAINTREE_SHOT_ONLY    comma-separated step filter (see step names below)
+ *   DESIGN_CAPTURE_DIR    optional absolute output dir, so review rounds stay out of the tree
  *
- * Output: artifacts/dialog-shots/<NN-slug>[-tag].png (gitignored).
+ * Output: artifacts/dialog-shots/<NN-slug>[-tag].png (gitignored) unless DESIGN_CAPTURE_DIR.
  */
 
 import { test, type Page } from "@playwright/test";
@@ -38,7 +39,8 @@ const PANEL = `${SEL.worktree.newDialog} > div`;
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "dialog-shots");
+const OUTPUT_DIR =
+  process.env.DESIGN_CAPTURE_DIR ?? path.resolve(process.cwd(), "artifacts", "dialog-shots");
 
 const POLISH_CSS = `
   ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
@@ -108,6 +110,15 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
     git(`branch ${branch}`, dir);
   }
   git("checkout develop", dir);
+
+  // Branches held by other worktrees, so the base picker has "in use" rows to
+  // draw — one short, one long enough on both the branch and the worktree name
+  // to exercise the row's truncation order.
+  git(`worktree add "${path.join(wtRoot, "uploads")}" feature/streaming-uploads`, dir);
+  git(
+    `worktree add -b feature/issue-12015-roll-redacted-payload-through-export "${path.join(wtRoot, "redacted-payload-export-pipeline-rework")}" main`,
+    dir
+  );
 
   return {
     dir,
@@ -341,6 +352,39 @@ test("new-worktree dialog review — rest and interactive states", async () => {
         .catch(() => {});
       await settle(page, 500);
       await snap(page, "30-base-branch-picker");
+      await closeDialog(page);
+    });
+
+    // 3b. In-use rows — branches another worktree already holds, at rest, under
+    // the cursor, and squeezed so the row has to give way.
+    await step("in-use", async () => {
+      await openDialog(page);
+      await page.locator(SEL.worktree.baseBranchTrigger).click();
+      const list = page.locator('[role="listbox"]').first();
+      await list.waitFor({ state: "visible", timeout: 4000 });
+      const popover = "[data-radix-popper-content-wrapper]";
+      await settle(page, 400);
+      await snap(page, "35-in-use-rest", popover);
+      await page
+        .getByRole("option", { name: /feature\/streaming-uploads/ })
+        .first()
+        .hover();
+      await snap(page, "36-in-use-highlighted", popover);
+      await page
+        .getByRole("option", { name: /feature\/issue-12015/ })
+        .first()
+        .hover();
+      await snap(page, "37-in-use-long-highlighted", popover);
+
+      // The window's minimum width (800) still fits the whole dialog, so the
+      // popover never gets narrower than its trigger in practice. Pin it to
+      // 380px to see which half of a crowded row gives way first.
+      const narrow = await page.addStyleTag({
+        content: `${popover} > * { width: 380px !important; }`,
+      });
+      await settle(page, 300);
+      await snap(page, "38-in-use-narrow", popover);
+      await narrow.evaluate((el) => el.remove());
       await closeDialog(page);
     });
 

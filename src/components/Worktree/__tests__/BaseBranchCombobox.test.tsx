@@ -91,7 +91,7 @@ describe("BaseBranchCombobox in-use rows", () => {
 
   it("labels the in-use badge with the owning worktree name, not the branch name", () => {
     renderCombobox([inUseRow("main", { id: "main-wt", name: "main-worktree" })]);
-    expect(screen.getByTitle("In use by worktree: main-worktree")).toBeTruthy();
+    expect(screen.getByRole("option", { name: /in use by worktree main-worktree/ })).toBeTruthy();
   });
 });
 
