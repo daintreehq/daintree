@@ -262,6 +262,7 @@ export const EXTENSION_KEYS = [
   "dialog-shadow",
   "floating-surface-bg",
   "floating-surface-shadow",
+  "overlay-surface-color",
 
   // Dock (docked terminal/agent dock pill)
   "dock-bg",
@@ -376,6 +377,7 @@ export const EXTENSION_KEYS = [
   // Welcome screen
   "welcome-field-wash",
   "welcome-mark-color",
+  "grid-mark-color",
 
   // Worktree section
   "worktree-section-hover-bg",

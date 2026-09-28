@@ -650,15 +650,17 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
     const elevated = scheme.tokens["surface-panel-elevated"];
     return isHexColor(elevated) ? [elevated] : null;
   }
-  const sidebar = scheme.tokens["surface-sidebar"];
-  if (!isHexColor(sidebar)) return null;
-  // The solid sidebar stays in the running: performance mode and
+  // Dark overlays paint the sidebar plane unless the theme lifts them with the
+  // `overlay-surface-color` extension (the `.surface-overlay` rules in index.css).
+  const plane = scheme.extensions?.["overlay-surface-color"] ?? scheme.tokens["surface-sidebar"];
+  if (!isHexColor(plane)) return null;
+  // The solid plane stays in the running: performance mode and
   // `prefers-contrast: more` both drop the material and render it opaque.
   return [
-    sidebar,
+    plane,
     ...DARK_PALETTE_BACKDROPS.map((key) => scheme.tokens[key])
       .filter(isHexColor)
-      .map((backdrop) => blendOverBackground(sidebar, backdrop, DARK_PALETTE_SURFACE_OPACITY)),
+      .map((backdrop) => blendOverBackground(plane, backdrop, DARK_PALETTE_SURFACE_OPACITY)),
   ];
 }
 

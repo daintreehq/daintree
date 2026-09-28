@@ -2379,7 +2379,7 @@ body[data-performance-mode="true"] .pulse-skeleton-shimmer::after {
 body[data-performance-mode="true"] .surface-overlay {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  background-color: var(--floating-surface-bg, var(--color-surface-sidebar)) !important;
+  background-color: var(--overlay-surface-color, var(--color-surface-sidebar)) !important;
 }
 
 /* F1 (light) — match the elevated floating-surface base in performance mode.
@@ -3390,7 +3390,7 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   /* Floating Radix surfaces (menus, popovers, palette, NotificationCenter).
    * The base rule below is the ORIGINAL dark behavior (sidebar @94%, frosted).
    * A dark theme whose sidebar sits below its panels can lift the plane with the
-   * `floating-surface-bg` extension; keep it under `surface-input`, which is the
+   * `overlay-surface-color` extension; keep it under `surface-input`, which is the
    * elevated plane on dark, or search fields vanish into their container. F1 re-points these to the elevated
    * plane and forces them opaque ONLY on light, in the `.light .surface-overlay`
    * override below — on light the old sidebar base was DARKER than canvas (e.g.
@@ -3398,11 +3398,11 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
    * transparency only admitted the darker canvas behind it; the material blur is
    * also inert on near-white (RC-9), so the surface must be solid/opaque. */
   .surface-overlay {
-    --scroll-shadow-color: var(--floating-surface-bg, var(--color-surface-sidebar));
-    background-color: var(--floating-surface-bg, var(--color-surface-sidebar));
+    --scroll-shadow-color: var(--overlay-surface-color, var(--color-surface-sidebar));
+    background-color: var(--overlay-surface-color, var(--color-surface-sidebar));
     background-color: color-mix(
       in oklab,
-      var(--floating-surface-bg, var(--color-surface-sidebar)) 94%,
+      var(--overlay-surface-color, var(--color-surface-sidebar)) 94%,
       transparent
     );
     border: 1px solid var(--border-overlay);
@@ -3425,7 +3425,7 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      whereas mixing in transparency would tint the ring with whatever the
      popover happens to be floating over. */
   .surface-overlay {
-    --overlay-surface-solid: var(--floating-surface-bg, var(--color-surface-sidebar));
+    --overlay-surface-solid: var(--overlay-surface-color, var(--color-surface-sidebar));
   }
 
   .light .surface-overlay {
@@ -3467,7 +3467,7 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     .surface-overlay {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
-      background-color: var(--floating-surface-bg, var(--color-surface-sidebar));
+      background-color: var(--overlay-surface-color, var(--color-surface-sidebar));
     }
 
     .light .surface-overlay {
@@ -3494,7 +3494,7 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     .surface-overlay {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
-      background-color: var(--floating-surface-bg, var(--color-surface-sidebar));
+      background-color: var(--overlay-surface-color, var(--color-surface-sidebar));
     }
 
     .light .surface-overlay {

@@ -35,6 +35,13 @@ export interface ExtensionKeyMetadata {
 
 const OPTIONAL: ExtensionKeyMetadata = { required: false };
 
+// Optional, but a single colour: the value feeds color-mix() and colour-typed
+// custom properties, where a background shorthand would invalidate the rule.
+const OPTIONAL_COLOR: ExtensionKeyMetadata = {
+  required: false,
+  formatGuard: /^(#[0-9a-fA-F]{6}|rgba?\([^)]*\))$/,
+};
+
 // Round-2 selection-direction flip (Issue 1): on LIGHT, the selected/hovered
 // sidebar row must ELEVATE toward an opaque brighter surface (panel/canvas) — a
 // darkening rgba(0,0,0,*) reads as grime on near-white, not lift. So the light
@@ -137,6 +144,10 @@ export const EXTENSION_KEY_REGISTRY = {
   "dialog-shadow": OPTIONAL,
   "floating-surface-bg": OPTIONAL,
   "floating-surface-shadow": OPTIONAL,
+  // The dark `.surface-overlay` plane (menus, palettes, popovers, tooltips). A
+  // single colour, because it also feeds a 94% color-mix, scroll fades and badge
+  // rings; `floating-surface-bg` stays the background-shorthand key.
+  "overlay-surface-color": OPTIONAL_COLOR,
 
   // Dock
   "dock-bg": OPTIONAL,
@@ -303,6 +314,9 @@ export const EXTENSION_KEY_REGISTRY = {
   // defeat perceptibility regexes).
   "welcome-field-wash": OPTIONAL,
   "welcome-mark-color": OPTIONAL,
+  // The brand mark in the empty panel grid (fallback: text-secondary). Its own
+  // key: themes tune welcome-mark-color against the welcome wash, not the grid.
+  "grid-mark-color": OPTIONAL_COLOR,
 
   // Worktree section
   "worktree-section-hover-bg": OPTIONAL,

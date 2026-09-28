@@ -394,7 +394,7 @@ describe("getThemeContrastWarnings", () => {
   // floats above, so these fixtures pin every backdrop to the sidebar's own
   // colour to isolate the pair under test from that blend.
   function makeFlatDarkScheme(overrides: Partial<AppColorSchemeTokens>): AppColorScheme {
-    return makeScheme({
+    const scheme = makeScheme({
       "surface-sidebar": "#000000" as AppColorSchemeTokens["surface-sidebar"],
       "surface-grid": "#000000" as AppColorSchemeTokens["surface-grid"],
       "surface-canvas": "#000000" as AppColorSchemeTokens["surface-canvas"],
@@ -402,7 +402,30 @@ describe("getThemeContrastWarnings", () => {
       "surface-panel-elevated": "#000000" as AppColorSchemeTokens["surface-panel-elevated"],
       ...overrides,
     });
+    // The base theme may lift its overlays off the sidebar; these fixtures need
+    // the palette surface to be the pinned sidebar.
+    const { "overlay-surface-color": _lifted, ...extensions } = scheme.extensions ?? {};
+    return { ...scheme, extensions };
   }
+
+  it("measures the palette selection on the overlay plane a dark theme lifts to", () => {
+    // #5A5A5A clears black at 3.04:1 but not a #3A3A3A overlay plane. Scored on
+    // the sidebar the validator would pass an outline the palette never shows.
+    const flat = makeFlatDarkScheme({
+      "overlay-highlight": "#000000" as AppColorSchemeTokens["overlay-highlight"],
+      "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
+    });
+    const lifted = {
+      ...flat,
+      extensions: { ...flat.extensions, "overlay-surface-color": "#3A3A3A" },
+    };
+    const surfacePair = (scheme: AppColorScheme) =>
+      getThemeContrastWarnings(scheme).some((w) =>
+        w.message.includes("selection-outline against the surrounding palette surface")
+      );
+    expect(surfacePair(flat)).toBe(false);
+    expect(surfacePair(lifted)).toBe(true);
+  });
 
   it("fails an outline that clears the surrounding surface but not the row fill it touches", () => {
     // The row lifts towards the outline on dark, so the surface pair is the

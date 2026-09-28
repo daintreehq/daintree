@@ -267,10 +267,10 @@ export function ContentGridEmptyState({
   const identityMark = sanitizedIcon?.ok ? (
     <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-14 w-14 object-contain" />
   ) : (
-    // The same theme hook as the first-run welcome mark; unset, it stays text-secondary.
+    // Unset, the mark stays text-secondary.
     <DaintreeIcon
       className="h-14 w-14"
-      style={{ color: "var(--welcome-mark-color, var(--color-text-secondary))" }}
+      style={{ color: "var(--grid-mark-color, var(--color-text-secondary))" }}
       aria-hidden="true"
     />
   );
