@@ -60,7 +60,13 @@ export function PanelPalette({
     }
   }, [isOpen]);
 
+  // A row the pointer claimed is already under the pointer; revealing it would
+  // scroll a half-visible row out from under it.
+  const pointerMovedRef = useRef(false);
   useEffect(() => {
+    const fromPointer = pointerMovedRef.current;
+    pointerMovedRef.current = false;
+    if (fromPointer) return;
     if (selectedIndex >= 0 && results[selectedIndex]) {
       const node = itemsRef.current.get(results[selectedIndex].id);
       node?.scrollIntoView({ block: "nearest" });
@@ -144,7 +150,12 @@ export function PanelPalette({
         tabIndex={-1}
         onPointerDown={(e) => e.preventDefault()}
         onPointerMove={
-          onHoverIndex && index !== selectedIndex ? () => onHoverIndex(index) : undefined
+          onHoverIndex && index !== selectedIndex
+            ? () => {
+                pointerMovedRef.current = true;
+                onHoverIndex(index);
+              }
+            : undefined
         }
         role="option"
         aria-selected={index === selectedIndex}

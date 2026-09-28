@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useEffect, useRef, useState, useCallback } from "react";
 import type { JSX } from "react";
 import {
+  Check,
   BellOff,
   ChevronDown,
   ChevronRight,
@@ -1859,9 +1860,12 @@ function ScratchSection({
                           // 1px sideways between browse and search.
                           "border border-transparent",
                           PALETTE_ROW_FOCUS_CLASS,
-                          scratch.isActive
-                            ? "bg-overlay-subtle hover:bg-overlay-medium"
-                            : "hover:bg-overlay-subtle"
+                          // The scratch you're in is a committed value inside a
+                          // picker, so it takes a check, not a fill: a fill here
+                          // read as a second cursor beside the palette's own.
+                          // These rows sit outside the arrow-key domain, so hover
+                          // is the lighter list step, the same on every row.
+                          "hover:bg-overlay-subtle"
                         )}
                         role="option"
                         // No `aria-current` here, unlike the ranked rows above.
@@ -1913,6 +1917,12 @@ function ScratchSection({
                             </div>
                           )}
                         </div>
+                        {scratch.isActive && (
+                          <Check
+                            className="h-4 w-4 shrink-0 text-text-secondary"
+                            aria-hidden="true"
+                          />
+                        )}
                       </button>
                     </ContextMenuTrigger>
                     {hasContextActions && (
@@ -2290,7 +2300,22 @@ function ProjectPaletteInner({
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
   const fleetSummary = fleetLiveness ? formatFleetLiveness(fleetLiveness) : null;
 
+  // A row the pointer put the cursor on is already under the pointer; revealing
+  // it would scroll a half-visible row out from under it. The keys, opening and
+  // a re-ranked list still reveal.
+  const pointerMovedRef = useRef(false);
+  const hoverRow = useCallback(
+    (rowId: string) => {
+      pointerMovedRef.current = true;
+      onHoverRow?.(rowId);
+    },
+    [onHoverRow]
+  );
+
   useEffect(() => {
+    const fromPointer = pointerMovedRef.current;
+    pointerMovedRef.current = false;
+    if (fromPointer) return;
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
       const selectedItem = listRef.current.querySelector(
         `#project-option-${results[selectedIndex]!.id}`
@@ -2475,7 +2500,7 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
-          onHoverRow={onHoverRow}
+          onHoverRow={onHoverRow ? hoverRow : undefined}
           onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (

@@ -1851,7 +1851,13 @@ export function SearchResults({
   const activeRef = useRef<HTMLButtonElement>(null);
   const renderLimit = useProgressiveRenderLimit(results.length, query, activeIndex);
 
+  // A result the pointer claimed is already under the pointer; revealing it
+  // would scroll a half-visible row out from under it.
+  const pointerMovedRef = useRef(false);
   useEffect(() => {
+    const fromPointer = pointerMovedRef.current;
+    pointerMovedRef.current = false;
+    if (fromPointer) return;
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
 
@@ -1923,7 +1929,12 @@ export function SearchResults({
               aria-selected={index === activeIndex}
               ref={index === activeIndex ? activeRef : undefined}
               onPointerMove={
-                onResultHover && index !== activeIndex ? () => onResultHover(index) : undefined
+                onResultHover && index !== activeIndex
+                  ? () => {
+                      pointerMovedRef.current = true;
+                      onResultHover(index);
+                    }
+                  : undefined
               }
               onClick={() =>
                 onResultClick(

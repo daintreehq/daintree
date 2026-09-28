@@ -85,7 +85,7 @@ The language, in full:
 - **Highlighted** — a neutral `overlay-highlight` fill and nothing else. No leading rail, no outline, no accent.
 - **One cursor** — the pointer and the arrow keys move the same highlight. Rows call the palette's hover callback on `pointermove` (never `pointerenter`, so rows scrolling under a resting pointer don't steal it) and carry no `hover:bg-*` of their own. Two lit rows is a defect.
 - **Committed value inside a picker** — the current project, the settings page a subject picker is on, the saved theme — is a check mark or a label with `aria-current`, never a competing fill, because the fill belongs to the cursor there.
-- **Selected in a list-detail or navigation list** — where there is no roving cursor, the selected record or page takes the highlight fill itself, and hover is a lighter step in the same direction (`overlay-subtle` on dark; on light, the settings sidebar's white lift and a half-strength white hover). No accent tint and no edge marker — the settings nav's sliding accent bar and its per-theme accent-tinted fills were removed for this.
+- **Selected in a list-detail or navigation list** — the selected record, or the page a nav list is showing, takes the highlight fill itself, and hover is a lighter step in the same direction (`overlay-subtle` on dark; on light, the settings sidebar's white lift and a half-strength white hover). The pointer does not move that selection — pointing at a settings page must not open it. Where the list is keyboard-navigable (the settings nav is a roving-focus tablist with manual activation), keyboard focus is its own focus ring on top, never a second fill. No accent tint and no edge marker — the settings nav's sliding accent bar and its per-theme accent-tinted fills were removed for this.
 - **Destructive** — the highlighted fill swaps to `status-danger/10` with danger text; that is a semantic, not a second selection mechanism.
 - **DOM focus** — rows that hold real focus (Radix items) add their inset `selection-outline` ring on keyboard focus, as every focused control does.
 - **Increased contrast / forced colours** — `prefers-contrast: more` outlines the highlighted row in `selection-outline`; `forced-colors` outlines it in `Highlight`. Both live in `src/index.css`, in their separate blocks.
@@ -263,7 +263,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 
 | Component | File | Key Pattern |
 | --- | --- | --- |
-| Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with neutral rail via `PALETTE_ROW_CLASS` |
+| Quick Switcher Item | `QuickSwitcherItem.tsx` | Highlighted row via `PALETTE_ROW_CLASS`, pointer moves the cursor |
 | Text Input | `ui/input.tsx` (`inputVariants`) | Input focus with outline ring |
 | Select Trigger | `ui/select.tsx` (`selectTriggerVariants`) | Input chrome and outline ring |
 | Search Field | `ui/SearchField.tsx` + `styles/components/search-field.css` | Search field (neutral focus, no accent) |

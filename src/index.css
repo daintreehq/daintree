@@ -2165,18 +2165,18 @@ label:focus-within .brand-mark,
 
 /* The assistant session strip's selected-tab mark.
  *
- * The same problem the palette rail solves, turned on its side. `overlay-raised`
- * is a 4% additive fill on dark and clears about 1.1:1, so it cannot be the
- * WCAG 1.4.11 indicator on its own — which is exactly how this strip shipped:
- * a 2% `overlay-subtle` chip and a font weight, and no reliable way to tell
- * Session 1 from Session 2. `selection-outline` carries the ratio, spent on a
- * rail rather than an enclosure, for the same reason it is a rail in the
- * palette: an indicator has to meet the ratio, not surround the component.
+ * These are tabs — persistent "this lane is showing" navigation, not the
+ * highlighted-row language the palettes use. `overlay-raised` is a 4% additive
+ * fill on dark and clears about 1.1:1, which is exactly how this strip first
+ * shipped: a 2% `overlay-subtle` chip and a font weight, and no reliable way to
+ * tell Session 1 from Session 2. A tab set's conventional mark is the underline,
+ * so `selection-outline` is spent on one: an indicator has to meet the ratio,
+ * not surround the component.
  *
  * A BOTTOM rail, not a leading one. These are tabs, and the edge a tab set is
  * read along is the one it shares with the body below it — a leading rail here
  * would land beside the lane's state marker and put two small marks in one
- * gutter, the collision the palette note describes.
+ * gutter.
  *
  * And ON that shared edge, not merely near it. The chip sits in the strip's 4px
  * of vertical padding, so a rail at `bottom: 0` floated four pixels clear of the

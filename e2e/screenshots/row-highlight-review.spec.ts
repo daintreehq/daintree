@@ -134,9 +134,11 @@ const SURFACES: Surface[] = [
   {
     slug: "project-switcher",
     url: (t) => `/row-highlight-preview.html?surface=project-switcher&theme=${t}`,
+    // The whole dialog, not the first listbox: the Scratch section is a second
+    // listbox below it, and its "you are here" check belongs in the frame.
     open: async (page) => {
       await expect(listbox(page).getByRole("option").first()).toBeVisible();
-      return listbox(page);
+      return page.getByRole("dialog").first();
     },
     row: '[role="option"]',
     pointerRow: 3,
@@ -302,7 +304,7 @@ async function shoot(
     x,
     y,
     width: Math.min(vp.width - x, box.width + pad * 2),
-    height: Math.min(vp.height - y, Math.min(box.height, 520) + pad * 2),
+    height: Math.min(vp.height - y, Math.min(box.height, 740) + pad * 2),
   };
   const base = `${surface.slug}--${state}--${theme}`;
   const out = path.join(OUT_DIR, `${base}.png`);

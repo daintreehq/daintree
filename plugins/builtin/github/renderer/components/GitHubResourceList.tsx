@@ -792,8 +792,17 @@ export function GitHubResourceList({
     setActiveIndex(data.findIndex((item) => item.number === previousNumber));
   }, [data, cursorScope]);
 
+  // A row the pointer claimed is already under the pointer; revealing it would
+  // scroll a half-visible row out from under it.
+  const pointerMovedRef = useRef(false);
+  const pointToCursor = useCallback((index: number) => {
+    pointerMovedRef.current = true;
+    setActiveIndex(index);
+  }, []);
   useEffect(() => {
-    if (activeIndex < 0) return;
+    const fromPointer = pointerMovedRef.current;
+    pointerMovedRef.current = false;
+    if (fromPointer || activeIndex < 0) return;
     if (isLoadMoreActive) {
       document.getElementById(`github-${type}-load-more`)?.scrollIntoView({ block: "nearest" });
       return;
@@ -935,7 +944,7 @@ export function GitHubResourceList({
       rowIndex: data.length + 1,
       onLoadMore: handleLoadMore,
       onOpenSettings: handleOpenGitHubSettings,
-      onPointerActivate: () => setActiveIndex(data.length),
+      onPointerActivate: () => pointToCursor(data.length),
     }),
     [
       canLoadMore,
@@ -948,6 +957,7 @@ export function GitHubResourceList({
       data.length,
       handleLoadMore,
       handleOpenGitHubSettings,
+      pointToCursor,
     ]
   );
 
@@ -1619,7 +1629,7 @@ export function GitHubResourceList({
                     onMenuClose={focusSearchInput}
                     onOpenExternalUrl={handleOpenUrlExternal}
                     isActive={activeIndex === index}
-                    onPointerActivate={() => setActiveIndex(index)}
+                    onPointerActivate={() => pointToCursor(index)}
                     isSelected={selection.selectedIds.has(item.number)}
                     isSelectionActive={selection.isSelectionActive}
                     onToggleSelect={(e: { shiftKey: boolean }) => {

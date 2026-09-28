@@ -21,6 +21,7 @@ import type {
   ProjectSwitcherBrowseBand,
   ProjectSwitcherProjectRow,
   ProjectSectionKey,
+  SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
 import "@/index.css";
 
@@ -81,11 +82,12 @@ function project(
 }
 
 const PROJECTS: ProjectSwitcherProjectRow[] = [
-  project("daintree", "daintree", "🌳", "emerald", "current", {
-    isActive: true,
+  // The window is in a scratch, so the scratch section carries the "you are
+  // here" check and no project is current.
+  project("daintree", "daintree", "🌳", "emerald", "running", {
     activeAgentCount: 2,
     processCount: 3,
-    lastOpened: NOW,
+    lastOpened: NOW - 60_000,
   }),
   project("helios-dashboard", "Helios Dashboard", "☀️", "amber", "running", {
     activeAgentCount: 1,
@@ -98,9 +100,31 @@ const PROJECTS: ProjectSwitcherProjectRow[] = [
 ];
 
 const BANDS: ProjectSwitcherBrowseBand[] = [
-  { key: "current", label: "Current project", itemCount: 1, collapsed: false },
-  { key: "running", label: "Running", itemCount: 1, collapsed: false },
+  { key: "running", label: "Running", itemCount: 2, collapsed: false },
   { key: "other", label: "Other projects", itemCount: 3, collapsed: false },
+];
+
+function scratch(id: string, name: string, isActive: boolean): SearchableScratch {
+  return {
+    id,
+    name,
+    path: `/Users/dev/.daintree/scratch/${id}`,
+    createdAt: NOW - 86_400_000,
+    lastOpened: NOW - (isActive ? 0 : 7_200_000),
+    isActive,
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
+    processCount: 0,
+  };
+}
+
+const SCRATCHES: SearchableScratch[] = [
+  scratch("spike-auth", "Spike: auth refresh", false),
+  scratch("try-vite", "Try Vite 9", true),
 ];
 
 const noop = () => {};
@@ -121,6 +145,9 @@ function ProjectSwitcherSurface() {
       onSelect={noop}
       onClose={noop}
       onHoverRow={(id) => setSelectedIndex(PROJECTS.findIndex((p) => p.id === id))}
+      scratchResults={SCRATCHES}
+      onSelectScratch={noop}
+      onCreateScratch={noop}
     />
   );
 }
