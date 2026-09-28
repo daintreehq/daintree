@@ -37,7 +37,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
-import { Check, ChevronDown, Circle, ExternalLink, PanelBottom } from "lucide-react";
+import { Check, ChevronDown, Circle, ExternalLink, PanelBottom, Settings2 } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentExternalLink } from "@shared/config/agentRegistry";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
@@ -97,7 +97,7 @@ function AgentExternalLinkItems({ links }: { links?: AgentExternalLink[] }) {
           actionId="system.openExternal"
           args={{ url: link.url }}
         >
-          <ExternalLink className="mr-2 h-3.5 w-3.5" />
+          <ExternalLink data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {link.label}
         </ContextMenuActionItem>
       ))}
@@ -165,7 +165,7 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
                   { source }
                 );
               }}
-              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-hover hover:text-text-primary group-data-[highlighted]/wt-row:opacity-100"
+              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-text-secondary opacity-0 transition-opacity hover:bg-overlay-hover hover:text-text-primary group-data-[highlighted]/wt-row:opacity-100"
             >
               <PanelBottom className="h-3 w-3" />
             </span>
@@ -440,7 +440,7 @@ export function AgentButton({
         <span
           data-zone="gutter"
           title={isDefault ? "Current default" : "Set as default"}
-          className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-daintree-text/60 transition-colors hover:bg-overlay-raised"
+          className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-raised"
         >
           {isDefault ? (
             <Check className="h-3.5 w-3.5" aria-hidden="true" />
@@ -545,11 +545,11 @@ export function AgentButton({
             Launch {config.name}
           </ContextMenuActionItem>
           <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
-            Launch {config.name} in Dock
+            Launch {config.name} in dock
           </ContextMenuActionItem>
           {hasWorktrees && (
             <ContextMenuSub>
-              <ContextMenuSubTrigger>Launch in Worktree</ContextMenuSubTrigger>
+              <ContextMenuSubTrigger>Launch in worktree</ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <WorktreeMenuItems agentType={type} />
               </ContextMenuSubContent>
@@ -561,13 +561,13 @@ export function AgentButton({
             actionId="app.settings.openTab"
             args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
           >
-            Manage {config.name} Presets...
+            Manage {config.name} presets…
           </ContextMenuActionItem>
           <ContextMenuActionItem
             actionId="app.settings.openTab"
             args={{ tab: "agents", subtab: type }}
           >
-            {config.name} Settings...
+            {config.name} settings…
           </ContextMenuActionItem>
           <AgentExternalLinkItems links={config.externalLinks} />
         </ContextMenuContent>
@@ -713,7 +713,7 @@ export function AgentButton({
                 <span
                   data-zone="gutter"
                   title={!savedPresetId ? "Current default" : "Set as default"}
-                  className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-daintree-text/60 transition-colors hover:bg-overlay-raised"
+                  className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-raised"
                 >
                   {!savedPresetId ? (
                     <Check className="h-3.5 w-3.5" aria-hidden="true" />
@@ -755,7 +755,10 @@ export function AgentButton({
                 </>
               )}
               <DropdownMenuSeparator />
+              {/* Inset past the default-pick gutter so the icon and label sit in
+                  the preset rows' columns. */}
               <DropdownMenuItem
+                inset
                 onSelect={() =>
                   void actionService.dispatch(
                     "app.settings.openTab",
@@ -764,7 +767,8 @@ export function AgentButton({
                   )
                 }
               >
-                Manage Presets...
+                <Settings2 className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Manage presets…
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -787,12 +791,12 @@ export function AgentButton({
           Launch {config.name}
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
-          Launch {config.name} in Dock
+          Launch {config.name} in dock
         </ContextMenuActionItem>
         {hasPresets && (
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={!isLaunchable}>
-              Launch with Preset
+              Launch with preset
             </ContextMenuSubTrigger>
             <ContextMenuSubContent
               data-testid="context-submenu-content"
@@ -847,7 +851,7 @@ export function AgentButton({
         )}
         {hasWorktrees && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger>Launch in Worktree</ContextMenuSubTrigger>
+            <ContextMenuSubTrigger>Launch in worktree</ContextMenuSubTrigger>
             <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
               <WorktreeMenuItems agentType={type} />
             </ContextMenuSubContent>
@@ -859,13 +863,13 @@ export function AgentButton({
           actionId="app.settings.openTab"
           args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
         >
-          Manage {config.name} Presets...
+          Manage {config.name} presets…
         </ContextMenuActionItem>
         <ContextMenuActionItem
           actionId="app.settings.openTab"
           args={{ tab: "agents", subtab: type }}
         >
-          {config.name} Settings...
+          {config.name} settings…
         </ContextMenuActionItem>
         <AgentExternalLinkItems links={config.externalLinks} />
       </ContextMenuContent>

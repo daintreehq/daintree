@@ -6,6 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -82,19 +83,21 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
           value={scope}
           onValueChange={(value) => setScope(value === "all" ? "all" : "file")}
         >
-          <DropdownMenuRadioItem value="file" onSelect={(event) => event.preventDefault()}>
-            <span className="flex flex-1 items-center gap-2">
-              This file
-              <span className="ml-auto text-3xs tabular-nums text-text-secondary">{fileCount}</span>
-            </span>
+          <DropdownMenuRadioItem
+            value="file"
+            aria-label={`This file, ${fileCount} ${fileCount === 1 ? "note" : "notes"}`}
+            onSelect={(event) => event.preventDefault()}
+          >
+            This file
+            <DropdownMenuMeta>{fileCount}</DropdownMenuMeta>
           </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="all" onSelect={(event) => event.preventDefault()}>
-            <span className="flex flex-1 items-center gap-2">
-              All files
-              <span className="ml-auto text-3xs tabular-nums text-text-secondary">
-                {allNotes.length}
-              </span>
-            </span>
+          <DropdownMenuRadioItem
+            value="all"
+            aria-label={`All files, ${allNotes.length} ${allNotes.length === 1 ? "note" : "notes"}`}
+            onSelect={(event) => event.preventDefault()}
+          >
+            All files
+            <DropdownMenuMeta>{allNotes.length}</DropdownMenuMeta>
           </DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
@@ -120,13 +123,19 @@ function DiffNoteTargetItems({
 }) {
   const targets = useDiffNoteTargets();
   if (targets.length === 0) {
-    return <DropdownMenuItem disabled>No agents running</DropdownMenuItem>;
+    return (
+      <DropdownMenuItem inset disabled>
+        No agents running
+      </DropdownMenuItem>
+    );
   }
   return (
     <>
       {targets.map((target) => (
+        // Inset onto the scope rows' label edge above.
         <DropdownMenuItem
           key={target.id}
+          inset
           disabled={disabled || target.isInputLocked}
           onSelect={() => onSend(target.id)}
         >

@@ -46,6 +46,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -535,44 +536,40 @@ export function FleetArmingRibbon(): ReactElement | null {
           armByState("waiting", "current", false);
         }}
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
+        aria-label={`All waiting — this worktree, ${presetCounts.waitingCurrent}`}
       >
         All waiting — this worktree
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.waitingCurrent}
-        </span>
+        <DropdownMenuMeta>{presetCounts.waitingCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
           armByState("waiting", "all", false);
         }}
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
+        aria-label={`All waiting — all worktrees, ${presetCounts.waitingAll}`}
       >
         All waiting — all worktrees
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.waitingAll}
-        </span>
+        <DropdownMenuMeta>{presetCounts.waitingAll}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
           armByState("working", "current", false);
         }}
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
+        aria-label={`All working — this worktree, ${presetCounts.workingCurrent}`}
       >
         All working — this worktree
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.workingCurrent}
-        </span>
+        <DropdownMenuMeta>{presetCounts.workingCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
           armByState("working", "all", false);
         }}
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
+        aria-label={`All working — all worktrees, ${presetCounts.workingAll}`}
       >
         All working — all worktrees
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.workingAll}
-        </span>
+        <DropdownMenuMeta>{presetCounts.workingAll}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem
@@ -580,11 +577,10 @@ export function FleetArmingRibbon(): ReactElement | null {
           armAll("current");
         }}
         {...previewItemHandlers(() => computePreviewAll("current"))}
+        aria-label={`All in this worktree, ${presetCounts.eligibleCurrent}`}
       >
         All in this worktree
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.eligibleCurrent}
-        </span>
+        <DropdownMenuMeta>{presetCounts.eligibleCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
       {armedCount > 0 ? (
         <>

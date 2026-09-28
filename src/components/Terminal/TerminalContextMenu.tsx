@@ -1448,7 +1448,7 @@ export function TerminalContextMenu({
                 Arm all in this worktree
               </ContextMenuItem>
               {isArmed && fleetSize >= 2 && (
-                <ContextMenuItem destructive onSelect={() => handleAction("fleet-clear")}>
+                <ContextMenuItem onSelect={() => handleAction("fleet-clear")}>
                   <Radio className={ICON_CLASS} aria-hidden="true" />
                   Clear fleet
                 </ContextMenuItem>
@@ -1597,7 +1597,7 @@ export function TerminalContextMenu({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill terminal
           </ContextMenuItem>
-          <PluginContextMenuSection items={pluginItems} />
+          <PluginContextMenuSection items={pluginItems} inset />
         </ContextMenuContent>
         {movePicker}
       </ContextMenu>

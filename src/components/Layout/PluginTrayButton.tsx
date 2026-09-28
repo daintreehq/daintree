@@ -166,13 +166,11 @@ function PluginTrayRow({
     <DropdownMenuItem
       onSelect={() => onSelect(config)}
       onKeyDown={handleKeyDown}
-      className="group h-7"
+      className="group"
       data-testid={`plugin-tray-row-${config.id}`}
       keybinding={config.actionId}
     >
-      <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
-        <Icon className="h-3.5 w-3.5 text-text-secondary" />
-      </span>
+      <Icon data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
 
       <span className="flex-1">{config.label}</span>
 
@@ -191,7 +189,7 @@ function PluginTrayRow({
           onTogglePin(config);
         }}
         className={cn(
-          "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 transition-opacity hover:bg-overlay-hover hover:text-text-primary",
+          "-my-0.5 ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-text-secondary transition-opacity hover:bg-overlay-hover hover:text-text-primary",
           promoted ? "opacity-100" : "opacity-0 group-data-[highlighted]:opacity-100"
         )}
       >
@@ -199,7 +197,7 @@ function PluginTrayRow({
           className={cn(
             "h-3 w-3",
             promoted &&
-              "fill-current text-daintree-text/40 group-data-[highlighted]:text-text-primary"
+              "fill-current text-text-secondary group-data-[highlighted]:text-text-primary"
           )}
           strokeWidth={promoted ? 2 : 1.75}
         />
@@ -360,16 +358,12 @@ export function PluginTrayButton({
         ))}
 
         <DropdownMenuSeparator />
-        <DropdownMenuActionItem actionId="app.pluginManager" className="h-7">
-          <Package className="mr-2 h-3.5 w-3.5 text-text-secondary" />
+        <DropdownMenuActionItem actionId="app.pluginManager">
+          <Package data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Manage plugins
         </DropdownMenuActionItem>
-        <DropdownMenuActionItem
-          actionId="app.settings.openTab"
-          args={{ tab: "toolbar" }}
-          className="h-7"
-        >
-          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-secondary" />
+        <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+          <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
       </DropdownMenuContent>

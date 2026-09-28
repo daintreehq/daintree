@@ -50,6 +50,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuMeta,
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
   ContextMenuSeparator,
@@ -72,6 +73,7 @@ const DOCK_DENSITY_OPTIONS = [
 const CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
   Item: ContextMenuItem,
   Label: ContextMenuLabel,
+  Meta: ContextMenuMeta,
   Separator: ContextMenuSeparator,
 };
 
@@ -603,7 +605,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         />
         <ContextMenuSeparator />
         <ContextMenuSub>
-          <ContextMenuSubTrigger>Dock density</ContextMenuSubTrigger>
+          {/* Inset into the launch rows' icon column above it. */}
+          <ContextMenuSubTrigger inset>Dock density</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             <ContextMenuRadioGroup value={density}>
               {DOCK_DENSITY_OPTIONS.map(({ value, label }) => (

@@ -137,6 +137,7 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuTrigger: fixture.passthrough,
   ContextMenuContent: () => null,
   ContextMenuItem: fixture.passthrough,
+  ContextMenuMeta: fixture.passthrough,
   ContextMenuLabel: fixture.passthrough,
   ContextMenuRadioGroup: fixture.passthrough,
   ContextMenuRadioItem: fixture.passthrough,

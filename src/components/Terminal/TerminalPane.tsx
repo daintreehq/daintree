@@ -1264,8 +1264,8 @@ function TerminalPaneComponent({
           )
         }
       >
-        <Settings className="w-3 h-3 mr-2" />
-        {agentName} Settings
+        <Settings className="w-3.5 h-3.5 mr-2" />
+        {agentName} settings…
       </DropdownMenuItem>
     );
   })();

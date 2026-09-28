@@ -2,6 +2,7 @@ import { ChevronDown, RotateCwSquare } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuMeta,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -98,11 +99,12 @@ export function ViewportControls({
                 key={option.id}
                 value={option.id}
                 data-viewport-preset-id={option.id}
+                aria-label={`${option.label}, ${option.width} by ${option.height}`}
               >
-                <span className="text-xs">{option.label}</span>
-                <span className="ml-auto pl-3 text-2xs tabular-nums text-text-secondary">
+                {option.label}
+                <DropdownMenuMeta>
                   {option.width} × {option.height}
-                </span>
+                </DropdownMenuMeta>
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>

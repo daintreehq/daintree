@@ -628,12 +628,12 @@ describe("PanelHeader", () => {
       expect(findMenuButton(menu, "Cancel watch")).toBeUndefined();
     });
 
-    it("renders Trash with destructive styling", () => {
+    it("keeps Trash neutral: it is restorable from the dock's trash, not destructive", () => {
       render(<PanelHeader {...makeProps()} />);
       const menu = screen.getByTestId("overflow-menu");
       const trashButton = findMenuButton(menu, "Trash");
       expect(trashButton).toBeDefined();
-      expect(trashButton?.getAttribute("data-destructive")).toBe("true");
+      expect(trashButton?.getAttribute("data-destructive")).not.toBe("true");
     });
 
     it("dispatches terminal.rename when clicking Rename", () => {

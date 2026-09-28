@@ -850,8 +850,6 @@ export function ProjectResourceBadge({
       <PopoverContent
         side="top"
         align="start"
-        sideOffset={8}
-        collisionPadding={8}
         aria-labelledby="resource-usage-title"
         // Focus the popover itself, not its first control. Radix's default
         // landed on the keep-awake row and painted a ring on a settings link

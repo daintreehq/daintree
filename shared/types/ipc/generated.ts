@@ -1488,10 +1488,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../portal.js").PortalShowPayload];
     result: void;
   };
-  "portal:show-new-tab-menu": {
-    args: [payload: import("../portal.js").PortalShowNewTabMenuPayload];
-    result: void;
-  };
   "privacy:clear-cache": {
     args: [];
     result: { cleared: number; failed: number };

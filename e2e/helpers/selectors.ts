@@ -411,7 +411,7 @@ export const SEL = {
     // a submenu (#11691) — the parent row announces itself with aria-expanded.
     trayLaunchPresetParent: '[role="option"][data-row-kind="item"][aria-expanded]',
     trayLaunchPresetItem: '[role="option"][data-row-kind="preset"]',
-    contextPresetSubmenu: '[role="menu"]:text("Launch with Preset")',
+    contextPresetSubmenu: '[role="menu"]:text("Launch with preset")',
     defaultOption: '[data-testid="preset-option-default"]',
     customPresetOption: '[data-testid="preset-selector-listbox"] [role="option"]',
   },

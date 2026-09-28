@@ -547,7 +547,6 @@ export function TrashContainer({
           className="w-96 p-0"
           side="top"
           align="end"
-          sideOffset={8}
           onFocusCapture={noteFocusEntered}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}

@@ -214,7 +214,6 @@ export function FleetCountChip({
       <PopoverContent
         side="bottom"
         align="start"
-        sideOffset={6}
         data-testid="fleet-armed-list"
         className={cn(
           "flex flex-col overflow-hidden p-1",

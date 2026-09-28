@@ -252,7 +252,6 @@ function TaskOverflow({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        sideOffset={6}
         aria-label="Earlier tasks"
         className="p-1 min-w-64 max-w-sm max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
       >

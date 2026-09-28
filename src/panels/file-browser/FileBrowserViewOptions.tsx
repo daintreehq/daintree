@@ -6,6 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -173,15 +174,14 @@ export function FileBrowserViewOptions({
             onHideDotfilesChange(!checked);
           }}
           data-testid="file-browser-show-dotfiles"
+          aria-label={
+            hiddenCounts.dotfiles > 0 ? `Show dotfiles, ${hiddenCounts.dotfiles} hidden` : undefined
+          }
         >
-          <span className="flex flex-1 items-center gap-2">
-            Show dotfiles
-            {hiddenCounts.dotfiles > 0 && (
-              <span className="ml-auto text-3xs tabular-nums text-text-secondary">
-                {hiddenCounts.dotfiles}
-              </span>
-            )}
-          </span>
+          Show dotfiles
+          {hiddenCounts.dotfiles > 0 && (
+            <DropdownMenuMeta>{hiddenCounts.dotfiles}</DropdownMenuMeta>
+          )}
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         {/* An action, not a view setting, so it sits under its own rule at the

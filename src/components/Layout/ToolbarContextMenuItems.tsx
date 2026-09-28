@@ -56,17 +56,13 @@ export function ToolbarContextMenuItems({
   if (variant === "dropdown") {
     return (
       <>
-        <DropdownMenuActionItem
-          actionId="app.settings.openTab"
-          args={{ tab: "toolbar" }}
-          className="h-7"
-        >
-          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
+        <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+          <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={handleUnpin} className="h-7">
-          <Unplug className="mr-2 h-3.5 w-3.5" />
+        <DropdownMenuItem onSelect={handleUnpin}>
+          <Unplug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {TOOLBAR_UNPIN_LABEL}
         </DropdownMenuItem>
       </>
@@ -76,11 +72,12 @@ export function ToolbarContextMenuItems({
   return (
     <>
       <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+        <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         {TOOLBAR_CUSTOMIZE_LABEL}
       </ContextMenuActionItem>
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={handleUnpin}>
-        <Unplug className="mr-2 h-3.5 w-3.5" />
+        <Unplug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         {TOOLBAR_UNPIN_LABEL}
       </ContextMenuItem>
     </>

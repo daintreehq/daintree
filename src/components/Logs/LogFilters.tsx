@@ -155,8 +155,6 @@ export function LogFilters({
           </PopoverTrigger>
           <PopoverContent
             align="start"
-            sideOffset={4}
-            collisionPadding={8}
             className="max-h-[min(240px,var(--radix-popover-content-available-height))] min-w-[200px] overflow-y-auto p-1"
           >
             {availableSources.map((source) => {

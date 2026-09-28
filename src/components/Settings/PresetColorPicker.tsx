@@ -115,7 +115,6 @@ export function PresetColorPicker({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        sideOffset={6}
         className="w-56 p-3 space-y-3"
         data-testid="preset-color-picker-popover"
       >

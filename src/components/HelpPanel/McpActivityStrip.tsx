@@ -202,8 +202,6 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
       <PopoverContent
         side="top"
         align="start"
-        sideOffset={6}
-        collisionPadding={8}
         onOpenAutoFocus={(event) => event.preventDefault()}
         aria-label="Recent tool calls"
         className="w-80 max-w-[var(--radix-popover-content-available-width)]"

@@ -1160,7 +1160,6 @@ export function GitHubResourceList({
             </PopoverTrigger>
             <PopoverContent
               align="end"
-              sideOffset={8}
               className="w-48 p-3"
               onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
               onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
@@ -1265,7 +1264,6 @@ export function GitHubResourceList({
             </PopoverTrigger>
             <PopoverContent
               align="end"
-              sideOffset={8}
               className="w-56 p-3"
               onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
               onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}

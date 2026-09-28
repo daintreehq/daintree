@@ -79,6 +79,7 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 vi.mock("lucide-react", () => ({
+  Settings2: () => <span data-testid="icon-settings" />,
   AlertCircle: () => <span data-testid="icon-alert" />,
   Unplug: () => <span data-testid="icon-unplug" />,
 }));

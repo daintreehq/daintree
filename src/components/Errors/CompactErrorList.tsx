@@ -226,8 +226,6 @@ function ErrorOverflow({
           ref={contentRef}
           align="start"
           alignOffset={frame?.offset}
-          sideOffset={2}
-          collisionPadding={8}
           aria-label="More errors"
           // Radix focuses the first tabbable on open, which for a clamped
           // message is the message itself — and focus opens its tooltip over

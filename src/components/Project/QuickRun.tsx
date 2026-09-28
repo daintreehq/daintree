@@ -950,7 +950,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
               {listOpen && (
                 <div
                   onMouseDown={(e) => e.preventDefault()}
-                  className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-72 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]"
+                  className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-72 flex-col overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay"
                 >
                   <div
                     role="listbox"

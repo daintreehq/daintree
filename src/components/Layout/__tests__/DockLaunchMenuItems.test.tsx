@@ -95,6 +95,7 @@ const MENU_COMPONENTS = {
     </button>
   ),
   Label: ({ children }: { children: ReactNode }) => <div data-testid="label">{children}</div>,
+  Meta: ({ children }: { children: ReactNode }) => <span>{children}</span>,
   Separator: () => <hr data-testid="separator" />,
 };
 

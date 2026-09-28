@@ -376,11 +376,9 @@ export const CHANNELS = {
   PORTAL_GO_BACK: "portal:go-back",
   PORTAL_GO_FORWARD: "portal:go-forward",
   PORTAL_RELOAD: "portal:reload",
-  PORTAL_SHOW_NEW_TAB_MENU: "portal:show-new-tab-menu",
   PORTAL_NAV_EVENT: "portal:nav-event",
   PORTAL_FOCUS: "portal:focus",
   PORTAL_BLUR: "portal:blur",
-  PORTAL_NEW_TAB_MENU_ACTION: "portal:new-tab-menu-action",
   PORTAL_TAB_EVICTED: "portal:tab-evicted",
   PORTAL_TABS_EVICTED: "portal:tabs-evicted",
 

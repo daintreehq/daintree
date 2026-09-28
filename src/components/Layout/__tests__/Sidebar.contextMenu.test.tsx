@@ -169,7 +169,7 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
       .getAllByRole("menuitem")
       .find((el) => el.getAttribute("data-action-id") === "system.openPath");
     expect(reveal?.getAttribute("data-args")).toBe(JSON.stringify({ path: SCRATCH.path }));
-    expect(reveal?.textContent).toContain("Reveal Workspace in Finder");
+    expect(reveal?.textContent).toContain("Reveal workspace in Finder");
   });
 
   it("ignores a project a sibling window left globally current", () => {
@@ -196,7 +196,7 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
       .getAllByRole("menuitem")
       .find((el) => el.getAttribute("data-action-id") === "system.openPath");
     expect(reveal?.getAttribute("data-args")).toBe(JSON.stringify({ path: SCRATCH.path }));
-    expect(reveal?.textContent).toContain("Reveal Workspace in Finder");
+    expect(reveal?.textContent).toContain("Reveal workspace in Finder");
   });
 
   it("keeps project settings for a folder opened without git, but not its worktree entries", () => {

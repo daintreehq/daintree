@@ -302,25 +302,30 @@ const DropdownMenuSubContent = React.forwardRef<
   const SubContent = radix.DropdownMenuPrimitive.SubContent;
   return (
     <Portal>
-      <SubContent
-        ref={shadowRef}
-        sideOffset={sideOffset}
-        collisionPadding={collisionPadding}
-        style={{ transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)", ...style }}
-        className={cn(
-          // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-          "app-no-drag",
-          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-          OVERLAY_MOTION_CLASS,
-          className
-        )}
-        {...props}
-        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-      >
-        {topShadow}
-        {children}
-        {bottomShadow}
-      </SubContent>
+      <BrandSurfaceReset>
+        <SubContent
+          ref={shadowRef}
+          sideOffset={sideOffset}
+          collisionPadding={collisionPadding}
+          style={{
+            transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
+            ...style,
+          }}
+          className={cn(
+            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+            "app-no-drag",
+            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+            OVERLAY_MOTION_CLASS,
+            className
+          )}
+          {...props}
+          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+        >
+          {topShadow}
+          {children}
+          {bottomShadow}
+        </SubContent>
+      </BrandSurfaceReset>
     </Portal>
   );
 });
@@ -338,6 +343,7 @@ const DropdownMenuContent = React.forwardRef<
     {
       className,
       sideOffset = 4,
+      collisionPadding = 8,
       children,
       style,
       onPointerDown,
@@ -401,6 +407,7 @@ const DropdownMenuContent = React.forwardRef<
           <Content
             ref={shadowRef}
             sideOffset={sideOffset}
+            collisionPadding={collisionPadding}
             style={{
               transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
               ...style,

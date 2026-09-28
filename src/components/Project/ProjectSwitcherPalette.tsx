@@ -2700,7 +2700,6 @@ function DropdownContent({
         className="p-0"
         data-testid="project-switcher-palette"
         align={dropdownAlign}
-        sideOffset={8}
         onEscapeKeyDown={(event) => {
           // Radix dismisses on a document-capture listener, which beats the
           // scratch-name input's own handler. While that input owns focus,

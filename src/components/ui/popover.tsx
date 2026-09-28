@@ -240,6 +240,7 @@ const PopoverContent = React.forwardRef<
       className,
       align = "center",
       sideOffset = 4,
+      collisionPadding = 8,
       collisionBoundary,
       style,
       onPointerDown,
@@ -320,6 +321,7 @@ const PopoverContent = React.forwardRef<
             ref={ref}
             align={align}
             sideOffset={sideOffset}
+            collisionPadding={collisionPadding}
             collisionBoundary={collisionBoundary ?? boundary ?? undefined}
             style={{ transformOrigin: "var(--radix-popover-content-transform-origin)", ...style }}
             className={cn(

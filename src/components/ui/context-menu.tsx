@@ -4,6 +4,7 @@ import { Slot, Slottable } from "@radix-ui/react-slot";
 import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
@@ -224,25 +225,30 @@ const ContextMenuSubContent = React.forwardRef<
   const SubContent = radix.ContextMenuPrimitive.SubContent;
   return (
     <Portal>
-      <SubContent
-        ref={shadowRef}
-        sideOffset={sideOffset}
-        collisionPadding={collisionPadding}
-        style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
-        className={cn(
-          // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-          "app-no-drag",
-          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-          OVERLAY_MOTION_CLASS,
-          className
-        )}
-        {...props}
-        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-      >
-        {topShadow}
-        {children}
-        {bottomShadow}
-      </SubContent>
+      <BrandSurfaceReset>
+        <SubContent
+          ref={shadowRef}
+          sideOffset={sideOffset}
+          collisionPadding={collisionPadding}
+          style={{
+            transformOrigin: "var(--radix-context-menu-content-transform-origin)",
+            ...style,
+          }}
+          className={cn(
+            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+            "app-no-drag",
+            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+            OVERLAY_MOTION_CLASS,
+            className
+          )}
+          {...props}
+          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+        >
+          {topShadow}
+          {children}
+          {bottomShadow}
+        </SubContent>
+      </BrandSurfaceReset>
     </Portal>
   );
 });
@@ -314,33 +320,38 @@ const ContextMenuContent = React.forwardRef<
     const Content = radix.ContextMenuPrimitive.Content;
     return (
       <Portal>
-        <Content
-          ref={shadowRef}
-          collisionPadding={collisionPadding}
-          style={{
-            transformOrigin: "var(--radix-context-menu-content-transform-origin)",
-            ...style,
-          }}
-          className={cn(
-            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-            "app-no-drag",
-            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-            OVERLAY_MOTION_CLASS,
-            className
-          )}
-          {...props}
-          onPointerDown={handlePointerDown}
-          onPointerDownOutside={handlePointerDownOutside}
-          onInteractOutside={handleInteractOutside}
-          onKeyDown={handleKeyDown}
-          onClick={handleClick}
-          onCloseAutoFocus={handleCloseAutoFocus}
-          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-        >
-          {topShadow}
-          {children}
-          {bottomShadow}
-        </Content>
+        {/* Context reaches through a portal even though the DOM does not, so a
+            menu opened from the toolbar would otherwise measure its brand marks
+            against the toolbar's surface instead of this floating one. */}
+        <BrandSurfaceReset>
+          <Content
+            ref={shadowRef}
+            collisionPadding={collisionPadding}
+            style={{
+              transformOrigin: "var(--radix-context-menu-content-transform-origin)",
+              ...style,
+            }}
+            className={cn(
+              // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+              "app-no-drag",
+              "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+              OVERLAY_MOTION_CLASS,
+              className
+            )}
+            {...props}
+            onPointerDown={handlePointerDown}
+            onPointerDownOutside={handlePointerDownOutside}
+            onInteractOutside={handleInteractOutside}
+            onKeyDown={handleKeyDown}
+            onClick={handleClick}
+            onCloseAutoFocus={handleCloseAutoFocus}
+            data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+          >
+            {topShadow}
+            {children}
+            {bottomShadow}
+          </Content>
+        </BrandSurfaceReset>
       </Portal>
     );
   }

@@ -489,10 +489,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {onResourceTeardown && (
                         <>
                           <ContextMenuSeparator />
-                          <ContextMenuItem
-                            onClick={onResourceTeardown}
-                            className="text-status-error"
-                          >
+                          <ContextMenuItem destructive onClick={onResourceTeardown}>
                             <Trash2 className="w-3.5 h-3.5 mr-2" />
                             Tear down resource
                           </ContextMenuItem>

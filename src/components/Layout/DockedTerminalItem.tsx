@@ -462,7 +462,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           style={{ height: popoverHeight }}
           side="top"
           align="start"
-          sideOffset={10}
           collisionPadding={collisionPadding}
           onInteractOutside={(e) => handleDockInteractOutside(e, portalContainerElementRef.current)}
           onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainerElementRef.current)}

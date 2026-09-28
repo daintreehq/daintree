@@ -141,7 +141,7 @@ export function ProjectPluginIndicator() {
         </button>
       </PopoverTrigger>
 
-      <PopoverContent side="top" align="start" sideOffset={8} className="w-72 p-3">
+      <PopoverContent side="top" align="start" className="w-72 p-3">
         <div className="space-y-3">
           <div>
             <p className={MICRO_LABEL}>Project plugins</p>

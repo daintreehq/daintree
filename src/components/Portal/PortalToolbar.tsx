@@ -34,11 +34,11 @@ import {
 } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { usePortalStore } from "@/store/portalStore";
+import { actionService } from "@/services/ActionService";
 import { PortalIcon } from "./PortalIcon";
 import { PORTAL_TAB_PANEL_ID, portalTabDomId } from "./portalTabIds";
 import { useAriaKeyshortcuts, useEffectiveCombo, useOverlayClaim } from "@/hooks";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   ContextMenu,
+  ContextMenuActionItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
@@ -57,8 +58,34 @@ import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
+import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 
 const noopTabAction = (_tabId: string) => {};
+
+/**
+ * A menu drawn over the portal's native page view. While it is open it claims
+ * an overlay so the page hides instead of painting over it, and because portal
+ * actions refuse to act while any overlay is claimed, a chosen command runs only
+ * once the menu has closed and released its claim.
+ */
+function useNativeViewMenu(claimId: string) {
+  const [open, setOpen] = useState(false);
+  const pendingRef = useRef<(() => void) | null>(null);
+  useOverlayClaim(claimId, open);
+  useEffect(() => {
+    if (open || !pendingRef.current) return;
+    const run = pendingRef.current;
+    pendingRef.current = null;
+    run();
+  }, [open]);
+  const afterClose = useCallback(
+    (run: () => void) => () => {
+      pendingRef.current = run;
+    },
+    []
+  );
+  return { setOpen, afterClose };
+}
 
 const OVERFLOW_FADE_PX = 24;
 
@@ -120,9 +147,10 @@ function SortableTab({
   const hasUrl = !!tab.url;
   const hasTabsToRight = tabIndex < tabCount - 1;
   const hasOtherTabs = tabCount > 1;
+  const { setOpen: setMenuOpen, afterClose } = useNativeViewMenu(`portal-tab-menu-${tab.id}`);
 
   return (
-    <ContextMenu modal={false}>
+    <ContextMenu modal={false} onOpenChange={setMenuOpen}>
       <Tooltip autoDismiss={false}>
         <ContextMenuTrigger asChild disabled={isDragging}>
           <TooltipTrigger asChild>
@@ -176,32 +204,38 @@ function SortableTab({
         </TooltipContent>
       </Tooltip>
       <ContextMenuContent>
-        <ContextMenuItem disabled={!hasUrl} onSelect={() => onDuplicate(tab.id)}>
+        <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onDuplicate(tab.id))}>
           Duplicate
         </ContextMenuItem>
-        <ContextMenuItem disabled={!hasUrl} onSelect={() => onReload(tab.id)}>
+        <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onReload(tab.id))}>
           Reload
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem disabled={!hasUrl} onSelect={() => onCopyUrl(tab.id)}>
+        <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onCopyUrl(tab.id))}>
           Copy URL
         </ContextMenuItem>
-        <ContextMenuItem disabled={!hasUrl} onSelect={() => onOpenExternal(tab.id)}>
+        <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onOpenExternal(tab.id))}>
           Open in browser
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem disabled={tabIndex === 0} onSelect={() => onMove(tab.id, -1)}>
+        <ContextMenuItem disabled={tabIndex === 0} onSelect={afterClose(() => onMove(tab.id, -1))}>
           Move left
         </ContextMenuItem>
-        <ContextMenuItem disabled={!hasTabsToRight} onSelect={() => onMove(tab.id, 1)}>
+        <ContextMenuItem disabled={!hasTabsToRight} onSelect={afterClose(() => onMove(tab.id, 1))}>
           Move right
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => onClose(tab.id)}>Close</ContextMenuItem>
-        <ContextMenuItem disabled={!hasOtherTabs} onSelect={() => onCloseOthers(tab.id)}>
+        <ContextMenuItem onSelect={afterClose(() => onClose(tab.id))}>Close</ContextMenuItem>
+        <ContextMenuItem
+          disabled={!hasOtherTabs}
+          onSelect={afterClose(() => onCloseOthers(tab.id))}
+        >
           Close others
         </ContextMenuItem>
-        <ContextMenuItem disabled={!hasTabsToRight} onSelect={() => onCloseToRight(tab.id)}>
+        <ContextMenuItem
+          disabled={!hasTabsToRight}
+          onSelect={afterClose(() => onCloseToRight(tab.id))}
+        >
           Close tabs to the right
         </ContextMenuItem>
       </ContextMenuContent>
@@ -422,6 +456,8 @@ export function PortalToolbar({
   // The page is a native view drawn over the DOM; claiming an overlay hides it
   // so the menu isn't painted underneath.
   useOverlayClaim("portal-all-tabs", allTabsOpen && isOverflowing);
+  const { setOpen: setNewTabMenuOpen, afterClose: afterNewTabMenuClose } =
+    useNativeViewMenu("portal-new-tab-menu");
 
   // With no tab selected (the launchpad over existing tabs) the first tab is
   // the strip's entry point, so the tablist never drops out of the Tab order.
@@ -684,39 +720,70 @@ export function PortalToolbar({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onNewTab}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  safeFireAndForget(
-                    window.electron.portal.showNewTabMenu({
-                      x: e.screenX,
-                      y: e.screenY,
-                      links: enabledLinks.map((link) => ({
-                        title: link.title,
-                        url: link.url,
-                      })),
-                      defaultNewTabUrl,
-                    }),
-                    { context: "Opening portal new-tab menu" }
-                  );
-                }}
-                className={iconButtonClass}
-                aria-label="New Tab"
-                aria-keyshortcuts={newTabAriaShortcut}
-                aria-haspopup="menu"
+          <ContextMenu modal={false} onOpenChange={setNewTabMenuOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <ContextMenuTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={onNewTab}
+                    // The dock's own context menu wraps this button; the "+"
+                    // menu replaces it here rather than stacking on top of it,
+                    // for a right-click and for a touch or pen long-press alike.
+                    onContextMenu={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => {
+                      if (e.pointerType !== "mouse") e.stopPropagation();
+                    }}
+                    className={iconButtonClass}
+                    aria-label="New Tab"
+                    aria-keyshortcuts={newTabAriaShortcut}
+                  >
+                    <Plus className={PANE_TOOLBAR_ICON_CLASS} />
+                  </button>
+                </ContextMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipContent("New Tab", newTabShortcut)}
+              </TooltipContent>
+            </Tooltip>
+            <ContextMenuContent>
+              {enabledLinks.map((link) => (
+                <ContextMenuItem
+                  key={link.url}
+                  onSelect={afterNewTabMenuClose(
+                    () =>
+                      void actionService.dispatch(
+                        "portal.openUrl",
+                        { url: link.url, title: link.title },
+                        { source: "context-menu" }
+                      )
+                  )}
+                >
+                  {link.title}
+                </ContextMenuItem>
+              ))}
+              {enabledLinks.length > 0 && <ContextMenuSeparator />}
+              <ContextMenuItem
+                onSelect={afterNewTabMenuClose(
+                  () =>
+                    void actionService.dispatch("portal.openLaunchpad", undefined, {
+                      source: "context-menu",
+                    })
+                )}
               >
-                <Plus className={PANE_TOOLBAR_ICON_CLASS} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipContent("New Tab", newTabShortcut)}
-            </TooltipContent>
-          </Tooltip>
+                Open launchpad
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <PortalDefaultNewTabSubmenu
+                links={enabledLinks}
+                defaultNewTabUrl={defaultNewTabUrl}
+              />
+              <ContextMenuSeparator />
+              <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "portal" }}>
+                Portal settings…
+              </ContextMenuActionItem>
+            </ContextMenuContent>
+          </ContextMenu>
         </div>
       )}
     </div>

@@ -1769,10 +1769,8 @@ function PanelHeaderComponent({
                   {headerActions && <DropdownMenuSeparator />}
                   {headerActions}
 
-                  {/* Destructive group */}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
-                    destructive
                     onSelect={() =>
                       void actionService.dispatch(
                         "terminal.trash",

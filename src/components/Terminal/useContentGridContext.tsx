@@ -54,10 +54,11 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { CliAvailability } from "@shared/types";
 import {
   ContextMenuActionItem,
-  ContextMenuContent,
   ContextMenuCheckboxItem,
+  ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuMeta,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
@@ -98,6 +99,7 @@ const EMPTY_TAB_GROUPS: TabGroup[] = [];
 const GRID_CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
   Item: ContextMenuItem,
   Label: ContextMenuLabel,
+  Meta: ContextMenuMeta,
   Separator: ContextMenuSeparator,
 };
 
@@ -1147,7 +1149,8 @@ export function useContentGridContext({
       />
       <ContextMenuSeparator />
       <ContextMenuSub>
-        <ContextMenuSubTrigger>Grid Layout</ContextMenuSubTrigger>
+        {/* Inset into the launch rows' icon column above it. */}
+        <ContextMenuSubTrigger inset>Grid layout</ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <MenuActionSourceContext.Consumer>
             {(menuSource) => (
@@ -1174,7 +1177,7 @@ export function useContentGridContext({
                     )
                   }
                 >
-                  Fixed Columns
+                  Fixed columns
                 </ContextMenuCheckboxItem>
                 <ContextMenuCheckboxItem
                   checked={layoutConfig.strategy === "fixed-rows"}
@@ -1186,7 +1189,7 @@ export function useContentGridContext({
                     )
                   }
                 >
-                  Fixed Rows
+                  Fixed rows
                 </ContextMenuCheckboxItem>
               </>
             )}
@@ -1194,8 +1197,8 @@ export function useContentGridContext({
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSeparator />
-      <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "terminal" }}>
-        Terminal Settings...
+      <ContextMenuActionItem inset actionId="app.settings.openTab" args={{ tab: "terminal" }}>
+        Terminal settings…
       </ContextMenuActionItem>
     </ContextMenuContent>
   );
