@@ -258,9 +258,47 @@ test("document tab strips — four surfaces, four states, every theme", async ({
         );
       }
     }
+
+    // Overflow: pick a hidden tab from the grid's overflow menu. The selected tab
+    // must come fully into the strip, underline and all.
+    written.push(
+      await withPage(context, async (page) => {
+        await page.setViewportSize({ width: 560, height: 400 });
+        const pane = page.locator("[data-preview-pane]").first();
+        const strip = pane.getByRole("tablist");
+        await goto(
+          page,
+          `${server!.baseURL}/panel-header-preview.html?theme=${theme}&fixture=tabs-overflow`,
+          strip
+        );
+        await pane.getByTestId("panel-tabs-overflow").click();
+        const items = page.getByRole("menuitem");
+        await expect(items.first()).toBeVisible();
+        await items.last().click();
+        await page.waitForTimeout(500);
+        const inView = await strip.evaluate((el) => {
+          const selected = el.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+          if (!selected) return false;
+          const s = el.getBoundingClientRect();
+          const t = selected.getBoundingClientRect();
+          // A tab wider than the strip cannot fit; its start must be showing.
+          const fits = t.width <= s.width + 1;
+          return t.left >= s.left - 1 && (!fits || t.right <= s.right + 1);
+        });
+        if (!inView) {
+          throw new Error(
+            "grid overflow: selected tab is not inside the strip — refusing to write"
+          );
+        }
+        return snap(
+          pane.locator("[data-pane-chrome]").first(),
+          `grid--${theme}--overflow-select.png`
+        );
+      })
+    );
   }
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(written.length).toBe(THEMES.length * SURFACES.length * STATES.length);
+  expect(written.length).toBe(THEMES.length * (SURFACES.length * STATES.length + 1));
 });

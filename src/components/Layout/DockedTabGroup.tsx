@@ -70,6 +70,7 @@ import {
 } from "./useDockActivityState";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import { tabDomId } from "@/components/Panel/TabButton";
+import { revealTabInStrip } from "@/components/ui/document-tab";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
@@ -409,14 +410,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       }
     }
     if (!tabEl) return;
-    const tabLeft = tabEl.offsetLeft;
-    const tabRight = tabLeft + tabEl.offsetWidth;
-    const behavior = prefersReducedMotion() ? "auto" : "smooth";
-    if (tabLeft < tabListEl.scrollLeft || tabEl.offsetWidth > tabListEl.clientWidth) {
-      tabListEl.scrollTo({ left: tabLeft, behavior });
-    } else if (tabRight > tabListEl.scrollLeft + tabListEl.clientWidth) {
-      tabListEl.scrollTo({ left: tabRight - tabListEl.clientWidth, behavior });
-    }
+    revealTabInStrip(tabListEl, tabEl, prefersReducedMotion() ? "auto" : "smooth");
   }, [isOpen, activeTabId, tabListEl]);
 
   // Handle tab reorder drag end

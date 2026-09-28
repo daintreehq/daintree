@@ -53,6 +53,7 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
+import { revealTabInStrip } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
@@ -840,21 +841,7 @@ function PanelHeaderComponent({
     const tabEl = tabListEl.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement | null;
     if (!tabEl) return;
 
-    const containerLeft = tabListEl.scrollLeft;
-    const containerRight = containerLeft + tabListEl.clientWidth;
-    const tabLeft = tabEl.offsetLeft;
-    const tabRight = tabLeft + tabEl.offsetWidth;
-
-    // A tab wider than the strip cannot fit either way; show its start — the
-    // brand glyph and the first words are what identify it, not its close.
-    if (tabLeft < containerLeft || tabEl.offsetWidth > tabListEl.clientWidth) {
-      tabListEl.scrollTo({ left: tabLeft, behavior: prefersReducedMotion() ? "auto" : "smooth" });
-    } else if (tabRight > containerRight) {
-      tabListEl.scrollTo({
-        left: tabRight - tabListEl.clientWidth,
-        behavior: prefersReducedMotion() ? "auto" : "smooth",
-      });
-    }
+    revealTabInStrip(tabListEl, tabEl, prefersReducedMotion() ? "auto" : "smooth");
   }, [activeTabId, isDragging, tabListEl]);
 
   // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)

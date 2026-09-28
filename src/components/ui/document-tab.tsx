@@ -49,6 +49,27 @@ export function DocumentTabIndicator() {
   );
 }
 
+/**
+ * Scroll a strip so one of its tabs is fully on screen. Measured in the
+ * strip's own scroll coordinates rather than from `offsetLeft`, which is
+ * relative to whatever positioned box the host wraps its tabs in. A tab wider
+ * than the strip shows its start — the glyph and first words identify it.
+ */
+export function revealTabInStrip(
+  strip: HTMLElement,
+  tab: HTMLElement,
+  behavior: ScrollBehavior
+): void {
+  const tabLeft =
+    tab.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+  const tabRight = tabLeft + tab.offsetWidth;
+  if (tabLeft < strip.scrollLeft || tab.offsetWidth > strip.clientWidth) {
+    strip.scrollTo({ left: tabLeft, behavior });
+  } else if (tabRight > strip.scrollLeft + strip.clientWidth) {
+    strip.scrollTo({ left: tabRight - strip.clientWidth, behavior });
+  }
+}
+
 export interface DocumentTabCloseProps {
   /** The tab's own title, for the control's label. */
   title: string;
