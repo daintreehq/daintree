@@ -38,3 +38,13 @@ export interface ForgeStatsDropdownProps {
    */
   onCountUpdate?: (count: number, hasMore: boolean) => void;
 }
+
+/**
+ * The box every stats dropdown body draws: 450×500, or as tall as the space
+ * under the pill allows. `FixedDropdown` publishes that space as
+ * `--fixed-dropdown-available-height`; a body that ignored it pushed its footer
+ * off a short window. Loaded, loading and connection-gated bodies all use it,
+ * so the panel never changes size between states.
+ */
+export const FORGE_DROPDOWN_PANEL_SIZE =
+  "w-[450px] h-[min(500px,var(--fixed-dropdown-available-height,500px))]";

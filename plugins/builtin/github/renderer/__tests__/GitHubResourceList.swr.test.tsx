@@ -1587,7 +1587,7 @@ describe("GitHubResourceList empty state branching", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(screen.getByText(/No matches for "nonexistent"/)).toBeTruthy();
+      expect(screen.getByText(/No issues match “nonexistent”/)).toBeTruthy();
     });
     // The state tab is still the default, so the action names only what it
     // actually undoes.
@@ -1663,7 +1663,7 @@ describe("GitHubResourceList empty state branching", () => {
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(screen.getByText(/No matches for "nonexistent"/)).toBeTruthy();
+      expect(screen.getByText(/No pull requests match “nonexistent”/)).toBeTruthy();
     });
   });
 
@@ -1791,7 +1791,7 @@ describe("GitHubResourceList retry behavior", () => {
     await vi.advanceTimersByTimeAsync(1500);
 
     await waitFor(() => {
-      expect(screen.getByText(/Cannot reach GitHub/)).toBeTruthy();
+      expect(screen.getByText(/Couldn't reach GitHub/)).toBeTruthy();
     });
 
     expect(mockListIssues).toHaveBeenCalledTimes(3);
@@ -1904,9 +1904,7 @@ describe("GitHubResourceList retry behavior", () => {
     // Cached row stays visible; inline paused banner appears above it.
     expect(screen.getByTestId("item-60")).toBeTruthy();
     await waitFor(() => {
-      expect(
-        screen.getByText(/GitHub requests are paused\. Showing last known results\./)
-      ).toBeTruthy();
+      expect(screen.getByText(/GitHub paused requests\. Showing saved results/)).toBeTruthy();
     });
     // Fetch never fires because the store-driven guard short-circuits.
     expect(mockListIssues).not.toHaveBeenCalled();
@@ -1951,7 +1949,7 @@ describe("GitHubResourceList retry behavior", () => {
     // network errors; only this surface is rewritten — the cold-error path still
     // surfaces the raw message.
     await waitFor(() => {
-      expect(screen.getByText(/Couldn't reach GitHub\. Showing last known results\./)).toBeTruthy();
+      expect(screen.getByText(/Couldn't reach GitHub\. Showing saved results/)).toBeTruthy();
     });
 
     expect(mockListIssues).toHaveBeenCalledTimes(1);
@@ -2420,9 +2418,32 @@ describe("GitHubResourceList stale-while-error banner copy (#6867)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Couldn't reach GitHub\. Showing last known results\./)).toBeTruthy();
+      expect(screen.getByText(/Couldn't reach GitHub\. Showing saved results/)).toBeTruthy();
     });
     expect(screen.queryByText(/Check your internet connection/)).toBeNull();
+  });
+
+  it("never truncates the sentence that explains the saved rows", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(20)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+    mockListIssues.mockRejectedValue(
+      new Error("Cannot reach GitHub. Check your internet connection.")
+    );
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    const message = await screen.findByText(/Showing saved results/);
+    // Truncation is what cut this to "Showing last kno…" beside a timestamp
+    // that kept its width. The banner may wrap; it may not clip.
+    for (let el: HTMLElement | null = message; el && el.getAttribute("role") !== "alert";) {
+      expect(el.className).not.toMatch(/\btruncate\b/);
+      el = el.parentElement;
+    }
   });
 
   it("keeps the sanitized raw message for non-transient errors", async () => {
@@ -2698,7 +2719,7 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
     // The empty state must stop naming #999 and start naming the query that
     // actually ran.
     await waitFor(() => {
-      expect(screen.getByText('No matches for "123,,124"')).toBeTruthy();
+      expect(screen.getByText("No issues match “123,,124”")).toBeTruthy();
     });
     expect(screen.queryByText(/No issue #999 in this view/)).toBeNull();
   });
@@ -2921,28 +2942,33 @@ describe("GitHubResourceList polish (#7202)", () => {
     });
   });
 
-  it("sort popover ArrowDown moves checked + focus to the next radio", async () => {
+  it("sort menu picks an order and hands focus back to the search field", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     const sortButton = await screen.findByRole("button", { name: /^sort/i });
     act(() => {
-      sortButton.click();
+      fireEvent.pointerDown(sortButton, { button: 0, ctrlKey: false });
     });
 
-    const newest = await screen.findByRole("radio", { name: /newest/i });
+    const newest = await screen.findByRole("menuitemradio", { name: /newest/i });
     expect(newest.getAttribute("aria-checked")).toBe("true");
+    const recent = screen.getByRole("menuitemradio", { name: /recently updated/i });
+    expect(recent.getAttribute("aria-checked")).toBe("false");
 
     act(() => {
-      newest.focus();
-      newest.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      recent.click();
     });
 
     await waitFor(() => {
-      const recent = screen.getByRole("radio", { name: /recently updated/i });
-      expect(recent.getAttribute("aria-checked")).toBe("true");
-      expect(document.activeElement).toBe(recent);
+      expect(useGitHubFilterStore.getState().issueSortOrder).toBe("updated");
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+    // The grid's keys live on the search field; a sort change that left focus
+    // on the trigger would leave the arrows and Enter dead.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
     });
   });
 
@@ -2964,7 +2990,7 @@ describe("GitHubResourceList polish (#7202)", () => {
     expect(sortButton.getAttribute("aria-expanded")).toBe("false");
 
     act(() => {
-      sortButton.click();
+      fireEvent.pointerDown(sortButton, { button: 0, ctrlKey: false });
     });
 
     await waitFor(() => {
@@ -3384,10 +3410,11 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     // The trigger is inert until there is something to select, so a click
     // fired mid-load would silently do nothing.
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    // Radix opens a menu on the primary-button press, not on click.
     act(() => {
-      button.click();
+      fireEvent.pointerDown(button, { button: 0, ctrlKey: false });
     });
-    await screen.findByRole("dialog", { name: "Selection actions" });
+    await screen.findByRole("menu");
     return button;
   };
 
@@ -3402,7 +3429,7 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     await screen.findByTestId("item-3");
 
     await openMenu();
-    const selectAll = await screen.findByRole("button", { name: "Select all (3)" });
+    const selectAll = await screen.findByRole("menuitem", { name: "Select all (3)" });
     act(() => {
       selectAll.click();
     });
@@ -3451,7 +3478,7 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     // until the menu is opened.
     const header = (await trigger()).closest(".space-y-2");
     expect(header?.children).toHaveLength(2);
-    expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("offers unassigned again, and skips the assigned rows", async () => {
@@ -3462,7 +3489,7 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await openMenu();
-    const unassigned = await screen.findByRole("button", { name: "Select unassigned (2)" });
+    const unassigned = await screen.findByRole("menuitem", { name: "Select unassigned (2)" });
     act(() => {
       unassigned.click();
     });
@@ -3480,8 +3507,8 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await openMenu();
-    expect(screen.getByRole("button", { name: "Select unassigned (2)" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Select without worktrees (1)" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Select unassigned (2)" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Select without worktrees (1)" })).toBeTruthy();
   });
 
   it("excludes rows that already have a worktree", async () => {
@@ -3491,7 +3518,7 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await openMenu();
-    const withoutWorktree = await screen.findByRole("button", {
+    const withoutWorktree = await screen.findByRole("menuitem", {
       name: "Select without worktrees (1)",
     });
     act(() => {
@@ -3507,8 +3534,8 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
 
     await openMenu("pull requests");
-    expect(screen.getByRole("button", { name: "Select all (1)" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /select unassigned/i })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Select all (1)" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /select unassigned/i })).toBeNull();
   });
 
   it("keeps an empty preset listed but disabled rather than dropping it", async () => {
@@ -3520,10 +3547,10 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await openMenu();
-    const unassigned = screen.getByRole("button", { name: "Select unassigned (0)" });
-    const withoutWorktree = screen.getByRole("button", { name: "Select without worktrees (0)" });
-    expect((unassigned as HTMLButtonElement).disabled).toBe(true);
-    expect((withoutWorktree as HTMLButtonElement).disabled).toBe(true);
+    const unassigned = screen.getByRole("menuitem", { name: "Select unassigned (0)" });
+    const withoutWorktree = screen.getByRole("menuitem", { name: "Select without worktrees (0)" });
+    expect(unassigned.getAttribute("aria-disabled")).toBe("true");
+    expect(withoutWorktree.getAttribute("aria-disabled")).toBe("true");
 
     act(() => {
       unassigned.click();
@@ -3539,9 +3566,9 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await openMenu();
-    expect(screen.queryByRole("button", { name: /^select all/i })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /^select all/i })).toBeNull();
     act(() => {
-      screen.getByRole("button", { name: "Deselect all" }).click();
+      screen.getByRole("menuitem", { name: "Deselect all" }).click();
     });
 
     expect(mockSelectionClear).toHaveBeenCalledTimes(1);
@@ -3566,8 +3593,8 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await openMenu();
-    expect(screen.getByRole("button", { name: "Select all (2)" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Deselect all" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Select all (2)" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Deselect all" })).toBeNull();
   });
 
   it("matches pull requests on prNumber, not on a same-numbered issue worktree", async () => {
@@ -3580,7 +3607,7 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
 
     await openMenu("pull requests");
-    const withoutWorktree = screen.getByRole("button", { name: "Select without worktrees (1)" });
+    const withoutWorktree = screen.getByRole("menuitem", { name: "Select without worktrees (1)" });
     act(() => {
       withoutWorktree.click();
     });
@@ -3595,11 +3622,11 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
 
     const button = await openMenu();
     act(() => {
-      screen.getByRole("button", { name: "Select all (1)" }).click();
+      screen.getByRole("menuitem", { name: "Select all (1)" }).click();
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
     expect(button.getAttribute("aria-expanded")).toBe("false");
   });
@@ -3610,13 +3637,13 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     const button = await openMenu();
-    const dialog = screen.getByRole("dialog", { name: "Selection actions" });
+    const dialog = screen.getByRole("menu");
     act(() => {
       fireEvent.keyDown(dialog, { key: "Escape" });
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(mockSelectAll).not.toHaveBeenCalled();
@@ -3652,7 +3679,7 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
     expect(mockSelectAll).not.toHaveBeenCalled();
     // The trigger went `disabled` in the same commit that closed the menu, so
@@ -3670,13 +3697,13 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await openMenu();
-    const dialog = screen.getByRole("dialog", { name: "Selection actions" });
+    const dialog = screen.getByRole("menu");
     act(() => {
       fireEvent.keyDown(dialog, { key: "Escape" });
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
     expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
   });
@@ -3694,7 +3721,7 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
     expect(mockSelectAll).not.toHaveBeenCalled();
   });
@@ -3719,7 +3746,7 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
   });
 });

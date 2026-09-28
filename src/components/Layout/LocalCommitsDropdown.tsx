@@ -37,6 +37,7 @@ import { classifyGitError, getGitRecoveryHint } from "@shared/utils/gitOperation
 import { logError } from "@/utils/logger";
 import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { FORGE_DROPDOWN_PANEL_SIZE } from "./forgeStatsDropdownContract";
 
 // The commits pill's list (issue #10414). Commit history is local git data, not
 // forge data, so the host renders it when no forge provider supplies a stats
@@ -255,7 +256,7 @@ export function reflowCommitBody(body: string): string {
 
 function LocalCommitsSkeleton({ count }: { count: number | null | undefined }) {
   return (
-    <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
+    <div aria-hidden="true">
       {Array.from({ length: skeletonRowCount(count) }).map((_, i) => (
         <div
           key={i}
@@ -819,6 +820,10 @@ export function LocalCommitsDropdown({
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
+      // An IME owns the keys while it composes: the Enter that commits a
+      // candidate must not also expand or copy a row. The keyCode check covers
+      // WebKit's first keydown, before `isComposing` is set.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -883,7 +888,7 @@ export function LocalCommitsDropdown({
         case "Escape":
           // A query is SearchField's to clear; only an empty field closes the
           // dropdown.
-          if (searchQuery || e.nativeEvent.isComposing) break;
+          if (searchQuery) break;
           e.preventDefault();
           e.stopPropagation();
           onClose?.();
@@ -943,10 +948,13 @@ export function LocalCommitsDropdown({
   const loadMoreRowIndex = data.length + 1;
 
   return (
-    <div className="relative w-[450px] flex flex-col h-[500px]">
+    <div className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}>
       <div className="p-3 border-b border-[var(--border-divider)] shrink-0">
         <SearchField
           size="compact"
+          // The dropdown header's 32px, text-sm field, the same as the issue
+          // and pull request lists beside it.
+          fieldClassName="h-8 text-sm"
           icon={
             showRefreshing ? (
               <SpinningIcon
@@ -1061,7 +1069,7 @@ export function LocalCommitsDropdown({
               {bottomShadow}
               <div ref={scrollShadowRef} className="h-full overflow-y-auto overscroll-contain">
                 <div>
-                  <div className="divide-y divide-[var(--border-divider)]">
+                  <div>
                     {data.map((commit, index) => (
                       <LocalCommitRow
                         key={commit.hash}
@@ -1085,7 +1093,7 @@ export function LocalCommitsDropdown({
                       aria-rowindex={loadMoreRowIndex}
                       data-active={isLoadMoreActive ? "true" : undefined}
                       className={cn(
-                        "forge-row relative scroll-my-8 border-t border-[var(--border-divider)] p-2",
+                        "forge-row relative scroll-my-8 p-2",
                         "transition-colors duration-150 ease-out",
                         // The same highlight as a commit row: this is where the
                         // cursor lands last.
@@ -1185,7 +1193,7 @@ export function LocalCommitsDropdown({
         copyFailed ||
         activeCommit ||
         footerAction) && (
-        <div className="px-3 h-9 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
+        <div className="px-3 h-10 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
           <div className="flex-1 min-w-0 flex items-center gap-2">
             {pushLine ? (
               <PushSummary line={pushLine} />
@@ -1216,7 +1224,9 @@ export function LocalCommitsDropdown({
               className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap"
               aria-hidden="true"
             >
-              <KbdChord shortcut="Shift+Enter" />
+              {/* The key that copies this row's hash: Shift+Enter where Enter
+                  opens a message, plain Enter where there is none to open. */}
+              <KbdChord shortcut={activeCommit.body?.trim() ? "Shift+Enter" : "Enter"} />
               Copy hash
             </span>
           ) : null}

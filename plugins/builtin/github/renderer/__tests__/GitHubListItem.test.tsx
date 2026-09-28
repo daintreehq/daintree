@@ -444,9 +444,8 @@ describe("GitHubListItem", () => {
     const iconWrapper = container.querySelector(".group\\/icon");
     expect(iconWrapper).not.toBeNull();
 
-    const children = iconWrapper!.querySelectorAll(":scope > span");
-    const stateIcon = children[0];
-    const checkbox = children[1];
+    const stateIcon = iconWrapper!.querySelector(":scope > span");
+    const checkbox = iconWrapper!.querySelector('[data-slot="checkbox"]');
 
     expect(stateIcon?.className).toContain("group-hover/icon:hidden");
     expect(stateIcon?.className).not.toContain("group-hover:hidden");
@@ -462,9 +461,8 @@ describe("GitHubListItem", () => {
     const iconWrapper = container.querySelector(".group\\/icon");
     expect(iconWrapper).not.toBeNull();
 
-    const children = iconWrapper!.querySelectorAll(":scope > span");
-    const stateIcon = children[0];
-    const checkbox = children[1];
+    const stateIcon = iconWrapper!.querySelector(":scope > span");
+    const checkbox = iconWrapper!.querySelector('[data-slot="checkbox"]');
 
     expect(stateIcon?.className).toContain("hidden");
     expect(stateIcon?.className).not.toContain("group-hover/icon:hidden");
@@ -1040,5 +1038,45 @@ describe("skeleton/row parity (#12294)", () => {
     // that the two differ would be satisfied by swapping them.
     expect(RESOURCE_STATE_BONE.issue).toBe("rounded-full");
     expect(RESOURCE_STATE_BONE.pr).not.toBe("rounded-full");
+  });
+});
+
+describe("row controls that must not steal the grid's focus", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("draws the selection mark as a square checkbox, never a round one", () => {
+    const { container } = render(
+      <GitHubListItem item={baseIssue} type="issue" isSelectionActive onToggleSelect={vi.fn()} />
+    );
+    const mark = container.querySelector('[data-slot="checkbox"]');
+    expect(mark).not.toBeNull();
+    const tokens = mark!.className.split(/\s+/);
+    // Bare `rounded` resolves to the 10px step here, which on a 16px box reads
+    // as a radio; `rounded-full` is a radio outright.
+    expect(tokens).not.toContain("rounded");
+    expect(tokens).not.toContain("rounded-full");
+  });
+
+  it("keeps DOM focus where it is when any in-row control is pressed", () => {
+    const withLinkedPr: Issue = {
+      ...baseIssue,
+      linkedPR: { number: 77, state: "open", url: "https://github.com/o/r/pull/77" },
+    };
+    const { container } = render(
+      <GitHubListItem item={withLinkedPr} type="issue" isSelectionActive onToggleSelect={vi.fn()} />
+    );
+    const controls = [
+      ...container.querySelectorAll<HTMLElement>('button[tabindex="-1"]'),
+      // The actions trigger opens a menu, which is allowed to take focus; the
+      // menu hands it back to the search field when it closes.
+    ].filter((el) => el.getAttribute("aria-haspopup") !== "menu");
+    expect(controls.length).toBeGreaterThan(3);
+    for (const control of controls) {
+      // `fireEvent` returns false when the default was prevented — a pressed
+      // native button would otherwise take focus off the search field.
+      expect(fireEvent.mouseDown(control), control.getAttribute("aria-label") ?? "").toBe(false);
+    }
   });
 });

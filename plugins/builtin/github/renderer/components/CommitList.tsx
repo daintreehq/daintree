@@ -35,7 +35,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
       footerAction={
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           onMouseDown={(e) => e.preventDefault()}
           onClick={handleViewOnGitHub}
         >

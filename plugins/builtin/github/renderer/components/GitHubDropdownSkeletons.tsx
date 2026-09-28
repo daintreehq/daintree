@@ -2,6 +2,7 @@ import { Search, ExternalLink, Plus, ArrowUpDown, RefreshCw } from "lucide-react
 import { ListChecks } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
+import { FORGE_DROPDOWN_PANEL_SIZE } from "@/components/Layout/forgeStatsDropdownContract";
 
 /**
  * The virtualized row height, in px, and the only definition of it. This used
@@ -135,7 +136,7 @@ export function GitHubResourceListSkeleton({
 
   return (
     <div
-      className="relative w-[450px] flex flex-col h-[500px]"
+      className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}
       role="status"
       aria-live="polite"
       aria-label="Loading GitHub results"
@@ -322,7 +323,7 @@ export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
   return (
     <div role="status" aria-live="polite" aria-label="Loading commits">
       <span className="sr-only">Loading commits</span>
-      <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
+      <div aria-hidden="true">
         {Array.from({ length: renderCount }).map((_, i) => (
           <div
             key={i}

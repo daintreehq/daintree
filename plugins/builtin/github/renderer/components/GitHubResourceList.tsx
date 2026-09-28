@@ -9,8 +9,17 @@ import {
 } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { ExternalLink, RefreshCw, WifiOff, Plus, Settings, ArrowUpDown, Clock } from "lucide-react";
-import { ListChecks } from "@/components/icons";
+import {
+  AlertCircle,
+  ExternalLink,
+  RefreshCw,
+  WifiOff,
+  Plus,
+  Settings,
+  ArrowUpDown,
+  Clock,
+} from "lucide-react";
+import { KeyRound, ListChecks } from "@/components/icons";
 import { GitHubIcon } from "@/components/icons/brands";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
 import { Button } from "@/components/ui/button";
@@ -20,7 +29,15 @@ import {
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
@@ -54,8 +71,14 @@ import { useGitHubResourceListSWR } from "../hooks/useGitHubResourceListSWR";
 import { forgeClient } from "@/clients/forgeClient";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
+import { FORGE_DROPDOWN_PANEL_SIZE } from "@/components/Layout/forgeStatsDropdownContract";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
-import { UI_DOHERTY_THRESHOLD, UI_SKELETON_FLOOR_MS } from "@/lib/animationUtils";
+import {
+  UI_DOHERTY_THRESHOLD,
+  UI_SKELETON_FLOOR_MS,
+  UI_STILL_WORKING_MS,
+} from "@/lib/animationUtils";
+import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
@@ -81,9 +104,6 @@ const FRESHNESS_VISIBLE_AFTER_MS = 5 * 60_000;
  */
 const REVALIDATE_SPINNER_GATE_MS = UI_DOHERTY_THRESHOLD;
 
-/** Past this, a wait stops being a wait and starts needing acknowledgement. */
-const STILL_WORKING_AFTER_MS = 5_000;
-
 /**
  * Spinner onset for an explicit click on Refresh. Also the Doherty gate — a
  * press does not buy an exemption from it. The acknowledgement a press needs
@@ -95,6 +115,10 @@ const MANUAL_REFRESH_SPINNER_GATE_MS = UI_DOHERTY_THRESHOLD;
 
 /** Minimum on-screen dwell once the spinner has crossed either gate. */
 const SPINNER_DWELL_MS = UI_SKELETON_FLOOR_MS * 2;
+
+/** A notice over saved rows: it wraps rather than truncating its one sentence. */
+const STALE_BANNER_CLASS =
+  "px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0";
 
 function sanitizeIpcError(message: string): string {
   const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").trim();
@@ -144,6 +168,9 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
   const isTokenError = loadMoreError !== null && isTokenRelatedError(loadMoreError);
   return (
     <div
+      // The row, not its button, is what the cursor names — the same as a
+      // resource row and as the commits list's Load more.
+      id={`github-${type}-load-more`}
       role="row"
       aria-rowindex={rowIndex}
       className="p-3"
@@ -158,7 +185,6 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
           <div className="p-2 rounded-[var(--radius-md)] bg-overlay-soft border border-[var(--border-divider)]">
             <p className="text-xs text-text-secondary">{sanitizeIpcError(loadMoreError)}</p>
             <Button
-              id={`github-${type}-load-more`}
               variant="outline"
               size="xs"
               onClick={isTokenError ? onOpenSettings : onLoadMore}
@@ -176,7 +202,6 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
           </div>
         ) : (
           <Button
-            id={`github-${type}-load-more`}
             variant="ghost"
             onClick={onLoadMore}
             disabled={loadingMore}
@@ -814,6 +839,15 @@ export function GitHubResourceList({
     }
   }, [activeIndex, data.length, isLoadMoreActive, type]);
 
+  const handleOpenGitHubSettings = useCallback(() => {
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+      { source: "user" }
+    );
+    handleClose();
+  }, [handleClose]);
+
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
       // During IME composition the browser owns the event lifecycle — an
@@ -836,7 +870,13 @@ export function GitHubResourceList({
           e.preventDefault();
           e.stopPropagation();
           if (isLoadMoreActive) {
-            handleLoadMore();
+            // One action per state, shared with the pointer: a failed page
+            // that needs a token goes to settings, never back round the loop.
+            if (loadMoreError !== null && isTokenRelatedError(loadMoreError)) {
+              handleOpenGitHubSettings();
+            } else {
+              handleLoadMore();
+            }
           } else if (activeItem) {
             if (e.metaKey || e.ctrlKey) {
               handleOpenUrlExternal(activeItem.url);
@@ -906,6 +946,8 @@ export function GitHubResourceList({
       activeIndex,
       activeItem,
       handleLoadMore,
+      loadMoreError,
+      handleOpenGitHubSettings,
       worktreeIndex,
       activeWorktreeId,
       handleSwitchToWorktree,
@@ -918,21 +960,12 @@ export function GitHubResourceList({
     ]
   );
 
-  const handleOpenGitHubSettings = useCallback(() => {
-    void actionService.dispatch(
-      "app.settings.openTab",
-      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
-      { source: "user" }
-    );
-    handleClose();
-  }, [handleClose]);
-
   // Pagination gets the same Doherty gate as everything else: a page that
   // arrives inside 400ms should not have flashed a spinner on the way, and one
   // that takes longer than five seconds should say so rather than spin
   // silently. `useDeferredLoading` owns the gate.
   const showLoadingMoreSpinner = useDeferredLoading(loadingMore, UI_DOHERTY_THRESHOLD);
-  const isSlowLoadingMore = useDeferredLoading(loadingMore, STILL_WORKING_AFTER_MS);
+  const isSlowLoadingMore = useDeferredLoading(loadingMore, UI_STILL_WORKING_MS);
 
   const footerContext = useMemo<LoadMoreFooterContext>(
     () => ({
@@ -982,7 +1015,7 @@ export function GitHubResourceList({
         exactNumberNotFound !== null
           ? `No ${singular} #${exactNumberNotFound} in this view`
           : trimmedSearch.length > 0
-            ? `No matches for "${trimmedSearch}"`
+            ? `No ${resourceLabel} match “${trimmedSearch}”`
             : `No ${resourceLabel} in this view`;
       return (
         <EmptyState
@@ -1047,7 +1080,7 @@ export function GitHubResourceList({
 
   if (showNoTokenEmptyState) {
     return (
-      <div className="relative w-[450px] flex flex-col h-[500px]">
+      <div className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}>
         {/* Canvas scale: this is the canonical "connection-gated panel" example
             in CLAUDE.md — a 450×500 dropdown that warrants panel semantics so the
             token-explanation description and "Add GitHub token" CTA stay legal. */}
@@ -1070,7 +1103,7 @@ export function GitHubResourceList({
   }
 
   return (
-    <div ref={rootRef} className="relative w-[450px] flex flex-col h-[500px]">
+    <div ref={rootRef} className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}>
       <div className="p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0">
         <div className="flex items-center gap-2">
           <SearchField
@@ -1122,9 +1155,10 @@ export function GitHubResourceList({
             <TooltipContent side="bottom">
               {showSpinner ? (
                 "Refreshing…"
-              ) : /* When a banner or the footer is already stating freshness,
-                     the tooltip stays out of it — one occurrence, not three. */
-              lastUpdatedAt != null && !error && !isRateLimited && !showStaleFreshness ? (
+              ) : /* When the footer is already stating freshness, the tooltip
+                     stays out of it. The banners no longer carry it, so over
+                     saved rows this is where "how old" is answered. */
+              lastUpdatedAt != null && !showStaleFreshness ? (
                 <>
                   Refresh &middot; updated <LiveTimeAgo timestamp={lastUpdatedAt} />
                 </>
@@ -1133,10 +1167,10 @@ export function GitHubResourceList({
               )}
             </TooltipContent>
           </Tooltip>
-          <Popover open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
+          <DropdownMenu open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <PopoverTrigger asChild>
+                <DropdownMenuTrigger asChild>
                   <button
                     type="button"
                     aria-label={
@@ -1144,8 +1178,6 @@ export function GitHubResourceList({
                         ? `Sort ${type === "issue" ? "issues" : "pull requests"}`
                         : `Sort ${type === "issue" ? "issues" : "pull requests"}, sorted by recently updated`
                     }
-                    aria-haspopup="dialog"
-                    aria-expanded={sortPopoverOpen}
                     className={cn(
                       "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
                       "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
@@ -1158,103 +1190,55 @@ export function GitHubResourceList({
                   >
                     <ArrowUpDown className="w-3.5 h-3.5" />
                   </button>
-                </PopoverTrigger>
+                </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 {sortOrder === "created" ? "Sort" : "Sort: recently updated"}
               </TooltipContent>
             </Tooltip>
-            <PopoverContent
+            {/* The app's menu, not a hand-built radio popover: the same rows,
+                marks, keys and motion as every other choice-of-one in the app. */}
+            <DropdownMenuContent
               align="end"
-              className="w-48 p-3"
+              className="w-48"
+              // Portaled out of the panel, so without these FixedDropdown reads
+              // a click inside as an outside click and closes the panel.
               onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
               onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
-              onKeyDown={(e: React.KeyboardEvent) => {
-                if (e.key === "Escape") {
-                  e.stopPropagation();
-                  setSortPopoverOpen(false);
-                }
+              // Focus goes back to the search field, not the trigger: the grid's
+              // keys live on the field, so a trigger holding focus leaves the
+              // arrows and Enter dead after every sort change.
+              onCloseAutoFocus={(event: Event) => {
+                event.preventDefault();
+                focusSearchInput();
               }}
             >
-              <div className="text-xs font-medium text-text-secondary mb-2">Sort by</div>
-              <div className="flex flex-col gap-1" role="radiogroup" aria-label="Sort order">
-                {(() => {
-                  const sortOptions = [
-                    { value: "created", label: "Newest" },
-                    { value: "updated", label: "Recently updated" },
-                  ] as const;
-                  return sortOptions.map((option, idx) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setSortOrder(option.value)}
-                      role="radio"
-                      aria-checked={sortOrder === option.value}
-                      tabIndex={sortOrder === option.value ? 0 : -1}
-                      onKeyDown={(e) => {
-                        const isNext = e.key === "ArrowDown" || e.key === "ArrowRight";
-                        const isPrev = e.key === "ArrowUp" || e.key === "ArrowLeft";
-                        if (!isNext && !isPrev) return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const delta = isNext ? 1 : -1;
-                        const nextIdx = (idx + delta + sortOptions.length) % sortOptions.length;
-                        const nextValue = sortOptions[nextIdx]!.value;
-                        setSortOrder(nextValue);
-                        const group = e.currentTarget.parentElement;
-                        requestAnimationFrame(() => {
-                          const radios =
-                            group?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-                          radios?.[nextIdx]?.focus();
-                        });
-                      }}
-                      className={cn(
-                        "flex items-center gap-2 px-2 py-1 text-xs rounded",
-                        "transition-[background-color,color] duration-150 ease-out",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
-                        "focus-visible:outline-accent-primary",
-                        sortOrder === option.value
-                          ? "bg-overlay-soft text-text-primary"
-                          : "text-text-secondary hover:bg-overlay-medium hover:text-text-primary"
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "w-3 h-3 rounded-full border",
-                          sortOrder === option.value
-                            ? "border-text-primary bg-text-primary"
-                            : "border-border-default"
-                        )}
-                      >
-                        {sortOrder === option.value && (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <div className="w-1.5 h-1.5 bg-text-inverse rounded-full" />
-                          </div>
-                        )}
-                      </div>
-                      {option.label}
-                    </button>
-                  ));
-                })()}
-              </div>
-            </PopoverContent>
-          </Popover>
+              <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={sortOrder}
+                onValueChange={(value: string) => {
+                  if (value === "created" || value === "updated") setSortOrder(value);
+                }}
+              >
+                <DropdownMenuRadioItem value="created">Newest</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="updated">Recently updated</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* The bulk-select entry point lives here, in the fixed icon row,
               rather than in a row of its own. A helper row keyed to selection
               mode could only be reached by ticking a row first, and one keyed
               to the search query grew the stacked header on the first
               keystroke and shoved the list down. A trigger that is always
               present at a fixed size is neither. */}
-          <Popover open={selectionMenuOpen} onOpenChange={setSelectionMenuOpen}>
+          <DropdownMenu open={selectionMenuOpen} onOpenChange={setSelectionMenuOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <PopoverTrigger asChild>
+                <DropdownMenuTrigger asChild>
                   <button
                     type="button"
                     disabled={loading || data.length === 0}
                     aria-label={`Select ${type === "issue" ? "issues" : "pull requests"}`}
-                    aria-haspopup="dialog"
-                    aria-expanded={selectionMenuOpen}
                     className={cn(
                       "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
                       "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
@@ -1268,124 +1252,99 @@ export function GitHubResourceList({
                   >
                     <ListChecks className="w-3.5 h-3.5" />
                   </button>
-                </PopoverTrigger>
+                </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">Select</TooltipContent>
             </Tooltip>
-            <PopoverContent
+            <DropdownMenuContent
               align="end"
-              className="w-56 p-3"
+              className="w-56"
               onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
               onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
-              onKeyDown={(e: React.KeyboardEvent) => {
-                if (e.key === "Escape") {
-                  e.stopPropagation();
-                  setSelectionMenuOpen(false);
-                }
-              }}
               // Radix hands focus back to the trigger, which leaves the grid
               // inert either way: focus off the search input kills the arrow
-              // keys, Shift+Space and Enter (see the invariant above), and on
-              // the emptied-list close the trigger has gone `disabled` in the
-              // same commit, so its `.focus()` is a no-op and focus falls all
-              // the way to `document.body`. Take the restoration over — same
-              // hand-back the row menus do via `onMenuClose`.
+              // keys, Shift+Space and Enter, and on the emptied-list close the
+              // trigger has gone `disabled` in the same commit, so its
+              // `.focus()` is a no-op and focus falls all the way to
+              // `document.body`. Take the restoration over — same hand-back the
+              // row menus do via `onMenuClose`.
               onCloseAutoFocus={(event: Event) => {
                 event.preventDefault();
                 focusSearchInput();
               }}
-              // Radix gives the content `role="dialog"`, and a dialog that
-              // announces itself as nothing is a dialog a screen-reader user
-              // has to explore to identify.
-              aria-label="Selection actions"
             >
-              <div className="text-xs font-medium text-text-secondary mb-2">Select</div>
-              <div className="flex flex-col gap-1">
-                {(() => {
-                  const allSelected =
-                    data.length > 0 && data.every((item) => selection.selectedIds.has(item.number));
-                  // Assignment, not worktree readiness — the two measure
-                  // different things, so this one does NOT inherit the open
-                  // filter below. `data` is already scoped by the state tab,
-                  // and a closed issue with nobody on it is still unassigned.
-                  // PRs carry no assignment model at all, so the choice is
-                  // absent for them rather than permanently empty.
-                  const unassigned =
-                    type === "issue"
-                      ? data.filter((item) => (item as Issue).assignees.length === 0)
-                      : null;
-                  // Open as well as worktree-less: the bulk planner skips
-                  // closed issues and merged PRs outright, so selecting them
-                  // would walk you into a dialog with nothing left to create.
-                  const withoutWorktree = data.filter(
-                    (item) => item.state === "open" && !worktreeIndex.has(item.number)
-                  );
+              <DropdownMenuLabel>Select</DropdownMenuLabel>
+              {(() => {
+                const allSelected =
+                  data.length > 0 && data.every((item) => selection.selectedIds.has(item.number));
+                // Assignment, not worktree readiness — the two measure
+                // different things, so this one does NOT inherit the open
+                // filter below. `data` is already scoped by the state tab,
+                // and a closed issue with nobody on it is still unassigned.
+                // PRs carry no assignment model at all, so the choice is
+                // absent for them rather than permanently empty.
+                const unassigned =
+                  type === "issue"
+                    ? data.filter((item) => (item as Issue).assignees.length === 0)
+                    : null;
+                // Open as well as worktree-less: the bulk planner skips
+                // closed issues and merged PRs outright, so selecting them
+                // would walk you into a dialog with nothing left to create.
+                const withoutWorktree = data.filter(
+                  (item) => item.state === "open" && !worktreeIndex.has(item.number)
+                );
 
-                  const options: {
-                    key: string;
-                    label: string;
-                    disabled: boolean;
-                    onSelect: () => void;
-                  }[] = [
-                    allSelected
-                      ? {
-                          key: "deselect-all",
-                          label: "Deselect all",
-                          disabled: false,
-                          onSelect: () => selection.clear(),
-                        }
-                      : {
-                          key: "select-all",
-                          label: `Select all (${data.length})`,
-                          disabled: data.length === 0,
-                          onSelect: () => selection.selectAll(data),
-                        },
-                  ];
-                  if (unassigned !== null) {
-                    options.push({
-                      key: "select-unassigned",
-                      label: `Select unassigned (${unassigned.length})`,
-                      disabled: unassigned.length === 0,
-                      onSelect: () => selection.selectAll(unassigned),
-                    });
-                  }
+                const options: {
+                  key: string;
+                  label: string;
+                  disabled: boolean;
+                  onSelect: () => void;
+                }[] = [
+                  allSelected
+                    ? {
+                        key: "deselect-all",
+                        label: "Deselect all",
+                        disabled: false,
+                        onSelect: () => selection.clear(),
+                      }
+                    : {
+                        key: "select-all",
+                        label: `Select all (${data.length})`,
+                        disabled: data.length === 0,
+                        onSelect: () => selection.selectAll(data),
+                      },
+                ];
+                if (unassigned !== null) {
                   options.push({
-                    key: "select-without-worktrees",
-                    label: `Select without worktrees (${withoutWorktree.length})`,
-                    disabled: withoutWorktree.length === 0,
-                    onSelect: () => selection.selectAll(withoutWorktree),
+                    key: "select-unassigned",
+                    label: `Select unassigned (${unassigned.length})`,
+                    disabled: unassigned.length === 0,
+                    onSelect: () => selection.selectAll(unassigned),
                   });
+                }
+                options.push({
+                  key: "select-without-worktrees",
+                  label: `Select without worktrees (${withoutWorktree.length})`,
+                  disabled: withoutWorktree.length === 0,
+                  onSelect: () => selection.selectAll(withoutWorktree),
+                });
 
-                  // Disabled rather than dropped at zero: a menu whose entries
-                  // come and go between openings has to be re-read every time,
-                  // and an empty preset would replace the selection with
-                  // nothing.
-                  return options.map((option) => (
-                    <button
-                      key={option.key}
-                      type="button"
-                      disabled={option.disabled}
-                      onClick={() => {
-                        option.onSelect();
-                        setSelectionMenuOpen(false);
-                      }}
-                      className={cn(
-                        "flex items-center px-2 py-1 text-xs text-start rounded-[var(--radius-sm)]",
-                        "transition-[background-color,color] duration-150 ease-out",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
-                        "focus-visible:outline-accent-primary",
-                        "text-text-secondary hover:bg-overlay-medium hover:text-text-primary",
-                        "disabled:cursor-default disabled:opacity-50",
-                        "disabled:hover:bg-transparent disabled:hover:text-text-secondary"
-                      )}
-                    >
-                      {option.label}
-                    </button>
-                  ));
-                })()}
-              </div>
-            </PopoverContent>
-          </Popover>
+                // Disabled rather than dropped at zero: a menu whose entries
+                // come and go between openings has to be re-read every time,
+                // and an empty preset would replace the selection with
+                // nothing.
+                return options.map((option) => (
+                  <DropdownMenuItem
+                    key={option.key}
+                    disabled={option.disabled}
+                    onSelect={option.onSelect}
+                  >
+                    {option.label}
+                  </DropdownMenuItem>
+                ));
+              })()}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         <SegmentedRadioGroup<StateFilter>
@@ -1491,51 +1450,56 @@ export function GitHubResourceList({
             <Activity mode="hidden">. Exit lifecycles get stuck under Activity,
             leaving stale DOM trees with stale closures. See BulkActionBar. */}
         {loading && !data.length ? (
-          <div key="github-skeleton" className="overflow-y-auto flex-1 min-h-0">
-            <GitHubResourceRowsSkeleton
-              count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
-              type={type}
+          <div key="github-skeleton" className="flex-1 min-h-0 flex flex-col">
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <GitHubResourceRowsSkeleton
+                count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
+                type={type}
+              />
+            </div>
+            {/* A cold read past five seconds says so, as the commits list does,
+                rather than pulsing on in silence. */}
+            <SkeletonHint
+              firstThreshold={UI_STILL_WORKING_MS}
+              message="Still working…"
+              onRetry={handleRetry}
+              className="shrink-0 px-3"
             />
           </div>
         ) : data.length > 0 ? (
           <div key="github-content" className="flex-1 min-h-0 flex flex-col">
             {isRateLimited && !error && (
-              <div
-                role="status"
-                className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
-              >
-                <Clock className="h-3.5 w-3.5 shrink-0" />
-                <span className="text-xs truncate">
-                  GitHub requests are paused. Showing last known results.
-                </span>
-                {rateLimitResetAt != null && (
-                  <span className="text-xs text-text-secondary shrink-0 whitespace-nowrap tabular-nums">
-                    · Resumes <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
-                  </span>
-                )}
-                {lastUpdatedAt != null && !debouncedSearch && (
-                  <span className="text-xs text-text-secondary shrink-0 whitespace-nowrap">
-                    · Updated <LiveTimeAgo timestamp={lastUpdatedAt} />
-                  </span>
-                )}
+              <div role="status" className={STALE_BANNER_CLASS}>
+                <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                {/* The sentence that makes the rows below trustworthy is the one
+                    part that never truncates — it wraps instead. How old the
+                    rows are lives in the refresh tooltip, which says it on
+                    every state. */}
+                <p className="min-w-0 flex-1 text-xs">
+                  GitHub paused requests. Showing saved results
+                  {rateLimitResetAt != null ? (
+                    <span className="whitespace-nowrap tabular-nums">
+                      {" "}
+                      &middot; resumes <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
+                    </span>
+                  ) : null}
+                </p>
               </div>
             )}
             {error && (
-              <div
-                role="alert"
-                className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
-              >
-                <WifiOff className="h-3.5 w-3.5 shrink-0" />
-                <span className="text-xs truncate">
-                  {isTransientNetworkError(error)
-                    ? "Couldn't reach GitHub. Showing last known results."
-                    : sanitizeIpcError(error)}
-                </span>
-                {lastUpdatedAt != null && !debouncedSearch && (
-                  <span className="text-xs text-text-secondary shrink-0 whitespace-nowrap">
-                    · Updated <LiveTimeAgo timestamp={lastUpdatedAt} />
-                  </span>
+              <div role="alert" className={STALE_BANNER_CLASS}>
+                {isTokenError ? (
+                  <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                ) : isTransientNetworkError(error) ? (
+                  <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                ) : (
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 )}
+                <p className="min-w-0 flex-1 text-xs">
+                  {isTransientNetworkError(error)
+                    ? "Couldn't reach GitHub. Showing saved results"
+                    : sanitizeIpcError(error)}
+                </p>
                 {isTokenError ? (
                   <Button
                     variant="outline"
@@ -1618,24 +1582,50 @@ export function GitHubResourceList({
         {!loading && !data.length && error && !isTokenError && !isRateLimited && (
           /* An alert, like the stale-data banner: the shared status node stays
              quiet whenever an error is showing, so without this a cold-start
-             failure was announced by nothing at all. */
-          <div role="alert" className="p-8 text-center text-text-secondary">
-            <WifiOff className="h-5 w-5 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">{sanitizeIpcError(error)}</p>
-            <Button variant="ghost" size="sm" onClick={handleRetry} className="mt-2">
-              <RefreshCw className="h-3.5 w-3.5" />
-              Retry
-            </Button>
+             failure was announced by nothing at all. The same composition as
+             every other state the panel can be in, and as the commits list's
+             failure, with a glyph for the cause rather than one for all. */
+          <div role="alert" className="contents">
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              icon={isTransientNetworkError(error) ? <WifiOff /> : <AlertCircle />}
+              title={
+                isTransientNetworkError(error)
+                  ? "Couldn't reach GitHub"
+                  : `Couldn't load ${type === "issue" ? "issues" : "pull requests"}`
+              }
+              description={
+                isTransientNetworkError(error)
+                  ? "Check your connection, then retry"
+                  : sanitizeIpcError(error)
+              }
+              action={
+                <Button variant="ghost" size="sm" onClick={handleRetry}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Retry
+                </Button>
+              }
+              className="flex-1 justify-center"
+            />
           </div>
         )}
         {!loading && !data.length && error && isTokenError && (
-          <div role="alert" className="p-8 text-center text-text-secondary">
-            <WifiOff className="h-5 w-5 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">{sanitizeIpcError(error)}</p>
-            <Button variant="ghost" size="sm" onClick={handleOpenGitHubSettings} className="mt-2">
-              <Settings className="h-3.5 w-3.5" />
-              Open GitHub settings
-            </Button>
+          <div role="alert" className="contents">
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              icon={<KeyRound />}
+              title="GitHub rejected the token"
+              description={sanitizeIpcError(error)}
+              action={
+                <Button variant="ghost" size="sm" onClick={handleOpenGitHubSettings}>
+                  <Settings className="h-3.5 w-3.5" />
+                  Open GitHub settings
+                </Button>
+              }
+              className="flex-1 justify-center"
+            />
           </div>
         )}
         {!loading && !data.length && isRateLimited && !isTokenError && (
@@ -1679,7 +1669,7 @@ export function GitHubResourceList({
           bottom bar or loses a row of list to one. */}
       <div
         className={cn(
-          "px-2 py-1.5 border-t border-[var(--border-divider)] grid grid-cols-[1fr_auto_1fr] items-center shrink-0",
+          "px-2 h-10 border-t border-[var(--border-divider)] grid grid-cols-[1fr_auto_1fr] items-center shrink-0",
           selection.selectedItems.size > 0 && "hidden"
         )}
       >

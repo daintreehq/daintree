@@ -192,7 +192,7 @@ test("Forge dropdowns — every state of the three lists", async ({ page }) => {
     await settled(panel, "Renderer memory climbs", FIRST_ISSUE);
     await shot(panel, "05-issues-search");
 
-    await kbd.press("Control+a");
+    await kbd.press("ControlOrMeta+a");
     await kbd.type("zebra");
     await settled(panel, /No matches/);
     await shot(panel, "06-issues-search-empty");
