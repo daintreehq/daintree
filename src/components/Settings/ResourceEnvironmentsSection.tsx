@@ -124,7 +124,7 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
                   onChange(name);
                   setIsOpen(false);
                 }}
-                className={cn(isSelected && "bg-overlay-selected text-text-primary")}
+                className={cn(isSelected && "bg-overlay-active text-text-primary")}
               >
                 <IconComp />
               </Button>

@@ -334,7 +334,7 @@ export function FigureLightbox({
               onClick={() => {
                 if (status === "loaded") toggleActualSize();
               }}
-              className="shrink-0 aria-pressed:bg-overlay-selected aria-pressed:text-text-primary aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+              className="shrink-0 aria-pressed:bg-overlay-active aria-pressed:text-text-primary aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
             >
               Actual size
             </Button>

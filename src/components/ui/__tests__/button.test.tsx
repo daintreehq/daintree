@@ -219,6 +219,18 @@ describe("ghost hover fill", () => {
     expect(getOverlayContrastWarnings(scheme("rgba(0, 0, 0, 0.01)"))).toHaveLength(1);
     expect(getOverlayContrastWarnings(scheme("rgba(0, 0, 0, 0.3)"))).toHaveLength(0);
   });
+  // Ghost Buttons double as pressed toggles (aria-pressed) that mark the
+  // pressed state with `overlay-active`. That fill has to stay heavier than
+  // the ghost hover in every theme, or hovering an unpressed toggle reads as
+  // pressing it.
+  it("stays lighter than a pressed ghost toggle in every built-in theme", () => {
+    const alpha = (value: string) => Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(value)?.[1] ?? NaN);
+    for (const theme of BUILT_IN_APP_SCHEMES) {
+      const hover = alpha(theme.tokens[hoverToken() as keyof typeof theme.tokens]);
+      const pressed = alpha(theme.tokens["overlay-active"]);
+      expect(pressed, theme.id).toBeGreaterThan(hover);
+    }
+  });
 });
 
 describe("link variant", () => {
