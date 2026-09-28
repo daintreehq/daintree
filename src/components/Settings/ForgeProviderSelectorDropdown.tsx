@@ -1,13 +1,11 @@
-import { useState, useEffect, useRef, type ComponentType } from "react";
-import { cn } from "@/lib/utils";
-import { ChevronDown, GitBranch, Settings2 } from "lucide-react";
+import type { ComponentType } from "react";
+import { GitBranch, Settings2 } from "lucide-react";
 import { GitHubIcon, GitLabIcon } from "@/components/icons/brands";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import {
   BUILTIN_GITHUB_PROVIDER_ID,
   BUILTIN_GITLAB_PROVIDER_ID,
 } from "@shared/utils/forgeProviderIds";
+import { SettingsSubjectPicker } from "./SettingsSubjectPicker";
 
 export interface ForgeProviderOption {
   /** Canonical `{pluginId}.{contributionId}` forge provider id. */
@@ -34,202 +32,62 @@ interface ForgeProviderSelectorDropdownProps {
   onSubtabChange: (id: string) => void;
 }
 
-type DropdownItem =
-  | { kind: "general"; id: "general" }
-  | { kind: "provider"; id: string; provider: ForgeProviderOption };
+type PickerItem =
+  { kind: "general"; id: typeof GENERAL_ID } | (ForgeProviderOption & { kind: "provider" });
 
 const GENERAL_ID = "general";
+const GENERAL_ITEM: PickerItem = { kind: "general", id: GENERAL_ID };
 
 export function ForgeProviderSelectorDropdown({
   providerOptions,
   activeSubtab,
   onSubtabChange,
 }: ForgeProviderSelectorDropdownProps) {
-  const [open, setOpen] = useState(false);
-  const [filterQuery, setFilterQuery] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
-  const activeItemRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const items: DropdownItem[] = (() => {
-    const q = filterQuery.trim().toLowerCase();
-    const generalItem: DropdownItem = { kind: "general", id: GENERAL_ID };
-    const providerItems: DropdownItem[] = providerOptions
-      .filter((p) => !q || p.name.toLowerCase().includes(q))
-      .map((p) => ({ kind: "provider" as const, id: p.id, provider: p }));
-    return [generalItem, ...providerItems];
-  })();
-
-  useEffect(() => {
-    const q = filterQuery.trim();
-    // General stays listed as a destination but is never a search result, so a query
-    // with no match leaves nothing active and Enter picks nothing.
-    setActiveIndex(q ? (items.length > 1 ? 1 : -1) : 0);
-  }, [filterQuery]); // eslint-disable-line react-hooks/exhaustive-deps -- items derived from filterQuery
-
-  useEffect(() => {
-    activeItemRef.current?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex]);
-
-  useEffect(() => {
-    if (!open) {
-      setFilterQuery("");
-    }
-  }, [open]);
-
-  const handleSelect = (id: string) => {
-    onSubtabChange(id);
-    setOpen(false);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        setActiveIndex((prev) => Math.min(prev + 1, items.length - 1));
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        setActiveIndex((prev) => Math.max(prev - 1, 0));
-        break;
-      case "Enter":
-        if (activeIndex >= 0 && activeIndex < items.length) {
-          e.preventDefault();
-          handleSelect(items[activeIndex]!.id);
-        }
-        break;
-    }
-  };
-
+  const entries: PickerItem[] = providerOptions.map((p) => ({ ...p, kind: "provider" }));
   const selectedProvider =
     activeSubtab !== GENERAL_ID ? providerOptions.find((p) => p.id === activeSubtab) : null;
+  const SelectedIcon = selectedProvider ? getProviderIcon(selectedProvider.id) : Settings2;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-haspopup="listbox"
-          data-testid="forge-provider-selector-trigger"
-          className={cn(
-            "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
-            // Radix hands focus back to the trigger when the list closes, so a `focus:`
-            // indicator stayed lit after every pick — accent only for keyboard focus.
-            "focus:outline-hidden focus-visible:border-accent-primary"
-          )}
-        >
-          {selectedProvider ? (
-            (() => {
-              const Icon = getProviderIcon(selectedProvider.id);
-              return (
-                <>
-                  <Icon size={16} className="text-text-secondary" />
-                  <span className="flex-1 text-left truncate">{selectedProvider.name}</span>
-                </>
-              );
-            })()
-          ) : (
+    <SettingsSubjectPicker<PickerItem>
+      idPrefix="forge-provider-selector"
+      overview={GENERAL_ITEM}
+      entries={entries}
+      matches={(item, q) => item.kind === "provider" && item.name.toLowerCase().includes(q)}
+      activeId={selectedProvider ? selectedProvider.id : GENERAL_ID}
+      onChange={onSubtabChange}
+      listLabel="Forge providers"
+      filterLabel="Filter providers"
+      placeholder="Filter providers…"
+      noMatches={(q) => <>No providers match &ldquo;{q}&rdquo;</>}
+      current={
+        <>
+          <SelectedIcon size={18} className="shrink-0 text-text-secondary" />
+          <span className="min-w-0 truncate text-base font-semibold">
+            {selectedProvider ? selectedProvider.name : "General"}
+          </span>
+        </>
+      }
+      renderRow={(item) => {
+        if (item.kind === "general") {
+          return (
             <>
-              <Settings2 size={16} className="text-text-secondary" />
-              <span className="flex-1 text-left truncate">General</span>
-            </>
-          )}
-          <ChevronDown
-            size={14}
-            className={cn(
-              "shrink-0 text-text-secondary transition-transform",
-              open && "rotate-180"
-            )}
-          />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        sideOffset={4}
-        className="p-0"
-        style={{ width: "var(--radix-popover-trigger-width)" }}
-        onEscapeKeyDown={(e) => e.stopPropagation()}
-      >
-        <PopoverSearchField
-          ref={inputRef}
-          autoFocus
-          placeholder="Filter providers…"
-          value={filterQuery}
-          onChange={(e) => setFilterQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          role="combobox"
-          aria-label="Filter providers"
-          aria-expanded={open}
-          aria-autocomplete="list"
-          aria-controls="forge-provider-selector-list"
-          aria-activedescendant={
-            activeIndex >= 0 && items[activeIndex]
-              ? `forge-provider-selector-item-${items[activeIndex].id}`
-              : undefined
-          }
-          className="h-8 text-xs"
-        />
-        <div
-          role="listbox"
-          id="forge-provider-selector-list"
-          aria-label="Forge providers"
-          className="overflow-y-auto max-h-[min(28rem,60vh)] p-1"
-        >
-          {items.map((item, index) => {
-            const isActive = index === activeIndex;
-            const isSelected =
-              item.kind === "general" ? activeSubtab === GENERAL_ID : activeSubtab === item.id;
-
-            return (
-              <div
-                key={item.id}
-                ref={isActive ? activeItemRef : undefined}
-                id={`forge-provider-selector-item-${item.id}`}
-                role="option"
-                aria-selected={isSelected}
-                data-highlighted={isActive || undefined}
-                onClick={() => handleSelect(item.id)}
-                onMouseEnter={() => setActiveIndex(index)}
-                className={cn(
-                  "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
-                  isActive && "bg-overlay-selected",
-                  isSelected && "text-text-primary font-medium",
-                  !isActive && !isSelected && "text-text-primary"
-                )}
-              >
-                {item.kind === "general" ? (
-                  <>
-                    <Settings2 size={16} className="shrink-0 text-text-secondary" />
-                    <div className="flex-1 min-w-0">
-                      <div className="truncate">General</div>
-                      <div className="text-xs text-text-secondary truncate">
-                        Global forge settings
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  (() => {
-                    const Icon = getProviderIcon(item.provider.id);
-                    return (
-                      <>
-                        <Icon size={16} className="shrink-0 text-text-secondary" />
-                        <span className="flex-1 min-w-0 truncate">{item.provider.name}</span>
-                      </>
-                    );
-                  })()
-                )}
+              <Settings2 size={16} className="shrink-0 text-text-secondary" />
+              <div className="flex-1 min-w-0">
+                <div className="truncate">General</div>
+                <div className="text-xs text-text-secondary truncate">Global forge settings</div>
               </div>
-            );
-          })}
-          {items.length === 1 && filterQuery && (
-            <div role="status" className="px-2 py-3 text-xs text-text-secondary">
-              No providers match &ldquo;{filterQuery.trim()}&rdquo;
-            </div>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
+            </>
+          );
+        }
+        const Icon = getProviderIcon(item.id);
+        return (
+          <>
+            <Icon size={16} className="shrink-0 text-text-secondary" />
+            <span className="flex-1 min-w-0 truncate">{item.name}</span>
+          </>
+        );
+      }}
+    />
   );
 }

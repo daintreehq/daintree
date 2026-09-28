@@ -1299,6 +1299,71 @@ body,
   pointer-events: none;
 }
 
+/* Anchored list that unrolls from its trigger (`OVERLAY_DROP_MOTION_CLASS`).
+ * The clip starts at the trigger edge and sweeps away from it, so the panel
+ * holds its full width from the first frame. It hugs the box while it moves:
+ * `shadow-overlay` spreads well past the panel, and a clip wide enough to keep
+ * it drew the moving edge as a hard line straight across that halo. Once the
+ * panel is fully out the clip opens past the shadow, which blooms in over the
+ * last fifth rather than popping when the clip is removed. */
+@keyframes overlay-drop-down {
+  0% {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+  }
+  40% {
+    opacity: 1;
+  }
+  80% {
+    clip-path: inset(0);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(-8rem);
+  }
+}
+
+@keyframes overlay-drop-up {
+  0% {
+    opacity: 0;
+    clip-path: inset(100% 0 0 0);
+  }
+  40% {
+    opacity: 1;
+  }
+  80% {
+    clip-path: inset(0);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(-8rem);
+  }
+}
+
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes overlay-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.overlay-motion-drop[data-state="open"] {
+  animation: overlay-drop-down var(--duration-200) var(--ease-out-expo);
+}
+
+.overlay-motion-drop[data-state="open"][data-side="top"] {
+  animation-name: overlay-drop-up;
+}
+
+.overlay-motion-drop[data-state="closed"] {
+  animation: overlay-fade-out var(--duration-120) var(--ease-exit) forwards;
+}
+
 /* Respect user's motion preferences — OS prefers-reduced-motion and the
  * Daintree-level "Reduce UI animations" toggle (body[data-reduce-animations])
  * both remove spatial motion while leaving opacity changes intact.
@@ -1522,6 +1587,12 @@ body,
     --tw-enter-translate-y: 0;
     --tw-exit-translate-x: 0;
     --tw-exit-translate-y: 0;
+  }
+
+  /* The drop list's wipe is spatial motion too; keep only its fade. */
+  .overlay-motion-drop[data-state="open"],
+  .overlay-motion-drop[data-state="open"][data-side="top"] {
+    animation-name: overlay-fade-in;
   }
 }
 

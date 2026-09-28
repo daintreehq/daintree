@@ -226,6 +226,7 @@ export function PresetSelector({
       <PopoverContent
         align="start"
         sideOffset={4}
+        motion="drop"
         className="p-1"
         style={{ width: "var(--radix-popover-trigger-width)" }}
         data-testid="preset-selector-listbox"

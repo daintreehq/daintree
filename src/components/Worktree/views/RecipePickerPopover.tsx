@@ -125,6 +125,7 @@ export function RecipePickerPopover({
         // was the odd one out at a hardcoded 400px, so opening the two fields
         // in turn stepped the surface width for no reason.
         className="w-[var(--radix-popover-trigger-width)] p-0"
+        motion="drop"
         align="start"
         // Focus stays on the trigger — it is the combobox, and it is what the
         // arrow keys are bound to.

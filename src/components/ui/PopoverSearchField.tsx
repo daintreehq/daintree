@@ -15,7 +15,7 @@ interface PopoverSearchFieldProps extends React.InputHTMLAttributes<HTMLInputEle
 export const POPOVER_SEARCH_STRIP_CLASS = cn(
   "flex items-center gap-2 border-b border-border-default px-3",
   "transition-colors duration-150 ease-out",
-  "focus-within:bg-overlay-soft focus-within:border-selection-outline"
+  "focus-within:border-border-strong"
 );
 
 export const POPOVER_SEARCH_INPUT_CLASS = cn(
@@ -35,11 +35,14 @@ export const POPOVER_SEARCH_INPUT_CLASS = cn(
  * the field looked like it was in the wrong place rather than being the top of
  * the panel.
  *
- * Focus is neutral `selection-outline` on the bottom edge plus a surface lift,
- * the same pairing the palette input and the palette's selected row use. It is
- * deliberately not the global accent ring: this field is autofocused whenever
- * its popover opens, so an accent ring would spend the region's one
- * load-bearing accent on chrome that is always lit.
+ * The field sits bare on the panel with a hairline under it, and focus only
+ * firms that hairline up. It used to lift the whole strip onto its own surface
+ * with a `selection-outline` edge, but every picker autofocuses this field on
+ * open, so that treatment was lit whenever the popover was — a permanent band
+ * across the top of the panel that read as a separate toolbar rather than the
+ * panel's own first line. The caret carries "type here"; the edge is only there
+ * so focus leaving for a row control is still visible. Never the accent ring,
+ * for the same always-lit reason.
  *
  * Only for a picker whose search box is the panel's full-width top strip, with
  * nothing else in that row. A search box inset in a header that also holds

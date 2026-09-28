@@ -117,6 +117,7 @@ export function NewBranchInput({
         </PopoverAnchor>
         <PopoverContent
           align="start"
+          motion="drop"
           className="w-[var(--radix-popover-trigger-width)] p-0"
           onOpenAutoFocus={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => e.stopPropagation()}
