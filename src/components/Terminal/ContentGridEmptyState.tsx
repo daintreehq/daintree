@@ -267,7 +267,12 @@ export function ContentGridEmptyState({
   const identityMark = sanitizedIcon?.ok ? (
     <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-14 w-14 object-contain" />
   ) : (
-    <DaintreeIcon className="h-14 w-14 text-text-secondary" aria-hidden="true" />
+    // The same theme hook as the first-run welcome mark; unset, it stays text-secondary.
+    <DaintreeIcon
+      className="h-14 w-14"
+      style={{ color: "var(--welcome-mark-color, var(--color-text-secondary))" }}
+      aria-hidden="true"
+    />
   );
 
   // The container no longer fades as one block — each launcher section below
