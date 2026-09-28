@@ -15,17 +15,21 @@ export const theme: BuiltInThemeSource = {
       //
       // Two properties are load-bearing and easy to undo by accident.
       //
-      // ONE HUE FAMILY. Every rung sits on the same warm axis. The ladder used
-      // to change family halfway up — grid and sidebar at OKLCH H 107, then
-      // canvas, panel and elevated at H 286, three stock Tailwind zincs — so
-      // the five planes were two different neutrals glued together.
+      // ONE HUE FAMILY. Every rung is a warm near-neutral: grid and sidebar
+      // carry the umber cast below, and canvas, panel and elevated sit at
+      // C ≤ 0.002, where the measured hue is rounding noise rather than a
+      // colour. The ladder used to change family halfway up — grid and sidebar
+      // at OKLCH H 107, then canvas, panel and elevated at H 286, three stock
+      // Tailwind zincs — so the five planes were two different neutrals glued
+      // together.
       //
       // CAST ON THE SHELL, NOT ON THE WORK. A smoked umber (H ~48) at C 0.008
       // in the grid, 0.005 in the sidebar, tapering to ~0.002 by canvas: the
       // structural planes carry the character, the surfaces you actually read
       // on stay neutral. Hue matters as much as amount. H 48 is ~115° from the
       // accent's H 162.5, so the field moves AWAY from `#36CE94` and buys it
-      // 1.8-3.1% more chroma-plane separation. An olive field (H ~105) was
+      // ~2.0-2.3% more chroma-plane separation than an achromatic grid and
+      // sidebar would. An olive field (H ~105) was
       // tried first: it cost the accent 2.9-3.7% and turned the whole app
       // olive, because the cast was not confined to the shell.
       //
@@ -74,7 +78,7 @@ export const theme: BuiltInThemeSource = {
     terminal: {
       // Selection is a fill, not a glyph: 1.41:1 on the terminal background puts
       // it in the cohort's visible band (arashiyama 1.41, highlands 1.42) while
-      // foreground text over it still clears 9.8:1.
+      // foreground text over it holds ~9.8:1.
       selection: "#22392c",
       red: "#e07a70",
       green: "#2fbf85",
@@ -90,7 +94,8 @@ export const theme: BuiltInThemeSource = {
       brightCyan: "#86dde2",
       brightWhite: "#fafafa",
     },
-    // All roles ≥ 4.5:1 on canvas except the soft-floor (3.0:1) comment/quote pair.
+    // All roles ≥ 4.5:1 on canvas except comment (4.27:1). Comment and quote carry
+    // the validator's 3.0:1 soft floor; only comment uses it (quote is 8.2:1).
     syntax: {
       comment: "#74807a",
       punctuation: "#ccd6cf",
@@ -133,7 +138,7 @@ export const theme: BuiltInThemeSource = {
     // Solid rather than alpha: a white-alpha border composites to a different
     // colour on every surface, so a value that clears the ratio inside a panel
     // quietly fails on the elevated field fill. `border-strong`
-    // (white 14% → ~#484848 on the field) measured ~1.55:1, less than half.
+    // (white 14% → ~#494948 on the field) measures ~1.57:1, about half.
     //
     // 3.11:1 on `surface-input` (#2b2b2a) and 3.61:1 on `surface-panel`
     // (#201f1f) — the quietest rung that clears both with margin. Warm-neutral
@@ -153,27 +158,29 @@ export const theme: BuiltInThemeSource = {
     // Landed at 3.6:1 on the worst surface (panel-elevated) up to 4.9:1 on the
     // grid — the house's 3:1 tier with room to spare, not the 4.5:1 body-text
     // floor. Clearing AA was tried first and is wrong here: at that level the
-    // token stops receding from `text-muted`, which inverts the role ramp and
-    // fails the ordering assertion in `scripts/theme-text-contrast.test.ts`.
-    // A placeholder has to stay the quietest rung, so the tier wins.
+    // token stops receding from `text-muted` and inverts the role ramp. A
+    // placeholder has to stay the quietest rung, so the tier wins. Nothing
+    // guards that for this theme alone — `scripts/theme-text-contrast.test.ts`
+    // orders the roles by their median across every built-in.
     // `npm run theme:text-contrast -- --theme daintree` reproduces the numbers.
     //
     // Set here rather than on the shared derivation: that fallback feeds all
     // fifteen themes and this pass only measured daintree.
     "text-placeholder": "#808087",
     // ANSI 90 is the conventional dim slot for hints, timestamps and secondary
-    // output — it is read as body text, so it owes AA. 4.55:1 on the terminal
-    // background, and still 3.0x quieter than the foreground's 13.85:1, so it
-    // reads de-emphasized rather than merely dark. Split out of `activity.idle`
-    // (which it used to inherit at 2.27:1) because a quiet idle dot and legible
-    // dim text are different jobs.
+    // output — it is read as body text, so it owes AA. 4.54:1 on the terminal
+    // background, a 3.05x ratio below the foreground's 13.84:1, so it reads
+    // de-emphasized rather than merely dark. Split out of `activity.idle`
+    // (which it used to inherit — 2.27:1 when idle was zinc #52525b, 2.45:1 at
+    // today's #585853) because a quiet idle dot and legible dim text are
+    // different jobs.
     "terminal-bright-black": "#82827c",
     // Forge metadata, re-cut off GitHub's brand hexes and into this palette.
     // The engine defaults (#3fb950 / #a371f7 / #f85149 / #8b949e) put a fourth
     // green and a neon red into resting toolbar chrome. All four now land in a
-    // 5.7-6.2:1 band on `surface-panel`: above the muted-text floor, below
-    // `text-secondary` (6.57:1), so a forge chip is never louder than the prose
-    // it annotates — and far below the waiting signal at 10.09:1.
+    // 5.6-6.0:1 band on `surface-panel`: above `text-muted` (4.81:1), below
+    // `text-secondary` (6.42:1), so a forge chip is never louder than the prose
+    // it annotates — and far below the waiting signal at 9.85:1.
     "pr-open": "#5FA47F",
     "pr-merged": "#AE8ED6",
     "pr-closed": "#D0827A",
@@ -210,7 +217,7 @@ export const theme: BuiltInThemeSource = {
     "settings-dialog-bg": "#201f1f",
     "settings-card-bg": "#252424",
     "settings-list-item-bg": "#252424",
-    // rgb(19,19,18) = the sidebar surface; keep in lockstep with surfaces.sidebar.
+    // rgb(21,18,17) = the sidebar surface; keep in lockstep with surfaces.sidebar.
     "dialog-header-bg": "rgba(21,18,17,0.60)",
     "settings-search-bg": "#1A1918",
     "settings-search-muted": "#a1a1aa",
