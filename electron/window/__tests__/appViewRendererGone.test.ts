@@ -23,6 +23,10 @@ import { notifyError } from "../../ipc/errorHandlers.js";
 import { logError, logWarn } from "../../utils/logger.js";
 import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
 import { isWindowRecreating } from "../../lifecycle/windowRecreationState.js";
+import {
+  noteTerminationIntent,
+  resetTerminationIntentsForTesting,
+} from "../../services/processTerminationIntent.js";
 import type { ProjectViewManager } from "../ProjectViewManager.js";
 
 type Handler = (event: unknown, details: { reason: string; exitCode: number }) => void;
@@ -96,6 +100,7 @@ describe("app-view render-process-gone (#12954)", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     availableMemory.mb = null;
+    resetTerminationIntentsForTesting();
   });
 
   afterEach(() => {
@@ -381,5 +386,36 @@ describe("app-view render-process-gone (#12954)", () => {
       expect.objectContaining({ process: "app-view", reason: "memory-eviction" })
     );
     expect(logError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "a crash",
+      reason: "crashed",
+      intent: false,
+      message: "The renderer process crashed and was automatically reloaded.",
+    },
+    {
+      name: "an external kill",
+      reason: "killed",
+      intent: false,
+      message: "The renderer process was stopped from outside Daintree and was reloaded.",
+    },
+    {
+      name: "Daintree's own force-restart",
+      reason: "killed",
+      intent: true,
+      message: "The renderer process was restarted.",
+    },
+  ])("attributes the reload toast for $name", ({ reason, intent, message }) => {
+    const { crash } = createHarness();
+    if (intent) noteTerminationIntent({ webContentsId: 2 }, "user force-restarted view");
+
+    crash(reason, 9);
+
+    expect(notifyError).toHaveBeenCalledTimes(1);
+    const [error, options] = vi.mocked(notifyError).mock.calls[0];
+    expect((error as Error).message).toBe(message);
+    expect(options).toEqual({ source: "renderer-crash" });
   });
 });
