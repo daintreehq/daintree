@@ -29,7 +29,7 @@ export interface ActionPaletteItem {
    * at an interactive sibling (e.g. a dialog-opener). See `PaletteBehavior`.
    */
   redirectTo?: string;
-  /** Display string for the binding (`⌘+⇧+C`), for text contexts. */
+  /** Display string for the binding (`⌘⇧C`), for text contexts. */
   keybinding?: string;
   /**
    * The canonical combo behind `keybinding` (`Cmd+Shift+C`). The row renders
