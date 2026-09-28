@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import type React from "react";
+import { ListX, PanelRight, Plus, Ruler, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
@@ -511,20 +512,29 @@ export function PortalDock() {
         </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuActionItem actionId="portal.newTab">New tab</ContextMenuActionItem>
+        <ContextMenuActionItem actionId="portal.newTab">
+          <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          New tab
+        </ContextMenuActionItem>
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="portal.closeTab" disabled={activeTabId === null}>
+          <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Close tab
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="portal.closeAllTabs" disabled={tabs.length === 0}>
+          <ListX data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Close all tabs
         </ContextMenuActionItem>
         <ContextMenuSeparator />
-        <ContextMenuActionItem actionId="portal.resetWidth">Reset width</ContextMenuActionItem>
+        <ContextMenuActionItem actionId="portal.resetWidth">
+          <Ruler data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Reset width
+        </ContextMenuActionItem>
         <ContextMenuSeparator />
         <PortalDefaultNewTabSubmenu links={enabledLinks} defaultNewTabUrl={defaultNewTabUrl} />
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "portal" }}>
+          <PanelRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Portal settings…
         </ContextMenuActionItem>
       </ContextMenuContent>

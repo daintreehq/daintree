@@ -375,8 +375,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
 });
 
 import { DockLaunchButton } from "../DockLaunchButton";
-import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
-import { SlidersHorizontal } from "lucide-react";
+import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
 import { comboToAriaKeyshortcuts, describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
@@ -1473,9 +1472,13 @@ describe("DockLaunchButton", () => {
       if (!row) throw new Error(`no option row for ${label}`);
       return row.querySelector("svg")!.innerHTML;
     };
-    const slidersGlyph = render(<SlidersHorizontal />).container.querySelector("svg")!.innerHTML;
+    // The glyph every Customize toolbar entry shares (pinned to the Toolbar
+    // settings tab's icon in ToolbarSettingsButton.menuRows.test).
+    const toolbarGlyph = render(<TOOLBAR_CUSTOMIZE_ICON />).container.querySelector(
+      "svg"
+    )!.innerHTML;
 
-    expect(glyphOf(TOOLBAR_CUSTOMIZE_LABEL)).toBe(slidersGlyph);
+    expect(glyphOf(TOOLBAR_CUSTOMIZE_LABEL)).toBe(toolbarGlyph);
     expect(glyphOf(TOOLBAR_CUSTOMIZE_LABEL)).not.toBe(glyphOf("Manage agents"));
   });
 

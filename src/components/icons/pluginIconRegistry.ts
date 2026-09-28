@@ -146,6 +146,15 @@ export const PLUGIN_ICON_COMPONENTS = {
 export const DEFAULT_PLUGIN_ICON = Package;
 
 /**
+ * Fallback for an iconless plugin-contributed toolbar button, wherever it
+ * shows: pinned on the toolbar, its plugin tray row and the overflow menu.
+ * `Puzzle`, the glyph every other plugin-contributed menu row wears, rather
+ * than `Package`: in the tray the button sits beside "Manage plugins", and a
+ * shared package glyph made the contributed action read as plugin management.
+ */
+export const DEFAULT_PLUGIN_BUTTON_ICON = Puzzle;
+
+/**
  * Fallback for general panel chrome. Panel surfaces also render built-ins,
  * agents, processes, and resume entries, where a terminal glyph — not a
  * package — is the honest default.

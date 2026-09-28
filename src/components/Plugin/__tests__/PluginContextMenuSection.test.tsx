@@ -111,7 +111,9 @@ describe("PluginContextMenuSection", () => {
     // not appear — the injected pair replaces both item and separator.
     expect(screen.getByTestId("dropdown-separator")).toBeTruthy();
     expect(screen.queryByTestId("separator")).toBeNull();
-    expect(screen.getByText("Do A").getAttribute("data-surface")).toBe("dropdown");
+    expect(screen.getByText("Do A").closest("[data-surface]")?.getAttribute("data-surface")).toBe(
+      "dropdown"
+    );
     fireEvent.click(screen.getByText("Do A"));
     expect(dispatchMock).toHaveBeenCalledWith("acme.a", undefined, { source: "menu" });
   });

@@ -1,4 +1,4 @@
-import { Play, Pin, Copy, Pencil, Trash2 } from "lucide-react";
+import { Play, Pin, PinOff, CopyPlus, Pencil, Trash2 } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -315,29 +315,33 @@ function RecipeContextMenu({
   return (
     <ContextMenuContent>
       <ContextMenuItem onSelect={() => onRun(recipe.id)}>
-        <Play className="h-3.5 w-3.5 mr-2" />
+        <Play data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
         Run
       </ContextMenuItem>
       {!fromPlugin && (
         <ContextMenuItem onSelect={() => onEdit(recipe.id)}>
-          <Pencil className="h-3.5 w-3.5 mr-2" />
+          <Pencil data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
           Edit
         </ContextMenuItem>
       )}
       <ContextMenuItem onSelect={() => onDuplicate(recipe.id)}>
-        <Copy className="h-3.5 w-3.5 mr-2" />
+        <CopyPlus data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
         Duplicate
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => (isPinned ? onUnpin : onPin)(recipe.id)}>
-        <Pin className="h-3.5 w-3.5 mr-2" />
+        {isPinned ? (
+          <PinOff data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
+        ) : (
+          <Pin data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
+        )}
         {isPinned ? "Unpin from canvas" : "Pin to canvas"}
       </ContextMenuItem>
       {!fromPlugin && (
         <>
           <ContextMenuSeparator />
           <ContextMenuItem destructive onSelect={() => onDelete(recipe.id)}>
-            <Trash2 className="h-3.5 w-3.5 mr-2" />
+            <Trash2 data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
             Delete recipe…
           </ContextMenuItem>
         </>

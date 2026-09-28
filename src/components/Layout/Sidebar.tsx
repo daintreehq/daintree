@@ -11,14 +11,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  FolderOpen,
-  GitBranchPlus,
-  RefreshCw,
-  Ruler,
-  Settings,
-  SlidersHorizontal,
-} from "lucide-react";
+import { FolderGit2, FolderOpen, GitBranchPlus, RefreshCw, Ruler, Settings } from "lucide-react";
 
 interface SidebarProps {
   width: number;
@@ -261,7 +254,7 @@ export function Sidebar({
         </ContextMenuActionItem>
         {isGitBackedWorkspace && (
           <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "worktree" }}>
-            <SlidersHorizontal className={ICON_CLASS} />
+            <FolderGit2 className={ICON_CLASS} />
             Worktree settings…
           </ContextMenuActionItem>
         )}

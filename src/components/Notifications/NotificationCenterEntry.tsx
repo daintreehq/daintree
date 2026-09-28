@@ -13,6 +13,8 @@ import {
   Archive,
   Mail,
   MailOpen,
+  BellMinus,
+  BellOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -801,6 +803,7 @@ function RowOptionsMenu({
         onSnooze?.(option);
       }}
     >
+      <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
       {SNOOZE_LABEL[option]}
       {/* The commitment, before it's made: "Until tomorrow" is 8:00 AM, and
           "Until next week" is Monday. */}
@@ -943,11 +946,7 @@ function RowOptionsMenu({
                     .then(() => refreshProjectOverrides(projectId));
                 }}
               >
-                {/* No shim. The gutter these two need in a menu that also offers
-                Snooze / Copy / Report is allocated by the `:has([data-menu-icon])`
-                rule in index.css, and withdrawn when every icon-bearing item is
-                filtered out — an entry with no correlationId and no panelId
-                leaves only these, and with no projectId either, only this one. */}
+                <BellMinus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Silence {EVENT_KIND_LABEL[eventKind]}
                 {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
               </DropdownMenuItem>
@@ -962,6 +961,7 @@ function RowOptionsMenu({
                     .then(() => refreshProjectOverrides(projectId));
                 }}
               >
+                <BellOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Mute project notifications
               </DropdownMenuItem>
             )}

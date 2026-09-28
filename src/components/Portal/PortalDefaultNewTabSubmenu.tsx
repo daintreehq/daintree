@@ -1,3 +1,4 @@
+import { House } from "lucide-react";
 import type { PortalLink } from "@shared/types";
 import {
   ContextMenuCheckboxItem,
@@ -25,7 +26,10 @@ export function PortalDefaultNewTabSubmenu({
 
   return (
     <ContextMenuSub>
-      <ContextMenuSubTrigger>Default new tab</ContextMenuSubTrigger>
+      <ContextMenuSubTrigger>
+        <House data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+        Default new tab
+      </ContextMenuSubTrigger>
       <ContextMenuSubContent>
         <ContextMenuCheckboxItem
           checked={defaultNewTabUrl === null}

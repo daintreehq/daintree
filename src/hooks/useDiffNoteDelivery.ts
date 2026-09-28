@@ -9,7 +9,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import {
   formatDiffNotesPrompt,
@@ -21,6 +21,8 @@ export interface DiffNoteTarget {
   id: string;
   title: string;
   isInputLocked: boolean;
+  kind: PtyPanelData["kind"];
+  chrome: TerminalChromeDescriptor;
 }
 
 /**
@@ -60,6 +62,8 @@ export function useDiffNoteTargets(): DiffNoteTarget[] {
         id: panel.id,
         title: getTerminalDisplayTitle(panel, "full", { showTask: showAgentTaskTitles }),
         isInputLocked: panel.isInputLocked === true,
+        kind: panel.kind,
+        chrome: deriveTerminalChrome(panel),
       })),
     [panels, showAgentTaskTitles]
   );

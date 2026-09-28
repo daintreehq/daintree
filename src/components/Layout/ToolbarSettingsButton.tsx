@@ -1,5 +1,15 @@
 import { Button } from "@/components/ui/button";
-import { SlidersHorizontal } from "lucide-react";
+import {
+  Bell,
+  Keyboard,
+  LayoutGrid,
+  LifeBuoy,
+  PanelRight,
+  Plug,
+  Settings2,
+  SlidersHorizontal,
+  type LucideIcon,
+} from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -14,14 +24,22 @@ import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
-const SETTINGS_CONTEXT_MENU_TABS = [
-  { tab: "general", label: "General" },
-  { tab: "agents", label: "Agents" },
-  { tab: "terminal", label: "Terminal" },
-  { tab: "keyboard", label: "Keyboard" },
-  { tab: "notifications", label: "Notifications" },
-  { tab: "portal", label: "Portal" },
-] as const;
+// Each row wears the icon its tab wears in the Settings sidebar
+// (`settingsTabRegistry.tsx`), and "Panel grid" is that tab's own name.
+export const SETTINGS_CONTEXT_MENU_TABS = [
+  { tab: "general", label: "General", icon: Settings2 },
+  { tab: "agents", label: "CLI agents", icon: Plug },
+  { tab: "terminal", label: "Panel grid", icon: LayoutGrid },
+  { tab: "keyboard", label: "Keyboard", icon: Keyboard },
+  { tab: "notifications", label: "Notifications", icon: Bell },
+  { tab: "portal", label: "Portal", icon: PanelRight },
+] as const satisfies readonly { tab: string; label: string; icon: LucideIcon }[];
+
+export const SETTINGS_CONTEXT_MENU_TROUBLESHOOTING = {
+  tab: "troubleshooting",
+  label: "Troubleshooting",
+  icon: LifeBuoy,
+} as const;
 
 interface ToolbarSettingsButtonProps {
   onSettings: () => void;
@@ -71,14 +89,23 @@ export function ToolbarSettingsButton({
         </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        {SETTINGS_CONTEXT_MENU_TABS.map(({ tab, label }) => (
+        {SETTINGS_CONTEXT_MENU_TABS.map(({ tab, label, icon: Icon }) => (
           <ContextMenuActionItem key={tab} actionId="app.settings.openTab" args={{ tab }}>
+            <Icon data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             {label}
           </ContextMenuActionItem>
         ))}
         <ContextMenuSeparator />
-        <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "troubleshooting" }}>
-          Troubleshooting
+        <ContextMenuActionItem
+          actionId="app.settings.openTab"
+          args={{ tab: SETTINGS_CONTEXT_MENU_TROUBLESHOOTING.tab }}
+        >
+          <SETTINGS_CONTEXT_MENU_TROUBLESHOOTING.icon
+            data-menu-icon
+            className="mr-2 h-3.5 w-3.5"
+            aria-hidden="true"
+          />
+          {SETTINGS_CONTEXT_MENU_TROUBLESHOOTING.label}
         </ContextMenuActionItem>
         <ContextMenuSeparator />
         <ToolbarContextMenuItems buttonId="settings" side="right" />

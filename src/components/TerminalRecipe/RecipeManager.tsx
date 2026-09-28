@@ -15,6 +15,8 @@ import {
   GitBranch,
   MoreHorizontal,
   Pin,
+  PinOff,
+  Clipboard,
 } from "lucide-react";
 import { Plug, Workflow } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
@@ -348,33 +350,37 @@ export function RecipeManager({
                   )
                 }
               >
-                <Pin className="mr-2 h-3.5 w-3.5" />
+                {isPinned ? (
+                  <PinOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Pin data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                )}
                 {isPinned ? "Unpin from canvas" : "Pin to canvas"}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void handleDuplicateRecipe(recipe)}>
-                <CopyPlus className="mr-2 h-3.5 w-3.5" />
+                <CopyPlus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Duplicate recipe
               </DropdownMenuItem>
               {!isInRepoRecipeId(recipe) && currentProject && (
                 <DropdownMenuItem onSelect={() => setRecipeToSave(recipe.id)}>
-                  <FolderGit2 className="mr-2 h-3.5 w-3.5" />
+                  <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Save as team recipe…
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => void handleExportRecipe(recipe.id)}>
-                <Copy className="mr-2 h-3.5 w-3.5" />
+                <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Copy as JSON
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void exportRecipeToFile(recipe.id)}>
-                <FileUp className="mr-2 h-3.5 w-3.5" />
+                <FileUp data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Export to file…
               </DropdownMenuItem>
               {!fromPlugin && (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem destructive onSelect={() => setRecipeToDelete(recipe.id)}>
-                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    <Trash2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     Delete recipe…
                   </DropdownMenuItem>
                 </>
@@ -573,11 +579,13 @@ export function RecipeManager({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" sideOffset={4}>
                     <DropdownMenuItem onSelect={() => setShowImportDialog(true)}>
+                      <Clipboard data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from clipboard…
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onSelect={() => void importRecipeFromFile(currentProject?.id)}
                     >
+                      <FileDown data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from file…
                     </DropdownMenuItem>
                   </DropdownMenuContent>

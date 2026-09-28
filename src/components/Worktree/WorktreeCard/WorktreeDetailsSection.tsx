@@ -19,11 +19,11 @@ import {
   ChevronDown,
   ChevronRight,
   GitCommitHorizontal,
+  Pause,
   Plug,
   Play,
   RotateCcw,
   ShieldAlert,
-  Square,
   Trash2,
 } from "lucide-react";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
@@ -469,7 +469,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       )}
                       {showResourcePause && onResourcePause && (
                         <ContextMenuItem onClick={onResourcePause}>
-                          <Square className="w-3.5 h-3.5 mr-2" />
+                          <Pause className="w-3.5 h-3.5 mr-2" />
                           Pause resource
                         </ContextMenuItem>
                       )}
@@ -535,7 +535,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                               className="shrink-0"
                               aria-label="Pause resource"
                             >
-                              <Square />
+                              <Pause />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom">Pause resource</TooltipContent>

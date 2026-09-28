@@ -20,8 +20,9 @@ import {
   Pencil,
   Pin,
   PinOff,
-  Clipboard,
-  Square,
+  Copy,
+  Settings,
+  CircleStop,
   X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -72,7 +73,10 @@ import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherT
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
-import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
+import {
+  DEFAULT_PLUGIN_BUTTON_ICON,
+  resolvePluginIcon,
+} from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -495,7 +499,7 @@ function OverflowMenu({
                 <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
                   <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
                   {group.buttons.map((config) => {
-                    const Icon = resolvePluginIcon(config.iconId);
+                    const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
                     return (
                       <DropdownMenuItem
                         key={config.id}
@@ -2507,19 +2511,20 @@ export function Toolbar({
                         )}
                       </ContextMenuItem>
                       <ContextMenuItem onSelect={handleCopyProjectPath}>
-                        <Clipboard data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                        <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Copy path
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                       <ContextMenuItem onSelect={handleOpenProjectSettings}>
-                        Project settings
+                        <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                        Project settings…
                       </ContextMenuItem>
                       {activeSearchableProject && activeSearchableProject.processCount > 0 && (
                         <ContextMenuItem
                           destructive
                           onSelect={() => handleStopProject(currentProject.id)}
                         >
-                          <Square data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                          <CircleStop data-menu-icon className="mr-2 h-3.5 w-3.5" />
                           Stop all agents
                         </ContextMenuItem>
                       )}

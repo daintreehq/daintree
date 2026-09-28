@@ -77,6 +77,8 @@ import {
   Globe,
   Info,
   Link,
+  CircleStop,
+  Clock,
   Lock,
   Maximize2,
   Mic,
@@ -91,6 +93,7 @@ import {
   RadioTower,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Send,
   Settings,
   Trash2,
@@ -1085,7 +1088,7 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
-            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+            <RotateCw className={ICON_CLASS} aria-hidden="true" />
             Reload page
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
@@ -1150,7 +1153,7 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
-            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+            <RotateCw className={ICON_CLASS} aria-hidden="true" />
             Reload preview
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
@@ -1182,7 +1185,7 @@ export function TerminalContextMenu({
             Trash dev preview
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <OctagonX className={ICON_CLASS} aria-hidden="true" />
+            <CircleStop className={ICON_CLASS} aria-hidden="true" />
             Stop dev server
           </ContextMenuItem>
         </ContextMenuContent>
@@ -1456,13 +1459,13 @@ export function TerminalContextMenu({
               {isKnownRun && (
                 <ContextMenuSub>
                   <ContextMenuSubTrigger>
-                    <BellOff className={ICON_CLASS} aria-hidden="true" />
+                    <Clock className={ICON_CLASS} aria-hidden="true" />
                     Snooze
                   </ContextMenuSubTrigger>
                   <ContextMenuSubContent>
                     {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
                       <ContextMenuItem key={option} onSelect={() => handleSnooze(option)}>
-                        <BellOff className={ICON_CLASS} aria-hidden="true" />
+                        <Clock className={ICON_CLASS} aria-hidden="true" />
                         {AGENT_SNOOZE_LABEL[option]}
                       </ContextMenuItem>
                     ))}
@@ -1597,7 +1600,7 @@ export function TerminalContextMenu({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill terminal
           </ContextMenuItem>
-          <PluginContextMenuSection items={pluginItems} inset />
+          <PluginContextMenuSection items={pluginItems} />
         </ContextMenuContent>
         {movePicker}
       </ContextMenu>

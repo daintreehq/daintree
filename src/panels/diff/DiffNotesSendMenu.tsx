@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
 import {
   deliverDiffNotes,
@@ -132,13 +133,20 @@ function DiffNoteTargetItems({
   return (
     <>
       {targets.map((target) => (
-        // Inset onto the scope rows' label edge above.
+        // Each agent leads with its own mark, which lands the label on the
+        // scope rows' label edge above.
         <DropdownMenuItem
           key={target.id}
-          inset
           disabled={disabled || target.isInputLocked}
           onSelect={() => onSend(target.id)}
         >
+          <span
+            data-menu-icon
+            aria-hidden="true"
+            className="mr-2 flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+          >
+            <TerminalIcon kind={target.kind} chrome={target.chrome} className="h-3.5 w-3.5" />
+          </span>
           <span className="truncate">{target.title}</span>
         </DropdownMenuItem>
       ))}

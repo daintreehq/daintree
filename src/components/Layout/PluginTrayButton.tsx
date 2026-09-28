@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Pin, Settings2 } from "lucide-react";
+import { Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -15,12 +15,16 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import {
+  TOOLBAR_CUSTOMIZE_ICON,
   TOOLBAR_CUSTOMIZE_LABEL,
   TOOLBAR_PIN_LABEL,
   TOOLBAR_UNPIN_LABEL,
 } from "./toolbarMenuStrings";
 import { Package } from "@/components/icons";
-import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
+import {
+  DEFAULT_PLUGIN_BUTTON_ICON,
+  resolvePluginIcon,
+} from "@/components/icons/pluginIconRegistry";
 import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -93,7 +97,7 @@ export function PluginToolbarButton({
   const hover = useShortcutHintHover(config.actionId);
   const ariaShortcut = useAriaKeyshortcuts(config.actionId);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
-  const Icon = resolvePluginIcon(config.iconId);
+  const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
 
   return (
     <ContextMenu>
@@ -152,7 +156,7 @@ function PluginTrayRow({
   onSelect: (config: ToolbarButtonConfig) => void;
   onTogglePin: (config: ToolbarButtonConfig) => void;
 }) {
-  const Icon = resolvePluginIcon(config.iconId);
+  const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "p" || e.key === "P") {
@@ -363,7 +367,7 @@ export function PluginTrayButton({
           Manage plugins
         </DropdownMenuActionItem>
         <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
-          <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          <TOOLBAR_CUSTOMIZE_ICON data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
       </DropdownMenuContent>

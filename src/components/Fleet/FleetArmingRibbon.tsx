@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { AlertCircle, AlertTriangle, MoreHorizontal, X } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  CheckSquare,
+  Clock,
+  Focus,
+  MoreHorizontal,
+  Radio,
+  X,
+  Zap,
+} from "lucide-react";
 import { AnimatePresence, m, useReducedMotion } from "framer-motion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -538,6 +548,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
         aria-label={`All waiting — this worktree, ${presetCounts.waitingCurrent}`}
       >
+        <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All waiting — this worktree
         <DropdownMenuMeta>{presetCounts.waitingCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
@@ -548,6 +559,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
         aria-label={`All waiting — all worktrees, ${presetCounts.waitingAll}`}
       >
+        <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All waiting — all worktrees
         <DropdownMenuMeta>{presetCounts.waitingAll}</DropdownMenuMeta>
       </DropdownMenuItem>
@@ -558,6 +570,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
         aria-label={`All working — this worktree, ${presetCounts.workingCurrent}`}
       >
+        <Zap data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All working — this worktree
         <DropdownMenuMeta>{presetCounts.workingCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
@@ -568,6 +581,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
         aria-label={`All working — all worktrees, ${presetCounts.workingAll}`}
       >
+        <Zap data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All working — all worktrees
         <DropdownMenuMeta>{presetCounts.workingAll}</DropdownMenuMeta>
       </DropdownMenuItem>
@@ -579,6 +593,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewAll("current"))}
         aria-label={`All in this worktree, ${presetCounts.eligibleCurrent}`}
       >
+        <CheckSquare data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All in this worktree
         <DropdownMenuMeta>{presetCounts.eligibleCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
@@ -590,6 +605,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               void actionService.dispatch("fleet.scope.enter", undefined, { source: "user" });
             }}
           >
+            <Focus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Focus selection
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -597,6 +613,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               clear();
             }}
           >
+            <Radio data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Clear selection
           </DropdownMenuItem>
         </>

@@ -3,7 +3,12 @@ import {
   AlertTriangle,
   ChevronRight,
   CircleDot,
+  ExternalLink,
+  FolderOpen,
+  Folders,
   GitBranch,
+  GitCommitHorizontal,
+  GitPullRequest,
   SquareTerminal,
   Sprout,
 } from "lucide-react";
@@ -19,6 +24,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { fileManagerRevealLabel } from "@/lib/platform";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import {
   ContextMenu,
@@ -342,6 +348,8 @@ export function WorktreeOverviewRow({
 
   const sessionLines = marks.map((m) => ({
     id: m.terminal.id,
+    kind: m.terminal.kind,
+    chrome: m.chrome,
     name: `${m.chrome.label}${m.state ? `, ${STATE_LABELS[m.state]}` : ""}`,
     detail: leadLine(m)?.text,
   }));
@@ -648,6 +656,14 @@ export function WorktreeOverviewRow({
                   key={line.id}
                   onSelect={() => void openSession(line.id, onBeforeMenuAction)}
                 >
+                  {/* Marked, so the icon gutter rule sees this slot as taken. */}
+                  <span
+                    data-menu-icon
+                    aria-hidden="true"
+                    className="mr-2 mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center self-start"
+                  >
+                    <TerminalIcon kind={line.kind} chrome={line.chrome} className="h-3.5 w-3.5" />
+                  </span>
                   <span className="flex min-w-0 flex-col">
                     <span className="whitespace-normal break-words">{line.name}</span>
                     {line.detail && line.detail !== line.name && (
@@ -666,6 +682,7 @@ export function WorktreeOverviewRow({
             args={menuArgs}
             onSelect={onBeforeMenuAction}
           >
+            <ExternalLink data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Open in editor
           </ContextMenuActionItem>
           <ContextMenuActionItem
@@ -673,13 +690,15 @@ export function WorktreeOverviewRow({
             args={menuArgs}
             onSelect={onBeforeMenuAction}
           >
-            Reveal in Finder
+            <FolderOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            {fileManagerRevealLabel()}
           </ContextMenuActionItem>
           <ContextMenuActionItem
             actionId="worktree.openReviewHub"
             args={menuArgs}
             onSelect={onBeforeMenuAction}
           >
+            <GitCommitHorizontal data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Open review hub
           </ContextMenuActionItem>
           {(showPr || worktree.issueNumber) && <ContextMenuSeparator />}
@@ -689,6 +708,7 @@ export function WorktreeOverviewRow({
               args={menuArgs}
               onSelect={onBeforeMenuAction}
             >
+              <GitPullRequest data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               Open pull request
             </ContextMenuActionItem>
           )}
@@ -698,6 +718,7 @@ export function WorktreeOverviewRow({
               args={menuArgs}
               onSelect={onBeforeMenuAction}
             >
+              <CircleDot data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               Open issue
             </ContextMenuActionItem>
           )}
@@ -709,6 +730,7 @@ export function WorktreeOverviewRow({
               void copyContextWithFeedback(worktree.id, "context-menu", undefined, "worktree-card")
             }
           >
+            <Folders data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Copy context
           </ContextMenuItem>
         </ContextMenuContent>

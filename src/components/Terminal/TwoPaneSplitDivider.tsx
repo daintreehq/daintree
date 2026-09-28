@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState, useRef } from "react";
+import { Columns2, PanelLeftOpen, PanelRightOpen, Ruler } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   ContextMenu,
@@ -273,19 +274,25 @@ export function TwoPaneSplitDivider({
           disabled={ratio >= maxRatio}
           onSelect={() => applyRatio(ratio + KEYBOARD_COARSE_STEP)}
         >
+          <PanelLeftOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Widen left pane
         </ContextMenuItem>
         <ContextMenuItem
           disabled={ratio <= minRatio}
           onSelect={() => applyRatio(ratio - KEYBOARD_COARSE_STEP)}
         >
+          <PanelRightOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Widen right pane
         </ContextMenuItem>
         <ContextMenuItem disabled={!canEvenSplit} onSelect={() => applyRatio(0.5)}>
+          <Columns2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Split evenly
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={onDoubleClick}>Reset split</ContextMenuItem>
+        <ContextMenuItem onSelect={onDoubleClick}>
+          <Ruler data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Reset split
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

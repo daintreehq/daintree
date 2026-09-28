@@ -1,5 +1,8 @@
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
-import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
+import {
+  DEFAULT_PLUGIN_BUTTON_ICON,
+  resolvePluginIcon,
+} from "@/components/icons/pluginIconRegistry";
 import type { ToolbarButtonMetadata } from "./toolbarButtonMetadata";
 
 /**
@@ -18,7 +21,7 @@ export function buildPluginToolbarMeta(
     if (!config) continue;
     meta[id] = {
       label: config.label,
-      icon: resolvePluginIcon(config.iconId),
+      icon: resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON),
       description: `Plugin button (${config.pluginId})`,
     };
   }

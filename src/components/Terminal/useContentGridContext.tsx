@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { Columns3, LayoutGrid } from "lucide-react";
 import { useDroppable } from "@dnd-kit/core";
 import type { Transition, TransformProperties } from "framer-motion";
 import { logError } from "@/utils/logger";
@@ -1149,8 +1150,10 @@ export function useContentGridContext({
       />
       <ContextMenuSeparator />
       <ContextMenuSub>
-        {/* Inset into the launch rows' icon column above it. */}
-        <ContextMenuSubTrigger inset>Grid layout</ContextMenuSubTrigger>
+        <ContextMenuSubTrigger>
+          <Columns3 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Grid layout
+        </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <MenuActionSourceContext.Consumer>
             {(menuSource) => (
@@ -1197,8 +1200,9 @@ export function useContentGridContext({
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSeparator />
-      <ContextMenuActionItem inset actionId="app.settings.openTab" args={{ tab: "terminal" }}>
-        Terminal settings…
+      <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "terminal" }}>
+        <LayoutGrid data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+        Panel grid settings…
       </ContextMenuActionItem>
     </ContextMenuContent>
   );

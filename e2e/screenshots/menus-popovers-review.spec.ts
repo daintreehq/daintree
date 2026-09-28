@@ -10,13 +10,16 @@
  * a tight crop around trigger + open surface.
  *
  * It reuses the existing `*-preview.html` pages wherever one already mounts the
- * component (toolbar, dock, portal, banners, PR checks, worktree sidebar, dev
- * preview toolbar, autocomplete, error list, recent calls), and drives
- * `menus-preview.html` (`src/components/ui/__preview__/menusPreview.tsx`) for the
- * rest: the toolbar seeded with live processes and plugin buttons, the browser
- * toolbar with navigation history, the diff notes send menu, the file browser
- * view options, the markdown text-size stepper and a worktree card with a
- * resource configured.
+ * component (toolbar, dock, portal, banners, PR checks, worktree sidebar and
+ * overview, dev preview toolbar, autocomplete, error list, recent calls, forge
+ * stats, split divider, conflict panel, fleet ribbon, toolbar settings,
+ * recipes), and drives `menus-preview.html`
+ * (`src/components/ui/__preview__/menusPreview.tsx`) for the rest: the toolbar
+ * seeded with live processes, plugin buttons, worktrees and copy-tree history,
+ * the empty panel grid, the notification center and a toast, the browser
+ * toolbar with navigation history and at compact width, the dev preview's two
+ * restart menus, the diff notes send menu, the file browser view options, the
+ * markdown text-size stepper and a worktree card with a resource configured.
  *
  * Opt-in only: skips itself unless DAINTREE_SHOT_MENUS is set.
  *
@@ -34,8 +37,8 @@
  * box, left padding, height, colour and icon placement, the trigger's box and the
  * measured trigger-to-surface gap — so consistency claims can be checked against
  * numbers. Never writes a PNG whose surface it has not verified open with a real
- * box, except the one allow-listed baseline below, and counts the files itself at
- * the end.
+ * box (bar an allow-listed baseline below, of which there are currently none),
+ * and counts the files itself at the end.
  */
 
 import { test, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
@@ -61,12 +64,11 @@ const ONLY = new Set(
 );
 
 /**
- * States whose surface is allowed to be absent. The Portal "+" button's
- * right-click still opens a NATIVE Electron menu over IPC, which the preview's
- * inert bridge swallows — so today there is nothing to photograph. The shot
- * still lands (a crop of the trigger, flagged in its sidecar) as the baseline a
- * React replacement will be compared against. Remove the entry once "+" opens a
- * `role="menu"`.
+ * States whose surface is allowed to be absent: a menu the app still draws
+ * natively over IPC, which the preview's inert bridge swallows. Such a shot
+ * lands as a crop of the trigger, flagged in its sidecar, as the baseline a
+ * React replacement is compared against. Empty now that the Portal "+" button
+ * opens a Radix context menu like every other surface here.
  */
 const ALLOW_NO_SURFACE = new Set<string>();
 
@@ -186,7 +188,77 @@ function centreOf(box: { x: number; y: number; width: number; height: number }) 
   return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
 }
 
+/**
+ * A point inside `container` whose hit target matches none of `skip` — an empty
+ * stretch of a surface whose background is the context-menu target. Scans row
+ * by row from `fromY` (a fraction of the container's height) downwards.
+ */
+async function emptyPointIn(
+  container: Locator,
+  skip: string,
+  fromY = 0
+): Promise<{ x: number; y: number }> {
+  const point = await container.evaluate(
+    (root, { skip, fromY }) => {
+      const r = root.getBoundingClientRect();
+      for (let y = r.top + Math.max(24, r.height * fromY); y < r.bottom - 8; y += 16) {
+        for (let x = r.left + 24; x < r.right - 8; x += 16) {
+          const hit = document.elementFromPoint(x, y);
+          if (!hit || !root.contains(hit) || hit.closest(skip)) continue;
+          return { x: Math.round(x), y: Math.round(y) };
+        }
+      }
+      return null;
+    },
+    { skip, fromY }
+  );
+  if (!point) throw new Error("no empty stretch of the surface to right-click");
+  return point;
+}
+
+/** Right-click at a point (a background, not a control), retrying a cold miss like `rightClick`. */
+async function rightClickAt(
+  page: Page,
+  point: { x: number; y: number },
+  surface: Locator
+): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.mouse.move(point.x, point.y);
+    await page.waitForTimeout(150);
+    await page.mouse.click(point.x, point.y, { button: "right" });
+    try {
+      await expect(surface).toBeVisible({ timeout: 3_000 });
+      return;
+    } catch {
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(200);
+    }
+  }
+  await expect(surface, "context menu never opened").toBeVisible({ timeout: 1_000 });
+}
+
+/**
+ * Open a submenu the way a pointer does — hover its row — and fall back to the
+ * keyboard (focus the row, ArrowRight) if the hover intent never lands.
+ */
+async function openSubmenu(page: Page, row: Locator, submenu: Locator): Promise<void> {
+  await row.hover();
+  try {
+    await expect(submenu).toBeVisible({ timeout: 2_000 });
+  } catch {
+    await row.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(submenu, "submenu never opened").toBeVisible({ timeout: 3_000 });
+  }
+  // Park the pointer on the open submenu so the parent row's grace area cannot close it.
+  const box = await submenu.boundingBox();
+  if (box) await page.mouse.move(box.x + box.width / 2, box.y + 12);
+}
+
 const TOOLBAR = "/toolbar-preview.html?fixture=owner&platform=mac";
+/** What in the Portal sidebar owns its own menu or none — a right-click on the body must miss these. */
+const PORTAL_CONTROLS =
+  "button, a, input, [role='tab'], [role='tablist'], [role='separator'], [role='toolbar']";
 const TOOLBAR_READY = '[data-toolbar-button-id="launcher"] button';
 
 const SHOTS: Shot[] = [
@@ -606,6 +678,350 @@ const SHOTS: Shot[] = [
         .locator('[data-radix-popper-content-wrapper] [aria-label="Recent tool calls"]')
         .first();
       await clickOpen(page, trigger, surface);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "agent-button-ctx-plain",
+    url: "/menus-preview.html?scene=toolbar",
+    viewport: { width: 1440, height: 560 },
+    ready: '[data-toolbar-button-id="codex"] button',
+    path: "Right-click an agent toolbar button for an agent with no presets",
+    open: async (page) => {
+      const trigger = page.locator('[data-toolbar-button-id="codex"] button').first();
+      const surface = page.locator(MENU).last();
+      const point = await rightClick(page, trigger, surface);
+      await expect(surface.getByRole("menuitem", { name: "Launch in worktree" })).toBeVisible();
+      await expect(surface.getByRole("menuitem", { name: "Launch with preset" })).toHaveCount(0);
+      return { trigger, surface, point };
+    },
+  },
+  {
+    slug: "agent-button-ctx-worktrees",
+    url: "/menus-preview.html?scene=toolbar",
+    viewport: { width: 1440, height: 560 },
+    ready: '[data-toolbar-button-id="codex"] button',
+    path: "Right-click an agent toolbar button, then hover Launch in worktree",
+    open: async (page) => {
+      const button = page.locator('[data-toolbar-button-id="codex"] button').first();
+      const menu = page.locator(MENU).first();
+      await rightClick(page, button, menu);
+      const surface = page
+        .locator(MENU)
+        .filter({ has: page.getByRole("menuitem", { name: /design\/menus-popovers/ }) });
+      await openSubmenu(page, menu.getByRole("menuitem", { name: "Launch in worktree" }), surface);
+      await expect(surface.getByRole("menuitem")).toHaveCount(4);
+      // The parent menu is the anchor: the crop holds both, and the gap is the submenu's offset.
+      return { trigger: menu, surface };
+    },
+  },
+  {
+    slug: "forge-stats-ctx",
+    url: "/forge-stats-preview.html?fixture=default",
+    viewport: { width: 1000, height: 520 },
+    ready: '[data-testid="forge-stat-pill-issues"]',
+    path: "Right-click the issues pill in the toolbar's forge stats",
+    open: async (page) => {
+      const trigger = page.locator('[data-testid="forge-stat-pill-issues"]').first();
+      const surface = page.locator(MENU).last();
+      const point = await rightClick(page, trigger, surface);
+      await expect(
+        surface.getByRole("menuitem", { name: /View all issues on GitHub/ })
+      ).toBeVisible();
+      await expect(
+        surface.getByRole("menuitem", { name: /View repository on GitHub/ })
+      ).toBeVisible();
+      return { trigger, surface, point };
+    },
+  },
+  {
+    slug: "copytree-dropdown",
+    url: "/menus-preview.html?scene=toolbar",
+    viewport: { width: 1440, height: 560 },
+    ready: 'button[aria-label="Copy context"]',
+    path: "Click the copy-context (folders) button in the toolbar",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label="Copy context"]').first();
+      const surface = page.locator("[data-copy-tree-panel]:visible").first();
+      await clickOpen(page, trigger, surface);
+      await expect(surface.locator("[data-copy-tree-recent]")).toHaveCount(4);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "grid-ctx",
+    url: "/menus-preview.html?scene=grid",
+    viewport: { width: 1000, height: 960 },
+    ready: '[data-testid="menus-grid"] [role="region"][aria-label="Panels"]',
+    path: "Right-click an empty stretch of the panel grid",
+    open: async (page) => {
+      const trigger = page.locator('[data-testid="menus-grid"]');
+      const surface = page.locator(MENU).last();
+      const box = await trigger.boundingBox();
+      if (!box) throw new Error("grid-ctx: grid has no box");
+      const point = { x: Math.round(box.x + 60), y: Math.round(box.y + 40) };
+      await rightClickAt(page, point, surface);
+      await expect(surface.getByRole("menuitem", { name: "Grid layout" })).toBeVisible();
+      await expect(surface.getByRole("menuitem", { name: /Panel grid settings/ })).toBeVisible();
+      return { trigger, surface, point, clipToPoint: true };
+    },
+  },
+  {
+    slug: "grid-layout-sub",
+    url: "/menus-preview.html?scene=grid",
+    viewport: { width: 1000, height: 960 },
+    ready: '[data-testid="menus-grid"] [role="region"][aria-label="Panels"]',
+    path: "Right-click an empty stretch of the panel grid, then hover Grid layout",
+    open: async (page) => {
+      const grid = page.locator('[data-testid="menus-grid"]');
+      const menu = page.locator(MENU).first();
+      const box = await grid.boundingBox();
+      if (!box) throw new Error("grid-layout-sub: grid has no box");
+      await rightClickAt(page, { x: Math.round(box.x + 60), y: Math.round(box.y + 40) }, menu);
+      const surface = page
+        .locator(MENU)
+        .filter({ has: page.getByRole("menuitemcheckbox", { name: "Fixed columns" }) });
+      await openSubmenu(page, menu.getByRole("menuitem", { name: "Grid layout" }), surface);
+      return { trigger: menu, surface };
+    },
+  },
+  {
+    slug: "split-divider-ctx",
+    url: "/panel-header-preview.html?scene=split-agent-browser",
+    viewport: { width: 1440, height: 600 },
+    ready: '[role="separator"][aria-label="Resize left pane"]',
+    path: "Right-click the divider between two panes in a two-pane split",
+    open: async (page) => {
+      const trigger = page.locator('[role="separator"][aria-label="Resize left pane"]').first();
+      const surface = page.locator(MENU).last();
+      const point = await rightClick(page, trigger, surface);
+      // The divider runs the full pane height; crop to where it was clicked.
+      return { trigger, surface, point, clipToPoint: true };
+    },
+  },
+  {
+    slug: "worktree-overview-row-ctx",
+    url: "/worktree-overview-preview.html?fleet=busy",
+    viewport: { width: 1600, height: 1000 },
+    ready: '[data-worktree-overview-cell="wt-handback"]',
+    path: "Right-click a worktree's row in the worktree overview",
+    open: async (page) => {
+      const trigger = page.locator('[data-worktree-overview-cell="wt-handback"]').first();
+      const surface = page.locator(MENU).last();
+      const box = await trigger.boundingBox();
+      if (!box) throw new Error("worktree-overview-row-ctx: row has no box");
+      const point = { x: Math.round(box.x + 48), y: Math.round(box.y + 16) };
+      await rightClickAt(page, point, surface);
+      await expect(surface.getByRole("menuitem", { name: "Open pull request" })).toBeVisible();
+      await expect(surface.getByRole("menuitem", { name: "Open issue" })).toBeVisible();
+      return { trigger, surface, point, clipToPoint: true };
+    },
+  },
+  {
+    slug: "conflict-file-menu",
+    url: "/button-states-preview.html?fixture=conflict-panel",
+    viewport: { width: 900, height: 700 },
+    ready: 'button[aria-label^="More actions for "]',
+    path: "Click ⋯ (More actions) on a conflicted file in the Review Hub's conflict panel",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label^="More actions for "]').first();
+      const surface = page.locator(MENU).last();
+      await trigger.hover();
+      await clickOpen(page, trigger, surface);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "portal-dock-ctx",
+    url: "/portal-preview.html?fixture=page-active",
+    viewport: { width: 1000, height: 900 },
+    ready: 'aside[aria-label="Portal"]',
+    path: "Right-click the Portal sidebar's body (away from its tabs and buttons)",
+    open: async (page) => {
+      const trigger = page.locator('aside[aria-label="Portal"]');
+      const surface = page.locator(MENU).last();
+      const point = await emptyPointIn(trigger, PORTAL_CONTROLS, 0.4);
+      await rightClickAt(page, point, surface);
+      await expect(surface.getByRole("menuitem", { name: "Default new tab" })).toBeVisible();
+      return { trigger, surface, point, clipToPoint: true };
+    },
+  },
+  {
+    slug: "portal-default-newtab-sub",
+    url: "/portal-preview.html?fixture=page-active",
+    viewport: { width: 1000, height: 900 },
+    ready: 'aside[aria-label="Portal"]',
+    path: "Right-click the Portal sidebar's body, then hover Default new tab",
+    open: async (page) => {
+      const dock = page.locator('aside[aria-label="Portal"]');
+      const menu = page.locator(MENU).first();
+      await rightClickAt(page, await emptyPointIn(dock, PORTAL_CONTROLS, 0.4), menu);
+      const row = menu.getByRole("menuitem", { name: "Default new tab" });
+      // The submenu is the one open menu that is not the parent.
+      const surface = page.locator(MENU).nth(1);
+      await openSubmenu(page, row, surface);
+      return { trigger: menu, surface };
+    },
+  },
+  {
+    slug: "browser-more-menu",
+    url: "/menus-preview.html?scene=browser-more",
+    viewport: { width: 640, height: 520 },
+    ready: '[data-testid="browser-more-actions"]',
+    path: "Click ⋯ (More page actions) in a narrow browser panel's toolbar",
+    open: async (page) => {
+      const trigger = page.locator('[data-testid="browser-more-actions"]').first();
+      const surface = page.locator(MENU).last();
+      await clickOpen(page, trigger, surface);
+      await expect(surface.getByRole("menuitem", { name: "Copy URL" })).toBeVisible();
+      await expect(surface.getByRole("menuitem", { name: /Zoom in/ })).toBeVisible();
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "devpreview-restart-menu",
+    url: "/menus-preview.html?scene=devpreview-console",
+    viewport: { width: 720, height: 520 },
+    ready: 'button[aria-label="More restart options"]',
+    path: "Click ⋯ beside Restart in a dev preview's bottom drawer header",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label="More restart options"]').first();
+      const surface = page.locator(MENU).last();
+      await clickOpen(page, trigger, surface);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "devpreview-refused-restart-menu",
+    url: "/menus-preview.html?scene=devpreview-refused",
+    viewport: { width: 720, height: 520 },
+    ready: 'button[aria-label="More restart options"]',
+    path: "Click the chevron beside Restart dev server on a dev preview's connection-refused screen",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label="More restart options"]').first();
+      const surface = page.locator(MENU).last();
+      await clickOpen(page, trigger, surface);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "fleet-ribbon-menu",
+    url: "/fleet-preview.html?fixture=saved-rich&width=1100",
+    viewport: { width: 1180, height: 820 },
+    ready: '[data-testid="fleet-selection-menu-trigger"]',
+    path: "Click ⋯ (selection menu) on the fleet ribbon with agents armed and saved fleets",
+    open: async (page) => {
+      const trigger = page.locator('[data-testid="fleet-selection-menu-trigger"]').first();
+      const surface = page.locator(MENU).last();
+      await clickOpen(page, trigger, surface);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "notification-pause-menu",
+    url: "/menus-preview.html?scene=notifications",
+    viewport: { width: 520, height: 640 },
+    ready: 'button[aria-label="Pause notifications"]',
+    path: "Click the moon (Pause notifications) in the notification center's header",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label="Pause notifications"]').first();
+      const surface = page.locator(MENU).last();
+      await clickOpen(page, trigger, surface);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "notification-more-menu",
+    url: "/menus-preview.html?scene=notifications",
+    viewport: { width: 520, height: 640 },
+    ready: 'button[aria-label="More notification actions"]',
+    path: "Click ⋯ (More actions) in the notification center's header",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label="More notification actions"]').first();
+      const surface = page.locator(MENU).last();
+      await clickOpen(page, trigger, surface);
+      await expect(surface.getByRole("menuitemcheckbox")).toHaveCount(1);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "notification-entry-menu",
+    url: "/menus-preview.html?scene=notifications",
+    viewport: { width: 520, height: 720 },
+    ready: 'button[aria-label^="Options for "]',
+    path: "Hover a notification in the notification center and click its ⋯ (Options)",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label^="Options for "]').first();
+      const surface = page.locator(MENU).last();
+      await trigger.hover();
+      await clickOpen(page, trigger, surface);
+      await expect(surface.getByRole("menuitem", { name: /^Silence / })).toBeVisible();
+      await expect(
+        surface.getByRole("menuitem", { name: "Mute project notifications" })
+      ).toBeVisible();
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "toolbar-settings-move-menu",
+    url: "/toolbar-settings-preview.html?fixture=populated",
+    viewport: { width: 820, height: 1000 },
+    ready: 'button[aria-label^="Move "]',
+    path: "Settings › Toolbar: click ⋯ (Move) on a button's row",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label^="Move "]').first();
+      const surface = page.locator(MENU).last();
+      await trigger.hover();
+      await clickOpen(page, trigger, surface);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "recipe-import-menu",
+    url: "/recipes-preview.html?fixture=populated",
+    viewport: { width: 1100, height: 900 },
+    ready: 'input[aria-label="Filter recipes"]',
+    path: "Recipe manager: click Import beside the filter field",
+    open: async (page) => {
+      // Not getByRole: the open menu aria-hides the dialog behind it, trigger included.
+      const trigger = page
+        .locator("button")
+        .filter({ hasText: /^\s*Import\s*$/ })
+        .first();
+      const surface = page.locator(MENU).last();
+      await clickOpen(page, trigger, surface);
+      return { trigger, surface };
+    },
+  },
+  {
+    slug: "recipe-runner-ctx",
+    url: "/recipes-preview.html?view=runner&fixture=populated",
+    viewport: { width: 1100, height: 900 },
+    ready: '[role="option"]',
+    path: "Right-click a pinned recipe in the canvas recipe runner",
+    open: async (page) => {
+      const trigger = page.locator('[role="option"]').filter({ hasText: "Work an issue" }).first();
+      const surface = page.locator(MENU).last();
+      const point = await rightClick(page, trigger, surface);
+      await expect(surface.getByRole("menuitem", { name: "Unpin from canvas" })).toBeVisible();
+      return { trigger, surface, point };
+    },
+  },
+  {
+    slug: "toaster-options-menu",
+    url: "/menus-preview.html?scene=toaster",
+    viewport: { width: 820, height: 560 },
+    ready: 'button[aria-label="Notification options"]',
+    path: "Hover a toast carrying a project and click its ⋯ (Notification options)",
+    open: async (page) => {
+      const trigger = page.locator('button[aria-label="Notification options"]').first();
+      const surface = page.locator(MENU).last();
+      await trigger.hover();
+      await clickOpen(page, trigger, surface);
+      await expect(surface.getByRole("menuitem", { name: /^Silence / })).toBeVisible();
+      await expect(
+        surface.getByRole("menuitem", { name: "Mute project notifications" })
+      ).toBeVisible();
       return { trigger, surface };
     },
   },

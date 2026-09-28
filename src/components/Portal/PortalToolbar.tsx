@@ -3,11 +3,17 @@ import { LayoutGroup } from "framer-motion";
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowRightToLine,
   RotateCw,
   X,
   Plus,
+  CopyPlus,
   ExternalLink,
+  Globe,
+  Link,
   Link2,
+  ListX,
+  PanelRight,
   Server,
   ChevronDown,
 } from "lucide-react";
@@ -205,37 +211,48 @@ function SortableTab({
       </Tooltip>
       <ContextMenuContent>
         <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onDuplicate(tab.id))}>
+          <CopyPlus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Duplicate
         </ContextMenuItem>
         <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onReload(tab.id))}>
+          <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Reload
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onCopyUrl(tab.id))}>
+          <Link data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Copy URL
         </ContextMenuItem>
         <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onOpenExternal(tab.id))}>
+          <Globe data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Open in browser
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem disabled={tabIndex === 0} onSelect={afterClose(() => onMove(tab.id, -1))}>
+          <ArrowLeft data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Move left
         </ContextMenuItem>
         <ContextMenuItem disabled={!hasTabsToRight} onSelect={afterClose(() => onMove(tab.id, 1))}>
+          <ArrowRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Move right
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={afterClose(() => onClose(tab.id))}>Close</ContextMenuItem>
+        <ContextMenuItem onSelect={afterClose(() => onClose(tab.id))}>
+          <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Close
+        </ContextMenuItem>
         <ContextMenuItem
           disabled={!hasOtherTabs}
           onSelect={afterClose(() => onCloseOthers(tab.id))}
         >
+          <ListX data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Close others
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!hasTabsToRight}
           onSelect={afterClose(() => onCloseToRight(tab.id))}
         >
+          <ArrowRightToLine data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Close tabs to the right
         </ContextMenuItem>
       </ContextMenuContent>
@@ -759,7 +776,8 @@ export function PortalToolbar({
                       )
                   )}
                 >
-                  {link.title}
+                  <PortalIcon icon={link.icon} size="tab" className="mr-2 shrink-0" />
+                  <span className="truncate">{link.title}</span>
                 </ContextMenuItem>
               ))}
               {enabledLinks.length > 0 && <ContextMenuSeparator />}
@@ -771,6 +789,7 @@ export function PortalToolbar({
                     })
                 )}
               >
+                <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Open launchpad
               </ContextMenuItem>
               <ContextMenuSeparator />
@@ -780,6 +799,7 @@ export function PortalToolbar({
               />
               <ContextMenuSeparator />
               <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "portal" }}>
+                <PanelRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Portal settings…
               </ContextMenuActionItem>
             </ContextMenuContent>
