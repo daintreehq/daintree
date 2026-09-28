@@ -112,6 +112,24 @@ async function own(page: Page, theme: string, fixture: string, extra = ""): Prom
 }
 
 /** From here on, every shimmed write the preview makes stays pending. */
+/**
+ * Waits until `n` controls read as in flight, either way a build draws it: the
+ * legacy "…ing" label swap, or the Button's `loading` state (`aria-busy`). The
+ * same spec therefore captures both sides of the button-states change.
+ */
+async function busy(page: Page, labels: string[], n = labels.length) {
+  await expect
+    .poll(async () => {
+      let count = await page.locator('button[aria-busy="true"]:visible').count();
+      for (const label of labels) {
+        count += await page.getByRole("button", { name: label, exact: true }).count();
+        count += await page.locator(`button:visible:has-text("${label}")`).count();
+      }
+      return count;
+    })
+    .toBeGreaterThanOrEqual(n);
+}
+
 async function hold(page: Page) {
   await page.evaluate(() => {
     (window as Window & { __buttonStatesHold?: boolean }).__buttonStatesHold = true;
@@ -241,9 +259,7 @@ const SHOTS: Shot[] = [
       await hold(page);
       await page.getByRole("button", { name: "Stop recording" }).click();
       await page.getByRole("button", { name: "Run health check" }).click();
-      await expect(page.getByRole("button", { name: "Checking…" })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Collecting…" })).toBeVisible();
+      await busy(page, ["Checking…", "Saving…", "Collecting…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -263,7 +279,7 @@ const SHOTS: Shot[] = [
       const s = await own(page, theme, "settings-editor");
       await hold(page);
       await page.getByRole("button", { name: "Test saved editor" }).click();
-      await expect(page.getByRole("button", { name: "Testing…" })).toBeVisible();
+      await busy(page, ["Testing…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -276,7 +292,7 @@ const SHOTS: Shot[] = [
       await s.locator("input").nth(1).fill("/opt/homebrew/sbin");
       await hold(page);
       await page.getByRole("button", { name: "Save", exact: true }).click();
-      await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+      await busy(page, ["Saving…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -288,7 +304,7 @@ const SHOTS: Shot[] = [
       const s = await own(page, theme, "settings-image-viewer");
       await hold(page);
       await page.getByRole("button", { name: "Save", exact: true }).click();
-      await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+      await busy(page, ["Saving…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -303,7 +319,7 @@ const SHOTS: Shot[] = [
       await input.fill("{parent-dir}/{base-folder}-trees/{branch-slug}");
       await hold(page);
       await page.getByRole("button", { name: "Save", exact: true }).click();
-      await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+      await busy(page, ["Saving…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -313,7 +329,7 @@ const SHOTS: Shot[] = [
     name: "settings-agents",
     run: async (page, theme) => {
       const s = await own(page, theme, "settings-agents");
-      await expect(page.getByRole("button", { name: "Checking…" })).toBeVisible();
+      await busy(page, ["Checking…"]);
       return s;
     },
   },
@@ -323,7 +339,7 @@ const SHOTS: Shot[] = [
       const s = await own(page, theme, "settings-privacy");
       await hold(page);
       await page.getByRole("button", { name: "Clear cache" }).click();
-      await expect(page.getByRole("button", { name: "Clearing…" })).toBeVisible();
+      await busy(page, ["Clearing…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -337,15 +353,14 @@ const SHOTS: Shot[] = [
       await expect(page.getByRole("button", { name: "Disconnect" })).toHaveCount(2);
       await hold(page);
       await page.getByRole("button", { name: "Disconnect" }).first().click();
-      const busy = page.getByRole("button", { name: "Disconnecting…" });
-      await expect(busy).toBeVisible();
+      await busy(page, ["Disconnecting…"]);
       await park(page);
       await settle(page, 250);
       // The innermost block holding both the server switch and the client rows.
       return page
         .locator("div")
         .filter({ has: page.getByText("Enable MCP server", { exact: true }) })
-        .filter({ has: busy })
+        .filter({ has: page.getByText("External clients", { exact: false }) })
         .last();
     },
   },
@@ -359,7 +374,7 @@ const SHOTS: Shot[] = [
       await section.getByRole("switch").first().click();
       await expect(page.getByRole("button", { name: "Confirm and enable" })).toBeVisible();
       await page.getByRole("button", { name: "Confirm and enable" }).click();
-      await expect(page.getByRole("button", { name: "Enabling…" })).toBeVisible();
+      await busy(page, ["Enabling…"]);
       await park(page);
       await settle(page, 250);
       return section;
@@ -371,7 +386,7 @@ const SHOTS: Shot[] = [
       const s = await own(page, theme, "project-env");
       await s.locator("input").nth(1).fill("postgres://localhost:5433/daintree");
       await page.getByRole("button", { name: "Save", exact: true }).click();
-      await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+      await busy(page, ["Saving…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -393,7 +408,7 @@ const SHOTS: Shot[] = [
       const s = await own(page, theme, "host-crash");
       await hold(page);
       await page.getByRole("button", { name: "Restart service" }).click();
-      await expect(page.getByRole("button", { name: "Restarting…" })).toBeVisible();
+      await busy(page, ["Restarting…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -403,9 +418,7 @@ const SHOTS: Shot[] = [
     name: "host-crash-collecting",
     run: async (page, theme) => {
       const s = await own(page, theme, "host-crash", "&collecting=1");
-      await expect(page.getByRole("button", { name: "Send diagnostics" })).toContainText(
-        "Collecting…"
-      );
+      await busy(page, ["Collecting…"]);
       return s;
     },
   },
@@ -484,7 +497,7 @@ const SHOTS: Shot[] = [
       const s = await own(page, theme, "agent-cli-step");
       await hold(page);
       await page.getByTestId("agent-cli-install-primary").click();
-      await expect(page.getByTestId("agent-cli-install-primary")).toContainText("Installing…");
+      await busy(page, ["Installing…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -506,7 +519,7 @@ const SHOTS: Shot[] = [
       await expandRequirements(page);
       await hold(page);
       await page.getByRole("button", { name: "Re-check" }).click();
-      await expect(page.getByRole("button", { name: "Checking…" })).toBeVisible();
+      await busy(page, ["Checking…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -526,7 +539,7 @@ const SHOTS: Shot[] = [
       const s = await own(page, theme, "system-requirements", "&git=missing");
       await hold(page);
       await page.getByRole("button", { name: "Check again" }).click();
-      await expect(page.getByRole("button", { name: "Checking…" })).toBeVisible();
+      await busy(page, ["Checking…"]);
       await park(page);
       await settle(page, 250);
       return s;
@@ -557,7 +570,7 @@ const SHOTS: Shot[] = [
       const s = await own(page, theme, "worktree-details");
       await hold(page);
       await page.getByRole("button", { name: "Retry setup" }).click();
-      await expect(page.getByRole("button", { name: "Retry setup" })).toContainText("Retrying…");
+      await busy(page, ["Retrying…"]);
       await park(page);
       await settle(page, 250);
       return s;
