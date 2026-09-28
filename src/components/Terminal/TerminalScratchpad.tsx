@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { PanelRightClose } from "lucide-react";
-import { Info, NotebookPen } from "@/components/icons";
+import { BookDashed, NotebookPen } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -24,6 +24,8 @@ import {
 interface TerminalScratchpadProps {
   terminalId: string;
 }
+
+const SCRATCHPAD_LIFECYCLE_HINT = "Cleared when this terminal closes";
 
 /**
  * A terminal's Scratchpad (#12835): a Markdown notes column on the right of the
@@ -293,17 +295,35 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       />
 
       <div
-        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-divider px-3 text-3xs text-text-secondary"
+        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-divider px-3 text-2xs text-text-secondary"
         data-testid="terminal-scratchpad-status"
       >
-        <span className="flex min-w-0 items-center gap-1.5">
-          <Info aria-hidden="true" className="size-3 shrink-0" />
-          <span id={hintId} className="truncate">
-            Temporary with this terminal
-          </span>
-        </span>
+        {/* One calm word on screen; the full lifecycle is the tooltip and the
+            editor's description, so it reads as a mode, not a warning. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              // Focusable so a keyboard user can open the same explanation a
+              // pointer gets on hover.
+              tabIndex={0}
+              className="-mx-1 flex min-w-0 cursor-default items-center gap-1.5 rounded-sm px-1 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent-primary"
+            >
+              <BookDashed aria-hidden="true" strokeWidth={1.25} className="size-3.5 shrink-0" />
+              <span className="truncate">Temporary</span>
+              <span id={hintId} className="sr-only">
+                {SCRATCHPAD_LIFECYCLE_HINT}
+              </span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="start">
+            {SCRATCHPAD_LIFECYCLE_HINT}
+          </TooltipContent>
+        </Tooltip>
         {nearLimit && (
-          <span className="shrink-0 tabular-nums" data-testid="terminal-scratchpad-count">
+          <span
+            className="shrink-0 text-text-primary tabular-nums"
+            data-testid="terminal-scratchpad-count"
+          >
             {scratchpad.content.length.toLocaleString()} / {SCRATCHPAD_MAX_CHARS.toLocaleString()}
           </span>
         )}
