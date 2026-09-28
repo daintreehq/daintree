@@ -166,6 +166,12 @@ describe("SpawnErrorBanner", () => {
     expect(screen.getByText(expected)).toBeTruthy();
   });
 
+  it("reads a code it has no copy for as the generic failure instead of crashing", () => {
+    renderBanner("ECONNRESET" as SpawnErrorCode);
+    expect(screen.getByText("Couldn't start terminal")).toBeTruthy();
+    expect(screen.getByText("simulated ECONNRESET error")).toBeTruthy();
+  });
+
   it("explains the kept-alive process and keeps Retry inline for TERMINAL_ALREADY_LIVE", () => {
     const onRetry = vi.fn();
     renderBanner("TERMINAL_ALREADY_LIVE", { onRetry });
