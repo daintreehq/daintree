@@ -99,8 +99,9 @@ describe("saved fleet counts", () => {
   });
 });
 
-/** The fleet name a chip shows (the leading span; the trailing one is its count). */
-const chipName = (chip: HTMLElement) => chip.querySelector("span")?.textContent ?? null;
+/** The fleet name a chip shows (the leading label span; the trailing one is its count). */
+const chipName = (chip: HTMLElement) =>
+  chip.querySelector('[data-slot="button-content"] > span')?.textContent ?? null;
 
 describe("SavedFleetQuickRecall", () => {
   it("offers exactly the fleets that would arm something now", () => {
