@@ -615,7 +615,7 @@ function ModeControl<T extends string>({
           aria-label={`View mode: ${current.ariaLabel ?? current.label}`}
           title={current.title}
           data-testid="file-browser-mode-menu"
-          className="toolbar-icon-button flex shrink-0 items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium text-text-primary"
+          className="toolbar-icon-button flex h-6.5 shrink-0 items-center gap-1 rounded-[var(--radius-md)] px-2 text-xs font-medium text-text-primary"
         >
           {current.label}
           <ChevronDown className="h-3 w-3 text-text-secondary" aria-hidden="true" />

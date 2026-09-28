@@ -23,6 +23,9 @@ const PANE_TOOLBAR_FILES = [
   "src/components/Notifications/NotificationCenter.tsx",
   "src/components/Markdown/MarkdownTextSizeControl.tsx",
   "src/panels/file-browser/FileBrowserViewOptions.tsx",
+  "src/components/Worktree/ReviewHub/FileSection.tsx",
+  "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
+  "src/components/FileViewer/ZoomableImage.tsx",
 ];
 
 /**

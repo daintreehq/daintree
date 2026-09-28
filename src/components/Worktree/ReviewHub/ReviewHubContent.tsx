@@ -21,6 +21,10 @@ import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
+import {
   EMPTY_MOUNTED_RANGE,
   rangeCovers,
   sameRange,
@@ -1939,18 +1943,14 @@ export function ReviewHubContent({
                   if (!loading) void refresh();
                 }}
                 // Not `disabled`: pressing it would drop keyboard focus to the page.
-                aria-disabled={loading}
-                className={cn(
-                  "p-1.5 rounded transition-colors",
-                  "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
-                )}
+                aria-disabled={loading || undefined}
+                className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                 aria-label="Refresh"
               >
                 <SpinningIcon
                   icon={RefreshCw}
                   active={loading || isBackgroundRefreshing}
-                  className="w-3.5 h-3.5"
+                  className={PANE_TOOLBAR_ICON_CLASS}
                 />
               </button>
             )}

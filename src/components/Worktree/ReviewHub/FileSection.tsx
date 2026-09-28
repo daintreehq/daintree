@@ -407,8 +407,11 @@ export function FileSection({
                   className={cn(
                     // Fixed width, not min-width: the count appears and
                     // disappears as settings change, and an intrinsically-sized
-                    // trigger drags the filter field with it every time.
-                    "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded-lg p-1",
+                    // trigger drags the filter field with it every time. `p-1`
+                    // rather than the pane toolbar's `p-1.5`: this header's
+                    // filter is 20px tall, and the glyph shares the fixed width
+                    // with the count.
+                    "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded-[var(--radius-md)] p-1 text-text-secondary aria-expanded:text-text-primary",
                     nonDefaultViewCount > 0 && "text-text-primary"
                   )}
                   data-testid={`${section}-section-view-trigger`}
