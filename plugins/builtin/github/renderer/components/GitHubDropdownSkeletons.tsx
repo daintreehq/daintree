@@ -167,16 +167,20 @@ export function GitHubResourceListSkeleton({
           </div>
         </div>
 
+        {/* Drawn as the shared segmented control at rest (inset track, bordered
+            neutral thumb), so the filter does not change shape when the list loads. */}
         <div
-          className="flex p-0.5 bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-md)]"
+          className="flex w-full p-0.5 bg-surface-inset rounded-[var(--radius-md)]"
           aria-hidden="true"
         >
           {stateTabs.map((tab) => (
             <div
               key={tab.id}
               className={cn(
-                "flex-1 px-3 py-1 text-xs font-medium rounded text-center",
-                tab.id === "open" ? "bg-overlay-medium text-text-primary" : "text-text-secondary"
+                "flex-1 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)] text-center border",
+                tab.id === "open"
+                  ? "bg-overlay-medium border-text-secondary text-text-primary"
+                  : "border-transparent text-text-secondary"
               )}
             >
               {tab.label}

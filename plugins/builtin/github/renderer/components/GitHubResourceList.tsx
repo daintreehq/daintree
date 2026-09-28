@@ -14,6 +14,10 @@ import { GitHubIcon } from "@/components/icons/brands";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
 import { Button } from "@/components/ui/button";
 import { SearchField } from "@/components/ui/SearchField";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -379,17 +383,17 @@ export function GitHubResourceList({
     useIssueSelectionStore.getState().clear(`${type}:${prevProjectPath}`);
   }, [projectPath, type]);
 
-  const stateTabs = useMemo(() => {
+  const stateTabs = useMemo((): SegmentedRadioOption<StateFilter>[] => {
     if (type === "pr") {
       return [
-        { id: "open", label: "Open" },
-        { id: "merged", label: "Merged" },
-        { id: "closed", label: "Closed" },
+        { value: "open", label: "Open" },
+        { value: "merged", label: "Merged" },
+        { value: "closed", label: "Closed" },
       ];
     }
     return [
-      { id: "open", label: "Open" },
-      { id: "closed", label: "Closed" },
+      { value: "open", label: "Open" },
+      { value: "closed", label: "Closed" },
     ];
   }, [type]);
 
@@ -1360,52 +1364,13 @@ export function GitHubResourceList({
           </Popover>
         </div>
 
-        <div
-          className="flex p-0.5 bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-md)]"
-          role="radiogroup"
+        <SegmentedRadioGroup<StateFilter>
           aria-label="Filter by state"
-        >
-          {stateTabs.map((tab, idx) => {
-            const isActive = filterState === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setFilterState(tab.id as StateFilter)}
-                role="radio"
-                aria-checked={isActive}
-                tabIndex={isActive ? 0 : -1}
-                onKeyDown={(e) => {
-                  const isNext = e.key === "ArrowRight" || e.key === "ArrowDown";
-                  const isPrev = e.key === "ArrowLeft" || e.key === "ArrowUp";
-                  if (!isNext && !isPrev) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const delta = isNext ? 1 : -1;
-                  const nextIdx = (idx + delta + stateTabs.length) % stateTabs.length;
-                  const nextTab = stateTabs[nextIdx]!;
-                  setFilterState(nextTab.id as StateFilter);
-                  const group = e.currentTarget.parentElement;
-                  requestAnimationFrame(() => {
-                    const radios = group?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-                    radios?.[nextIdx]?.focus();
-                  });
-                }}
-                className={cn(
-                  "flex-1 px-3 py-1 text-xs font-medium rounded",
-                  "transition-[background-color,color] duration-150 ease-out",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
-                  "focus-visible:outline-accent-primary",
-                  isActive
-                    ? "bg-overlay-medium text-text-primary"
-                    : "text-text-secondary hover:text-text-primary"
-                )}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
+          fullWidth
+          options={stateTabs}
+          value={filterState}
+          onChange={setFilterState}
+        />
 
         {numberQuery !== null &&
           !loading &&

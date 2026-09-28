@@ -952,7 +952,11 @@ describe("BrowserToolbar viewport presets", () => {
     it("renders a DPR radiogroup with one radio per ratio", () => {
       renderWithDpr();
       const radios = dprRadios();
-      expect(radios.map((r) => r.getAttribute("data-dpr"))).toEqual(["1", "2", "3"]);
+      expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual([
+        "Device pixel ratio 1x",
+        "Device pixel ratio 2x",
+        "Device pixel ratio 3x",
+      ]);
     });
 
     it("ArrowRight moves focus to the next ratio and selection follows focus", () => {

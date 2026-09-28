@@ -36,8 +36,6 @@ const RADIUS_EXCEPTIONS: Record<string, number> = {
   // The zoom chip and copy-URL sit inside the 28px address field, so they take
   // a smaller concentric corner than the field's own radius-md.
   "src/components/Browser/BrowserToolbar.tsx": 2,
-  // Segments of the DPR radio group, inset in its radius-md track.
-  "src/components/Browser/ViewportControls.tsx": 1,
 };
 
 function classStrings(file: string): string[] {
