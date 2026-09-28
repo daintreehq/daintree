@@ -189,6 +189,9 @@ describe("substringMatchIndices", () => {
       ["İstanbul office", "office"],
       ["İstanbul office", "i̇st"],
       ["Ärger İm Büro", "büro"],
+      // Final sigma lowers by context, so only the whole-string lowering the
+      // filters use finds this one.
+      ["ΟΣ İ", "ος"],
     ] as const) {
       const { run } = marked(text, query);
       expect(run.toLowerCase()).toBe(query);

@@ -72,19 +72,19 @@ export function substringMatchIndices(
     return start < 0 ? undefined : [[start, start + q.length - 1]];
   }
   // Some characters lowercase to more code units ("İ" → "i̇"), so an offset in
-  // the lowered string is not an offset in the text. Lower one character at a
-  // time and remember which original character each lowered unit came from.
-  let lowered = "";
+  // the lowered string is not an offset in the text. The match is still found
+  // in the whole-string lowering the filters use (final sigma depends on its
+  // neighbours); lowering one character at a time only sizes each character's
+  // run, to map that match back to the characters it came from.
   let offset = 0;
   const from: [number, number][] = [];
   for (const ch of text) {
     const unit: [number, number] = [offset, offset + ch.length - 1];
-    const l = ch.toLowerCase();
-    lowered += l;
-    for (let i = 0; i < l.length; i++) from.push(unit);
+    for (let i = 0; i < ch.toLowerCase().length; i++) from.push(unit);
     offset += ch.length;
   }
-  const at = lowered.indexOf(q);
+  if (from.length !== lower.length) return undefined;
+  const at = lower.indexOf(q);
   const first = from[at];
   const last = from[at + q.length - 1];
   return at < 0 || !first || !last ? undefined : [[first[0], last[1]]];
