@@ -2267,10 +2267,10 @@ export function ReviewHubContent({
                               variant="contrast"
                               size="sm"
                               onClick={() => void handlePushClean()}
-                              disabled={isPushing}
+                              loading={isPushing}
                               data-testid="review-hub-clean-push"
                             >
-                              {isPushing ? "Pushing…" : "Push"}
+                              Push
                             </Button>
                           ) : undefined
                         }

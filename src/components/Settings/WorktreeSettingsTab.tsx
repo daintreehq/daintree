@@ -389,9 +389,10 @@ export function WorktreeSettingsTab() {
               variant="contrast"
               size="sm"
               onClick={handleSave}
-              disabled={unavailable || !hasChanges || !validation.valid || isSaving}
+              loading={isSaving}
+              disabled={unavailable || !hasChanges || !validation.valid}
             >
-              {isSaving ? "Saving…" : "Save"}
+              Save
             </Button>
           </SettingsActions>
         </SettingsGroup>

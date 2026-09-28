@@ -201,12 +201,17 @@ export function SystemRequirementsSection({
               <Button
                 variant="outline"
                 size="xs"
-                onClick={() => void runCheck()}
-                disabled={isChecking}
-                className="shrink-0 gap-1.5 text-xs"
+                onClick={() => {
+                  if (!isChecking) void runCheck();
+                }}
+                // Busy, not unavailable: the rotating glyph says so, and the
+                // button keeps keyboard focus rather than dropping it to <body>.
+                aria-busy={isChecking || undefined}
+                aria-disabled={isChecking || undefined}
+                className="shrink-0"
               >
                 <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
-                {isChecking ? "Checking…" : "Check again"}
+                Check again
               </Button>
             </div>
           )}
@@ -215,12 +220,14 @@ export function SystemRequirementsSection({
             <Button
               variant="outline"
               size="xs"
-              onClick={() => void runCheck()}
-              disabled={isChecking}
-              className="gap-1.5 text-xs"
+              onClick={() => {
+                if (!isChecking) void runCheck();
+              }}
+              aria-busy={isChecking || undefined}
+              aria-disabled={isChecking || undefined}
             >
               <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
-              {isChecking ? "Checking…" : "Re-check"}
+              Re-check
             </Button>
           )}
         </div>

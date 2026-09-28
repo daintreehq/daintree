@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { ErrorRetryRow, InlineErrorRow } from "./auditLogParts";
-import { Spinner } from "@/components/ui/Spinner";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
@@ -73,8 +72,8 @@ function SystemHealthSection() {
         description="Checks that the command-line tools Daintree relies on are installed and on your PATH"
         error={checkError}
         control={
-          <Button variant="outline" size="sm" onClick={() => void runCheck()} disabled={isChecking}>
-            {isChecking ? "Checking…" : result ? "Run health check again" : "Run health check"}
+          <Button variant="outline" size="sm" onClick={() => void runCheck()} loading={isChecking}>
+            {result ? "Run health check again" : "Run health check"}
           </Button>
         }
       />
@@ -136,9 +135,8 @@ export function DownloadDiagnosticsSection() {
       description="A snapshot of your system environment, app state, and recent logs. You review it before anything is saved."
       error={downloadError}
       control={
-        <Button variant="outline" size="sm" onClick={handleOpenReview} disabled={isCollecting}>
-          {isCollecting && <Spinner size="sm" />}
-          {isCollecting ? "Collecting…" : "Download diagnostics"}
+        <Button variant="outline" size="sm" onClick={handleOpenReview} loading={isCollecting}>
+          Download diagnostics
         </Button>
       }
     />
@@ -228,9 +226,9 @@ function RendererCpuProfileSection() {
             variant="subtle"
             size="sm"
             onClick={() => void handleRecord()}
-            disabled={phase === "saving"}
+            loading={phase === "saving"}
           >
-            {phase === "saving" ? "Saving…" : "Record profile"}
+            Record profile
           </Button>
         )
       }

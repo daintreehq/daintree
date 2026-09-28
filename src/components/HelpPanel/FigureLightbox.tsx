@@ -378,7 +378,7 @@ function StepButton({ ref, direction, available, onStep }: StepButtonProps) {
       onClick={() => {
         if (available) onStep();
       }}
-      className="shrink-0 rounded-full aria-disabled:opacity-40 aria-disabled:pointer-events-none"
+      className="shrink-0 rounded-full aria-disabled:opacity-50 aria-disabled:pointer-events-none"
     >
       <Icon aria-hidden="true" />
     </Button>

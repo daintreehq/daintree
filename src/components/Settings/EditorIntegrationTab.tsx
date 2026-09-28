@@ -254,8 +254,14 @@ export function EditorIntegrationTab() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    onClick={handleRescan}
-                    disabled={disabled || isRescanning}
+                    onClick={() => {
+                      if (!isRescanning) handleRescan();
+                    }}
+                    // Busy, not unavailable: the rotating glyph says so, at full
+                    // strength, and the button keeps keyboard focus.
+                    aria-busy={isRescanning || undefined}
+                    aria-disabled={isRescanning || undefined}
+                    disabled={disabled}
                     aria-label="Re-scan for installed editors"
                   >
                     <SpinningIcon icon={RefreshCw} active={isRescanning} />
@@ -459,20 +465,20 @@ export function EditorIntegrationTab() {
             variant="outline"
             size="sm"
             onClick={handleTest}
-            disabled={isTesting || !preferredEditor || isDirty}
+            loading={isTesting}
+            disabled={!preferredEditor || isDirty}
           >
             <ExternalLink aria-hidden="true" />
-            {isTesting ? "Testing…" : "Test saved editor"}
+            Test saved editor
           </Button>
           <Button
             variant="contrast"
             size="sm"
             onClick={handleSave}
-            disabled={
-              isSaving || isLoadingConfig || !activeProjectId || !isDirty || Boolean(loadError)
-            }
+            loading={isSaving}
+            disabled={isLoadingConfig || !activeProjectId || !isDirty || Boolean(loadError)}
           >
-            {isSaving ? "Saving…" : "Save"}
+            Save
           </Button>
         </SettingsActions>
       </SettingsGroup>

@@ -516,8 +516,11 @@ export function PluginDetailPane({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  onClick={onCheckForUpdate}
-                  disabled={checkingUpdate}
+                  onClick={() => {
+                    if (!checkingUpdate) onCheckForUpdate();
+                  }}
+                  aria-busy={checkingUpdate || undefined}
+                  aria-disabled={checkingUpdate || undefined}
                   aria-label={`Check ${label} for updates`}
                 >
                   <SpinningIcon icon={RefreshCw} active={checkingUpdate} />
@@ -553,11 +556,10 @@ export function PluginDetailPane({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant="ghost"
+                  variant="ghost-danger"
                   size="icon-sm"
                   onClick={onUninstall}
                   aria-label={`Uninstall ${label}`}
-                  className="text-text-secondary hover:text-status-error"
                 >
                   <Trash2 />
                 </Button>

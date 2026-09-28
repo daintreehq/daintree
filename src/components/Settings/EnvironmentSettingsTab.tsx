@@ -283,8 +283,14 @@ export function EnvironmentSettingsTab() {
           >
             Discard
           </Button>
-          <Button variant="contrast" size="sm" onClick={handleSave} disabled={!isDirty || isSaving}>
-            {isSaving ? "Saving…" : "Save"}
+          <Button
+            variant="contrast"
+            size="sm"
+            onClick={handleSave}
+            loading={isSaving}
+            disabled={!isDirty}
+          >
+            Save
           </Button>
         </SettingsActions>
       </SettingsGroup>

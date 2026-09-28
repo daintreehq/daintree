@@ -330,7 +330,11 @@ export function CrashRecoveryDialog({
                   className="flex-1"
                   data-testid="restore-selected-button"
                 >
-                  Restore selected (<span className="tabular-nums">{selectedCount}</span>)
+                  {/* One flex item: the button's gap would otherwise space the
+                      parentheses away from the count. */}
+                  <span>
+                    Restore selected (<span className="tabular-nums">{selectedCount}</span>)
+                  </span>
                 </Button>
                 <Button
                   variant="ghost"
@@ -487,7 +491,7 @@ export function CrashRecoveryDialog({
                     onClick={handleOpenLogFile}
                     data-testid="open-log-button"
                   >
-                    <FileText className="h-3 w-3 mr-1" />
+                    <FileText aria-hidden="true" />
                     Open log file
                   </Button>
 
@@ -498,7 +502,7 @@ export function CrashRecoveryDialog({
                       onClick={() => copyStack(crash.entry.errorStack!)}
                       data-testid="copy-stack-button"
                     >
-                      <Copy className="h-3 w-3 mr-1" />
+                      <Copy aria-hidden="true" />
                       {stackCopied ? "Copied" : "Copy stack"}
                     </Button>
                   )}
@@ -509,7 +513,7 @@ export function CrashRecoveryDialog({
                     onClick={() => setShowReportPreview((o) => !o)}
                     data-testid="report-button"
                   >
-                    <ExternalLink className="h-3 w-3 mr-1" />
+                    <ExternalLink aria-hidden="true" />
                     Report this crash
                   </Button>
                 </div>
@@ -575,10 +579,10 @@ export function CrashRecoveryDialog({
                         variant="contrast"
                         size="sm"
                         onClick={() => void handleSubmitReport()}
-                        disabled={submitting}
+                        loading={submitting}
                         data-testid="submit-report-button"
                       >
-                        <ExternalLink className="h-3 w-3 mr-1" />
+                        <ExternalLink aria-hidden="true" />
                         Submit on GitHub
                       </Button>
                       <Button

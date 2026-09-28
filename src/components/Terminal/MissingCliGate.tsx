@@ -286,7 +286,7 @@ export function MissingCliGate({
               variant="ghost"
               onClick={() => window.electron.system.openExternal(docsUrl)}
             >
-              <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+              <ExternalLink aria-hidden="true" />
               Docs
             </Button>
           )}
@@ -299,15 +299,13 @@ export function MissingCliGate({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => void handleRefresh()}
-              disabled={isRefreshing}
+              onClick={() => {
+                if (!isRefreshing) void handleRefresh();
+              }}
+              aria-busy={isRefreshing || undefined}
+              aria-disabled={isRefreshing || undefined}
             >
-              <SpinningIcon
-                icon={RefreshCw}
-                active={isRefreshing}
-                size={14}
-                wrapperClassName="mr-1.5"
-              />
+              <SpinningIcon icon={RefreshCw} active={isRefreshing} size={14} />
               Re-check
             </Button>
             <Button size="sm" variant="outline" onClick={onRunAnyway}>

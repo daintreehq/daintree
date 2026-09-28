@@ -421,22 +421,13 @@ export function AgentCliStep({
       {(hasInstallableAgents || isBatchRunning) && (
         <Button
           variant={hasUsableSelection ? "outline" : "contrast"}
-          disabled={isBatchRunning}
+          loading={isBatchRunning}
           onClick={() => void handleInstallAll(installableIds)}
           className="w-full"
           data-testid="agent-cli-install-primary"
         >
-          {isBatchRunning ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Installing…
-            </>
-          ) : (
-            <>
-              <Download className="w-4 h-4" />
-              {installAllLabel}
-            </>
-          )}
+          <Download aria-hidden="true" />
+          {installAllLabel}
         </Button>
       )}
 

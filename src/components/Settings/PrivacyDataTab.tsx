@@ -541,9 +541,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                       variant="outline"
                       size="sm"
                       onClick={() => void handleClearCache()}
-                      disabled={cacheClearing}
+                      loading={cacheClearing}
                     >
-                      {cacheClearing ? "Clearing…" : cacheCleared ? "Cache cleared" : "Clear cache"}
+                      {cacheCleared ? "Cache cleared" : "Clear cache"}
                     </Button>
                   }
                 />

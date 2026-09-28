@@ -730,9 +730,10 @@ export function McpServerSettingsTab() {
                       variant="outline"
                       size="sm"
                       onClick={() => void handleDisconnectBearer(bearer.tokenHash)}
+                      loading={disconnectingHash === bearer.tokenHash}
                       disabled={disconnectingHash !== null}
                     >
-                      {disconnectingHash === bearer.tokenHash ? "Disconnecting…" : "Disconnect"}
+                      Disconnect
                     </Button>
                   </li>
                 ))}

@@ -608,8 +608,8 @@ function BackgroundGroupItem({
       <div className="flex items-center gap-2 px-2.5 py-1.5 group">
         <Button
           variant="ghost"
-          size="icon-sm"
-          className="shrink-0 h-4 w-4 p-0 hover:bg-transparent"
+          size="icon-xs"
+          className="shrink-0 -m-1 hover:bg-transparent"
           onClick={() => setIsExpanded(!isExpanded)}
           aria-label={isExpanded ? "Collapse group" : "Expand group"}
           aria-expanded={isExpanded}

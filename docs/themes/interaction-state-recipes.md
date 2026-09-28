@@ -255,6 +255,18 @@ The sliding thumb of `SegmentedRadioGroup` sits on an inset track, where `border
 
 ---
 
+## Button States
+
+One treatment per state, owned by `Button` (`src/components/ui/button.tsx`). A site that rebuilds one of these by hand is the inconsistency, not a variant of it.
+
+- **Busy** — `loading`. The spinner overlays the label, which stays in place to hold the width and the accessible name; the button keeps keyboard focus and vetoes activation. Never swap the label to "Saving…", never put a `Spinner` in place of the icon, and never pair it with `disabled` for the same flag — `loading` outranks `disabled`, and the primitive neither natively disables nor dims a busy button. A rotating refresh glyph (`SpinningIcon`) on a refresh control is the one other busy pattern, with a static label.
+- **Unavailable** — `disabled`, or `aria-disabled` plus `ARIA_DISABLED_CLASSES` when focus must survive: 50% opacity and `cursor-not-allowed`. Never 40% or 60%, and never a colour change alone. The ReviewHub primary CTAs keep their documented inset treatment (`REVIEW_HUB_DISABLED_CTA`).
+- **Destructive** — `ghost-danger` (red at rest) for inline and row actions, filled `destructive` for a confirmation's footer. The exception is sidebar chrome (worktree cards, deleted-worktree rows), which stays neutral at rest and turns red on hover and focus: the sidebar repeats these on every card, and its red belongs to the interaction and the confirm. A fix action on an error band (Retry, Restart) is not destructive and is `outline`, like `InlineStatusBanner`'s.
+- **Icon gap** — the size carries it (`default` 8px, `sm` 6px, `xs` 4px). Never add `mr-*`/`ml-*` to an icon inside a Button, and let the size set the glyph too.
+- **Size** — pick the size whose height you want. `sm` forced to `h-6` is `xs`; `icon` forced to `h-7 w-7` is `icon-sm`. A row action under 24px fails WCAG 2.5.8: use `icon-xs` with a negative margin when the row cannot grow.
+
+---
+
 ## Transition Patterns
 
 | Need | Use Instead | Why |

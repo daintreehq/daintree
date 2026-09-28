@@ -19,7 +19,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Spinner } from "@/components/ui/Spinner";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   DropdownMenu,
@@ -657,10 +656,10 @@ export function ConflictPanel({
                       onClick={() => {
                         handleMarkResolvedClick(file.path).catch(() => {});
                       }}
-                      disabled={isBusy}
+                      loading={isBusy}
                       aria-label={`Mark ${file.path} as resolved`}
                     >
-                      {isBusy ? <Spinner size="xs" /> : <Check aria-hidden />}
+                      <Check aria-hidden />
                       Mark resolved
                     </Button>
                     <DropdownMenu>
@@ -762,10 +761,11 @@ export function ConflictPanel({
           onClick={() => void handleContinue()}
           aria-disabled={continueBlocked || undefined}
           aria-describedby={summaryId}
-          className={cn("w-full", REVIEW_HUB_DISABLED_CTA)}
+          loading={isContinuing}
+          className={cn("w-full", !isContinuing && REVIEW_HUB_DISABLED_CTA)}
           data-testid="conflict-continue"
         >
-          {isContinuing ? <Spinner size="sm" /> : <Play aria-hidden />}
+          <Play aria-hidden />
           Continue {operationNoun}
         </Button>
       </div>

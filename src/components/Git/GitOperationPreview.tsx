@@ -240,13 +240,13 @@ export function PreviewNotice({
         )}
         {onRetry && (
           <Button
-            variant="ghost"
-            size="sm"
+            variant="outline"
+            size="xs"
             onClick={onRetry}
             data-testid={retryTestId}
-            className="mt-1.5 -ml-2 h-6 px-2 text-2xs"
+            className="mt-1.5 -ml-2"
           >
-            <RefreshCw className="w-3 h-3" />
+            <RefreshCw aria-hidden="true" />
             Retry
           </Button>
         )}

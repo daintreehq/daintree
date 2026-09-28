@@ -316,10 +316,11 @@ export function EnvironmentVariablesEditor({
               <Button
                 variant="contrast"
                 onClick={handleSave}
-                disabled={isSaving || !isDirty}
+                loading={isSaving}
+                disabled={!isDirty}
                 size="sm"
               >
-                {isSaving ? "Saving…" : "Save"}
+                Save
               </Button>
             </SettingsActions>
           ) : (

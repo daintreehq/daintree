@@ -259,9 +259,10 @@ export function ImageViewerTab() {
             variant="contrast"
             size="sm"
             onClick={handleSave}
-            disabled={isSaving || isLoading || Boolean(loadError) || !isDirty}
+            loading={isSaving}
+            disabled={isLoading || Boolean(loadError) || !isDirty}
           >
-            {isSaving ? "Saving…" : "Save"}
+            Save
           </Button>
         </SettingsActions>
       </SettingsGroup>

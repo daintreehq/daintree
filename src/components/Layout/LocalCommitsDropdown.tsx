@@ -1046,12 +1046,12 @@ export function LocalCommitsDropdown({
                   Couldn&apos;t refresh commits &middot; {error}
                 </span>
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="outline"
+                  size="xs"
                   onClick={handleRetry}
-                  className="ml-auto h-6 text-xs shrink-0"
+                  className="ml-auto shrink-0"
                 >
-                  <RefreshCw className="h-3 w-3" />
+                  <RefreshCw aria-hidden="true" />
                   Retry
                 </Button>
               </div>
@@ -1107,19 +1107,19 @@ export function LocalCommitsDropdown({
                               Couldn&apos;t load more commits &middot; {loadMoreError}
                             </p>
                             <Button
-                              variant="ghost"
-                              size="sm"
+                              variant="outline"
+                              size="xs"
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={handleLoadMore}
                               className={cn(
-                                "h-6 text-xs shrink-0",
+                                "shrink-0",
                                 // The row carries the highlight fill; the button
                                 // only steps its text up rather than painting a
                                 // second fill on top.
                                 isLoadMoreActive && "text-text-primary"
                               )}
                             >
-                              <RefreshCw className="h-3 w-3" />
+                              <RefreshCw aria-hidden="true" />
                               Retry
                             </Button>
                           </div>
@@ -1196,11 +1196,11 @@ export function LocalCommitsDropdown({
             ) : null}
             {showPushSummary && pushStatus.kind === "failed" && (
               <Button
-                variant="ghost"
-                size="sm"
+                variant="outline"
+                size="xs"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={handleRetryPush}
-                className="h-6 text-xs shrink-0"
+                className="shrink-0"
               >
                 Retry
               </Button>
