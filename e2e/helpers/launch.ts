@@ -45,6 +45,8 @@ export interface AppContext {
 export interface LaunchOptions {
   env?: Record<string, string>;
   userDataDir?: string;
+  /** The app folder to launch instead of this checkout, e.g. one whose package.json differs. */
+  appRoot?: string;
   waitForSelector?: string;
   extraArgs?: string[];
   /**
@@ -491,7 +493,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), E2E_TEMP_PREFIX));
     if (!options.userDataDir) recordTempDir(userDataDir);
     launchedUserDataDirs.add(userDataDir);
-    const args = [`--user-data-dir=${userDataDir}`, ROOT];
+    const args = [`--user-data-dir=${userDataDir}`, options.appRoot ?? ROOT];
     args.unshift(E2E_MODE_ARG);
     if (options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS !== "0") {
       args.unshift(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
