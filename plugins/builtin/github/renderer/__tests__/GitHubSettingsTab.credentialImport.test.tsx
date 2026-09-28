@@ -49,7 +49,12 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
         >
           {props.confirmLabel}
         </button>
-        <button type="button" onClick={props.onClose} disabled={!props.onClose}>
+        {/* Mirrors the real dialog: Cancel is unavailable while the confirm runs. */}
+        <button
+          type="button"
+          onClick={props.onClose}
+          disabled={!props.onClose || props.isConfirmLoading}
+        >
           Cancel
         </button>
       </div>

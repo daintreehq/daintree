@@ -9,6 +9,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { PredicateFleetSavedScope } from "@shared/types";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 type SaveFleetKind = "snapshot" | "predicate";
 type RuleState = PredicateFleetSavedScope["stateFilter"];
@@ -93,7 +94,12 @@ export function SaveFleetDialog({
       kind === "snapshot"
         ? { kind: "snapshot" as const, name: trimmed }
         : { kind: "predicate" as const, name: trimmed, scope: ruleScope, stateFilter: ruleState };
-    await actionService.dispatch("fleet.saveNamedFleet", args, { source: "user" });
+    try {
+      await actionService.dispatch("fleet.saveNamedFleet", args, { source: "user" });
+    } catch {
+      // Reported by the dispatcher; the unchanged list below reads as a failure.
+    }
+    // Always unlocks: the dialog can't be dismissed while this is set.
     setSaving(false);
     // The action rolls its in-memory append back when the write fails, so a
     // new id surviving the await is the success signal. Keep the draft on
@@ -112,6 +118,7 @@ export function SaveFleetDialog({
       isOpen={isOpen}
       onClose={onClose}
       size="sm"
+      dismissible={!saving}
       initialFocus="none"
       restoreFocusTo={restoreFocusTo}
       data-testid="fleet-save-dialog"
@@ -134,7 +141,7 @@ export function SaveFleetDialog({
                 setFailed(false);
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (isEnterToSubmit(e)) {
                   e.preventDefault();
                   void submit();
                 }
@@ -229,7 +236,7 @@ export function SaveFleetDialog({
               ? "Name the fleet to save it"
               : undefined
         }
-        secondaryAction={{ label: "Cancel", onClick: onClose }}
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: saving }}
         primaryAction={{
           label: "Save fleet",
           onClick: () => void submit(),

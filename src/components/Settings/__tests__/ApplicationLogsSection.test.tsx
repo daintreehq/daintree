@@ -112,3 +112,17 @@ describe("ClearLogsRow — clear confirmation", () => {
     confirmSpy.mockRestore();
   });
 });
+
+describe("restoreClearedLogOverrides — the Undo for Clear all overrides", () => {
+  it("puts the cleared levels back without overwriting one set since", async () => {
+    const { logsClient } = await import("@/clients");
+    const get = vi.spyOn(logsClient, "getLevelOverrides").mockResolvedValue({ git: "warn" });
+    const set = vi.spyOn(logsClient, "setLevelOverrides").mockResolvedValue({ success: true });
+    const { restoreClearedLogOverrides } = await import("../TroubleshootingTab");
+
+    await restoreClearedLogOverrides({ git: "debug", pty: "trace" });
+
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenCalledWith({ git: "warn", pty: "trace" });
+  });
+});

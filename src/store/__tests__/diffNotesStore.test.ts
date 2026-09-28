@@ -131,3 +131,24 @@ describe("diffNotesStore", () => {
     expect(merged.state.notes).toEqual({});
   });
 });
+
+describe("diffNotesStore restoreNote — the Undo for deleteNote", () => {
+  it("puts a deleted note back exactly, but never over a newer revision", () => {
+    const store = useDiffNotesStore.getState();
+    const note = store.addNote({
+      worktreePath: "/repo",
+      filePath: "src/a.ts",
+      anchor: { kind: "file" },
+      body: "Check the retry path",
+    })!;
+
+    useDiffNotesStore.getState().deleteNote(note.id);
+    useDiffNotesStore.getState().restoreNote(note);
+    expect(useDiffNotesStore.getState().notes[note.id]).toEqual(note);
+
+    const newer = { ...note, body: "Edited since", updatedAt: note.updatedAt + 1 };
+    useDiffNotesStore.setState({ notes: { [note.id]: newer } });
+    useDiffNotesStore.getState().restoreNote(note);
+    expect(useDiffNotesStore.getState().notes[note.id]?.body).toBe("Edited since");
+  });
+});

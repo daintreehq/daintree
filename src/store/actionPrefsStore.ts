@@ -32,8 +32,11 @@ useActionPrefsStore.subscribe((state) => {
   const pinnedJson = JSON.stringify(state.pinnedActionIds);
   const hiddenJson = JSON.stringify(state.hiddenActionIds);
 
-  const pinnedChanged = pinnedJson !== lastPinned && pinnedJson !== inflightPinned;
-  const hiddenChanged = hiddenJson !== lastHidden && hiddenJson !== inflightHidden;
+  // Compared against what disk will hold once the pending write lands, not the
+  // last settled value: an Undo that puts back the pre-write value while that
+  // write is still in flight differs from where disk is heading, and must send.
+  const pinnedChanged = pinnedJson !== (inflightPinned ?? lastPinned);
+  const hiddenChanged = hiddenJson !== (inflightHidden ?? lastHidden);
 
   if (!pinnedChanged && !hiddenChanged) return;
 

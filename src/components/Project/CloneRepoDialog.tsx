@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
+import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, CircleSlash, FolderOpen, LogIn } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -36,6 +38,7 @@ import type { ProjectCreationIdentity } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { isClientAppError } from "@/utils/clientAppError";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface CloneError {
   message: string;
@@ -487,9 +490,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter acts as Retry too — startClone resets `error` internally, so this
     // matches the on-screen Retry button instead of going dead after a failure.
-    // Enter that confirms an IME candidate is composition, not submission.
-    if (e.nativeEvent.isComposing) return;
-    if (e.key === "Enter" && canClone && !isCloning && !isComplete) {
+    if (!isEnterToSubmit(e)) return;
+    if (canClone && !isCloning && !isComplete) {
       e.preventDefault();
       void startClone();
     }
@@ -607,13 +609,13 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       dismissible={!isCloning && !canFinalize}
       initialFocus="none"
     >
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
         <AppDialog.Title icon={<FolderGit2 className="h-4 w-4 text-text-secondary" />}>
           Clone repository
         </AppDialog.Title>
-        {!isCloning && !canFinalize && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
@@ -815,6 +817,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                     id="clone-parent-dir"
                     value={parentPath}
                     onBrowse={() => void pickDirectory()}
+                    // Enter here answers like the dialog's other fields do.
+                    onEnter={() => {
+                      if (canClone && !isCloning && !isComplete) void startClone();
+                    }}
                     disabled={isCloning}
                     browseLabel="Browse for a location"
                   />
@@ -883,34 +889,35 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
           </Button>
         ) : error ? (
           <div className="flex shrink-0 items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={onCancel}>
+            <Button variant="ghost" onClick={onCancel}>
               Close
             </Button>
             <Button
               ref={footerActionRef}
               variant="contrast"
-              size="sm"
-              onClick={() => void startClone()}
-              disabled={isCloning || !canClone}
+              onClick={() => {
+                if (isCloning || !canClone) return;
+                void startClone();
+              }}
+              aria-disabled={isCloning || !canClone || undefined}
+              className={cn((isCloning || !canClone) && ARIA_DISABLED_CLASSES)}
             >
               Retry
             </Button>
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={isCloning ? stopClone : onCancel}
-              loading={isStopping}
-            >
+            <Button variant="ghost" onClick={isCloning ? stopClone : onCancel} loading={isStopping}>
               {isCloning ? "Stop clone" : "Cancel"}
             </Button>
             <Button
               variant="contrast"
-              size="sm"
-              onClick={() => void startClone()}
-              disabled={!canClone}
+              onClick={() => {
+                if (!canClone) return;
+                void startClone();
+              }}
+              aria-disabled={!canClone || undefined}
+              className={cn(!canClone && ARIA_DISABLED_CLASSES)}
               loading={isCloning}
               aria-keyshortcuts="Enter"
             >

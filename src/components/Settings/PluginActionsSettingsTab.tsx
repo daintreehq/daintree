@@ -192,7 +192,7 @@ export function PluginActionsSettingsTab() {
         isOpen={showClearConfirm}
         variant="destructive"
         onConfirm={() => void handleClear()}
-        onClose={isClearing ? undefined : () => setShowClearConfirm(false)}
+        onClose={() => setShowClearConfirm(false)}
         isConfirmLoading={isClearing}
         title="Clear plugin audit log?"
         description={`This permanently deletes ${records.length === 1 ? "1 recorded plugin action" : `${records.length} recorded plugin actions`} on this machine.${auditEnabled ? " New dispatches will still be recorded." : ""}`}

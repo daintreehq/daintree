@@ -87,9 +87,10 @@ export function LifecycleCommandApprovalDialog({
   return (
     <ConfirmDialog
       isOpen={isOpen}
-      // Not dismissible while an approval is in flight: its answer belongs to
-      // this opening, and would otherwise close or annotate the next one.
-      onClose={isApproving ? undefined : onClose}
+      // Not dismissible while an approval is in flight — `isConfirmLoading` locks
+      // it: its answer belongs to this opening, and would otherwise close or
+      // annotate the next one.
+      onClose={onClose}
       variant="default"
       title="Approve repository commands?"
       description="These commands come from the repository and run with your account when worktrees are set up, torn down, or their resources are managed. Approve them only if you trust whoever wrote them — on a pull request branch, that's its author. Approval covers these exact lines, not the scripts they call, and any change to them asks again."

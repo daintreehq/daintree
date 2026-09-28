@@ -201,7 +201,7 @@ function GitForcePushConfirmDialogInner() {
       // preview landed, changing the dialog's accessible name mid-read. The
       // branch is known from the record before anything loads; the destination
       // is named in the body.
-      title={`Force push ${branchName}?`}
+      title={`Force push '${branchName}'?`}
       onClose={() => resolveConfirmation(requestId, false)}
       onConfirm={handleConfirm}
       confirmLabel="Force push"

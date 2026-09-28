@@ -41,6 +41,12 @@ interface DiffNotesState {
   saveNote: (note: DiffNote, body: string) => void;
   deleteNote: (id: string) => void;
   /**
+   * Puts a deleted note back exactly as it was — the Undo for `deleteNote`. A
+   * note that already exists again (edited or re-saved since) is left alone,
+   * so an Undo can never overwrite a newer revision.
+   */
+  restoreNote: (note: DiffNote) => void;
+  /**
    * Removes notes that were delivered, but only where the stored note still
    * matches what was sent — one edited after the prompt was built stays.
    */
@@ -133,6 +139,12 @@ export const useDiffNotesStore = create<DiffNotesState>()(
           if (!(id in state.notes)) return state;
           const { [id]: _removed, ...rest } = state.notes;
           return { notes: rest };
+        }),
+
+      restoreNote: (note) =>
+        set((state) => {
+          if (note.id in state.notes) return state;
+          return { notes: { ...state.notes, [note.id]: note } };
         }),
 
       clearSent: (sent) => {

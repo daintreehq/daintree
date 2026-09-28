@@ -47,16 +47,16 @@ describe("PluginPanelReloadConfirmDialog (#12611)", () => {
     stage();
     render(<PluginPanelReloadConfirmDialog />);
 
-    expect(screen.getByText("Reload panel with unsaved changes?")).toBeTruthy();
-    expect(screen.getByText(/Dashboard has changes it hasn't saved/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Reload panel" })).toBeTruthy();
+    expect(screen.getByText("Reload 'Dashboard'?")).toBeTruthy();
+    expect(screen.getByText(/changes it hasn't saved, and reloading discards them/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Discard and reload" })).toBeTruthy();
   });
 
   it("approves one reload of that panel and dispatches it again", () => {
     stage();
     render(<PluginPanelReloadConfirmDialog />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Reload panel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard and reload" }));
 
     expect(dispatch).toHaveBeenCalledWith(
       "plugin.reloadPanel",

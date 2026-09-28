@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertTriangle, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { notify } from "@/lib/notify";
 import { useShallow } from "zustand/react/shallow";
 import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
 import {
@@ -89,6 +90,13 @@ function describeAnchor(anchor: DiffNoteAnchor): string {
   return anchor.startLine === anchor.endLine ? `Line ${lines}` : `Lines ${lines}`;
 }
 
+/** How long a deleted note can be brought back — the app's standard undo window. */
+const NOTE_UNDO_WINDOW_MS = 5_000;
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** "file note" or "note on line 12", for accessible names built around it. */
 function nameAnchor(anchor: DiffNoteAnchor): string {
   const described = describeAnchor(anchor);
@@ -158,6 +166,24 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
   const stale = placement === "stale";
   const saveNote = useDiffNotesStore((s) => s.saveNote);
   const deleteNote = useDiffNotesStore((s) => s.deleteNote);
+  const restoreNote = useDiffNotesStore((s) => s.restoreNote);
+
+  // Deletes at once and offers Undo, the app's pattern for a small reversible
+  // loss (D0) — a confirm on every note would train the click-through.
+  const handleDelete = () => {
+    const deleted = note;
+    deleteNote(deleted.id);
+    notify({
+      type: "success",
+      title: "Note deleted",
+      message: capitalize(nameAnchor(deleted.anchor)),
+      priority: "high",
+      transient: true,
+      duration: NOTE_UNDO_WINDOW_MS,
+      context: { eventKind: "uiFeedback" },
+      action: { label: "Undo", onClick: () => restoreNote(deleted) },
+    });
+  };
   const markEditing = useDiffNotesStore((s) => s.setEditing);
   const [editing, setEditing] = useState(false);
   const noteId = note.id;
@@ -208,7 +234,7 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
               size="icon-xs"
               aria-label="Delete note"
               title="Delete note"
-              onClick={() => deleteNote(note.id)}
+              onClick={handleDelete}
             >
               <Trash2 />
             </Button>

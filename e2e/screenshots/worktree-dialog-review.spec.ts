@@ -192,12 +192,14 @@ async function openDialog(page: Page): Promise<void> {
 
 async function closeDialog(page: Page): Promise<void> {
   const dialog = page.locator(SEL.worktree.newDialog);
-  // Scoped to the dialog: two other "Discard" buttons live in settings.
-  const discard = dialog.getByRole("button", { name: "Discard", exact: true });
+  // The discard prompt is its own destructive confirm stacked over the dialog.
+  const discard = page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Discard changes", exact: true });
 
   for (let i = 0; i < 4; i++) {
     if (!(await dialog.isVisible().catch(() => false))) return;
-    // A dialog with edits answers Escape with "Discard unsaved changes?" rather
+    // A dialog with edits answers Escape with a discard confirm rather
     // than closing, which otherwise strands every later step behind it. Clear
     // that prompt before pressing Escape again — a second Escape cancels the
     // prompt instead, and the loop would chase its own tail.

@@ -258,9 +258,12 @@ export function CrashRecoveryDialog({
         data-testid="crash-recovery-dialog"
       >
         <AppDialog.Header>
-          <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
+          <AppDialog.Title icon={<AlertTriangle className="text-status-warning" />}>
             {getCrashCauseTitle(crash.entry.crashCause)}
           </AppDialog.Title>
+          {/* Disabled, not absent: recovery has to be answered, and the header
+              says so the way every other locked dialog does. */}
+          <AppDialog.CloseButton />
         </AppDialog.Header>
 
         <AppDialog.Body className="space-y-4">

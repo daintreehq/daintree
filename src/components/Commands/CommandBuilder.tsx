@@ -1,7 +1,9 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import type {
   CommandManifestEntry,
   CommandContext,
@@ -580,6 +582,14 @@ export function CommandBuilder({
                 <fieldset
                   ref={formRef}
                   disabled={isExecuting}
+                  // Enter in a single-line field presses the footer's primary —
+                  // Next, or the submit on the last step — so it runs the same
+                  // validation a click does.
+                  onKeyDown={(event) => {
+                    if (!isEnterToSubmit(event)) return;
+                    event.preventDefault();
+                    primaryRef.current?.click();
+                  }}
                   className="m-0 min-w-0 border-0 p-0 [&_:disabled]:opacity-100!"
                 >
                   <FormGrid>
@@ -624,26 +634,33 @@ export function CommandBuilder({
         }
       >
         {showSuccessState || hasEmptySteps ? (
-          <Button ref={closeRef} variant="contrast" onClick={onCancel}>
+          // A dismissal, so the ghost Close every info dialog uses — nothing
+          // here is waiting on a decision.
+          <Button
+            ref={closeRef}
+            variant="ghost"
+            onClick={onCancel}
+            className="text-text-secondary hover:text-text-primary"
+          >
             Close
           </Button>
         ) : (
           <div className="ml-auto flex items-center gap-3">
             <Button
+              aria-disabled={!canDismiss || undefined}
               variant="ghost"
-              onClick={onCancel}
-              disabled={!canDismiss}
-              className="text-text-secondary"
+              onClick={!canDismiss ? undefined : onCancel}
+              className={cn("text-text-secondary", !canDismiss && ARIA_DISABLED_CLASSES)}
             >
               {/* Once a slow run can be left, this no longer cancels anything. */}
               {isSlowRun ? "Close" : "Cancel"}
             </Button>
             {!isFirstStep && (
               <Button
+                aria-disabled={isExecuting || undefined}
                 variant="ghost"
-                onClick={handleBack}
-                disabled={isExecuting}
-                className="text-text-secondary"
+                onClick={isExecuting ? undefined : handleBack}
+                className={cn("text-text-secondary", isExecuting && ARIA_DISABLED_CLASSES)}
               >
                 <ChevronLeft className="h-4 w-4" aria-hidden="true" />
                 Back

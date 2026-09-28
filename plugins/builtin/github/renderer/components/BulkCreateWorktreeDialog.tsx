@@ -12,6 +12,7 @@ import { Check, AlertTriangle, UserPlus, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
@@ -1153,7 +1154,7 @@ export function BulkCreateWorktreeDialog({
               ? "Creation complete"
               : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
         </AppDialog.Title>
-        {!isExecuting && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body>
@@ -1394,10 +1395,13 @@ export function BulkCreateWorktreeDialog({
                 Cancel
               </Button>
               <Button
+                aria-disabled={isExecuting || creatableCount === 0 || undefined}
                 variant="contrast"
-                onClick={handleCreate}
-                disabled={isExecuting || creatableCount === 0}
-                className="min-w-[100px]"
+                onClick={isExecuting || creatableCount === 0 ? undefined : handleCreate}
+                className={cn(
+                  "min-w-[100px]",
+                  (isExecuting || creatableCount === 0) && ARIA_DISABLED_CLASSES
+                )}
                 data-testid="bulk-create-confirm-button"
               >
                 <Check />

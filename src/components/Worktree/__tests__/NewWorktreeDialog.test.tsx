@@ -696,7 +696,7 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     });
 
     const createButton = screen.getByTestId("create-worktree-button");
-    expect(createButton.hasAttribute("disabled")).toBe(true);
+    expect(createButton.getAttribute("aria-disabled")).toBe("true");
   });
 });
 
@@ -1653,7 +1653,7 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     // Re-checking a name we already know is free would re-disable Create in the
     // gap between the blur and the click that caused it, swallowing the click.
     const createButton = screen.getByTestId("create-worktree-button") as HTMLButtonElement;
-    expect(createButton.disabled).toBe(false);
+    expect(createButton.getAttribute("aria-disabled")).toBeNull();
 
     await advanceTimersGradually(500);
     expect(mockGetAvailableBranch).not.toHaveBeenCalled();

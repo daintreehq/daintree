@@ -255,9 +255,9 @@ describe("MarkdownEditorView (#12323)", () => {
     await screen.findByText("File changed on disk");
     const before = editorView();
     fireEvent.click(screen.getByRole("button", { name: "Load disk version" }));
-    expect(await screen.findByText("Discard the draft of 'plan.md'?")).toBeTruthy();
+    expect(await screen.findByText("Discard changes to 'plan.md'?")).toBeTruthy();
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
     });
     await waitFor(() => expect(editorView()).not.toBe(before));
     expect(editorView().state.doc.toString()).toBe("# Plan\n\nBody\n\ntheirs\n");

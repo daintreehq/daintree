@@ -796,14 +796,14 @@ export function ConflictPanel({
           pendingCheckout ? (
             <span>
               Overwrites <span className="font-mono break-all">{pendingCheckout.filePath}</span>{" "}
-              with the {sideSource[pendingCheckout.side]} version. Any manual conflict edits in this
-              file are discarded and cannot be undone.
+              with the {sideSource[pendingCheckout.side]} version, and any manual conflict edits in
+              this file are discarded.
             </span>
           ) : (
             ""
           )
         }
-        confirmLabel={pendingCheckout ? `Use ${sideSource[pendingCheckout.side]}` : "Confirm"}
+        confirmLabel={pendingCheckout ? `Use ${sideSource[pendingCheckout.side]}` : "Use version"}
         cancelLabel="Cancel"
         variant="destructive"
         onConfirm={() => {

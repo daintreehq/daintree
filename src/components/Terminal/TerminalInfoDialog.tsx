@@ -749,7 +749,7 @@ Performance:
       data-testid="terminal-info-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<Info className="h-5 w-5" />}>Terminal information</AppDialog.Title>
+        <AppDialog.Title icon={<Info />}>Terminal information</AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 

@@ -74,10 +74,10 @@ export function NonGitFolderDialog({
       initialFocus="confirm"
       data-testid="non-git-folder-dialog"
     >
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         <AppDialog.Title icon={<FolderOpen className="h-4 w-4 text-text-secondary" />}>
           {/* A root path ("/", "C:\") has no leaf — name it by the path itself. */}
-          Open &lsquo;{basename(directoryPath) || directoryPath}&rsquo;?
+          {`Open '${basename(directoryPath) || directoryPath}'?`}
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
@@ -110,12 +110,11 @@ export function NonGitFolderDialog({
 
       <AppDialog.Footer>
         <div className="flex shrink-0 items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={onCancel} data-confirm-role="cancel">
+          <Button variant="ghost" onClick={onCancel} data-confirm-role="cancel">
             Cancel
           </Button>
           <Button
             variant="outline"
-            size="sm"
             onClick={() => setStep("initialize")}
             aria-describedby={initConsequenceId}
           >
@@ -123,7 +122,6 @@ export function NonGitFolderDialog({
           </Button>
           <Button
             variant="contrast"
-            size="sm"
             onClick={onOpenWithoutGit}
             aria-describedby={openConsequenceId}
             data-confirm-role="confirm"

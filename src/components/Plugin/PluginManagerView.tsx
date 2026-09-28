@@ -50,6 +50,7 @@ import { groupPluginsByCategory } from "./pluginGrouping";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 // Provenance badge — where the archive came from. Deliberately the quietest
 // thing in the row: it is trivia next to whether the plugin is actually running.
@@ -1090,7 +1091,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <ConfirmDialog
         isOpen={pm.pendingUninstall !== null}
-        onClose={pm.isUninstalling ? undefined : pm.closeUninstall}
+        onClose={pm.closeUninstall}
         title={pm.pendingUninstall ? `Uninstall '${pluginLabel(pm.pendingUninstall)}'?` : ""}
         description="Removes the plugin and deletes its files, unloading its panels, commands, and integrations. Per-project settings under .daintree/ are always kept; this plugin's saved settings are kept too unless you check the box below."
         confirmLabel="Uninstall plugin"
@@ -1129,7 +1130,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <ConfirmDialog
         isOpen={pm.pendingUpdate !== null}
-        onClose={pm.isReinstalling ? undefined : () => pm.dismissPendingUpdate()}
+        onClose={() => pm.dismissPendingUpdate()}
         title={pm.pendingUpdate ? `Update '${pluginLabel(pm.pendingUpdate.plugin)}'?` : ""}
         description="Reinstalls the version shown here over the current one. If the download no longer matches it, nothing is installed. Your settings are kept."
         confirmLabel="Reinstall plugin"
@@ -1175,7 +1176,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <ConfirmDialog
         isOpen={pm.pendingHttpUrl !== null}
-        onClose={pm.isInstalling ? undefined : pm.cancelHttpInstall}
+        onClose={pm.cancelHttpInstall}
         title="Install over HTTP?"
         description="This URL doesn't use HTTPS, so the download isn't encrypted or authenticated in transit. Only continue if you trust the source."
         confirmLabel="Install over HTTP"
@@ -1188,10 +1189,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <AppDialog
         isOpen={pm.showUrlDialog}
-        onClose={() => {
-          if (pm.isInstalling) return;
-          pm.closeUrlDialog();
-        }}
+        onClose={pm.closeUrlDialog}
+        // Locked while the install runs; the X says so instead of looking live.
+        dismissible={!pm.isInstalling}
         size="sm"
         zIndex="nested"
         initialFocus="first"
@@ -1237,7 +1237,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             value={pm.urlInput}
             onChange={(e) => pm.setUrlInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && pm.urlInput.trim()) void pm.handleInstallFromUrl();
+              if (!isEnterToSubmit(e)) return;
+              e.preventDefault();
+              if (pm.urlInput.trim()) void pm.handleInstallFromUrl();
             }}
             placeholder="https://example.com/plugin.dntr"
             aria-label="Plugin URL"
@@ -1260,7 +1262,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <ConfirmDialog
         isOpen={isRestartConfirmOpen}
-        onClose={isRestarting ? undefined : () => setIsRestartConfirmOpen(false)}
+        onClose={() => setIsRestartConfirmOpen(false)}
         title="Restart Daintree now?"
         description="All running terminals and agent sessions will be closed, and any in-flight agent work and scrollback will be lost."
         confirmLabel="Restart Daintree"

@@ -16,6 +16,7 @@ import { projectClient } from "@/clients/projectClient";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface UpdateCwdDialogProps {
   isOpen: boolean;
@@ -202,7 +203,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      if (isEnterToSubmit(e)) {
         e.preventDefault();
         void handleUpdate();
       }
@@ -224,6 +225,9 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
       isOpen={isOpen}
       onClose={onClose}
       size="md"
+      // Locked while the restart runs, like every dialog mid-action: the X
+      // stays and reads as unavailable.
+      dismissible={!busy}
       // The field takes focus itself, with its value selected.
       initialFocus="none"
       restoreFocusTo={restoreFocusToTerminal}
@@ -232,9 +236,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. Same
             glyph as the banner's "Change directory" that opens this. */}
-        <AppDialog.Title icon={<FolderPen className="w-5 h-5 text-text-secondary" />}>
-          Change working directory
-        </AppDialog.Title>
+        <AppDialog.Title icon={<FolderPen />}>Change working directory</AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
@@ -329,14 +331,16 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         </FormGrid>
       </AppDialog.Body>
 
-      <AppDialog.Footer>
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button variant="contrast" onClick={() => void handleUpdate()} loading={showBusy}>
-          Restart terminal
-        </Button>
-      </AppDialog.Footer>
+      <AppDialog.Footer
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: busy }}
+        primaryAction={{
+          label: "Restart terminal",
+          onClick: () => void handleUpdate(),
+          loading: showBusy,
+          // Locked from the press; the spinner waits out the Doherty gate.
+          disabled: busy && !showBusy,
+        }}
+      />
     </AppDialog>
   );
 }

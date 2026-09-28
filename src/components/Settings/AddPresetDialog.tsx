@@ -114,7 +114,14 @@ export function AddPresetDialog({
     (choice !== "template" || !!selectedTemplate) && (choice !== "clone" || !!currentPreset);
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="sm" data-testid="add-preset-dialog">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="sm"
+      // Locked while the preset is being created, like every dialog mid-action.
+      dismissible={!isCreating}
+      data-testid="add-preset-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title>Add preset</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -219,7 +226,7 @@ export function AddPresetDialog({
       </AppDialog.Body>
 
       <AppDialog.Footer
-        secondaryAction={{ label: "Cancel", onClick: onClose }}
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: isCreating }}
         primaryAction={{
           label: "Create preset",
           onClick: handleCreate,

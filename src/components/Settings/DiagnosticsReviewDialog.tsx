@@ -350,7 +350,14 @@ export function DiagnosticsReviewDialog({
   const previewLines = preview.text.split("\n").length;
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="lg" data-testid="diagnostics-review-dialog">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="lg"
+      // Locked while the report saves, like every dialog mid-action.
+      dismissible={!isSaving}
+      data-testid="diagnostics-review-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title>Review diagnostics</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -606,6 +613,7 @@ export function DiagnosticsReviewDialog({
         secondaryAction={{
           label: "Cancel",
           onClick: onClose,
+          disabled: isSaving,
         }}
       />
     </AppDialog>

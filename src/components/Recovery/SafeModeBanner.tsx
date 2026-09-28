@@ -194,7 +194,7 @@ export function SafeModeBanner() {
       />
       <ConfirmDialog
         isOpen={isConfirmOpen}
-        onClose={isRestarting ? undefined : () => setIsConfirmOpen(false)}
+        onClose={() => setIsConfirmOpen(false)}
         title="Restart Daintree normally?"
         description="All running terminals and agent sessions will be killed. Scrollback and in-flight agent work will be lost."
         confirmLabel="Restart normally"

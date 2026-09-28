@@ -288,7 +288,9 @@ describe("CommandBuilder recovery", () => {
     try {
       const onCancel = vi.fn();
       renderBuilder({ isExecuting: true, onCancel });
-      expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+      expect(screen.getByRole("button", { name: "Cancel" }).getAttribute("aria-disabled")).toBe(
+        "true"
+      );
 
       act(() => {
         vi.advanceTimersByTime(5000);
@@ -296,7 +298,7 @@ describe("CommandBuilder recovery", () => {
       expect(screen.getByRole("status").textContent).toContain("Closing this won't stop it");
       // Relabelled only once leaving is possible, and it no longer cancels anything.
       const leave = screen.getByRole("button", { name: "Close" });
-      expect(leave.hasAttribute("disabled")).toBe(false);
+      expect(leave.getAttribute("aria-disabled")).toBeNull();
       fireEvent.click(leave);
       expect(onCancel).toHaveBeenCalledTimes(1);
     } finally {
@@ -313,5 +315,40 @@ describe("CommandBuilder recovery", () => {
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
 
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Do it" }));
+  });
+});
+
+describe("CommandBuilder Enter-to-submit", () => {
+  it("submits from a single-line field, as every form dialog does", async () => {
+    const { onExecute } = renderBuilder();
+    const title = screen.getByLabelText("Issue title");
+    fireEvent.change(title, { target: { value: "Crash on open" } });
+    fireEvent.keyDown(title, { key: "Enter" });
+
+    await screen.findByText("Done");
+    expect(onExecute).toHaveBeenCalledTimes(1);
+    expect(onExecute.mock.calls[0]?.[0]).toMatchObject({ title: "Crash on open" });
+  });
+
+  it("keeps Enter a newline in a textarea, and never submits mid-composition", () => {
+    const { onExecute } = renderBuilder();
+    fireEvent.keyDown(screen.getByLabelText("Description"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByLabelText("Issue title"), { key: "Enter", isComposing: true });
+    fireEvent.keyDown(screen.getByLabelText("Issue title"), { key: "Enter", shiftKey: true });
+    expect(onExecute).not.toHaveBeenCalled();
+  });
+
+  it("advances a step rather than skipping to the submit, with the same validation", () => {
+    const { onExecute } = renderBuilder({ steps: twoSteps });
+    const count = screen.getByLabelText("Count");
+
+    fireEvent.change(count, { target: { value: "1.5" } });
+    fireEvent.keyDown(count, { key: "Enter" });
+    expect(screen.getByText("Whole numbers only")).toBeTruthy();
+
+    fireEvent.change(count, { target: { value: "2" } });
+    fireEvent.keyDown(count, { key: "Enter" });
+    expect(screen.getByLabelText("Note")).toBeTruthy();
+    expect(onExecute).not.toHaveBeenCalled();
   });
 });

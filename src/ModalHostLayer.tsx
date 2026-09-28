@@ -22,7 +22,7 @@ import { launchPanelKind } from "@/registry/panelKindLaunch";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
-import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { usePilotStore } from "@/store/pilotStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
@@ -543,19 +543,11 @@ export function ModalHostLayer({
           </Suspense>
         )}
       </ErrorBoundary>
-      <ConfirmDialog
-        isOpen={projectSwitcherPalette.stopConfirmProjectId != null}
-        onClose={() => {
-          if (projectSwitcherPalette.isStoppingProject) return;
-          projectSwitcherPalette.setStopConfirmProjectId(null);
-        }}
-        title={`Stop project?`}
-        description="This will terminate all running sessions in this project. This can't be undone."
-        confirmLabel="Stop project"
-        cancelLabel="Cancel"
+      <StopProjectConfirmDialog
+        projectId={projectSwitcherPalette.stopConfirmProjectId}
+        isStopping={projectSwitcherPalette.isStoppingProject}
+        onClose={() => projectSwitcherPalette.setStopConfirmProjectId(null)}
         onConfirm={projectSwitcherPalette.confirmStopProject}
-        isConfirmLoading={projectSwitcherPalette.isStoppingProject}
-        variant="destructive"
       />
 
       <ErrorBoundary

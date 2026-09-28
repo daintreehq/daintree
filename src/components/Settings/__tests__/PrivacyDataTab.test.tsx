@@ -462,15 +462,20 @@ describe("PrivacyDataTab", () => {
     });
   });
 
-  it("resets all app data only from a confirm dialog", async () => {
+  it("resets all app data only from a confirm dialog, behind the typed-name gate", async () => {
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
       wrapper: TooltipProvider,
     });
     fireEvent.click(await screen.findByRole("button", { name: "Reset all data…" }));
 
     const dialog = await screen.findByRole("alertdialog");
+    const reset = within(dialog).getByRole("button", { name: "Reset and restart" });
+    // D3: the primary answers nothing until the name is typed.
+    fireEvent.click(reset);
     expect(window.electron.privacy.resetAllData).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Reset and restart" }));
+
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Daintree" } });
+    fireEvent.click(reset);
     expect(window.electron.privacy.resetAllData).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useId, useMemo } from "react";
 import { join } from "@shared/utils/path";
-import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderPlus } from "lucide-react";
 import { projectClient } from "@/clients";
@@ -18,6 +17,7 @@ import {
   PathCaption,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface CreateProjectFolderDialogProps {
   isOpen: boolean;
@@ -122,7 +122,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !isCreating) {
+      if (isEnterToSubmit(e) && !isCreating) {
         e.preventDefault();
         void handleCreate();
       }
@@ -143,13 +143,13 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isCreating}>
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
         <AppDialog.Title icon={<FolderPlus className="h-4 w-4 text-text-secondary" />}>
           Create project folder
         </AppDialog.Title>
-        {!isCreating && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
@@ -159,6 +159,10 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
               id="create-folder-parent"
               value={parentPath}
               onBrowse={() => void handleBrowseParent()}
+              // Enter here answers like the folder name field does.
+              onEnter={() => {
+                if (!isCreating) void handleCreate();
+              }}
               disabled={isCreating}
               browseLabel="Browse for a location"
             />
@@ -233,21 +237,14 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             </span>
           )
         }
-      >
-        <div className="flex shrink-0 items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={isCreating}>
-            Cancel
-          </Button>
-          <Button
-            variant="contrast"
-            size="sm"
-            onClick={handleCreate}
-            disabled={isCreating || !parentPath || !folderName.trim() || nameError !== null}
-          >
-            {isCreating ? "Creating…" : "Create folder"}
-          </Button>
-        </div>
-      </AppDialog.Footer>
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: isCreating }}
+        primaryAction={{
+          label: "Create folder",
+          onClick: () => void handleCreate(),
+          loading: isCreating,
+          disabled: !parentPath || !folderName.trim() || nameError !== null,
+        }}
+      />
     </AppDialog>
   );
 }

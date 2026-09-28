@@ -656,7 +656,7 @@ export function TrashContainer({
         <ConfirmDialog
           isOpen={pendingRemoval !== null}
           onClose={closeRemoval}
-          title={`Remove ${pendingRemoval?.label ?? ""}?`}
+          title={pendingRemoval?.label ? `Remove '${pendingRemoval.label}'?` : "Remove panel?"}
           description={
             (pendingRemoval?.ids.length ?? 0) === 1
               ? `${pendingRemoval?.label ?? "This panel"} will be permanently removed.`

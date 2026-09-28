@@ -5,7 +5,7 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { StopProjectConfirmDialog } from "./StopProjectConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -188,19 +188,11 @@ export function ProjectSwitcher() {
   }, [projectSwitcher.nonActiveAgentCounts]);
 
   const stopDialog = (
-    <ConfirmDialog
-      isOpen={projectSwitcher.stopConfirmProjectId != null}
-      onClose={() => {
-        if (projectSwitcher.isStoppingProject) return;
-        projectSwitcher.setStopConfirmProjectId(null);
-      }}
-      title="Stop project?"
-      description="This will terminate all running sessions in this project. This can't be undone."
-      confirmLabel="Stop project"
-      cancelLabel="Cancel"
+    <StopProjectConfirmDialog
+      projectId={projectSwitcher.stopConfirmProjectId}
+      isStopping={projectSwitcher.isStoppingProject}
+      onClose={() => projectSwitcher.setStopConfirmProjectId(null)}
       onConfirm={projectSwitcher.confirmStopProject}
-      isConfirmLoading={projectSwitcher.isStoppingProject}
-      variant="destructive"
     />
   );
 
