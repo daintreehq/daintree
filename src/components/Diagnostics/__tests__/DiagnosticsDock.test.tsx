@@ -300,6 +300,15 @@ describe("DiagnosticsDock — focus on close", () => {
     expect(document.activeElement).toBe(opener);
   });
 
+  it("forgets the origin once focus drops out of the dock onto nothing", async () => {
+    const { opener, tab } = renderWithOpener();
+    // A click on an unfocusable surface blurs the tab with no new target.
+    tab.blur();
+    await Promise.resolve();
+    act(() => useDiagnosticsStore.getState().closeDock());
+    expect(document.activeElement).not.toBe(opener);
+  });
+
   it("leaves focus alone when the keyboard had already left the dock", () => {
     const { opener } = renderWithOpener();
     const elsewhere = document.createElement("button");

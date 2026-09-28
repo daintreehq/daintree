@@ -102,7 +102,9 @@ describe("diagnostics dock layout signal (issue #12264)", () => {
     // corrective pass shorter than the animation measures a mid-transition box,
     // and the two values drifting apart is exactly how that regresses.
     const css = await readFile(resolve(__dirname, "../../index.css"), "utf-8");
-    const rule = /\.diagnostics-dock\s*\{[^}]*transition:\s*height\s+(\d+)ms/.exec(css);
+    // The dock shares its rule with the output drawer, so the selector list may
+    // name more than the dock.
+    const rule = /\.diagnostics-dock\s*(?:,[^{]*)?\{[^}]*transition:\s*height\s+(\d+)ms/.exec(css);
     expect(rule).not.toBeNull();
     expect(Number(rule![1])).toBe(DIAGNOSTICS_DOCK_TRANSITION_MS);
   });

@@ -256,7 +256,17 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
 
   const handleBlurCapture = (e: React.FocusEvent<HTMLDivElement>) => {
     const to = e.relatedTarget;
-    if (to instanceof Node && !e.currentTarget.contains(to)) focusInsideRef.current = false;
+    if (to instanceof Node) {
+      if (!e.currentTarget.contains(to)) focusInsideRef.current = false;
+      return;
+    }
+    // Focus went nowhere: a click on something unfocusable, or the dock being
+    // removed around it. Only the first means the keyboard left; closing is
+    // settled by the layout effect before this microtask runs.
+    const dock = e.currentTarget;
+    queueMicrotask(() => {
+      if (dock.isConnected) focusInsideRef.current = false;
+    });
   };
 
   if (!isOpen) return null;
