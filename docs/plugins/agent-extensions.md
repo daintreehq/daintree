@@ -106,7 +106,7 @@ Tool definitions consume tokens wherever a model reads them. An MCP server expos
 - Return compact results (a model doesn't need the full database dump — just what answers the question)
 - Use `structuredContent` for rich data a UI can render without spending the model's tokens
 
-See [Architecture → MCP supervisor](./architecture.md#mcp-supervisor) for the supervisor's side. The first two points apply harder to an [agent MCP endpoint](#agent-mcp-endpoints), whose whole roster is listed to the agent up front — which is why the host caps it. The third does not: an endpoint's result is always sent as text, and an `outputSchema` adds the same data as `structuredContent` rather than moving it off the model's budget.
+See [Architecture → MCP supervisor](./architecture.md#mcp-supervisor) for the supervisor's side. The first two points apply harder to an [agent MCP endpoint](#agent-mcp-endpoints), whose whole roster is listed to the agent up front — which is why the host caps it, at 16 tools. What that costs depends on the client and its configuration: by default Claude Code defers MCP tool schemas behind its built-in tool search once they pass about 10% of the context window, while Codex CLI loads every tool up front unless its tool search is turned on. Loaded eagerly, 16 tools at a typical 250–600 tokens each come to roughly 4–10K tokens. The third does not: an endpoint's result is always sent as text, and an `outputSchema` adds the same data as `structuredContent` rather than moving it off the model's budget.
 
 ## Agent MCP endpoints
 

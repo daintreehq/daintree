@@ -673,12 +673,14 @@ The entry is strict: an unknown field (a `url`, a `command`) is rejected rather 
 
 | Limit | Value |
 | --- | --- |
-| Tools per endpoint | 8 |
+| Tools per endpoint | 16 |
 | Tool name | `^[a-z][a-z0-9_]{0,31}$` — at most 32 characters, so Claude's `mcp__<server>__<tool>` name stays within its 64-character limit. `database_schema` and `database_query` are reserved for the host's database tools |
 | Description | Non-empty, at most 400 UTF-8 bytes |
 | `inputSchema` / `outputSchema` | A plain object with `type: "object"`, at most 8 KiB serialized each |
 | Result | At most 256 KiB of serialized JSON |
 | Call timeout | 60 seconds, activation included |
+
+The cap was 8 tools before Daintree 0.39.0. An older host rejects a larger roster whole: `registerTools` throws, and unless the plugin catches it, activation fails. A plugin that registers more than 8 tools should set `engines.daintree` to `>=0.39.0`. The range is advisory — an older Daintree still installs and loads the plugin — but it shows the user a compatibility warning that explains the failure.
 
 **Giving it access.** Declaring the endpoint exposes nothing, for an installed plugin or a project one. Each plugin has one agent access setting — **Off** (the default), **Read only** (the database tools) or **Read and write** (the database tools and your own tools) — in **Project settings → Plugins → Agent tools**. It is stored in Daintree's own user store, keyed by the plugin _instance_ so an answer for an installed plugin never reaches a project plugin with the same manifest id, and never in the repository. An installed plugin can also be set once for every project, and a project's own setting overrides that. A project plugin's own repository can set a default in `.daintree/mcp.json`, which never reaches an installed plugin and which the user's answer overrides ([Agent extensions → Project defaults](./agent-extensions.md#project-defaults-daintreemcpjson)). Lowering the setting revokes every live credential it no longer allows. Once the plugin has access, each agent launched in that project afterwards receives a credential for its server — Claude Code, Codex, Gemini CLI, opencode, Copilot CLI, Amp, Qwen Code and Mistral Vibe, each in its own launch mechanism; an agent already running must be relaunched to get it ([Agent extensions → Reaching an agent](./agent-extensions.md#reaching-an-agent)). The Daintree MCP server must be enabled in Settings → MCP server, since the plugin's server is served on its listener.
 

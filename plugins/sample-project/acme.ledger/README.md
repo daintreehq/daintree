@@ -61,6 +61,6 @@ Earlier versions of this sample kept the ledger at `.daintree/plugin-storage/acm
 
 ## Limits
 
-At most 8 tools per endpoint, names matching `^[a-z][a-z0-9_]{0,31}$`, descriptions up to 400 bytes, schemas that are plain `{ "type": "object" }` objects up to 8 KiB, results up to 256 KiB of JSON, and 60 seconds per call. The host rejects a roster that breaks any of these whole.
+At most 16 tools per endpoint, names matching `^[a-z][a-z0-9_]{0,31}$`, descriptions up to 400 bytes, schemas that are plain `{ "type": "object" }` objects up to 8 KiB, results up to 256 KiB of JSON, and 60 seconds per call. The host rejects a roster that breaks any of these whole.
 
 `engines.daintree` is `>=0.39.0`, the first release with `host.db` and `contributes.databases`; a build without them rejects the manifest at the schema gate regardless of the range.

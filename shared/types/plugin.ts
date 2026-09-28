@@ -743,7 +743,7 @@ export interface PluginDatabaseContribution {
 }
 
 /** Most tools one `agentMcp` endpoint may register. Client tool caps are app-wide, not per server. */
-export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 8;
+export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 16;
 /** Most `agentMcp` endpoints one manifest may declare. */
 export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
 /**

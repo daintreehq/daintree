@@ -109,6 +109,10 @@ describe("validateAgentMcpTools", () => {
     expect(Object.isFrozen(descriptor.inputSchema)).toBe(true);
   });
 
+  it("accepts a roster past the old cap of 8 tools", () => {
+    expect(validateAgentMcpTools(roster(9))).toHaveLength(9);
+  });
+
   it("accepts a full roster and rejects one tool more", () => {
     expect(validateAgentMcpTools(roster(AGENT_MCP_MAX_TOOLS_PER_ENDPOINT))).toHaveLength(
       AGENT_MCP_MAX_TOOLS_PER_ENDPOINT
