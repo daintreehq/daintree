@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { extractAtRuleBlocks } from "./cssBlocks";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
 const PROBLEMS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarProblemsButton.tsx");
@@ -15,6 +16,7 @@ const COPY_TREE_ACTION_PATH = path.resolve(
   "../../../services/actions/definitions/worktreeContextActions.ts"
 );
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
+const INDEX_CSS_PATH = path.resolve(__dirname, "../../../index.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
   let source: string;
@@ -217,12 +219,12 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(copyTreeBlock).not.toBeNull();
       // The Doherty gate is the point: the raw in-flight flag must never drive
       // the glyph directly, or a sub-400ms copy flashes a spinner.
-      expect(copyTreeBlock![0]).toMatch(/showCopyingSpinner \?\s*<Spinner \/>/);
-      expect(copyTreeBlock![0]).not.toMatch(/isCopyingTree \?\s*<Spinner \/>/);
+      expect(copyTreeBlock![0]).toMatch(/showCopyingSpinner \?\s*\(?\s*<Spinner \/>/);
+      expect(copyTreeBlock![0]).not.toMatch(/isCopyingTree \?\s*\(?\s*<Spinner \/>/);
       expect(copyTreeBlock![0]).toContain("<Folders />");
     });
 
-    it("presents completion as the button's transient tooltip, not a checkmark swap", () => {
+    it("presents completion as the button's transient tooltip", () => {
       // Completion feedback is a short-lived tooltip pinned to the button (the
       // toast it replaced felt heavy for a one-second copy). The presenter,
       // hide timer, and decline rules are useCopyTreeCompletionNotice's and
@@ -231,12 +233,9 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // controlled `open` as a union with ordinary hover, close requests clear
       // the notice too (Escape and dialog transitions must be able to end the
       // display window early), and the notice is mirrored into a live region,
-      // since tooltips aren't announced the way the old toast was. The old
-      // check-icon swap stays gone — the glyph slot belongs to the spinner.
+      // since tooltips aren't announced the way the old toast was.
       const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
       expect(copyTreeBlock).not.toBeNull();
-      expect(copyTreeBlock![0]).not.toContain("<Check />");
-      expect(copyTreeBlock![0]).not.toContain("text-status-success");
       expect(copyTreeBlock![0]).toMatch(
         /open=\{copyTreeTooltipHovered \|\| copyTreeNotice !== null\}/
       );
@@ -244,6 +243,40 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(copyTreeBlock![0]).toContain('role="status"');
       expect(copyTreeBlock![0]).toContain("{copyTreeAnnouncement}");
       expect(source).toContain("useCopyTreeCompletionNotice(copyTreeButtonRef");
+    });
+
+    it("holds the success glyph for exactly the notice's window, spinner first", async () => {
+      // The check is the CopyButton swap, but it rides the notice rather than
+      // state of its own: a separate flag and timer (the pre-#11735 version)
+      // drifted from the tooltip and only lit for clicks. Gating on the notice
+      // means every route the notice covers lights it, every path that clears
+      // the notice clears it, and a declined notice (evicted, blurred) never
+      // leaves a check with nothing to explain it. An in-flight copy outranks
+      // a finished one, so the spinner branch must come first.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      const glyphs = copyTreeBlock![0].match(
+        /\{showCopyingSpinner \?[\s\S]*?<Spinner \/>[\s\S]*?: (\w+) && !isCopyingTree \?[\s\S]*?<Check className="([^"]+)" \/>[\s\S]*?<Folders \/>/
+      );
+      expect(glyphs).not.toBeNull();
+      expect(glyphs![1]).toBe("copyTreeNotice");
+      // Neutral, like CopyButton: the glyph carries the confirmation.
+      expect(copyTreeBlock![0]).not.toContain("text-status-success");
+
+      // A run starting from any route retires the previous confirmation, so a
+      // retry that fails can't surface the earlier success's check again. It
+      // hangs off the store's own start, not the rendered flag, which a run
+      // that begins and settles within one render never flips.
+      expect(source).toMatch(
+        /useCopyTreeRunStore\.subscribe\(\(state, prev\) => \{\s*if \(state\.activeRunCount > prev\.activeRunCount\) clearCopyTreeNotice\(\);/
+      );
+
+      // Whatever entry motion the check uses must be one reduced motion strips.
+      const css = await fs.readFile(INDEX_CSS_PATH, "utf-8");
+      const reduced = extractAtRuleBlocks(css, "@variant reduce-motion").join("\n");
+      for (const cls of glyphs![2]!.split(/\s+/).filter((c) => c.startsWith("animate-"))) {
+        expect(reduced).toContain(`.${cls}`);
+      }
     });
 
     it("suppresses the completion tooltip while the recents panel holds the anchor", () => {
