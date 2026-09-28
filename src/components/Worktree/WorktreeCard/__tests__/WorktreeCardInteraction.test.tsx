@@ -419,3 +419,13 @@ describe("collapsed alarm reaches the select overlay", () => {
     );
   });
 });
+
+describe("WorktreeCard Shift+click text selection (issue #12926)", () => {
+  // Chromium extends the page selection on Shift+mousedown, before the card's
+  // click handler sees the modifier, so the guard has to sit on mousedown.
+  it("cancels Shift+mousedown on the multi-select card root", () => {
+    expect(cardSource).toMatch(
+      /onMouseDown=\{isMultiSelectEnabled \? suppressShiftClickTextSelection : undefined\}\s*onClick=\{handleCardClick\}/
+    );
+  });
+});

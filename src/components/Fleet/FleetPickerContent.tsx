@@ -18,6 +18,7 @@ import {
   type UseFleetPickerResult,
 } from "@/hooks/useFleetPicker";
 import type { AgentState, SemanticSearchMatch } from "@shared/types";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 
 export interface FleetPickerContentProps {
   /** Result of `useFleetPicker` — owned and called by the consumer. */
@@ -544,6 +545,7 @@ function TerminalRow({
           "hover:bg-tint/[0.06]",
           "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
         )}
+        onMouseDown={suppressShiftClickTextSelection}
         onClick={handleClick}
         data-testid={`${testIdPrefix}-row-${terminal.id}`}
       >

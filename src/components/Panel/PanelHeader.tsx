@@ -58,6 +58,7 @@ import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import {
@@ -1037,6 +1038,10 @@ function PanelHeaderComponent({
       brandSurface={brandSurface}
       ref={headerActivatorRef}
       {...dragListeners}
+      onMouseDown={(e: React.MouseEvent<HTMLElement>) => {
+        dragListeners?.onMouseDown?.(e);
+        suppressShiftClickTextSelection(e);
+      }}
       tabIndex={headerHasDrag ? 0 : undefined}
       role={headerHasDrag ? "group" : undefined}
       aria-roledescription={

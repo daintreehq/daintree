@@ -333,6 +333,9 @@ describe("WorktreeTerminalSection arming click handlers", () => {
 
     const buttons = screen.getAllByRole("button", { name: /Test Terminal/i });
     fireEvent.click(buttons[0]!); // arm a1
+    // Shift+mousedown is cancelled so the page selection doesn't stretch (#12926).
+    expect(fireEvent.mouseDown(buttons[2]!, { shiftKey: true, button: 0 })).toBe(false);
+    expect(document.activeElement).toBe(buttons[2]);
     fireEvent.click(buttons[2]!, { shiftKey: true }); // shift-click adds only a3
 
     const armed = useFleetArmingStore.getState().armedIds;

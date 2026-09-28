@@ -1676,6 +1676,20 @@ describe("PanelHeader", () => {
       }
     });
 
+    it("cancels Shift+mousedown so fleet shift-clicks don't extend the page selection (#12926)", () => {
+      const dragMouseDown = vi.fn();
+      mockDragHandle = { listeners: { onMouseDown: dragMouseDown } };
+      try {
+        const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+        const header = container.firstElementChild as HTMLElement;
+        expect(fireEvent.mouseDown(header, { shiftKey: true, button: 0 })).toBe(false);
+        expect(fireEvent.mouseDown(header, { button: 0 })).toBe(true);
+        expect(dragMouseDown).toHaveBeenCalledTimes(2);
+      } finally {
+        mockDragHandle = null;
+      }
+    });
+
     it("applies select-none to the header container (#6978 selection guard)", () => {
       const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
       const header = container.firstElementChild as HTMLElement;

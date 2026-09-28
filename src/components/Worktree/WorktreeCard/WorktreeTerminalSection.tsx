@@ -1,4 +1,5 @@
 import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import type React from "react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -132,6 +133,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               what a click has to answer to. */}
           <button
             type="button"
+            onMouseDown={suppressShiftClickTextSelection}
             onClick={(e) => {
               e.stopPropagation();
               onClick(term);

@@ -974,6 +974,8 @@ describe("ReviewHub", () => {
       const z = screen.getByTestId("file-stage-row-src/z.ts");
 
       fireEvent.click(x, { metaKey: true });
+      // Shift+mousedown is cancelled so the page selection doesn't stretch (#12926).
+      expect(fireEvent.mouseDown(z, { shiftKey: true, button: 0 })).toBe(false);
       fireEvent.click(z, { shiftKey: true });
 
       await waitFor(() => {
