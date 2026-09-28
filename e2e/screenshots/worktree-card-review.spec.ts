@@ -807,6 +807,66 @@ test("sidebar worktree card review — states and themes", async () => {
       await snap(page, "81-sidebar-keyboard-focus", sidebar);
     });
 
+    // 9b. The header toolbar's three buttons side by side, hovered and focused,
+    //     and the Copy submenu's toasts. The chevron is judged against its two
+    //     siblings, so every frame holds the whole toolbar plus room above it
+    //     for a tooltip; the copy rows close their menu, so the toast is the
+    //     only thing left on screen to confirm them.
+    await step("toolbar-copy", async () => {
+      await setCardCollapsed(flagship, false);
+      const toolbar = flagship.locator("[data-worktree-row-toolbar]").first();
+      const chevron = toolbar.locator('[aria-label="Collapse card"]').first();
+      const more = toolbar.locator(SEL.worktree.actionsMenu).first();
+      const toastRegion = page.locator(SEL.notifications.toastRegion).first();
+      const toolbarFrame = async (slug: string) => {
+        await page.waitForTimeout(900);
+        await snapUnion(page, slug, [toolbar], 56);
+      };
+
+      await chevron.hover();
+      await toolbarFrame("85-toolbar-chevron-hover");
+      await more.hover();
+      await toolbarFrame("86-toolbar-more-hover");
+
+      await more.focus();
+      await page.keyboard.press("ArrowLeft");
+      const focusVisible = await chevron
+        .evaluate((el) => el === document.activeElement && el.matches(":focus-visible"))
+        .catch(() => false);
+      if (!focusVisible) throw new Error("chevron never reached :focus-visible by arrow key");
+      await toolbarFrame("87-toolbar-chevron-focus");
+      await page.keyboard.press("Escape");
+
+      const copyRow = async (label: string) => {
+        await page.mouse.move(1600, 980);
+        await more.click();
+        await page
+          .getByRole("menuitem", { name: /^Copy$/ })
+          .first()
+          .hover();
+        await page.getByRole("menuitem", { name: label, exact: true }).first().click();
+        await page.waitForTimeout(700);
+      };
+      const toastFrame = async (slug: string, text: string | RegExp) => {
+        if (await toastRegion.isVisible().catch(() => false)) {
+          await snap(page, slug, toastRegion, text);
+        } else {
+          await snap(page, `${slug}-window`);
+        }
+      };
+
+      await copyRow("Path");
+      await toastFrame("88-copy-path-toast", "Path copied");
+      await copyRow("Branch name");
+      await toastFrame("89-copy-branch-toast", "Branch name copied");
+
+      await page.evaluate(() => {
+        navigator.clipboard.writeText = () => Promise.reject(new Error("denied"));
+      });
+      await copyRow("Path");
+      await toastFrame("89b-copy-path-error-toast", "Couldn't copy path");
+    });
+
     // 10. Sessions. Real PTYs in the flagship worktree so Active Sessions has
     //     agent identity, state and location to render — the densest row in
     //     the card and the one that shares a shell with Details.
