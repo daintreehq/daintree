@@ -339,9 +339,9 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
 
 /** A suggested folder, named by its basename; the full path shows once the name is clipped. */
 function SuggestionChip({ path, onChoose }: { path: string; onChoose: (path: string) => void }) {
-  const nameTruncation = useTruncationDetection();
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
   return (
-    <TruncatedTooltip content={path} isTruncated={nameTruncation.isTruncated}>
+    <TruncatedTooltip content={path} isTruncated={isNameTruncated}>
       <Button
         variant="subtle"
         size="xs"
@@ -349,7 +349,7 @@ function SuggestionChip({ path, onChoose }: { path: string; onChoose: (path: str
         aria-label={`Use ${path}`}
         onClick={() => onChoose(path)}
       >
-        <span ref={nameTruncation.ref} className="truncate">
+        <span ref={nameRef} className="truncate">
           {basename(path) || path}
         </span>
       </Button>
