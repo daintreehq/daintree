@@ -1348,7 +1348,8 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     // The task title is what shows, not the lane number it replaced. Read without the
     // tab's screen-reader state text, which is a description rather than the label.
     const visible = (t: HTMLElement) => {
-      const copy = t.cloneNode(true) as HTMLElement;
+      const copy = t.cloneNode(true);
+      if (!(copy instanceof HTMLElement)) throw new Error("tab did not clone");
       copy.querySelectorAll(".sr-only").forEach((n) => n.remove());
       return copy.textContent;
     };

@@ -199,11 +199,7 @@ function SessionTabChip({
     >
       {isActive && <DocumentTabIndicator />}
       <TabStateIndicator agentState={agentState} />
-      <TabLabel
-        label={tab.label}
-        isTaskTitle={tab.fullTitle !== undefined}
-        labelRef={labelRef}
-      />
+      <TabLabel label={tab.label} isTaskTitle={tab.fullTitle !== undefined} labelRef={labelRef} />
       <DocumentTabClose
         title={title}
         isActive={isActive}
