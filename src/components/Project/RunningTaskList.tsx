@@ -10,6 +10,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { logError } from "@/utils/logger";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
@@ -356,32 +357,42 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       {/* Actions */}
       <div className="hidden items-center gap-0.5 shrink-0 group-hover:flex group-focus-within:flex">
         {isActive && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={(e) => {
-              e.stopPropagation();
-              onStop(terminal.id);
-            }}
-            className="[&_svg]:size-3.5 hover:text-status-error"
-            aria-label="Stop task"
-          >
-            <X aria-hidden="true" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStop(terminal.id);
+                }}
+                className="[&_svg]:size-3.5 hover:text-status-error"
+                aria-label="Stop task"
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Stop task</TooltipContent>
+          </Tooltip>
         )}
         {status === "failed" && terminal.exitBehavior !== "restart" && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRestart(terminal.id);
-            }}
-            className="[&_svg]:size-3.5"
-            aria-label="Restart task"
-          >
-            <RotateCw aria-hidden="true" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRestart(terminal.id);
+                }}
+                className="[&_svg]:size-3.5"
+                aria-label="Restart task"
+              >
+                <RotateCw aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Restart task</TooltipContent>
+          </Tooltip>
         )}
         {(status === "failed" || status === "success") && (
           <DismissButton
@@ -392,18 +403,23 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
             aria-label="Dismiss task"
           />
         )}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={(e) => {
-            e.stopPropagation();
-            onFocus(terminal.id);
-          }}
-          className="[&_svg]:size-3.5"
-          aria-label="Focus terminal"
-        >
-          <Eye aria-hidden="true" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                onFocus(terminal.id);
+              }}
+              className="[&_svg]:size-3.5"
+              aria-label="Focus terminal"
+            >
+              <Eye aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Focus terminal</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );
