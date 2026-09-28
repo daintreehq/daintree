@@ -111,9 +111,22 @@ describe("settings search combobox", () => {
  * The results header promises "Enter open". That only holds if a row is lit the
  * moment results appear, before any arrow press.
  */
+function key(
+  name: string,
+  mods: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; isComposing?: boolean } = {}
+) {
+  return {
+    key: name,
+    metaKey: mods.metaKey ?? false,
+    ctrlKey: mods.ctrlKey ?? false,
+    altKey: mods.altKey ?? false,
+    nativeEvent: { isComposing: mods.isComposing ?? false, keyCode: 0 },
+  };
+}
+
 describe("settings search keyboard", () => {
   it("starts every query on its first result", () => {
-    const { result, rerender } = renderHook(({ query }) => useSearchResultCursor(query), {
+    const { result, rerender } = renderHook(({ query }) => useSearchResultCursor(query, 5), {
       initialProps: { query: "f" },
     });
     expect(result.current[0]).toBe(0);
@@ -123,43 +136,75 @@ describe("settings search keyboard", () => {
 
     rerender({ query: "fo" });
     expect(result.current[0]).toBe(0);
+
+    // Backing out to the earlier query is a new query too.
+    rerender({ query: "f" });
+    expect(result.current[0]).toBe(0);
+  });
+
+  it("falls back to the first result when the list shrinks under the cursor", () => {
+    const { result, rerender } = renderHook(
+      ({ count }) => useSearchResultCursor("@modified", count),
+      { initialProps: { count: 5 } }
+    );
+    act(() => result.current[1](4));
+    rerender({ count: 2 });
+    expect(result.current[0]).toBe(0);
   });
 
   it("opens the active row on Enter, including the untouched first row", () => {
-    expect(settingsSearchKeyAction("Enter", 0, RESULTS.length)).toEqual({
+    expect(settingsSearchKeyAction(key("Enter"), 0, RESULTS.length)).toEqual({
       type: "open",
       index: 0,
     });
-    expect(settingsSearchKeyAction("Enter", 2, RESULTS.length)).toEqual({
+    expect(settingsSearchKeyAction(key("Enter"), 2, RESULTS.length)).toEqual({
       type: "open",
       index: 2,
     });
   });
 
   it("leaves Enter alone when there is nothing to open", () => {
-    expect(settingsSearchKeyAction("Enter", 0, 0)).toBeNull();
-    expect(settingsSearchKeyAction("Enter", 3, 3)).toBeNull();
+    expect(settingsSearchKeyAction(key("Enter"), 0, 0)).toBeNull();
+    expect(settingsSearchKeyAction(key("Enter"), 3, 3)).toBeNull();
   });
 
   it("wraps the arrow keys at both ends", () => {
     const last = RESULTS.length - 1;
-    expect(settingsSearchKeyAction("ArrowDown", 0, RESULTS.length)).toEqual({
+    expect(settingsSearchKeyAction(key("ArrowDown"), 0, RESULTS.length)).toEqual({
       type: "move",
       index: 1,
     });
-    expect(settingsSearchKeyAction("ArrowDown", last, RESULTS.length)).toEqual({
+    expect(settingsSearchKeyAction(key("ArrowDown"), last, RESULTS.length)).toEqual({
       type: "move",
       index: 0,
     });
-    expect(settingsSearchKeyAction("ArrowUp", 0, RESULTS.length)).toEqual({
+    expect(settingsSearchKeyAction(key("ArrowUp"), 0, RESULTS.length)).toEqual({
       type: "move",
       index: last,
     });
   });
 
+  it("leaves an IME's Enter and modified chords alone", () => {
+    // A row is always lit, so an Enter that commits a composition candidate
+    // would otherwise open a result.
+    expect(
+      settingsSearchKeyAction(key("Enter", { isComposing: true }), 0, RESULTS.length)
+    ).toBeNull();
+    expect(
+      settingsSearchKeyAction(
+        { ...key("Enter"), nativeEvent: { isComposing: false, keyCode: 229 } },
+        0,
+        RESULTS.length
+      )
+    ).toBeNull();
+    for (const mod of ["metaKey", "ctrlKey", "altKey"] as const) {
+      expect(settingsSearchKeyAction(key("Enter", { [mod]: true }), 0, RESULTS.length)).toBeNull();
+    }
+  });
+
   it("leaves Home and End to the field's caret", () => {
-    expect(settingsSearchKeyAction("Home", 2, RESULTS.length)).toBeNull();
-    expect(settingsSearchKeyAction("End", 0, RESULTS.length)).toBeNull();
+    expect(settingsSearchKeyAction(key("Home"), 2, RESULTS.length)).toBeNull();
+    expect(settingsSearchKeyAction(key("End"), 0, RESULTS.length)).toBeNull();
   });
 
   it("points aria-activedescendant at the first row before any arrow press", () => {

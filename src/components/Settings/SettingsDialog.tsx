@@ -567,7 +567,10 @@ function SettingsDialogInner({
     });
   };
 
-  const [activeResultIndex, setActiveResultIndex] = useSearchResultCursor(searchQuery);
+  const [activeResultIndex, setActiveResultIndex] = useSearchResultCursor(
+    searchQuery,
+    searchResults.length
+  );
 
   const searchComboboxAria = settingsSearchComboboxAria(
     searchResults,
@@ -582,7 +585,7 @@ function SettingsDialogInner({
       return;
     }
     if (!isSearching) return;
-    const action = settingsSearchKeyAction(e.key, activeResultIndex, searchResults.length);
+    const action = settingsSearchKeyAction(e, activeResultIndex, searchResults.length);
     if (!action) return;
     e.preventDefault();
     if (action.type === "move") {
@@ -1822,14 +1825,21 @@ export function settingsSearchComboboxAria(
 }
 
 /**
- * The active result, keyed to the query it was set under: every new query
- * starts on its first result in the keystroke's own render, so the row the
- * Enter hint promises to open is the one that is lit.
+ * The active result. Every new query starts on its first result, so the row
+ * the Enter hint promises to open is the one that is lit — read in the
+ * keystroke's own render, then made durable by the effect so going back to an
+ * earlier query cannot resurrect the row it had. An index past the end (a live
+ * `@modified` list that shrank) also falls back to the first result.
  */
-export function useSearchResultCursor(query: string) {
+export function useSearchResultCursor(query: string, count: number) {
   const [cursor, setCursor] = useState({ query, index: 0 });
-  const index = cursor.query === query ? cursor.index : 0;
+  const index = cursor.query === query && cursor.index < count ? cursor.index : 0;
   const setIndex = (next: number) => setCursor({ query, index: next });
+
+  useEffect(() => {
+    setCursor((prev) => (prev.query === query ? prev : { query, index: 0 }));
+  }, [query]);
+
   return [index, setIndex] as const;
 }
 
@@ -1839,11 +1849,18 @@ export function useSearchResultCursor(query: string) {
  * field's caret, as the APG combobox leaves it.
  */
 export function settingsSearchKeyAction(
-  key: string,
+  e: Pick<React.KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey"> & {
+    nativeEvent: { isComposing: boolean; keyCode: number };
+  },
   activeIndex: number,
   count: number
 ): { type: "move" | "open"; index: number } | null {
-  if (count === 0) return null;
+  // Mid-composition, Enter commits the IME candidate — and a row is always lit,
+  // so letting it through would open a result instead. Chromium can emit 229
+  // before `isComposing` flips. Modified chords belong to whatever bound them.
+  if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return null;
+  if (e.metaKey || e.ctrlKey || e.altKey || count === 0) return null;
+  const { key } = e;
   if (key === "ArrowDown") {
     return { type: "move", index: activeIndex < count - 1 ? activeIndex + 1 : 0 };
   }
