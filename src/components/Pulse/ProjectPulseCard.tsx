@@ -636,7 +636,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             }}
             // Not `disabled`: pressing it would drop keyboard focus to the page.
             aria-disabled={isLoading}
-            className="pulse-control aria-disabled:opacity-50"
+            className="pulse-control aria-disabled:cursor-not-allowed"
             aria-label="Refresh"
           >
             <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />
