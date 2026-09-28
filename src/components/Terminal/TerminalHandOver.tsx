@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { Unplug } from "lucide-react";
-import { Joystick } from "@/components/icons";
+import { Plug } from "@/components/icons";
 import { usePanelStore } from "@/store";
 import { useTerminalAdoptionStore } from "@/store/terminalAdoptionStore";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -80,7 +80,7 @@ function OrchestratorMenuItem({
   if (name === null) return null;
   return (
     <ContextMenuItem aria-haspopup="dialog" onSelect={() => onSelect(paneId)}>
-      <Joystick className={ICON_CLASS} aria-hidden="true" />
+      <Plug className={ICON_CLASS} aria-hidden="true" />
       {name}
     </ContextMenuItem>
   );
@@ -123,7 +123,7 @@ export function TerminalHandOverMenuItems({
   return (
     <ContextMenuSub>
       <ContextMenuSubTrigger>
-        <Joystick className={ICON_CLASS} aria-hidden="true" />
+        <Plug className={ICON_CLASS} aria-hidden="true" />
         Hand to orchestrator
       </ContextMenuSubTrigger>
       <ContextMenuSubContent>
@@ -255,7 +255,7 @@ export function TerminalDrivenByBadge({ terminalId }: { terminalId: string }) {
           aria-live="off"
           data-testid="terminal-driven-by-badge"
         >
-          <Joystick className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <Plug className="w-3 h-3 shrink-0" aria-hidden="true" />
           <span className="truncate">{label}</span>
         </div>
       </TooltipTrigger>
