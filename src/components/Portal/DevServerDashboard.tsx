@@ -9,6 +9,10 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { worktreeLabels } from "@/lib/worktreeLabels";
 import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 // Status dot colors reuse the dev-server semantic tokens (--color-server-*),
 // the same ones DevPreview's ConsoleDrawer uses — NOT the panel-state-* border
@@ -45,8 +49,7 @@ const STOPPED_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "restored-stopped",
 ]);
 
-const actionClass =
-  "toolbar-icon-button flex w-6 h-6 items-center justify-center rounded-[var(--radius-md)] text-text-secondary disabled:opacity-30 disabled:cursor-not-allowed";
+const actionClass = PANE_TOOLBAR_ICON_BUTTON_CLASS;
 
 function extractPort(session: DevPreviewSessionState): string | null {
   const target = session.url ?? session.predictedUrl;
@@ -131,7 +134,11 @@ function DevServerRow({
           title={restartLabel}
           className={actionClass}
         >
-          {isStopped ? <Play className="w-3.5 h-3.5" /> : <RotateCw className="w-3.5 h-3.5" />}
+          {isStopped ? (
+            <Play className={PANE_TOOLBAR_ICON_CLASS} />
+          ) : (
+            <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
+          )}
         </button>
         {!isStopped && (
           <button
@@ -147,9 +154,9 @@ function DevServerRow({
             className={actionClass}
           >
             {isDismissableError ? (
-              <X className="w-3.5 h-3.5" />
+              <X className={PANE_TOOLBAR_ICON_CLASS} />
             ) : (
-              <CircleStop className="w-3.5 h-3.5" />
+              <CircleStop className={PANE_TOOLBAR_ICON_CLASS} />
             )}
           </button>
         )}
@@ -229,7 +236,7 @@ export function DevServerDashboard({ onHide }: { onHide?: () => void }) {
             title="Hide dev servers"
             className={actionClass}
           >
-            <X className="w-3.5 h-3.5" />
+            <X className={PANE_TOOLBAR_ICON_CLASS} />
           </button>
         )}
       </header>

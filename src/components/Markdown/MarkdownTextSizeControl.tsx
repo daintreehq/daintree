@@ -17,6 +17,7 @@ import {
   MARKDOWN_FONT_SIZE_STEPS,
   type MarkdownFontSize,
 } from "@/store/preferencesStore";
+import { PANE_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 
 /**
  * What each rung measures at the app's 16px root, for the readout. Labels only:
@@ -115,7 +116,7 @@ export function MarkdownTextSizeControl({
               // Same footprint as its neighbours in the row; the armed chip
               // `toolbar-icon-button` paints on `data-state="open"` carries the
               // only state this trigger has.
-              className="toolbar-icon-button shrink-0 rounded-lg p-1.5 text-text-secondary"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               // Carries the current size, so a screen reader hears where the
               // document already is before opening anything.
               aria-label={`Text size, ${label} pixels`}

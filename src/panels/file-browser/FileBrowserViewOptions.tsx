@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import type { FileBrowserSortKey } from "@shared/types/panel";
 import type { FileBrowserSortOrder, HiddenRowCounts } from "./fileBrowserTree";
+import { PANE_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 
 const SORT_OPTIONS: ReadonlyArray<{ value: FileBrowserSortKey; label: string }> = [
   { value: "name", label: "Name" },
@@ -115,7 +116,7 @@ export function FileBrowserViewOptions({
               // `toolbar-icon-button` paints on `data-state="open"` is the only
               // state this control needs to carry; what the filters are actually
               // doing is said in words under the tree, not crammed in here.
-              className="toolbar-icon-button shrink-0 rounded-lg p-1.5 text-text-secondary"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               aria-label={label}
               data-testid={testId}
             >

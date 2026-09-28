@@ -44,6 +44,10 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 const noopTabAction = (_tabId: string) => {};
 
@@ -51,9 +55,9 @@ const OVERFLOW_FADE_PX = 24;
 
 const tabDomId = (tabId: string) => `portal-tab-${tabId}`;
 
-// Shared with the dev-preview browser toolbar so both browser chromes read as one family.
-const iconButtonClass =
-  "toolbar-icon-button shrink-0 p-1.5 rounded-[var(--radius-md)] text-text-secondary disabled:opacity-30 disabled:cursor-not-allowed";
+// The pane-toolbar icon button the dev-preview browser toolbar uses too, so both
+// browser chromes read as one family.
+const iconButtonClass = PANE_TOOLBAR_ICON_BUTTON_CLASS;
 
 function SortableTab({
   tab,
@@ -400,7 +404,7 @@ export function PortalToolbar({
               aria-label="Go back"
               className={iconButtonClass}
             >
-              <ArrowLeft className="w-4 h-4" />
+              <ArrowLeft className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Go back</TooltipContent>
@@ -414,7 +418,7 @@ export function PortalToolbar({
               aria-label="Go forward"
               className={iconButtonClass}
             >
-              <ArrowRight className="w-4 h-4" />
+              <ArrowRight className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Go forward</TooltipContent>
@@ -428,7 +432,7 @@ export function PortalToolbar({
               aria-label="Reload"
               className={iconButtonClass}
             >
-              <RotateCw className="w-4 h-4" />
+              <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Reload</TooltipContent>
@@ -442,7 +446,7 @@ export function PortalToolbar({
               aria-label="Copy URL"
               className={iconButtonClass}
             >
-              <Link2 className="w-4 h-4" />
+              <Link2 className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Copy URL</TooltipContent>
@@ -456,7 +460,7 @@ export function PortalToolbar({
               aria-label="Open in external browser"
               className={iconButtonClass}
             >
-              <ExternalLink className="w-4 h-4" />
+              <ExternalLink className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Open in external browser</TooltipContent>
@@ -473,7 +477,7 @@ export function PortalToolbar({
               aria-pressed={showDevDashboard}
               className={iconButtonClass}
             >
-              <Server className="w-4 h-4" />
+              <Server className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -489,7 +493,7 @@ export function PortalToolbar({
               aria-keyshortcuts={closePortalAriaShortcut}
               className={iconButtonClass}
             >
-              <X className="w-4 h-4" />
+              <X className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -642,7 +646,7 @@ export function PortalToolbar({
                 aria-keyshortcuts={newTabAriaShortcut}
                 aria-haspopup="menu"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className={PANE_TOOLBAR_ICON_CLASS} />
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">

@@ -18,6 +18,7 @@ import {
   useDiffNoteTargets,
   type DiffNoteDeliveryResult,
 } from "@/hooks/useDiffNoteDelivery";
+import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 
 export type DiffNoteSendScope = "file" | "all";
 
@@ -67,7 +68,7 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
         <button
           type="button"
           data-testid="diff-notes-send"
-          className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs text-text-secondary transition-colors hover:text-text-primary hover:bg-border-default"
+          className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
         >
           <SendHorizontal className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
           Send notes

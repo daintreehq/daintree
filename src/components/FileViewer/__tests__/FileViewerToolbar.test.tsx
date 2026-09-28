@@ -296,6 +296,36 @@ describe("FileViewerToolbar.IconButton", () => {
     expect(button.hasAttribute("aria-controls")).toBe(false);
     expect(button.hasAttribute("data-sidebar-toggle")).toBe(false);
   });
+
+  it("stays focusable in the toolbar while unavailable, and swallows the click", () => {
+    const onClick = vi.fn();
+    render(
+      <FileViewerToolbar.IconButton label="Previous file" onClick={onClick} disabled>
+        <svg />
+      </FileViewerToolbar.IconButton>
+    );
+
+    const button = screen.getByRole("button", { name: "Previous file" });
+    // aria-disabled, never `disabled`: a native disabled button drops out of the
+    // roving toolbar's arrow-key order.
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    fireEvent.click(button);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("shows a richer tooltip than its name when given one", () => {
+    render(
+      <FileViewerToolbar.IconButton label="Next file" tooltip="Next file (])" onClick={vi.fn()}>
+        <svg />
+      </FileViewerToolbar.IconButton>
+    );
+
+    expect(screen.getByRole("button", { name: "Next file" })).toBeTruthy();
+    expect(screen.getByText("Next file (])")).toBeTruthy();
+  });
 });
 
 describe("FileViewerToolbar.CopyContentsButton", () => {

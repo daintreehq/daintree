@@ -1,6 +1,12 @@
 import { useId } from "react";
 import { ChevronUp, ChevronDown, X } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  FIND_BAR_CLASS,
+  FIND_BAR_ICON_CLASS,
+  FindBarButton,
+  FindBarToggle,
+  findBarCountClass,
+} from "@/components/ui/FindBarControls";
 import { SearchField } from "@/components/ui/SearchField";
 import type { FindInPageState } from "@/hooks/useFindInPage";
 
@@ -57,7 +63,7 @@ export function FindBar({ find }: FindBarProps) {
   return (
     // `z-40`: above a dev preview tool drawer floating over the page (`z-30`),
     // which otherwise covers this corner while Find has the focus.
-    <div className="absolute top-2 right-2 z-40 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-floating)] px-2 py-1">
+    <div className={`absolute top-2 right-2 z-40 ${FIND_BAR_CLASS}`}>
       <SearchField
         size="compact"
         fieldClassName="w-44"
@@ -78,84 +84,43 @@ export function FindBar({ find }: FindBarProps) {
         data-testid="find-bar-input"
         spellCheck={false}
       />
+      <FindBarToggle
+        pressed={matchCase}
+        label="Match case"
+        tooltip="Match case"
+        onToggle={toggleMatchCase}
+      >
+        Aa
+      </FindBarToggle>
       <span
         id={counterId}
         role="status"
         aria-atomic="true"
-        className={`text-2xs tabular-nums whitespace-nowrap mr-0.5 ${
-          noResults ? "text-status-error" : "text-text-secondary"
-        }`}
+        className={findBarCountClass(!noResults)}
       >
         {countText}
       </span>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={toggleMatchCase}
-            onMouseDown={(e) => e.preventDefault()}
-            // Same control as the terminal's find bar, so the same treatment.
-            // "On" is membership, not the one load-bearing signal in the
-            // region, so it stays off the accent — both states carry a border
-            // so the button does not resize when toggled.
-            className={`px-1 rounded-[var(--radius-sm)] border text-xs font-medium transition-colors ${
-              matchCase
-                ? "border-text-secondary bg-border-default text-text-primary"
-                : "border-transparent text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
-            }`}
-            aria-label="Match case"
-            aria-pressed={matchCase}
-          >
-            Aa
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Match case</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <button
-              type="button"
-              onClick={goPrev}
-              disabled={matchCount === 0}
-              className="p-1 rounded hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none transition-colors text-daintree-text/70"
-              aria-label="Previous match"
-            >
-              <ChevronUp className="w-3.5 h-3.5" />
-            </button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Previous match (Shift+Enter)</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <button
-              type="button"
-              onClick={goNext}
-              disabled={matchCount === 0}
-              className="p-1 rounded hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none transition-colors text-daintree-text/70"
-              aria-label="Next match"
-            >
-              <ChevronDown className="w-3.5 h-3.5" />
-            </button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Next match (Enter)</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={close}
-            className="p-1 rounded hover:bg-overlay-medium transition-colors text-daintree-text/70"
-            aria-label="Close find bar"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Close (Esc)</TooltipContent>
-      </Tooltip>
+      <FindBarButton
+        label="Previous match"
+        tooltip="Previous match (Shift+Enter)"
+        onClick={goPrev}
+        disabled={matchCount === 0}
+        keepFieldFocus
+      >
+        <ChevronUp className={FIND_BAR_ICON_CLASS} />
+      </FindBarButton>
+      <FindBarButton
+        label="Next match"
+        tooltip="Next match (Enter)"
+        onClick={goNext}
+        disabled={matchCount === 0}
+        keepFieldFocus
+      >
+        <ChevronDown className={FIND_BAR_ICON_CLASS} />
+      </FindBarButton>
+      <FindBarButton label="Close find bar" tooltip="Close (Esc)" onClick={close}>
+        <X className={FIND_BAR_ICON_CLASS} />
+      </FindBarButton>
     </div>
   );
 }

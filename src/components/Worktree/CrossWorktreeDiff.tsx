@@ -563,36 +563,28 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                     aria-label="File navigation"
                     className="flex items-center gap-1"
                   >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (selectedFileIndex > 0) navigateFile(-1);
-                      }}
-                      aria-disabled={selectedFileIndex <= 0 || undefined}
-                      aria-label="Previous file"
-                      title="Previous file ([)"
-                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary aria-disabled:opacity-40 aria-disabled:pointer-events-none"
+                    <FileViewerToolbar.IconButton
+                      label="Previous file"
+                      tooltip="Previous file ([)"
+                      disabled={selectedFileIndex <= 0}
+                      onClick={() => navigateFile(-1)}
                     >
-                      <ChevronLeft className="w-3.5 h-3.5" />
-                    </button>
+                      <ChevronLeft className={TOOLBAR_ICON_CLASS} />
+                    </FileViewerToolbar.IconButton>
                     <span
                       data-testid="cross-worktree-file-position"
                       className="text-xs text-text-secondary tabular-nums"
                     >
                       {selectedFileIndex + 1} of {files.length}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (selectedFileIndex < files.length - 1) navigateFile(1);
-                      }}
-                      aria-disabled={selectedFileIndex >= files.length - 1 || undefined}
-                      aria-label="Next file"
-                      title="Next file (])"
-                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary aria-disabled:opacity-40 aria-disabled:pointer-events-none"
+                    <FileViewerToolbar.IconButton
+                      label="Next file"
+                      tooltip="Next file (])"
+                      disabled={selectedFileIndex >= files.length - 1}
+                      onClick={() => navigateFile(1)}
                     >
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
+                      <ChevronRight className={TOOLBAR_ICON_CLASS} />
+                    </FileViewerToolbar.IconButton>
                   </div>
                 )}
                 <FileViewerToolbar.IconButton

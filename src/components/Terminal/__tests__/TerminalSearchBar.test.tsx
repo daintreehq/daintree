@@ -179,6 +179,58 @@ describe("TerminalSearchBar", () => {
     expect(liveRegion.textContent).toBe("6 of 1000+");
   });
 
+  it("offers stepping only while there is something to step to", async () => {
+    const mock = createMockManaged(false);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const next = screen.getByLabelText("Next match") as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+
+    const input = screen.getByPlaceholderText("Find in terminal");
+    await act(() => {
+      fireEvent.change(input, { target: { value: "nonexistent" } });
+    });
+    // While the query is still settling, stepping runs the search.
+    expect((screen.getByLabelText("Next match") as HTMLButtonElement).disabled).toBe(false);
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    // A search that found nothing leaves nothing to step through.
+    expect((screen.getByLabelText("Next match") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Previous match") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("lets Enter press a focused option rather than running the search", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal");
+    await act(() => {
+      fireEvent.change(input, { target: { value: "hello" } });
+    });
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    mock.searchAddon.findNext.mockClear();
+
+    const toggle = screen.getByLabelText("Toggle whole word");
+    await act(async () => {
+      fireEvent.keyDown(toggle, { key: "Enter" });
+    });
+    expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
+  });
+
   it('announces "No matches" when search finds nothing', async () => {
     const mock = createMockManaged(false);
     vi.mocked(terminalInstanceService.get).mockReturnValue(
