@@ -198,7 +198,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       {...{ [SCRATCHPAD_BOUNDARY_ATTR]: terminalId }}
       aria-label="Scratchpad"
       data-testid="terminal-scratchpad"
-      className="group/scratchpad relative flex min-h-0 shrink-0 flex-col border-l border-divider bg-surface-panel"
+      className="group/scratchpad relative flex min-h-0 shrink-0 flex-col border-l border-border-default bg-surface-panel"
       // Capped at half the pane so the terminal always keeps the larger share.
       style={{ width, maxWidth: "50%" }}
     >
@@ -215,22 +215,20 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
         data-testid="terminal-scratchpad-resize"
         className={cn(
           "group absolute -left-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
-          "transition-colors outline-hidden focus-visible:bg-overlay-soft",
+          "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
           // Hover styling is off while resizing, or it outranks the drag state.
-          isDragging ? "bg-overlay-soft" : "hover:bg-overlay-subtle"
+          isDragging ? "bg-overlay-medium" : "hover:bg-overlay-soft"
         )}
         onMouseDown={handleResizeStart}
         onDoubleClick={() => setScratchpadWidth(terminalId, SCRATCHPAD_DEFAULT_WIDTH)}
         onKeyDown={handleResizeKeyDown}
       >
-        {/* The grip is the separator's focus mark: a short solid bar at the
-            edge rather than a ring drawn down the whole height of the pane. */}
         <div
           className={cn(
-            "rounded-full transition-[width,height,background-color] duration-150 ease-out",
+            "h-8 rounded-full transition-[width] delay-100 duration-150",
             isDragging
-              ? "h-8 w-0.5 bg-text-secondary"
-              : "h-8 w-px bg-border-strong group-hover:w-0.5 group-hover:bg-text-secondary group-focus-visible:h-10 group-focus-visible:w-1 group-focus-visible:bg-text-primary"
+              ? "w-0.5 bg-text-primary/50"
+              : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
           )}
         />
       </div>
@@ -295,7 +293,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       />
 
       <div
-        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-divider px-3 text-2xs text-text-secondary"
+        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-border-default px-3 text-2xs text-text-secondary"
         data-testid="terminal-scratchpad-status"
       >
         <span id={hintId} className="truncate">
