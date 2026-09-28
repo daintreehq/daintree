@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import { buildPluginToolbarMeta } from "../pluginToolbarMeta";
-import { DEFAULT_PLUGIN_ICON, PLUGIN_ICON_COMPONENTS } from "@/components/icons/pluginIconRegistry";
+import { DEFAULT_PLUGIN_BUTTON_ICON, PLUGIN_ICON_COMPONENTS } from "@/components/icons/pluginIconRegistry";
 
 function config(overrides: Partial<ToolbarButtonConfig> = {}): ToolbarButtonConfig {
   return {
@@ -54,13 +54,13 @@ describe("buildPluginToolbarMeta", () => {
   it("falls back to the generic plugin glyph for an unrecognized icon id", () => {
     const meta = build([config({ iconId: "no-such-icon" })]);
 
-    expect(meta["acme.plan"]?.icon).toBe(DEFAULT_PLUGIN_ICON);
+    expect(meta["acme.plan"]?.icon).toBe(DEFAULT_PLUGIN_BUTTON_ICON);
   });
 
   it("does not resolve agent brand ids — the toolbar has no brand-icon path", () => {
     const meta = build([config({ iconId: "claude" })]);
 
-    expect(meta["acme.plan"]?.icon).toBe(DEFAULT_PLUGIN_ICON);
+    expect(meta["acme.plan"]?.icon).toBe(DEFAULT_PLUGIN_BUTTON_ICON);
   });
 
   it("carries the label and attributes the button to its plugin", () => {

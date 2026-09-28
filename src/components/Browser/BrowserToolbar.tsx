@@ -1122,7 +1122,7 @@ export function BrowserToolbar({
                 {isCompact && (
                   <>
                     <DropdownMenuItem disabled={!address} onSelect={() => void handleCopy()}>
-                      <Link className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <Link data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Copy URL
                     </DropdownMenuItem>
                     {consoleInMenu && (
@@ -1152,7 +1152,7 @@ export function BrowserToolbar({
                         handleZoomStep("in");
                       }}
                     >
-                      <ZoomIn className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <ZoomIn data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Zoom in
                     </DropdownMenuItem>
                     <DropdownMenuItem
@@ -1162,11 +1162,11 @@ export function BrowserToolbar({
                         handleZoomStep("out");
                       }}
                     >
-                      <ZoomOut className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <ZoomOut data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Zoom out
                     </DropdownMenuItem>
                     <DropdownMenuItem disabled={!isNonDefaultZoom} onSelect={handleZoomReset}>
-                      <Scan className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <Scan data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Actual size
                     </DropdownMenuItem>
                   </>
@@ -1176,7 +1176,7 @@ export function BrowserToolbar({
                 )}
                 {onToggleDevTools && (
                   <DropdownMenuItem disabled={!isWebviewReady} onSelect={onToggleDevTools}>
-                    <Code className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    <Code data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Toggle DevTools
                   </DropdownMenuItem>
                 )}
@@ -1185,7 +1185,7 @@ export function BrowserToolbar({
                     onSelect={onPromoteToPortal}
                     data-testid="browser-promote-portal"
                   >
-                    <PanelRight className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    <PanelRight data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Open in Portal
                   </DropdownMenuItem>
                 )}

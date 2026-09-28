@@ -73,7 +73,10 @@ import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherT
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
-import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
+import {
+  DEFAULT_PLUGIN_BUTTON_ICON,
+  resolvePluginIcon,
+} from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -496,7 +499,7 @@ function OverflowMenu({
                 <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
                   <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
                   {group.buttons.map((config) => {
-                    const Icon = resolvePluginIcon(config.iconId);
+                    const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
                     return (
                       <DropdownMenuItem
                         key={config.id}
