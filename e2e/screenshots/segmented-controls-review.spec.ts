@@ -87,13 +87,17 @@ async function settleDevServer(context: BrowserContext, url: string) {
   await page.close();
 }
 
-async function snap(target: Locator, file: string): Promise<void> {
+async function snap(
+  target: Locator,
+  file: string,
+  animations: "disabled" | "allow" = "disabled"
+): Promise<void> {
   await expect(target).toBeVisible();
   const box = await target.boundingBox();
   if (!box || box.width < 8 || box.height < 8) {
     throw new Error(`${file}: target has no real box (${JSON.stringify(box)}) — refusing to write`);
   }
-  await target.screenshot({ path: path.join(OUT!, file), animations: "disabled" });
+  await target.screenshot({ path: path.join(OUT!, file), animations });
 }
 
 async function withPage(
@@ -209,6 +213,34 @@ test("segmented controls — every consumer, every state", async ({ browser }) =
   });
 
   await context.close();
+
+  // The slide itself, in a real layout engine: motion on, a user pick, and a
+  // frame taken partway through the 150ms transition. A thumb that snapped (or
+  // had its transition stripped by a re-measure) is already at rest here.
+  const motion = await browser.newContext({ deviceScaleFactor: 2, reducedMotion: "no-preference" });
+  await withPage(motion, `midslide ${first}`, async (page) => {
+    await openGallery(page, first);
+    const specimen = page.locator('[data-shot="diff-pane"]');
+    await specimen.getByRole("radio", { name: "Unified" }).click();
+    // Freeze the transition halfway rather than racing it with a timer: a
+    // screenshot under load can land after 150ms and photograph a thumb at rest.
+    const frozen = await specimen
+      .locator('[role="radiogroup"][aria-label="Diff layout"] [data-slot="segmented-thumb"]')
+      .evaluate((el) => {
+        const running = el.getAnimations();
+        for (const animation of running) {
+          animation.pause();
+          animation.currentTime = 75;
+        }
+        return running.length;
+      });
+    if (frozen === 0) throw new Error("diff layout: a user pick started no thumb transition");
+    const file = `diff-pane--midslide--${first}.png`;
+    // "allow": the default would finish the frozen transition before capturing.
+    await snap(specimen, file, "allow");
+    expected.push(file);
+  });
+  await motion.close();
 
   const written = new Set(readdirSync(OUT!).filter((f) => f.endsWith(".png")));
   const missing = expected.filter((f) => !written.has(f) || !existsSync(path.join(OUT!, f)));
