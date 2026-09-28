@@ -269,7 +269,9 @@ describe("PluginMcpConfirmDialog structure", () => {
     });
     render(<PluginMcpConfirmDialog />);
 
-    const trigger = screen.getByRole("button", { name: /what this plugin can do \(2\)/i });
+    const trigger = screen.getByRole("button", {
+      name: /what this plugin can do, 2 capabilities/i,
+    });
     act(() => trigger.click());
     expect(screen.getByText("Run shell commands")).toBeTruthy();
 
@@ -295,7 +297,9 @@ describe("PluginMcpConfirmDialog structure", () => {
     const caps: BuiltInPluginCapability[] = ["git:read", "shell:exec", "network:fetch"];
     enqueue({ declaredCapabilities: caps });
     render(<PluginMcpConfirmDialog />);
-    const trigger = screen.getByRole("button", { name: /what this plugin can do \(3\)/i });
+    const trigger = screen.getByRole("button", {
+      name: /what this plugin can do, 3 capabilities/i,
+    });
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("Run shell commands")).toBeNull();
     act(() => trigger.click());

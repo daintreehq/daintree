@@ -52,7 +52,7 @@ import {
 import { useNotificationSource } from "./notificationSource";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
-import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { CountBadge } from "@/components/ui/badge";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -333,22 +333,19 @@ export function NotificationCenterEntry({
               {entry.title}
             </p>
             {showChip && (
-              <span
+              <CountBadge
                 key={bumpKey}
-                aria-label={formatNotificationCountAriaLabel(safeCount)}
+                // Spoken as "N events"; the capped glyph ("99+") is for the eye.
+                label={formatNotificationCountAriaLabel(safeCount)}
                 // Handle for the forced-colors repaint — the tint fill is forced
                 // to Canvas there, leaving a bare numeral that reads as part of
                 // the title.
                 data-notification-count="true"
                 style={{ animationDuration: `${DURATION_150}ms` }}
-                className={cn(
-                  COUNT_BADGE_CLASS,
-                  "min-w-[2.5ch]",
-                  bumpKey > 0 && "animate-badge-bump"
-                )}
+                className={cn("min-w-[2.5ch]", bumpKey > 0 && "animate-badge-bump")}
               >
                 {formatNotificationCountGlyph(safeCount)}
-              </span>
+              </CountBadge>
             )}
           </div>
         )}
@@ -372,19 +369,18 @@ export function NotificationCenterEntry({
           </p>
         )}
         {showChip && !entry.title && (
-          <span
+          <CountBadge
             key={bumpKey}
-            aria-label={formatNotificationCountAriaLabel(safeCount)}
+            label={formatNotificationCountAriaLabel(safeCount)}
             data-notification-count="true"
             style={{ animationDuration: `${DURATION_150}ms` }}
             className={cn(
-              COUNT_BADGE_CLASS,
               "col-span-2 row-start-2 mt-0.5 justify-self-start min-w-[2.5ch]",
               bumpKey > 0 && "animate-badge-bump"
             )}
           >
             {formatNotificationCountGlyph(safeCount)}
-          </span>
+          </CountBadge>
         )}
         {/* Where it came from, and on a snoozed row when it comes back: quiet
             lines under the message rather than more weight on the title line.

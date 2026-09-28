@@ -8,7 +8,7 @@ import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
 import type { PluginMcpConsentDecision, PluginMcpDangerTier } from "@shared/types/pluginMcpConsent";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
-import { Badge } from "@/components/ui/badge";
+import { Badge, CountBadge } from "@/components/ui/badge";
 
 const CONFIRM_COOLDOWN_MS = 1_200;
 
@@ -346,7 +346,15 @@ function CapabilitiesDisclosure({
             expanded && "rotate-90"
           )}
         />
-        <span className={SECTION_LABEL_CLASS}>What this plugin can do ({capabilities.length})</span>
+        <span className={SECTION_LABEL_CLASS}>
+          What this plugin can do
+          <CountBadge
+            className="ml-1.5"
+            label={`, ${capabilities.length} ${capabilities.length === 1 ? "capability" : "capabilities"}`}
+          >
+            {capabilities.length}
+          </CountBadge>
+        </span>
       </button>
       {expanded && (
         <ul className="mt-1.5 max-h-44 space-y-1.5 overflow-y-auto pl-[1.125rem]">
