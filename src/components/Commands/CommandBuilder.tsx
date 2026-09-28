@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import type {
   CommandManifestEntry,
   CommandContext,
@@ -646,20 +647,20 @@ export function CommandBuilder({
         ) : (
           <div className="ml-auto flex items-center gap-3">
             <Button
+              aria-disabled={!canDismiss || undefined}
               variant="ghost"
-              onClick={onCancel}
-              disabled={!canDismiss}
-              className="text-text-secondary"
+              onClick={!canDismiss ? undefined : onCancel}
+              className={cn("text-text-secondary", !canDismiss && ARIA_DISABLED_CLASSES)}
             >
               {/* Once a slow run can be left, this no longer cancels anything. */}
               {isSlowRun ? "Close" : "Cancel"}
             </Button>
             {!isFirstStep && (
               <Button
+                aria-disabled={isExecuting || undefined}
                 variant="ghost"
-                onClick={handleBack}
-                disabled={isExecuting}
-                className="text-text-secondary"
+                onClick={isExecuting ? undefined : handleBack}
+                className={cn("text-text-secondary", isExecuting && ARIA_DISABLED_CLASSES)}
               >
                 <ChevronLeft className="h-4 w-4" aria-hidden="true" />
                 Back

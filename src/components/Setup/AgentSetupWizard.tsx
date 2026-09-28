@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AgentCliStep } from "./AgentCliStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
@@ -851,6 +852,9 @@ export function AgentSetupWizard({
     return true;
   }, [isFirstRun, state.step.type, commitTelemetry, notifyTelemetryDefault]);
 
+  const agentsContinueBlocked =
+    selectedAgentIds.length === 0 || isSaving || hasFatalHealthFailure || isHealthChecking;
+
   return (
     <AppDialog
       isOpen={isOpen}
@@ -975,10 +979,13 @@ export function AgentSetupWizard({
           {state.step.type !== "complete" &&
             (state.history.length > 0 ? (
               <Button
+                aria-disabled={isSaving || isInstalling || undefined}
                 variant="ghost"
-                onClick={handleBack}
-                className="text-text-secondary hover:text-text-primary"
-                disabled={isSaving || isInstalling}
+                onClick={isSaving || isInstalling ? undefined : handleBack}
+                className={cn(
+                  "text-text-secondary hover:text-text-primary",
+                  (isSaving || isInstalling) && ARIA_DISABLED_CLASSES
+                )}
               >
                 <ChevronLeft className="w-4 h-4" />
                 Back
@@ -990,61 +997,83 @@ export function AgentSetupWizard({
               // wizard uses it. "Cancel" on a re-run, where the selection the
               // user just made is discarded rather than deferred.
               <Button
+                aria-disabled={isSaving || undefined}
                 variant="ghost"
-                onClick={handleSkip}
-                disabled={isSaving}
+                onClick={isSaving ? undefined : handleSkip}
                 data-testid="agent-setup-exit"
-                className="text-text-secondary hover:text-text-primary"
+                className={cn(
+                  "text-text-secondary hover:text-text-primary",
+                  isSaving && ARIA_DISABLED_CLASSES
+                )}
               >
                 {isFirstRun ? "Not now" : "Cancel"}
               </Button>
             ))}
           {state.step.type === "appearance" && (
-            <Button variant="contrast" onClick={handleAppearanceContinue} disabled={isSaving}>
+            <Button
+              aria-disabled={isSaving || undefined}
+              className={cn(isSaving && ARIA_DISABLED_CLASSES)}
+              variant="contrast"
+              onClick={isSaving ? undefined : handleAppearanceContinue}
+            >
               Continue
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>
           )}
           {state.step.type === "agents" && (
             <Button
+              aria-disabled={agentsContinueBlocked || undefined}
+              className={cn(agentsContinueBlocked && ARIA_DISABLED_CLASSES)}
               variant="contrast"
-              onClick={handleAgentsContinue}
-              disabled={
-                selectedAgentIds.length === 0 ||
-                isSaving ||
-                hasFatalHealthFailure ||
-                isHealthChecking
-              }
+              onClick={agentsContinueBlocked ? undefined : handleAgentsContinue}
             >
               Continue
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>
           )}
           {state.step.type === "privacy" && (
-            <Button variant="contrast" onClick={handlePrivacyContinue} disabled={isSaving}>
+            <Button
+              aria-disabled={isSaving || undefined}
+              className={cn(isSaving && ARIA_DISABLED_CLASSES)}
+              variant="contrast"
+              onClick={isSaving ? undefined : handlePrivacyContinue}
+            >
               Continue
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>
           )}
           {state.step.type === "cli" &&
             (hasUsableSelection ? (
-              <Button variant="contrast" onClick={handleCliContinue} disabled={isInstalling}>
+              <Button
+                aria-disabled={isInstalling || undefined}
+                className={cn(isInstalling && ARIA_DISABLED_CLASSES)}
+                variant="contrast"
+                onClick={isInstalling ? undefined : handleCliContinue}
+              >
                 Continue
                 <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             ) : (
               <Button
+                aria-disabled={isInstalling || undefined}
                 variant="ghost"
-                onClick={handleCliContinue}
-                disabled={isInstalling}
+                onClick={isInstalling ? undefined : handleCliContinue}
                 data-testid="agent-cli-defer"
-                className="text-text-secondary hover:text-text-primary"
+                className={cn(
+                  "text-text-secondary hover:text-text-primary",
+                  isInstalling && ARIA_DISABLED_CLASSES
+                )}
               >
                 Set up later
               </Button>
             ))}
           {state.step.type === "permissions" && (
-            <Button variant="contrast" onClick={handlePermissionsContinue} disabled={isSaving}>
+            <Button
+              aria-disabled={isSaving || undefined}
+              className={cn(isSaving && ARIA_DISABLED_CLASSES)}
+              variant="contrast"
+              onClick={isSaving ? undefined : handlePermissionsContinue}
+            >
               Continue
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>

@@ -1329,8 +1329,8 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     // Confirm the run really is executing, or the guard under test never runs.
-    expect((screen.getByTestId("bulk-create-confirm-button") as HTMLButtonElement).disabled).toBe(
-      true
+    expect(screen.getByTestId("bulk-create-confirm-button").getAttribute("aria-disabled")).toBe(
+      "true"
     );
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
 
@@ -1546,8 +1546,8 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     // Cancel must not inherit the CTA's slot once the run commits.
-    const confirmButton = screen.getByTestId("bulk-create-confirm-button") as HTMLButtonElement;
-    expect(confirmButton.disabled).toBe(true);
+    const confirmButton = screen.getByTestId("bulk-create-confirm-button");
+    expect(confirmButton.getAttribute("aria-disabled")).toBe("true");
     expect(footerLabels()).toEqual(footerOrderBefore);
 
     // A stray second click on the now-disabled CTA starts nothing.
@@ -2772,8 +2772,8 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
     const hint = hintText();
     expect(Number(/^(\d+)/.exec(hint)?.[1])).toBe(Number(/(\d+) skipped/.exec(hint)?.[1]));
 
-    const confirm = screen.getByTestId("bulk-create-confirm-button") as HTMLButtonElement;
-    expect(confirm.disabled).toBe(true);
+    const confirm = screen.getByTestId("bulk-create-confirm-button");
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => {
       confirm.click();
@@ -2906,7 +2906,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     render(<BulkCreateWorktreeDialog {...props} />);
 
     expect(screen.queryByText("Fork PR")).toBeNull();
-    expect(screen.getByTestId("bulk-create-confirm-button").hasAttribute("disabled")).toBe(false);
+    expect(
+      screen.getByTestId("bulk-create-confirm-button").getAttribute("aria-disabled")
+    ).toBeNull();
   });
 
   it("skips merged PRs with reason", () => {

@@ -141,6 +141,21 @@ function variantOf(element: ts.JsxOpeningLikeElement): VariantInfo {
   return { kind: "absent" };
 }
 
+// Recipe dialogs still disable footer actions natively. The recipe editor and
+// manager are being reworked as their own piece of work, which takes these
+// with it; remove each entry as it lands. Shrink-only.
+const NATIVE_DISABLED_PENDING = new Set([
+  "src/components/TerminalRecipe/RecipeEditor.tsx",
+  "src/components/TerminalRecipe/RecipeManager.tsx",
+  "src/components/Project/RecipesTab.tsx",
+]);
+
+function hasAttribute(element: ts.JsxOpeningLikeElement, name: string): boolean {
+  return element.attributes.properties.some(
+    (attribute) => ts.isJsxAttribute(attribute) && attribute.name.getText() === name
+  );
+}
+
 /** The `size` attribute's source text, or null when the button takes the default size. */
 function sizeOf(element: ts.JsxOpeningLikeElement): string | null {
   for (const attribute of element.attributes.properties) {
@@ -195,6 +210,12 @@ function scan(filePath: string): ScanResult {
       const size = sizeOf(node);
       if (size !== null) {
         result.violations.push({ file: relative, line, reason: `size=${size}` });
+      }
+      // An unavailable footer action stays focusable and says so with
+      // `aria-disabled`, vetoing its own activation — native `disabled` drops it
+      // out of the tab order, so Tab skips the very action the hint explains.
+      if (hasAttribute(node, "disabled") && !NATIVE_DISABLED_PENDING.has(relative)) {
+        result.violations.push({ file: relative, line, reason: "native disabled" });
       }
     }
     ts.forEachChild(node, inspectButtons);
