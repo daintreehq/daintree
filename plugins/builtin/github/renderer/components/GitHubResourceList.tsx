@@ -1597,7 +1597,7 @@ export function GitHubResourceList({
               }
               description={
                 isTransientNetworkError(error)
-                  ? "Check your connection, then retry"
+                  ? "Check your connection, then retry."
                   : sanitizeIpcError(error)
               }
               action={

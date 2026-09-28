@@ -153,7 +153,11 @@ type PushStatus =
  */
 function describeReadError(error: unknown, fallback: string): string {
   const reason = classifyGitError(error);
-  if (reason === "not-a-repository") return "This folder isn't a Git repository";
+  // Name the fix, so the Retry beside it is the step after it rather than a
+  // button that can only fail the same way again.
+  if (reason === "not-a-repository") {
+    return "This folder isn't a Git repository. Run git init here, then retry.";
+  }
   const hint = reason === "unknown" ? undefined : getGitRecoveryHint(reason);
   if (hint) return hint;
   const cleaned = formatErrorMessage(error, fallback)
