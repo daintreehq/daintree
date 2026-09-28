@@ -36,6 +36,7 @@ import type { ProjectCreationIdentity } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { isClientAppError } from "@/utils/clientAppError";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface CloneError {
   message: string;
@@ -487,9 +488,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter acts as Retry too — startClone resets `error` internally, so this
     // matches the on-screen Retry button instead of going dead after a failure.
-    // Enter that confirms an IME candidate is composition, not submission.
-    if (e.nativeEvent.isComposing) return;
-    if (e.key === "Enter" && canClone && !isCloning && !isComplete) {
+    if (!isEnterToSubmit(e)) return;
+    if (canClone && !isCloning && !isComplete) {
       e.preventDefault();
       void startClone();
     }

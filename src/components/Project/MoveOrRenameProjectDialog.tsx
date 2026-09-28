@@ -32,6 +32,7 @@ import {
 } from "@/store/projectRelocationStore";
 import { DirectoryPickerField, PathCaption } from "./projectDialogFields";
 import { PathSegments } from "@/components/ui/PathSegments";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 /** Typing pause before the preview is requested, so a folder name isn't checked per keystroke. */
 const PREVIEW_DEBOUNCE_MS = 250;
@@ -327,8 +328,7 @@ function MoveOrRenameProjectDialogInner({
   };
 
   const handleFieldKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Enter that confirms an IME candidate is composition, not submission.
-    if (e.nativeEvent.isComposing || e.key !== "Enter") return;
+    if (!isEnterToSubmit(e)) return;
     e.preventDefault();
     commitFromKeyboard();
   };

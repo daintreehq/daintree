@@ -17,6 +17,7 @@ import {
   PathCaption,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface CreateProjectFolderDialogProps {
   isOpen: boolean;
@@ -121,8 +122,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-      if (e.key === "Enter" && !isCreating) {
+      if (isEnterToSubmit(e) && !isCreating) {
         e.preventDefault();
         void handleCreate();
       }

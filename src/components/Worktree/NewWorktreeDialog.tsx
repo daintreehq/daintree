@@ -612,6 +612,9 @@ export function NewWorktreeDialog({
     if (handleBeforeClose()) onClose();
   }, [handleBeforeClose, onClose]);
 
+  // Names what the user was setting up, the way the recipe editor names its recipe.
+  const discardTarget = selectedExistingBranch ?? (branchInput.trim() || initialPR?.headRef);
+
   // A dialog closed from outside while the confirm was up must not reopen onto it.
   useEffect(() => {
     if (!isOpen) closeDiscardConfirm();
@@ -1430,7 +1433,7 @@ export function NewWorktreeDialog({
         onClose={closeDiscardConfirm}
         variant="destructive"
         zIndex="nested"
-        title={initialPR ? "Discard this PR checkout?" : "Discard this worktree?"}
+        title={discardTarget ? `Discard changes to '${discardTarget}'?` : "Discard changes?"}
         description="The branch, destination and setup you've chosen aren't kept, and nothing is created."
         confirmLabel="Discard changes"
         onConfirm={() => {

@@ -8,6 +8,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
 import type { PluginInputBoxOptions } from "@shared/types/plugin";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 /**
  * Compile a plugin-supplied validation pattern. A malformed pattern is ignored
@@ -78,9 +79,7 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
             aria-describedby={provenanceId}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
-              // Enter that commits an IME composition is not a submit.
-              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-              if (e.key === "Enter") {
+              if (isEnterToSubmit(e)) {
                 e.preventDefault();
                 handleSubmit();
               }

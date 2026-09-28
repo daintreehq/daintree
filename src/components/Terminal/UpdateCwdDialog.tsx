@@ -16,6 +16,7 @@ import { projectClient } from "@/clients/projectClient";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface UpdateCwdDialogProps {
   isOpen: boolean;
@@ -202,7 +203,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      if (isEnterToSubmit(e)) {
         e.preventDefault();
         void handleUpdate();
       }

@@ -9,6 +9,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { PredicateFleetSavedScope } from "@shared/types";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 type SaveFleetKind = "snapshot" | "predicate";
 type RuleState = PredicateFleetSavedScope["stateFilter"];
@@ -134,7 +135,7 @@ export function SaveFleetDialog({
                 setFailed(false);
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (isEnterToSubmit(e)) {
                   e.preventDefault();
                   void submit();
                 }

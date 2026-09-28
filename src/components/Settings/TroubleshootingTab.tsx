@@ -343,6 +343,15 @@ export function ApplicationLogsSection() {
   );
 }
 
+/**
+ * The Undo for "Clear all overrides": puts the cleared levels back, except for a
+ * module set again since the clear, which keeps its newer level.
+ */
+export async function restoreClearedLogOverrides(cleared: Record<string, string>): Promise<void> {
+  const current = await logsClient.getLevelOverrides();
+  await logsClient.setLevelOverrides({ ...cleared, ...current });
+}
+
 /** Destructive, so it closes the logging group rather than sharing the logs row. */
 export function ClearLogsRow() {
   const [showClearDialog, setShowClearDialog] = useState(false);
@@ -431,7 +440,7 @@ export function TroubleshootingTab() {
           label: "Undo",
           onClick: async () => {
             try {
-              await logsClient.setLevelOverrides(cleared);
+              await restoreClearedLogOverrides(cleared);
             } catch (error) {
               setClearOverridesError(
                 "Overrides couldn't be restored. Set them again from Set log level."

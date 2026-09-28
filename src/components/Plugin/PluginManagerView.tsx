@@ -50,6 +50,7 @@ import { groupPluginsByCategory } from "./pluginGrouping";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 // Provenance badge — where the archive came from. Deliberately the quietest
 // thing in the row: it is trivia next to whether the plugin is actually running.
@@ -1237,7 +1238,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             value={pm.urlInput}
             onChange={(e) => pm.setUrlInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && pm.urlInput.trim()) void pm.handleInstallFromUrl();
+              if (!isEnterToSubmit(e)) return;
+              e.preventDefault();
+              if (pm.urlInput.trim()) void pm.handleInstallFromUrl();
             }}
             placeholder="https://example.com/plugin.dntr"
             aria-label="Plugin URL"

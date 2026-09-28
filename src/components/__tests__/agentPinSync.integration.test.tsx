@@ -43,6 +43,10 @@ const agentSettingsState = {
   updateWorktreePreset: updateWorktreePresetMock,
 };
 
+// The toolbar tab's reset confirm reaches for stores this suite's `@/store`
+// mock doesn't carry; the confirm itself is covered by the tab's own suite.
+vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
+
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: Object.assign(
     (selector: (s: typeof agentSettingsState) => unknown) => selector(agentSettingsState),
