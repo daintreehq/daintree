@@ -320,6 +320,13 @@ function MoveToWorktreePickerBody({
         ref={inputRef}
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
+        // "Clear", not the family default: the no-match state owns "Clear
+        // search", and two buttons with one name are indistinguishable.
+        clearLabel="Clear"
+        onClear={() => {
+          onQueryChange("");
+          inputRef.current?.focus();
+        }}
         onKeyDown={handleNavigationKeyDown}
         placeholder="Search worktrees"
         aria-label="Search worktrees"

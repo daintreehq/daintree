@@ -880,13 +880,12 @@ export function LocalCommitsDropdown({
           break;
         }
         case "Escape":
-          // A query is cleared first, like every other search field; only an
-          // empty field closes the dropdown.
-          if (e.nativeEvent.isComposing) break;
+          // A query is SearchField's to clear; only an empty field closes the
+          // dropdown.
+          if (searchQuery || e.nativeEvent.isComposing) break;
           e.preventDefault();
           e.stopPropagation();
-          if (searchQuery) handleClearSearch();
-          else onClose?.();
+          onClose?.();
           break;
       }
     },
@@ -904,7 +903,6 @@ export function LocalCommitsDropdown({
       toggleCommitExpanded,
       copyHash,
       searchQuery,
-      handleClearSearch,
     ]
   );
 

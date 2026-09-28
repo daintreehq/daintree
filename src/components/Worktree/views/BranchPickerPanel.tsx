@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
+import { clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -78,8 +79,12 @@ export function BranchPickerPanel({
       motion="drop"
       align="start"
       // The popover portals out of the dialog's subtree; without this its own
-      // Escape would also dismiss the dialog behind it.
-      onEscapeKeyDown={(e) => e.stopPropagation()}
+      // Escape would also dismiss the dialog behind it. A query clears before
+      // the picker closes, as in every other search field.
+      onEscapeKeyDown={(e) => {
+        e.stopPropagation();
+        clearSearchBeforeDismiss(e, inputRef.current, () => setQuery(""));
+      }}
       onOpenAutoFocus={(e) => {
         // Cold mount: the lazy Radix chunk can land after the hook's rAF focus
         // attempt has already run, so claim focus here too.
@@ -92,6 +97,13 @@ export function BranchPickerPanel({
         placeholder={searchPlaceholder}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        // "Clear", not the family default: the no-match state owns "Clear
+        // search", and two buttons with one name are indistinguishable.
+        clearLabel="Clear"
+        onClear={() => {
+          setQuery("");
+          inputRef.current?.focus();
+        }}
         onKeyDown={handleKeyDown}
         role="combobox"
         aria-label={searchAriaLabel}

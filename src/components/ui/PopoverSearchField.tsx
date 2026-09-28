@@ -1,10 +1,17 @@
 import { forwardRef } from "react";
-import { Search } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface PopoverSearchFieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
   /** Extra classes for the field, not the inner input. */
   fieldClassName?: string;
+  /**
+   * Shows the clear button while the field has a value, as `SearchField` does.
+   * Escape inside the popover is the layer's: pass `clearSearchBeforeDismiss`
+   * from its `onEscapeKeyDown` so a query clears before the picker closes.
+   */
+  onClear?: () => void;
+  clearLabel?: string;
 }
 
 /**
@@ -49,7 +56,12 @@ export const POPOVER_SEARCH_INPUT_CLASS = cn(
  * other controls, or anywhere outside a picker popover, is `SearchField`.
  */
 export const PopoverSearchField = forwardRef<HTMLInputElement, PopoverSearchFieldProps>(
-  function PopoverSearchField({ className, fieldClassName, ...inputProps }, ref) {
+  function PopoverSearchField(
+    { className, fieldClassName, onClear, clearLabel = "Clear search", ...inputProps },
+    ref
+  ) {
+    const { value } = inputProps;
+    const hasValue = value !== undefined && value !== null && String(value).length > 0;
     return (
       // A label rather than a div: clicking anywhere on the strip — the icon,
       // the padding — puts the caret in the field, which is what "the whole
@@ -64,6 +76,19 @@ export const PopoverSearchField = forwardRef<HTMLInputElement, PopoverSearchFiel
           className={cn(POPOVER_SEARCH_INPUT_CLASS, className)}
           {...inputProps}
         />
+        {onClear && hasValue && (
+          <button
+            type="button"
+            className="search-field-clear"
+            aria-label={clearLabel}
+            disabled={inputProps.disabled}
+            // Pressing the button would otherwise pull focus off the input.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={onClear}
+          >
+            <X className="h-3 w-3" aria-hidden="true" />
+          </button>
+        )}
       </label>
     );
   }

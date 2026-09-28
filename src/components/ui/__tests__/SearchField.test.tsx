@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import fs from "node:fs";
 import path from "node:path";
-import { SearchField } from "../SearchField";
+import { SearchField, clearSearchBeforeDismiss } from "../SearchField";
+import { PopoverSearchField } from "../PopoverSearchField";
 
 const CSS = fs.readFileSync(
   path.resolve(__dirname, "../../../styles/components/search-field.css"),
@@ -122,6 +123,58 @@ describe("SearchField Escape", () => {
     );
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
     expect(outer).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("search inside a dismissable layer", () => {
+  function focusedInput(value: string): HTMLInputElement {
+    render(<input aria-label="Query" defaultValue={value} />);
+    const input = screen.getByLabelText("Query") as HTMLInputElement;
+    input.focus();
+    return input;
+  }
+
+  it("clears a focused query instead of letting the layer close", () => {
+    const input = focusedInput("abc");
+    const onClear = vi.fn();
+    const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    clearSearchBeforeDismiss(event, input, onClear);
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("lets the layer close once the query is empty", () => {
+    const input = focusedInput("");
+    const onClear = vi.fn();
+    const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    clearSearchBeforeDismiss(event, input, onClear);
+    expect(onClear).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves Escape to an IME that is composing", () => {
+    const input = focusedInput("abc");
+    const onClear = vi.fn();
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+      isComposing: true,
+    });
+    clearSearchBeforeDismiss(event, input, onClear);
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
+  it("offers the popover field's clear control only while there is a query", () => {
+    const onClear = vi.fn();
+    const { rerender } = render(
+      <PopoverSearchField aria-label="Find" value="" onChange={() => {}} onClear={onClear} />
+    );
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+    rerender(
+      <PopoverSearchField aria-label="Find" value="x" onChange={() => {}} onClear={onClear} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(onClear).toHaveBeenCalledTimes(1);
   });
 });
 
