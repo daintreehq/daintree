@@ -30,7 +30,7 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import {
   Select,
   SelectContent,
@@ -239,8 +239,9 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
-      <SegmentedToggle
+      <SegmentedRadioGroup
         density="compact"
+        aria-label="Canvas mode"
         options={MODE_OPTIONS}
         value={state.mode}
         onChange={(mode) => void controller.setMode(mode)}

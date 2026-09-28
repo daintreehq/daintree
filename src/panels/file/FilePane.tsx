@@ -1153,7 +1153,7 @@ export function FilePane({
     if (wasEditModeRef.current && viewMode !== "edit" && focusLost) {
       const toggle = modeToggleRef.current;
       const active =
-        toggle?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]') ??
+        toggle?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]') ??
         toggle?.querySelector<HTMLButtonElement>("button");
       active?.focus({ preventScroll: true });
     }

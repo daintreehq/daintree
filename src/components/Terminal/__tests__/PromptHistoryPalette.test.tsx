@@ -38,6 +38,7 @@ afterAll(() => {
 });
 
 const { PromptHistoryPalette } = await import("@/components/Terminal/PromptHistoryPalette");
+const { TooltipProvider } = await import("@/components/ui/tooltip");
 const { useCommandHistoryStore } = await import("@/store/commandHistoryStore");
 const { usePaletteStore } = await import("@/store/paletteStore");
 const { useProjectStore } = await import("@/store/projectStore");
@@ -57,7 +58,12 @@ function seed(history: Record<string, PromptHistoryEntry[]>) {
 }
 
 function renderPalette() {
-  render(<PromptHistoryPalette terminalId="t1" projectId={PROJECT} />);
+  // The scope segments carry tooltips; the app root supplies the provider.
+  render(
+    <TooltipProvider>
+      <PromptHistoryPalette terminalId="t1" projectId={PROJECT} />
+    </TooltipProvider>
+  );
   const input = document.querySelector<HTMLInputElement>('[role="combobox"]')!;
   expect(input).toBeTruthy();
   return input;
@@ -105,7 +111,9 @@ describe("PromptHistoryPalette", () => {
     });
     const input = renderPalette();
     const scopeOf = () =>
-      document.querySelector('[aria-label="History scope"] [aria-pressed="true"]')?.textContent;
+      document.querySelector(
+        '[role="radiogroup"][aria-label="History scope"] [role="radio"][aria-checked="true"]'
+      )?.textContent;
     const initial = scopeOf();
     const initialCount = optionTexts().length;
 

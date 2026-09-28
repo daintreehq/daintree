@@ -175,16 +175,18 @@ test("segmented controls — every consumer, every state", async ({ browser }) =
   await withPage(context, `focus ${first}`, async (page) => {
     await openGallery(page, first);
     for (const id of FOCUS_SPECIMENS) {
-      // Click the specimen's own caption (inert), then Tab: the first tab stop
-      // after it is the control, and focus arrives by keyboard, so the ring is
-      // the one a keyboard user sees.
-      await page.locator(`[data-shot="${id}"] [data-harness-decoration]`).click();
+      // A Tab press first, so focus arrives with keyboard modality and the ring
+      // is the one a keyboard user sees; then the control's own tab stop, which
+      // is not always the specimen's first (the theme browser's close button
+      // comes before its appearance switch).
       await page.keyboard.press("Tab");
+      const specimen = page.locator(`[data-shot="${id}"]`);
+      const radioStop = specimen.locator('[role="radio"][tabindex="0"]').first();
+      const target = (await radioStop.count()) > 0 ? radioStop : specimen.locator("button").first();
+      await target.focus();
       await page.waitForTimeout(150);
-      const focusedInside = await page
-        .locator(`[data-shot="${id}"]`)
-        .evaluate((el) => el.contains(document.activeElement) && document.activeElement !== el);
-      if (!focusedInside) throw new Error(`${id}: Tab did not land inside the specimen`);
+      const focusVisible = await target.evaluate((el) => el.matches(":focus-visible"));
+      if (!focusVisible) throw new Error(`${id}: the control's tab stop is not :focus-visible`);
       const file = `${id}--focus--${first}.png`;
       await snap(page.locator(`[data-shot="${id}"]`), file);
       expected.push(file);

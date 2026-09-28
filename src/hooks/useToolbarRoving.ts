@@ -9,6 +9,21 @@ import { useCallback, useEffect, useRef, type RefObject } from "react";
 const CONTROL_SELECTOR = 'button:not([disabled]), [role="button"]:not([aria-disabled="true"])';
 
 /**
+ * A radiogroup is ONE toolbar item, not one per segment: its own roving stop
+ * (the checked segment, or the first enabled one when that is disabled or
+ * nothing matches) stands for the whole group. The group answers the arrows
+ * inside itself and hands Left/Right back at its edges, so the row still loops.
+ */
+function isToolbarItem(element: HTMLElement): boolean {
+  if (element.getAttribute("role") !== "radio") return true;
+  const group = element.closest('[role="radiogroup"]');
+  if (!group) return true;
+  const radios = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]:not([disabled])'));
+  const checked = radios.find((radio) => radio.getAttribute("aria-checked") === "true");
+  return element === (checked ?? radios[0]);
+}
+
+/**
  * The WAI-ARIA toolbar pattern: the whole row is ONE tab stop, and Left/Right
  * move between its controls.
  *
@@ -45,7 +60,8 @@ export function useToolbarRoving(
     if (!root) return [];
     return Array.from(root.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)).filter(
       // A control inside an open portalled menu is not part of this row.
-      (element) => element.closest("[data-radix-popper-content-wrapper]") === null
+      (element) =>
+        element.closest("[data-radix-popper-content-wrapper]") === null && isToolbarItem(element)
     );
   }, [ref]);
 

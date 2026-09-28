@@ -667,7 +667,7 @@ describe("DiffPane — video current-version mode (#11382)", () => {
     });
     renderPane();
 
-    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Unified" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
   });
 
@@ -810,7 +810,7 @@ describe("DiffPane — audio current-version mode (#11425)", () => {
     });
     renderPane();
 
-    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Unified" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
   });
 
@@ -970,7 +970,7 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
     const { container } = renderPane();
     await waitForFrame(container);
 
-    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Unified" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
   });
 
@@ -1165,12 +1165,12 @@ describe("DiffPane wrap toggle (#12170)", () => {
 
 describe("DiffPane — rendered Markdown layout (#12171)", () => {
   function layoutSegments(): string[] {
-    const group = screen.getByRole("group", { name: "Diff layout" });
+    const group = screen.getByRole("radiogroup", { name: "Diff layout" });
     return [...group.querySelectorAll("button")].map((button) => button.textContent ?? "");
   }
 
   function clickSegment(label: string): void {
-    const group = screen.getByRole("group", { name: "Diff layout" });
+    const group = screen.getByRole("radiogroup", { name: "Diff layout" });
     const button = [...group.querySelectorAll("button")].find(
       (candidate) => candidate.textContent === label
     );
@@ -1220,7 +1220,7 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
     // would only ever see the Suspense fallback.
     expect(await screen.findByTestId("rendered-markdown-mock")).toBeTruthy();
     expect(screen.queryByTestId("diff-viewer-mock")).toBe(null);
-    expect(screen.queryByRole("group", { name: "Diff content" })).toBe(null);
+    expect(screen.queryByRole("radiogroup", { name: "Diff content" })).toBe(null);
     expect(screen.queryByLabelText("Wrap long lines")).toBe(null);
   });
 
@@ -1229,14 +1229,14 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
     renderPane();
 
     expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
-    expect(screen.getByRole("group", { name: "Diff content" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Diff content" })).toBeTruthy();
   });
 
   it("disables the segment on a staged diff and describes why for the keyboard path", () => {
     seedPanel({ filePath: "docs/guide.md", fileStatus: "modified", diffSource: "staged" });
     renderPane();
 
-    const group = screen.getByRole("group", { name: "Diff layout" });
+    const group = screen.getByRole("radiogroup", { name: "Diff layout" });
     const rendered = [...group.querySelectorAll("button")].find(
       (button) => button.textContent === "Rendered"
     );
@@ -1405,7 +1405,7 @@ index ada605e..029ae62 160000
     seedGitlink();
     renderPane();
 
-    const group = screen.getByRole("group", { name: "Diff content" });
+    const group = screen.getByRole("radiogroup", { name: "Diff content" });
     const describedBy = group.getAttribute("aria-describedby");
     if (!describedBy) throw new Error("scope group carries no aria-describedby");
     expect(document.getElementById(describedBy)?.textContent).toMatch(/submodule/i);
@@ -1442,7 +1442,7 @@ index ada605e..029ae62 160000
     seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
     renderPane();
 
-    const group = screen.getByRole("group", { name: "Diff content" });
+    const group = screen.getByRole("radiogroup", { name: "Diff content" });
     const fullFile = [...group.querySelectorAll("button")].find(
       (button) => button.textContent === "Full file"
     );
@@ -1458,7 +1458,7 @@ index ada605e..029ae62 160000
 
     await act(async () => {});
     expect(sourceEnabledCalls().some(Boolean)).toBe(false);
-    const layoutGroup = screen.getByRole("group", { name: "Diff layout" });
+    const layoutGroup = screen.getByRole("radiogroup", { name: "Diff layout" });
     const describedBy = layoutGroup.getAttribute("aria-describedby");
     if (!describedBy) throw new Error("layout group carries no aria-describedby");
     expect(document.getElementById(describedBy)?.textContent).toMatch(/submodule/i);

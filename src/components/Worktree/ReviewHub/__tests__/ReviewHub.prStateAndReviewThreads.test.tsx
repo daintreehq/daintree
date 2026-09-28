@@ -749,7 +749,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: /vs main/i }));
+        fireEvent.click(screen.getByRole("radio", { name: /vs main/i }));
       });
       await waitFor(() => screen.getByText("component.tsx"));
     }

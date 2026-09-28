@@ -66,9 +66,9 @@ describe("ImageDiffViewer", () => {
     expect(headImg.getAttribute("src")).toBe(HEAD_URL);
     expect(workingImg.getAttribute("src")).toBe(WORKING_URL);
 
-    expect(screen.getByRole("button", { name: "Two-up" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Swipe" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Onion skin" })).toBeDefined();
+    expect(screen.getByRole("radio", { name: "Two-up" })).toBeDefined();
+    expect(screen.getByRole("radio", { name: "Swipe" })).toBeDefined();
+    expect(screen.getByRole("radio", { name: "Onion skin" })).toBeDefined();
 
     expect(mockReadFileVersions).toHaveBeenCalledWith({
       cwd: "/repo",
@@ -81,7 +81,7 @@ describe("ImageDiffViewer", () => {
 
     render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Swipe" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Swipe" }));
 
     const divider = screen.getByRole("slider", { name: "Swipe divider" });
     expect(divider.getAttribute("aria-valuenow")).toBe("50");
@@ -104,8 +104,8 @@ describe("ImageDiffViewer", () => {
     await screen.findByAltText("Working tree version of new.png");
     expect(screen.queryByAltText("HEAD version of new.png")).toBeNull();
     expect(screen.getByText("Added — no previous version")).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Swipe" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Onion skin" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Swipe" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Onion skin" })).toBeNull();
   });
 
   it("shows a single HEAD pane for a deleted file", async () => {
@@ -118,7 +118,7 @@ describe("ImageDiffViewer", () => {
 
     await screen.findByAltText("HEAD version of gone.png");
     expect(screen.getByText("Deleted — no working version")).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Swipe" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Swipe" })).toBeNull();
   });
 
   it("keeps the single-pane layout for a deleted file with no readable prior version", async () => {
@@ -164,7 +164,7 @@ describe("ImageDiffViewer", () => {
 
     expect(await screen.findByText("Image too large to compare (over 8 MB)")).toBeDefined();
     expect(screen.getByAltText("Working tree version of huge.png")).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Swipe" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Swipe" })).toBeNull();
   });
 
   it("recovers via Retry after a failed fetch", async () => {
@@ -304,7 +304,7 @@ describe("ImageDiffViewer", () => {
       expect(screen.getByAltText("Working tree version of logo.png")).toBeDefined();
       expect(screen.queryByAltText("HEAD version of logo.png")).toBeNull();
       // Compare modes are hidden while a side is un-decodable.
-      expect(screen.queryByRole("button", { name: "Swipe" })).toBeNull();
+      expect(screen.queryByRole("radio", { name: "Swipe" })).toBeNull();
     });
 
     it("refetches on a status-only change and holds the old layout until the new one commits", async () => {
@@ -523,7 +523,7 @@ describe("ImageDiffViewer", () => {
 
     render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Onion skin" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Onion skin" }));
 
     const slider = screen.getByRole("slider", { name: "Working tree opacity" });
     fireEvent.change(slider, { target: { value: "25" } });

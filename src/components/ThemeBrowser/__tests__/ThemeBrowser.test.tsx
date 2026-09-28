@@ -188,7 +188,7 @@ describe("ThemeBrowser", () => {
     fireEvent.click(findRowByName(target.name));
     expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
 
-    fireEvent.click(screen.getByRole("button", { name: "Light" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Light" }));
 
     expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
   });

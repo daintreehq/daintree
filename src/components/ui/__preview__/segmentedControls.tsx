@@ -13,7 +13,6 @@ import {
   SegmentedRadioGroup,
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { QuickStateFilterBar } from "@/components/Worktree/QuickStateFilterBar";
 import { QuickStateArmButton } from "@/components/Worktree/QuickStateArmButton";
 import { PilotFilterBar } from "@/components/Pilot/PilotFilterBar";
@@ -119,11 +118,11 @@ function Toggle<T extends string>({
 }) {
   const [value, setValue] = useState<T>(initial);
   return (
-    <SegmentedToggle<T>
-      options={options.map(({ tooltip, ...rest }) => ({ ...rest, title: tooltip }))}
+    <SegmentedRadioGroup<T>
+      options={options}
       value={value}
       onChange={setValue}
-      ariaLabel={label}
+      aria-label={label}
       density={density}
       className={className}
     />
@@ -191,7 +190,7 @@ function Gallery() {
       <Specimen
         id="settings"
         title="Settings — scope switch + full-width preset (canonical)"
-        surface="settings-card flex flex-col gap-3 rounded-[var(--radius-lg)] border border-border-default p-3"
+        surface="settings-card flex flex-col items-start gap-3 rounded-[var(--radius-lg)] border border-border-default p-3"
         width={380}
       >
         <SegmentedRadioGroup

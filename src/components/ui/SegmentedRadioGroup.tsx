@@ -1,10 +1,17 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 export interface SegmentedRadioOption<T extends string> {
   value: T;
   label: string;
+  /** Unavailable right now. Skipped by the arrow keys; still shown as checked if it is. */
+  disabled?: boolean;
+  /** Screen-reader name when the visible label is an abbreviation ("60d") or truncates. */
+  ariaLabel?: string;
+  /** Hover detail — a shortcut, or the full name behind a truncated label. */
+  tooltip?: ReactNode;
 }
 
 interface SegmentedRadioGroupProps<T extends string> {
@@ -19,19 +26,39 @@ interface SegmentedRadioGroupProps<T extends string> {
   disabled?: boolean;
   /** Fill the container and split it evenly between the segments. */
   fullWidth?: boolean;
+  /**
+   * `compact` (24px) for a 32px chrome strip — a pane toolbar, a palette header
+   * or footer — where the default 28px leaves 2px of clearance and reads as a
+   * tab welded to the strip's bottom edge. It is also the height of an
+   * `icon-xs` button, so a strip carrying both has one control height.
+   */
+  density?: "default" | "compact";
+  /** `data-testid` for the group; each segment gets `${testId}-${value}`. */
+  testId?: string;
+  /**
+   * Pass `min-w-0 shrink` to let the labels truncate instead of pushing the
+   * last segment out of the row — for a label whose width is only known at
+   * runtime. `min-w-0` alone is not enough: the base `shrink-0` says the group
+   * never shrinks at all. tailwind-merge resolves the pair to the caller's
+   * `shrink`.
+   */
   className?: string;
 }
 
 /**
- * The app's one segmented single-choice control, shared by the create-worktree
- * form's branch-mode and environment switches and by the settings shell's
- * global/project scope switch.
+ * The app's one segmented single-choice control: every mode switch, scope
+ * switch and range picker — settings rows, pane toolbars (diff layout, file
+ * view mode, review hub diff mode), palettes (prompt history scope, fleet
+ * commit mode, theme browser appearance), the image diff and the pulse card.
+ * Anything that picks exactly one of a few options uses this, so they all look,
+ * answer the keyboard and move the same way.
  *
  * Radio semantics with a real radiogroup keyboard model: arrow keys and
- * Home/End move the selection, and only the checked segment is a tab stop, so
- * the group is one stop in the tab order rather than N. `SegmentedToggle` is
- * the sibling control for `aria-pressed` toggles; this one exists because these
- * two switches are single-choice pickers, and screen readers should say so.
+ * Home/End move the selection, skipping disabled segments, and only one
+ * segment is a tab stop — the checked one, or the first enabled one when the
+ * checked segment is disabled or nothing matches — so the group is one stop in
+ * the tab order rather than N. Keys the group handles stop propagating, so a
+ * palette or list around it does not also act on the same press.
  *
  * The thumb slides via a measured transform rather than framer's shared-layout
  * projection: framer is a lint-restricted heavy import (#7659), and a segment's
@@ -53,6 +80,8 @@ export function SegmentedRadioGroup<T extends string>({
   "aria-invalid": ariaInvalid,
   disabled,
   fullWidth,
+  density = "default",
+  testId,
   className,
 }: SegmentedRadioGroupProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -64,6 +93,10 @@ export function SegmentedRadioGroup<T extends string>({
   const skipMotion = useShouldSkipMotion();
 
   const activeIndex = options.findIndex((option) => option.value === value);
+  const activeOption = activeIndex === -1 ? undefined : options[activeIndex];
+  const firstEnabled = options.findIndex((option) => !option.disabled);
+  // Roving tabindex: the checked segment, unless it cannot take focus.
+  const tabStop = activeOption && !activeOption.disabled ? activeIndex : firstEnabled;
 
   const measure = useCallback(
     (animate: boolean) => {
@@ -73,7 +106,17 @@ export function SegmentedRadioGroup<T extends string>({
         setThumb(null);
         return;
       }
-      setThumb({ left: button.offsetLeft, width: button.offsetWidth, animate });
+      const left = button.offsetLeft;
+      const width = button.offsetWidth;
+      // A re-measure that finds the same geometry is not a move. A new observer
+      // always reports once on attach — and one is attached on every value
+      // change — so without this its first report would strip the transition
+      // from a slide the user's pick had just started.
+      setThumb((prev) =>
+        !animate && prev && prev.left === left && prev.width === width
+          ? prev
+          : { left, width, animate }
+      );
     },
     [activeIndex]
   );
@@ -97,21 +140,37 @@ export function SegmentedRadioGroup<T extends string>({
   }, [measure, options.length, value]);
 
   const pick = (next: T) => {
-    // A pick of the current value clears the intent too, so a pick the owner
-    // rejected can't make a later outside change to that option slide.
-    pendingPickRef.current = next === value ? null : next;
+    // Re-picking the checked segment is not a change: the owner is not told, so
+    // an inert click cannot refetch or persist. It still clears the intent, so a
+    // pick the owner rejected can't make a later outside change to that option slide.
+    if (next === value) {
+      pendingPickRef.current = null;
+      return;
+    }
+    pendingPickRef.current = next;
     onChange(next);
   };
 
   const select = (index: number) => {
     const option = options[index];
-    if (!option) return;
+    if (!option || option.disabled) return;
     pick(option.value);
     buttonRefs.current[index]?.focus();
   };
 
+  /** The next enabled segment from `from` in `step` direction, wrapping; -1 if none. */
+  const nextEnabled = (from: number, step: 1 | -1): number => {
+    for (let i = 1; i <= options.length; i++) {
+      const index = (((from + step * i) % options.length) + options.length) % options.length;
+      if (!options[index]?.disabled) return index;
+    }
+    return -1;
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (disabled || options.length === 0) return;
+    if (disabled || firstEnabled === -1) return;
+    // Chords belong to the app (word-jump, tab switching), as they do in a toolbar.
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
     // Move from where the keyboard is, not from the selection. They differ after a
     // rejected change — the owner rolls `value` back while focus stays on the option
     // the user tried — and stepping from the selection would re-attempt that same
@@ -120,39 +179,54 @@ export function SegmentedRadioGroup<T extends string>({
       (button) => button !== null && button === document.activeElement
     );
     const from = focusedIndex !== -1 ? focusedIndex : activeIndex === -1 ? 0 : activeIndex;
+    // Inside a toolbar the group is one item of the row: Left/Right past its
+    // edge belong to the toolbar, which moves on to the neighbouring control
+    // rather than wrapping back round the group. Up/Down still wrap.
+    const inToolbar = containerRef.current?.parentElement?.closest('[role="toolbar"]') != null;
+    let target: number;
     switch (event.key) {
       case "ArrowRight":
       case "ArrowDown":
-        event.preventDefault();
-        select((from + 1) % options.length);
+        target = nextEnabled(from, 1);
+        if (inToolbar && event.key === "ArrowRight" && target <= from) return;
         break;
       case "ArrowLeft":
       case "ArrowUp":
-        event.preventDefault();
-        select((from - 1 + options.length) % options.length);
+        target = nextEnabled(from, -1);
+        if (inToolbar && event.key === "ArrowLeft" && target >= from) return;
         break;
       case "Home":
-        event.preventDefault();
-        select(0);
+        target = firstEnabled;
         break;
       case "End":
-        event.preventDefault();
-        select(options.length - 1);
+        target = nextEnabled(0, -1);
         break;
       default:
-        break;
+        return;
     }
+    // Only once the key is known to belong to the group: cancelling earlier would
+    // eat keys the surrounding form and the browser still have a use for.
+    event.preventDefault();
+    event.stopPropagation();
+    select(target);
   };
+
+  const thumbDimmed = disabled || activeOption?.disabled;
 
   return (
     <div
       ref={containerRef}
       className={cn(
-        "relative isolate rounded-[var(--radius-md)] bg-surface-inset p-0.5",
+        // Compact keeps its 24px footprint by giving the segments the full
+        // height rather than padding the track: the thumb stays inset 2px, but
+        // the target a pointer can hit is 24px tall, not 20.
+        "relative isolate rounded-[var(--radius-md)] bg-surface-inset",
+        density === "compact" ? "px-0.5" : "p-0.5",
         fullWidth ? "flex w-full" : "inline-flex shrink-0",
         className
       )}
       role="radiogroup"
+      data-testid={testId}
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedBy}
       aria-invalid={ariaInvalid || undefined}
@@ -177,7 +251,9 @@ export function SegmentedRadioGroup<T extends string>({
             // it entirely rather than shortening it.
             thumb.animate && !skipMotion && "transition-[translate,width] duration-150 ease-out",
             "motion-reduce:transition-none",
-            disabled && "opacity-40"
+            // Unavailable is not unselected: a disabled checked segment keeps its
+            // thumb, dimmed with it.
+            thumbDimmed && "opacity-40"
           )}
           style={{ translate: `${thumb.left}px 0`, width: thumb.width }}
           aria-hidden="true"
@@ -185,7 +261,8 @@ export function SegmentedRadioGroup<T extends string>({
       )}
       {options.map((option, index) => {
         const isActive = option.value === value;
-        return (
+        const isDisabled = disabled || option.disabled;
+        const segment = (
           <button
             key={option.value}
             ref={(el) => {
@@ -194,13 +271,17 @@ export function SegmentedRadioGroup<T extends string>({
             type="button"
             role="radio"
             aria-checked={isActive}
-            // Roving tabindex: the group is one tab stop, arrows move within it.
-            tabIndex={isActive || (activeIndex === -1 && index === 0) ? 0 : -1}
+            aria-label={option.ariaLabel}
+            data-testid={testId ? `${testId}-${option.value}` : undefined}
+            tabIndex={index === tabStop ? 0 : -1}
             onClick={() => pick(option.value)}
-            disabled={disabled}
+            disabled={isDisabled}
             className={cn(
-              "relative z-10 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)]",
-              fullWidth && "flex-1 min-w-0 truncate",
+              // The button is already a stacking context (z-10), so dimming it
+              // cannot trap its label under a thumb sliding in from a sibling.
+              "relative z-10 min-w-0 text-xs font-medium rounded-[var(--radius-sm)]",
+              density === "compact" ? "px-2 py-1" : "px-2.5 py-1",
+              fullWidth && "flex-1",
               "transition-colors duration-150 ease-out",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
               "disabled:cursor-not-allowed disabled:pointer-events-none",
@@ -211,11 +292,21 @@ export function SegmentedRadioGroup<T extends string>({
               isActive &&
                 !thumb &&
                 "bg-overlay-medium border border-text-secondary forced-colors:border-[Highlight]",
-              disabled && "opacity-40"
+              isDisabled && "opacity-40"
             )}
           >
-            {option.label}
+            {/* `block truncate`: an inline label has no width of its own to
+                overflow, so a shrinking segment would clip it mid-glyph instead
+                of ellipsing it. */}
+            <span className="block truncate">{option.label}</span>
           </button>
+        );
+        if (option.tooltip === undefined) return segment;
+        return (
+          <Tooltip key={option.value}>
+            <TooltipTrigger asChild>{segment}</TooltipTrigger>
+            <TooltipContent side="bottom">{option.tooltip}</TooltipContent>
+          </Tooltip>
         );
       })}
     </div>

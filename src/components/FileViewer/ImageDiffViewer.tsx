@@ -3,7 +3,7 @@ import { GripVertical, ImageOff } from "lucide-react";
 import type { DiffMediaFileVersions, DiffMediaSide, GitStatus } from "@shared/types";
 import { getDiffMediaImageMime } from "@shared/types/ipc/diffMedia";
 import { diffMediaClient } from "@/clients/diffMediaClient";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -857,8 +857,8 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
       <div className="flex h-full min-h-0 w-full flex-col" aria-busy={isHolding || undefined}>
         {zoomable ? (
           <div className="flex shrink-0 px-3 pt-3">
-            <SegmentedToggle
-              ariaLabel="Zoom"
+            <SegmentedRadioGroup
+              aria-label="Zoom"
               options={zoomOptions}
               value={zoomLevel}
               onChange={setZoom}
@@ -908,11 +908,16 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 pt-3">
           <div className="flex flex-wrap items-center gap-2">
             {showModes ? (
-              <SegmentedToggle options={MODE_OPTIONS} value={effectiveMode} onChange={setMode} />
+              <SegmentedRadioGroup
+                aria-label="Comparison mode"
+                options={MODE_OPTIONS}
+                value={effectiveMode}
+                onChange={setMode}
+              />
             ) : null}
             {zoomable ? (
-              <SegmentedToggle
-                ariaLabel="Zoom"
+              <SegmentedRadioGroup
+                aria-label="Zoom"
                 options={zoomOptions}
                 value={zoomLevel}
                 onChange={setZoom}

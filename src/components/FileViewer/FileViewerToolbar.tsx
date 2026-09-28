@@ -18,7 +18,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { SegmentedToggle, type SegmentedToggleOption } from "@/components/ui/SegmentedToggle";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
@@ -169,7 +172,7 @@ export const TOOLBAR_ICON_CLASS = PANE_TOOLBAR_ICON_CLASS;
  * Composed rather than config-driven: the two surfaces own materially
  * different state (the dialog has diff modes and an Open-as-panel action the
  * panel has no concept of), so they supply their own children and keep their
- * own handlers. SegmentedToggle stays a separate import for the same reason —
+ * own handlers. SegmentedRadioGroup stays a separate import for the same reason —
  * the dialog appends a Diff segment the panel never has.
  *
  * None of these primitives take a className. The chrome is deliberately fixed:
@@ -590,7 +593,7 @@ function ModeControl<T extends string>({
   onChange,
   menuBelow = MODE_MENU_BELOW,
 }: {
-  options: Array<SegmentedToggleOption<T>>;
+  options: Array<SegmentedRadioOption<T>>;
   value: T;
   onChange: (value: T) => void;
   /** Row width under which the segments fold into the menu. */
@@ -603,7 +606,13 @@ function ModeControl<T extends string>({
     return (
       // Compact density: the toolbar's icon buttons are 26px, and the default
       // 28px segment made every renderable file's row taller than every other.
-      <SegmentedToggle<T> options={options} value={value} onChange={onChange} density="compact" />
+      <SegmentedRadioGroup<T>
+        options={options}
+        value={value}
+        onChange={onChange}
+        density="compact"
+        aria-label="View mode"
+      />
     );
   }
 
@@ -613,7 +622,6 @@ function ModeControl<T extends string>({
         <button
           type="button"
           aria-label={`View mode: ${current.ariaLabel ?? current.label}`}
-          title={current.title}
           data-testid="file-browser-mode-menu"
           className="toolbar-icon-button flex h-6.5 shrink-0 items-center gap-1 rounded-[var(--radius-md)] px-2 text-xs font-medium text-text-primary"
         >
@@ -636,7 +644,6 @@ function ModeControl<T extends string>({
               value={option.value}
               disabled={option.disabled}
               aria-label={option.ariaLabel}
-              title={option.title ?? option.ariaLabel}
             >
               {option.label}
             </DropdownMenuRadioItem>

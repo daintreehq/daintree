@@ -631,19 +631,25 @@ describe("FleetPickerPalette", () => {
       await act(async () => {});
 
       const group = screen.getByTestId("fleet-picker-cold-start-commit-mode");
-      const thumbOwner = () => {
+      // The thumb is one sibling of the segments, owned by the group rather than
+      // any segment; the checked radio is the one it marks.
+      const expectOneThumbAndChecked = (value: "replace" | "append") => {
         const thumbs = group.querySelectorAll("[data-slot='segmented-thumb']");
         expect(thumbs.length).toBe(1);
-        return thumbs[0]?.closest("[role='radio']");
+        expect(thumbs[0]?.parentElement).toBe(group);
+        expect(thumbs[0]?.closest("[role='radio']")).toBeNull();
+        const checked = group.querySelectorAll("[role='radio'][aria-checked='true']");
+        expect(checked.length).toBe(1);
+        expect(checked[0]).toBe(screen.getByTestId(`fleet-picker-cold-start-commit-mode-${value}`));
       };
 
-      expect(thumbOwner()).toBe(screen.getByTestId("fleet-picker-cold-start-commit-mode-replace"));
+      expectOneThumbAndChecked("replace");
 
       await act(async () => {
         fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
       });
 
-      expect(thumbOwner()).toBe(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      expectOneThumbAndChecked("append");
     });
 
     it("switching to Append updates aria-checked and confirm label", async () => {

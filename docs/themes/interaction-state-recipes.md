@@ -183,6 +183,8 @@ Rest is a recessed well (`surface-canvas`, or the site's theme hook through `--s
 
 The sliding thumb of `SegmentedRadioGroup` sits on an inset track, where `border-strong` measured only 1.5–1.7:1 and the fill barely moves. It uses `border-text-secondary` for the boundary instead, which clears SC 1.4.11's 3:1 in both polarities.
 
+`SegmentedRadioGroup` is the only segmented single-choice control: every mode switch, scope switch and range picker renders through it rather than hand-rolling a track and thumb, so they share one track, one thumb, one keyboard model and one slide. The quick-state filter bars (`QuickStateFilterBar`, `PilotFilterBar`) are a deliberate separate visual family — full-width segments with counts and an underline — but share the same radiogroup keyboard model.
+
 ---
 
 ### Switch-Row ON State

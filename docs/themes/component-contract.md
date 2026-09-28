@@ -15,7 +15,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `SearchablePalette`, `AppPaletteDialog`, `AppPalettePopover` | Anything list-and-filter. The palette family owns the arrow-key model, the active-descendant cursor and hover/keyboard reconciliation. |
 | `popover`, `fixed-dropdown`, `dropdown-menu`, `context-menu`, `select`, `tooltip` | Layered surfaces. `fixed-dropdown` is the one that survives overlay-count races on cold start. |
 | `button` | Any button. Its variant table is the accent budget in code — pick a variant rather than restyling a `ghost`. |
-| `SegmentedToggle`, `SegmentedRadioGroup`, `RadioChoiceGroup` / `RadioChoiceRow` | Two-to-three-way mode switches and option groups. |
+| `SegmentedRadioGroup`, `RadioChoiceGroup` / `RadioChoiceRow` | `SegmentedRadioGroup` is every single-choice mode switch, scope switch and range picker (radiogroup, one tab stop, arrows and Home/End, `compact` density for 32px chrome); `RadioChoice*` for option groups with descriptions. |
 | `EmptyState` | An empty region. The `user-cleared` variant deliberately nulls its action so completed-work states stay quiet. |
 | `Skeleton`, `Spinner` | Loading, under the 400ms Doherty gate in `CLAUDE.md` — skeleton when the layout shape is predictable, `Spinner` when it is not. |
 | `field`, `input`, `textarea`, `checkbox`, `switch` | Any form control. `field` owns the label/description/error wiring and the `aria-describedby` and `aria-invalid` plumbing that hand-rolled forms get wrong. |

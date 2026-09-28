@@ -180,3 +180,83 @@ describe("useToolbarRoving", () => {
     expect(tabIndexes().filter((t) => t === 0)).toHaveLength(1);
   });
 });
+
+describe("useToolbarRoving with a radiogroup in the row", () => {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+
+  async function renderRow(initial: string) {
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= ResizeObserverStub;
+    const { SegmentedRadioGroup } = await import("@/components/ui/SegmentedRadioGroup");
+    function Row() {
+      const ref = useRef<HTMLDivElement>(null);
+      const onKeyDown = useToolbarRoving(ref);
+      const [mode, setMode] = useState(initial);
+      return (
+        <div ref={ref} role="toolbar" aria-label="Viewer" onKeyDown={onKeyDown}>
+          <button type="button">before</button>
+          <SegmentedRadioGroup
+            aria-label="Mode"
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: "a", label: "Alpha" },
+              { value: "b", label: "Bravo" },
+              { value: "c", label: "Charlie" },
+            ]}
+          />
+          <button type="button">after</button>
+        </div>
+      );
+    }
+    render(<Row />);
+  }
+
+  const tabStops = () =>
+    [...document.querySelectorAll<HTMLElement>("[tabindex]")].filter((el) => el.tabIndex === 0);
+
+  it("keeps the whole row, group included, to one tab stop", async () => {
+    await renderRow("b");
+
+    expect(tabStops()).toHaveLength(1);
+    fireEvent.keyDown(screen.getByRole("button", { name: "before" }), { key: "ArrowRight" });
+    expect(tabStops()).toHaveLength(1);
+  });
+
+  it("enters the group on its checked segment, not its first", async () => {
+    await renderRow("b");
+    const before = screen.getByRole("button", { name: "before" });
+    before.focus();
+
+    fireEvent.keyDown(before, { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Bravo" }));
+  });
+
+  it("moves the selection inside the group, then hands the row on at its edges", async () => {
+    await renderRow("b");
+    const group = screen.getByRole("radiogroup", { name: "Mode" });
+    screen.getByRole("radio", { name: "Bravo" }).focus();
+
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(screen.getByRole("radio", { name: "Charlie" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "after" }));
+    expect(screen.getByRole("radio", { name: "Charlie" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+
+    screen.getByRole("radio", { name: "Charlie" }).focus();
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "before" }));
+    expect(group.contains(document.activeElement)).toBe(false);
+  });
+});

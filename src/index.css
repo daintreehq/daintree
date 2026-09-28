@@ -3061,15 +3061,11 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      the underline in the same place rather than borrowing the chips' border —
      a border would shift the segment's contents by its width. ButtonText, not
      Highlight, for the same reason as the chips above. */
-  [data-quick-state-segment][aria-pressed="true"],
-  [data-quick-state-segment][aria-checked="true"],
-  .pulse-range [role="radio"][aria-checked="true"] {
+  [data-quick-state-segment][aria-checked="true"] {
     position: relative;
   }
 
-  [data-quick-state-segment][aria-pressed="true"]::after,
-  [data-quick-state-segment][aria-checked="true"]::after,
-  .pulse-range [role="radio"][aria-checked="true"]::after {
+  [data-quick-state-segment][aria-checked="true"]::after {
     content: "";
     position: absolute;
     inset-inline: 0;

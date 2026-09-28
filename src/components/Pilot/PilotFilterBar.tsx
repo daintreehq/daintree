@@ -177,11 +177,9 @@ export interface PilotFilterBarProps {
 /**
  * The state filter under the search box.
  *
- * A radiogroup rather than the worktree sidebar's toolbar-of-toggles: these
- * segments are mutually exclusive with All as the null option, which is what a
- * radiogroup IS. (The sidebar's own `QuickStateFilterBar` is roled as a toolbar
- * with `aria-pressed` for the same single-select behaviour, which is arguably
- * wrong, but realigning it is a separate change.) Visually the two are the same
+ * A radiogroup: these segments are mutually exclusive with All as the null
+ * option, which is what a radiogroup IS — and the sidebar's own
+ * `QuickStateFilterBar` is one too, keyed the same way. Visually the two are the same
  * control — same segment box, dividers, active treatment and
  * muted-icon-on-zero rule — so the fleet overview and the sidebar don't teach
  * two spellings of one idea.

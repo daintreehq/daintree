@@ -63,7 +63,7 @@ import { DiffNotesSendMenu, sendDiffNotes, type DiffNoteSendRequest } from "./Di
 import { PendingFileNotes } from "@/components/Worktree/DiffNoteWidgets";
 import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -796,13 +796,13 @@ export function DiffPane({
   // disabled segment takes no focus, so a keyboard or screen-reader user would
   // never reach a hover-only explanation.
   const scopeReasonId = `${id}-full-file-reason`;
+  // `flex`: the group is inline-flex, and inline content in a block wrapper
+  // grows the line box by the font's descender, lifting it off the toolbar's axis.
   const scopeToggle = (
-    <div
-      role="group"
-      aria-label="Diff content"
-      aria-describedby={fullFileAvailability.available ? undefined : scopeReasonId}
-    >
-      <SegmentedToggle<DiffContentScope>
+    <div className="flex">
+      <SegmentedRadioGroup<DiffContentScope>
+        aria-label="Diff content"
+        aria-describedby={fullFileAvailability.available ? undefined : scopeReasonId}
         options={[
           { value: "changes", label: "Changes" },
           {
@@ -914,12 +914,10 @@ export function DiffPane({
       : null;
   const layoutReasonId = `${id}-rendered-reason`;
   const layoutToggle = (
-    <div
-      role="group"
-      aria-label="Diff layout"
-      aria-describedby={renderedDisabledReason ? layoutReasonId : undefined}
-    >
-      <SegmentedToggle<DiffPaneLayout>
+    <div className="flex">
+      <SegmentedRadioGroup<DiffPaneLayout>
+        aria-label="Diff layout"
+        aria-describedby={renderedDisabledReason ? layoutReasonId : undefined}
         options={[
           { value: "unified", label: "Unified" },
           { value: "split", label: "Split" },
