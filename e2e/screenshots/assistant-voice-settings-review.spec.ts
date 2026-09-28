@@ -439,7 +439,7 @@ async function seedPreferredAgent(page: Page, agentId: string | null): Promise<v
 async function reloadRenderer(page: Page): Promise<void> {
   await page.reload({ waitUntil: "domcontentloaded" });
   await page
-    .locator('[aria-label="Toggle Sidebar"]')
+    .locator('[aria-label="Toggle sidebar"]')
     .waitFor({ state: "visible", timeout: 30_000 });
   await dismissBlockingPalette(page);
   await page.addStyleTag({ content: POLISH_CSS });

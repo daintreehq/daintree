@@ -451,7 +451,7 @@ test.describe.serial("Core: Accessibility", () => {
           const elementsToTest = [
             { selector: SEL.toolbar.openSettings, name: "Settings button" },
             { selector: SEL.toolbar.openTerminal, name: "Open terminal button" },
-            { selector: SEL.toolbar.toggleSidebar, name: "Toggle Sidebar button" },
+            { selector: SEL.toolbar.toggleSidebar, name: "Toggle sidebar button" },
           ];
 
           const failures: string[] = [];

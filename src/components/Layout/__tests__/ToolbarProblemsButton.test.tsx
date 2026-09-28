@@ -6,7 +6,9 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: () => null,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="tooltip-content">{children}</div>
+  ),
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -98,7 +100,7 @@ vi.mock("@/hooks", () => ({
 }));
 
 vi.mock("@/lib/tooltipShortcut", () => ({
-  createTooltipContent: () => null,
+  createTooltipContent: (label: React.ReactNode) => <span>{label}</span>,
 }));
 
 describe("ToolbarProblemsButton — aria-expanded / aria-controls", () => {
@@ -218,5 +220,57 @@ describe("ToolbarProblemsButton — topology-watcher-dark pip (#9908)", () => {
   it("keeps the pip hidden when neither watcher signal is set", () => {
     const { getByTestId } = render(<ToolbarProblemsButton errorCount={0} />);
     expect(getByTestId("watcher-degraded-badge").getAttribute("data-visible")).toBe("false");
+  });
+});
+
+describe("ToolbarProblemsButton — tooltip carries what the button shows", () => {
+  beforeEach(() => {
+    useDiagnosticsStore.setState({ isOpen: false });
+  });
+
+  const tooltipText = (container: HTMLElement) =>
+    container.querySelector('[data-testid="tooltip-content"]')?.textContent ?? "";
+
+  it.each([
+    { errorCount: 0 },
+    { errorCount: 1 },
+    { errorCount: 3, watcherDegraded: true },
+    { errorCount: 0, topologyWatcherDark: true },
+    { errorCount: 2, watcherDegraded: true, topologyWatcherDark: true },
+  ])(
+    "states in the tooltip every status the accessible name carries ($errorCount errors)",
+    (props) => {
+      const { container } = render(<ToolbarProblemsButton {...props} />);
+      const status = container
+        .querySelector("button")!
+        .getAttribute("aria-label")!
+        .replace(/^Problems: /, "")
+        .split(", ");
+      const tooltip = tooltipText(container).toLowerCase();
+      for (const part of status) {
+        if (props.errorCount === 0 && /errors?$/.test(part)) continue;
+        expect(tooltip).toContain(part.toLowerCase());
+      }
+    }
+  );
+
+  it("still states the error status when the count is zero, in words rather than a 0", () => {
+    const { container } = render(<ToolbarProblemsButton errorCount={0} />);
+    expect(tooltipText(container)).toMatch(/errors/i);
+    expect(tooltipText(container)).not.toMatch(/\b0 errors\b/);
+  });
+
+  it("changes the tooltip's action with the dock state while the accessible name holds", () => {
+    const { container } = render(<ToolbarProblemsButton errorCount={2} />);
+    const button = container.querySelector("button")!;
+    const closedName = button.getAttribute("aria-label");
+    const closedTooltip = tooltipText(container);
+
+    act(() => {
+      useDiagnosticsStore.setState({ isOpen: true });
+    });
+
+    expect(button.getAttribute("aria-label")).toBe(closedName);
+    expect(tooltipText(container)).not.toBe(closedTooltip);
   });
 });

@@ -176,7 +176,9 @@ function PluginTrayRow({
     >
       <Icon data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
 
-      <span className="flex-1">{config.label}</span>
+      <span className="min-w-0 flex-1 truncate" title={config.label}>
+        {config.label}
+      </span>
 
       <span className="sr-only">Press P to {promoted ? "unpin from" : "pin to"} toolbar</span>
 
@@ -329,7 +331,7 @@ export function PluginTrayButton({
       <DropdownMenuContent
         align="end"
         sideOffset={4}
-        className="min-w-[16rem]"
+        className="min-w-[16rem] max-w-[22rem]"
         onPointerDownOutside={() => {
           wasPointerCloseRef.current = true;
         }}

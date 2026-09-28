@@ -94,7 +94,7 @@ test.describe.serial("Multi-window isolation", () => {
 
     // Wait for window 2's sidebar to be ready before any test body runs.
     await window2Page
-      .locator('[aria-label="Toggle Sidebar"]')
+      .locator('[aria-label="Toggle sidebar"]')
       .waitFor({ state: "visible", timeout: MULTI_WINDOW_READY_TIMEOUT });
 
     // Re-resolve window 1's page by stable windowId in case the cached

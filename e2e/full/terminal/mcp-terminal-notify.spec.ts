@@ -253,7 +253,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
       window.localStorage.setItem(key, JSON.stringify(blob));
     });
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.locator('[aria-label="Toggle Sidebar"]')).toBeVisible({ timeout: T_LONG });
+    await expect(page.locator('[aria-label="Toggle sidebar"]')).toBeVisible({ timeout: T_LONG });
 
     // The Daintree Assistant, opened in the sidebar and started the way a user
     // starts it, then a second lane beside it.

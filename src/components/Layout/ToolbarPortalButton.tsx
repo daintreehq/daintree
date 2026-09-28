@@ -28,7 +28,9 @@ export function ToolbarPortalButton({
           data-toolbar-item={dataToolbarItem}
           onClick={togglePortal}
           className={toolbarIconButtonClass}
-          aria-label={portalOpen ? "Close web chat" : "Open web chat"}
+          // A toggle keeps one name; aria-pressed announces the state and only
+          // the tooltip reads differently.
+          aria-label="Web chat"
           aria-pressed={portalOpen}
           aria-keyshortcuts={portalAriaShortcut}
         >

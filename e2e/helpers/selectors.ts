@@ -1,13 +1,13 @@
 export const SEL = {
   toolbar: {
-    toggleSidebar: '[aria-label="Toggle Sidebar"]',
+    toggleSidebar: '[aria-label="Toggle sidebar"]',
     openTerminal: '[aria-label="Open terminal"]',
     openSettings: '[aria-label="Open settings"]',
     openBrowser: '[aria-label="Open browser"]',
     openDevPreview: '[aria-label="Open dev preview"]',
     copyContext: '[aria-label="Copy context"]',
     projectSwitcherTrigger: '[data-testid="project-switcher-trigger"]',
-    portalToggle: '[aria-label*="web chat"]',
+    portalToggle: '[aria-label="Web chat"]',
   },
   portal: {
     region: 'aside[aria-label="Portal"]',
