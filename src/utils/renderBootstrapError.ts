@@ -4,12 +4,12 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 // Daintree value: this screen paints exactly when boot failed, which may be
 // before the stylesheet or the theme were applied. Either way it reads as the
 // same family as the React crash screen — neutral canvas, red only on the glyph.
-const CANVAS = "var(--color-surface-canvas,#1a1918)";
+const CANVAS = "var(--color-surface-canvas,#1a1b18)";
 const TILE = "var(--color-overlay-subtle,rgba(255,255,255,0.04))";
-const TEXT = "var(--color-text-primary,#e4e4e7)";
-const TEXT_SECONDARY = "var(--color-text-secondary,#a1a1aa)";
-const INVERSE = "var(--color-text-inverse,#1a1918)";
-const ERROR = "var(--color-status-error,#c8746c)";
+const TEXT = "var(--color-text-primary,#dfe0d8)";
+const TEXT_SECONDARY = "var(--color-text-secondary,#a5a89d)";
+const INVERSE = "var(--color-text-inverse,#1a1b18)";
+const ERROR = "var(--color-status-error,#d3786d)";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 // Lucide's triangle-alert, drawn by hand: React and lucide-react may be the

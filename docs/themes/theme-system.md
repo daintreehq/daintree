@@ -73,7 +73,7 @@ Component-specific styling does not belong in this layer.
 
 **See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns when working with component overrides.
 
-Component CSS owns the public override surface. Themes can target specific UI regions through `extensions` without expanding the global semantic contract. The allowed extension keys are the typed `ExtensionKey` union (`EXTENSION_KEYS` in `shared/theme/types.ts` — 102 keys today), gated and classified OPTIONAL vs REQUIRED by the registry in `shared/theme/extensionRegistry.ts` (e.g. `panel-grid-bg` is registered there and consumed in `src/index.css`). A key not in the union is not a theme decision the host will honour — adding one is an edit to both files.
+Component CSS owns the public override surface. Themes can target specific UI regions through `extensions` without expanding the global semantic contract. The allowed extension keys are the typed `ExtensionKey` union (`EXTENSION_KEYS` in `shared/theme/types.ts` — 100 keys today), gated and classified OPTIONAL vs REQUIRED by the registry in `shared/theme/extensionRegistry.ts` (e.g. `panel-grid-bg` is registered there and consumed in `src/index.css`). A key not in the union is not a theme decision the host will honour — adding one is an edit to both files.
 
 | Component | File | Variable prefix |
 | --- | --- | --- |
