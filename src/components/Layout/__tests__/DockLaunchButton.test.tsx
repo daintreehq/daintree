@@ -378,6 +378,11 @@ import { DockLaunchButton } from "../DockLaunchButton";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import { SlidersHorizontal } from "lucide-react";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
+import { describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
+
+/** Spoken by name ("Alt P" / "Option P"), never as the "Alt+P" string. */
+const PIN_SPOKEN = describeChord("Alt+P", isMac());
 
 const AGENTS: DockLaunchAgent[] = [
   { id: "claude", name: "Claude", availability: "ready" },
@@ -2233,8 +2238,8 @@ describe("DockLaunchButton", () => {
       // have to be announced by the option that owns it. The control keeps only
       // the mouse tooltip, which is not an accessibility surface.
       expect(row.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
-      expect(row.getAttribute("aria-label")).toContain("Alt+P");
-      expect(pin.getAttribute("title")).toContain("Alt+P");
+      expect(row.getAttribute("aria-label")).toContain(PIN_SPOKEN);
+      expect(pin.getAttribute("title")).toContain(labelWithShortcut("", "Alt+P", isMac()).trim());
       // No second tab stop inside a row: the palette moves selection, not focus,
       // and a focusable control here would break that model.
       expect(pin.tabIndex).toBe(-1);
@@ -2252,8 +2257,8 @@ describe("DockLaunchButton", () => {
       const pinned = rowFor(container, "Claude").getAttribute("aria-label") ?? "";
       const unpinned = rowFor(container, "Gemini").getAttribute("aria-label") ?? "";
 
-      expect(pinned).toContain("Press Alt+P to unpin from toolbar");
-      expect(unpinned).toContain("Press Alt+P to pin to toolbar");
+      expect(pinned).toContain(`Press ${PIN_SPOKEN} to unpin from toolbar`);
+      expect(unpinned).toContain(`Press ${PIN_SPOKEN} to pin to toolbar`);
       expect(pinned).not.toContain("pin to toolbar");
       expect(unpinned).not.toContain("unpin from toolbar");
     });
@@ -2266,7 +2271,7 @@ describe("DockLaunchButton", () => {
       const { container } = renderButton();
       const cue = rowFor(container, "Create a recipe");
 
-      expect(cue.getAttribute("aria-label")).not.toContain("Alt+P");
+      expect(cue.getAttribute("aria-label")).not.toContain("to toolbar");
       expect(cue.getAttribute("aria-keyshortcuts")).toBeNull();
     });
 
@@ -2275,7 +2280,7 @@ describe("DockLaunchButton", () => {
       const { container } = renderButton();
       const row = rowFor(container, "My recipe");
 
-      expect(row.getAttribute("aria-label")).toContain("Press Alt+P to pin to toolbar");
+      expect(row.getAttribute("aria-label")).toContain(`Press ${PIN_SPOKEN} to pin to toolbar`);
       expect(row.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
     });
 

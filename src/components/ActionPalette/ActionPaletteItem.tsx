@@ -1,7 +1,8 @@
 import { memo, useCallback, useMemo } from "react";
 import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createTooltipWithShortcut, isMac } from "@/lib/platform";
+import { isMac } from "@/lib/platform";
+import { labelWithShortcut } from "@/lib/kbdShortcut";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { paletteSummary } from "@/lib/paletteSummary";
@@ -260,7 +261,7 @@ function ActionPaletteItemInner({
           <span
             role="presentation"
             data-testid="action-palette-hide"
-            title={createTooltipWithShortcut("Hide from Recently used", HIDE_SHORTCUT)}
+            title={labelWithShortcut("Hide from Recently used", HIDE_SHORTCUT, isMac())}
             onPointerDown={(e) => e.preventDefault()}
             onClick={handleHideClick}
             className={cn(
@@ -276,9 +277,10 @@ function ActionPaletteItemInner({
             role="presentation"
             data-testid="action-palette-pin"
             data-pinned={isPinned}
-            title={createTooltipWithShortcut(
+            title={labelWithShortcut(
               isPinned ? "Unpin from Favorites" : "Pin to Favorites",
-              PIN_SHORTCUT
+              PIN_SHORTCUT,
+              isMac()
             )}
             onPointerDown={(e) => e.preventDefault()}
             onClick={handlePinClick}

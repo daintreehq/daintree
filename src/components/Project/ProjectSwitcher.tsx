@@ -9,7 +9,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks/useKeybinding";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useProjectSwitcherPalette, useDohertyGate } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "./ProjectSwitcherPalette";
@@ -40,7 +41,8 @@ export function ProjectSwitcher() {
   const isLoading = useProjectStore((state) => state.isLoading);
   const showLoadingSpinner = useDohertyGate(isLoading);
   const projectSwitcher = useProjectSwitcherPalette();
-  const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
+  const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
+  const projectSwitcherAriaShortcut = useAriaKeyshortcuts("project.switcherPalette");
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
   const handleDropdownClose = useCallback(() => {
     if (projectSwitcher.mode !== "dropdown") return;
@@ -370,6 +372,7 @@ export function ProjectSwitcher() {
               )}
               disabled={showLoadingSpinner}
               aria-label={workspaceIdentity.ariaLabel}
+              aria-keyshortcuts={projectSwitcherAriaShortcut}
               onClick={handleOpenDropdown}
               onPointerEnter={() => {
                 isRestoringFocusRef.current = false;
@@ -425,7 +428,7 @@ export function ProjectSwitcher() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="right">
-            Switch project{projectSwitcherShortcut ? ` (${projectSwitcherShortcut})` : ""}
+            {createTooltipContent("Switch project", projectSwitcherShortcut)}
           </TooltipContent>
         </Tooltip>
       </ProjectSwitcherPalette>

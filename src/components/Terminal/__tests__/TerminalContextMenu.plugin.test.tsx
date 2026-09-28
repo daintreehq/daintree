@@ -26,11 +26,13 @@ vi.mock("@/components/ui/context-menu", () => {
     onSelect,
     disabled,
     destructive,
+    keybinding,
   }: {
     children?: React.ReactNode;
     onSelect?: () => void;
     disabled?: boolean;
     destructive?: boolean;
+    keybinding?: string;
   }) => (
     <button
       disabled={disabled}
@@ -38,6 +40,11 @@ vi.mock("@/components/ui/context-menu", () => {
       onClick={() => onSelect?.()}
     >
       {children}
+      {/* The real primitive draws the action's live binding; the mock draws
+          the combo the test resolves for it. */}
+      {keybinding && keybindingDisplays.current[keybinding] && (
+        <kbd>{keybindingDisplays.current[keybinding]}</kbd>
+      )}
     </button>
   );
   return {
@@ -428,14 +435,14 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
   });
 
   it("shows the maximize keybinding on the maximize row alone", () => {
-    keybindingDisplays.current = { "terminal.maximize": "⌃⇧F" };
+    keybindingDisplays.current = { "terminal.maximize": "Ctrl+Shift+F" };
     registerPluginKind(VIEW_PLUGIN_KIND);
     renderMenuFor(pluginPanel);
 
     const hints = Array.from(
       screen.getByTestId("context-menu-content").querySelectorAll("button kbd")
     ).map((kbd) => [rowLabel(kbd.closest("button")!), kbd.textContent]);
-    expect(hints).toEqual([[commandLabel({}, "toggle-maximize"), "⌃⇧F"]]);
+    expect(hints).toEqual([[commandLabel({}, "toggle-maximize"), "Ctrl+Shift+F"]]);
   });
 
   it.each([

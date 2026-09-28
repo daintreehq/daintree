@@ -7,7 +7,8 @@ import {
   PIN_SHORTCUT,
   paletteSummary,
 } from "./ActionPaletteItem";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { labelWithShortcut } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 
 vi.mock("@/lib/utils", () => ({
@@ -365,7 +366,7 @@ describe("ActionPaletteItem", () => {
         ["action-palette-hide", HIDE_SHORTCUT],
       ] as const) {
         const title = screen.getByTestId(testId).getAttribute("title") ?? "";
-        expect(title).toBe(createTooltipWithShortcut(title.split(" (")[0]!, shortcut));
+        expect(title).toBe(labelWithShortcut(title.split(" (")[0]!, shortcut, isMac()));
       }
     });
 

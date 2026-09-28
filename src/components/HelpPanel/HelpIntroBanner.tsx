@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 
 interface HelpIntroBannerProps {
   onDismiss: () => void;
@@ -15,7 +16,7 @@ export function HelpIntroBanner({ onDismiss }: HelpIntroBannerProps) {
       )}
     >
       <span className="flex-1 min-w-0 truncate">
-        Tip: Press <kbd className="text-text-secondary">Shift+Enter</kbd> to add a newline without
+        Tip: Press <KbdChord shortcut="Shift+Enter" density="compact" /> to add a newline without
         sending.
       </span>
       <Button

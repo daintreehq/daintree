@@ -21,7 +21,10 @@ import { keybindingService } from "@/services/KeybindingService";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { Kbd } from "../Kbd";
+import { KbdChord } from "../Kbd";
+import { terminalClipboardCombos } from "@/services/terminalReservedKeys";
+import { INSERT_FILE_REFERENCE_COMBO } from "@/panels/file-browser/fileReference";
+import { FLEET_EXIT_COMBO } from "@/components/Fleet/fleetKeys";
 import { ShortcutHint } from "../ShortcutHint";
 import {
   DropdownMenu,
@@ -75,17 +78,6 @@ document.body.style.margin = "0";
 
 const combo = (id: string) => keybindingService.getEffectiveCombo(id) ?? "";
 
-/** A menu shortcut slot fed by its callers' source for the action's binding. */
-function MenuSlot({ actionId }: { actionId: string }) {
-  const shortcut = keybindingService.getDisplayCombo(actionId);
-  return shortcut ? <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut> : null;
-}
-
-function ContextSlot({ actionId }: { actionId: string }) {
-  const shortcut = keybindingService.getDisplayCombo(actionId);
-  return shortcut ? <ContextMenuShortcut>{shortcut}</ContextMenuShortcut> : null;
-}
-
 const ICON = "mr-2 h-3.5 w-3.5";
 
 function MenuFixture() {
@@ -98,41 +90,39 @@ function MenuFixture() {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64" data-preview-surface>
-          <DropdownMenuItem>
+          <DropdownMenuItem keybinding="agent.claude">
             <Sparkles className={ICON} />
             <span className="flex-1">Claude</span>
-            <MenuSlot actionId="agent.claude" />
           </DropdownMenuItem>
-          <DropdownMenuItem>
+          <DropdownMenuItem keybinding="agent.terminal">
             <SquareTerminal className={ICON} />
             <span className="flex-1">Terminal</span>
-            <MenuSlot actionId="agent.terminal" />
           </DropdownMenuItem>
-          <DropdownMenuItem>
+          <DropdownMenuItem keybinding="worktree.copyTree">
             <Copy className={ICON} />
             <span className="flex-1">Copy context</span>
-            <MenuSlot actionId="worktree.copyTree" />
           </DropdownMenuItem>
-          <DropdownMenuItem>
+          <DropdownMenuItem keybinding="action.palette.open">
             <Command className={ICON} />
             <span className="flex-1">Command palette</span>
-            <MenuSlot actionId="action.palette.open" />
           </DropdownMenuItem>
-          <DropdownMenuItem>
+          <DropdownMenuItem keybinding="app.settings">
             <Settings className={ICON} />
             <span className="flex-1">Settings</span>
-            <MenuSlot actionId="app.settings" />
           </DropdownMenuItem>
           <DropdownMenuSeparator />
+          <DropdownMenuItem keybinding="terminal.resumeSessions">
+            <SquareTerminal className={ICON} />
+            <span className="flex-1">Resume sessions</span>
+          </DropdownMenuItem>
           <DropdownMenuItem>
             <Archive className={ICON} />
             Archive
-            <DropdownMenuShortcut aria-hidden="true">E</DropdownMenuShortcut>
+            <DropdownMenuShortcut shortcut="E" />
           </DropdownMenuItem>
-          <DropdownMenuItem disabled>
+          <DropdownMenuItem disabled keybinding="notifications.toggle">
             <Bell className={ICON} />
             <span className="flex-1">Notifications (disabled)</span>
-            <MenuSlot actionId="notifications.toggle" />
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -141,7 +131,7 @@ function MenuFixture() {
 }
 
 function ContextMenuFixture() {
-  const mac = isMac();
+  const clipboard = terminalClipboardCombos(isMac());
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -156,32 +146,29 @@ function ContextMenuFixture() {
         <ContextMenuItem>
           <Copy className={ICON} />
           Copy
-          <ContextMenuShortcut>{mac ? "⌘" : "Ctrl"}C</ContextMenuShortcut>
+          <ContextMenuShortcut shortcut={clipboard.copy} />
         </ContextMenuItem>
         <ContextMenuItem>
           <Clipboard className={ICON} />
           Paste
-          <ContextMenuShortcut>{mac ? "⌘V" : "Ctrl+⇧V"}</ContextMenuShortcut>
+          <ContextMenuShortcut shortcut={clipboard.paste} />
         </ContextMenuItem>
-        <ContextMenuItem>
+        <ContextMenuItem keybinding="terminal.sendToAgent">
           <Send className={ICON} />
           Send to agent
-          <ContextMenuShortcut>{mac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
         </ContextMenuItem>
-        <ContextMenuItem>
+        <ContextMenuItem keybinding="terminal.maximize">
           <Maximize2 className={ICON} />
           Maximize
-          <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
         </ContextMenuItem>
-        <ContextMenuItem>
+        <ContextMenuItem keybinding="terminal.watch">
           <Bell className={ICON} />
           Watch terminal
-          <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem>
           <Copy className={ICON} />
           Insert reference
-          <ContextMenuShortcut>{mac ? "⌘I" : "Ctrl+I"}</ContextMenuShortcut>
+          <ContextMenuShortcut shortcut={INSERT_FILE_REFERENCE_COMBO} />
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -211,7 +198,7 @@ function TooltipFixture() {
             </button>
           </TooltipTrigger>
           <TooltipContent side="right" data-preview-surface>
-            Switch project ({keybindingService.getDisplayCombo("project.switcherPalette")})
+            {createTooltipContent("Switch project", combo("project.switcherPalette"))}
           </TooltipContent>
         </Tooltip>
         <Tooltip open>
@@ -241,7 +228,9 @@ function InlineFixture() {
         </p>
       </section>
       <section className="flex flex-col gap-1">
-        <span className="text-3xs uppercase tracking-wider">Content grid tip (unbound fallback)</span>
+        <span className="text-3xs uppercase tracking-wider">
+          Content grid tip (unbound fallback)
+        </span>
         <p className="text-xs">Tip: {tipWithKey.message}</p>
       </section>
       <section className="flex flex-col gap-1 w-[420px] border border-border-subtle">
@@ -259,34 +248,48 @@ function InlineFixture() {
   );
 }
 
+/** Mirrors FleetPickerContent's help popover and the ribbon's exit / confirm keys. */
 function PreviewFleetKeys() {
   return (
     <div className="flex flex-col gap-1.5 text-xs leading-[inherit] text-text-secondary">
-      <span className="inline-flex items-center gap-1">
-        <Kbd>{isMac() ? "⌘A" : "Ctrl+A"}</Kbd>
+      <span className="inline-flex items-center gap-1.5">
+        <KbdChord shortcut="Cmd+A" />
         <span>Select all</span>
       </span>
-      <span className="inline-flex items-center gap-1">
-        <Kbd>Shift</Kbd>+<Kbd>Click</Kbd>
+      <span className="inline-flex items-center gap-1.5">
+        <KbdChord shortcut="Shift" />
+        <span>+ click</span>
         <span>Range</span>
       </span>
-      <span className="inline-flex items-center gap-1">
-        <Kbd>{isMac() ? "⌘⇧I" : "Ctrl+Shift+I"}</Kbd>
+      <span className="inline-flex items-center gap-1.5">
+        <KbdChord shortcut="Cmd+Shift+I" />
         <span>Invert</span>
       </span>
       <span className="inline-flex items-center gap-1.5 text-xs">
         <span>Exit</span>
-        <Kbd>{isMac() ? "⌘Esc" : "Ctrl+Esc"}</Kbd>
+        <KbdChord shortcut={FLEET_EXIT_COMBO} />
+      </span>
+      <span className="flex items-center gap-3 text-2xs">
+        <span className="inline-flex items-center gap-1">
+          <KbdChord shortcut="Enter" density="compact" /> to confirm
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <KbdChord shortcut="Escape" density="compact" /> to cancel
+        </span>
       </span>
     </div>
   );
 }
 
+/** Mirrors SettingsDialog's search-results key hint. */
 function PreviewSettingsHints() {
   return (
     <p className="shrink-0 whitespace-nowrap text-3xs text-text-secondary">
-      <kbd className="settings-kbd px-1 py-0.5 rounded-sm border font-mono">↑↓</kbd> navigate{" "}
-      <kbd className="settings-kbd px-1 py-0.5 rounded-sm border font-mono">↵</kbd> open
+      <span className="inline-flex items-center gap-0.5 align-middle">
+        <KbdChord shortcut="Up" density="compact" />
+        <KbdChord shortcut="Down" density="compact" />
+      </span>{" "}
+      navigate <KbdChord shortcut="Enter" density="compact" className="align-middle" /> open
     </p>
   );
 }

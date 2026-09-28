@@ -279,10 +279,12 @@ describe("SidebarContent zero-worktrees empty state — issue #6752 (supersedes 
     expect(branch).not.toMatch(/<ol[^>]*>/);
   });
 
-  it("keeps the File → Open Project menu-path pill as the single wayfinding cue", () => {
-    // The menu-path pill stays as a raw <kbd> with the existing styling — it
-    // names the one action a zero-worktrees user can take next.
-    expect(source).toMatch(/<kbd[^>]*>\s*File → Open Project\s*<\/kbd>/);
+  it("keeps the File → Open Project menu path as the single wayfinding cue", () => {
+    // It names the one action a zero-worktrees user can take next. It is a
+    // menu path, not a key, so it is set as words — never in a key chip, which
+    // everywhere else in the app means "press this".
+    expect(source).toContain("File → Open Project");
+    expect(source).not.toMatch(/<kbd[^>]*>\s*File → Open Project/);
   });
 
   it("mounts NewWorktreeDialog from the zero-worktrees branch so populated-sidebar shortcuts still work", () => {

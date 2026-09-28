@@ -17,7 +17,8 @@ import {
   useOverlayTriggerRef,
 } from "./overlay-focus-restore";
 import { actionService } from "@/services/ActionService";
-import { useAriaKeyshortcuts } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
+import { KbdChord } from "./Kbd";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 const DropdownMenuIntentContext = React.createContext<((next: boolean) => void) | null>(null);
@@ -432,20 +433,47 @@ const DropdownMenuContent = React.forwardRef<
 );
 DropdownMenuContent.displayName = "DropdownMenuContent";
 
+interface DropdownMenuShortcutProps {
+  /** The canonical combo (`"Cmd+Shift+P"`), never a pre-formatted display string. */
+  shortcut: string | null | undefined;
+  className?: string;
+}
+
+/* The trailing key column, drawn by `KbdChord` like every other shortcut in the
+ * app, bare because every row of a menu can carry one. `aria-hidden`: the glyph
+ * run is not part of the item's name (WCAG 2.5.3) — the item carries the keys
+ * as `aria-keyshortcuts` instead. */
+const DropdownMenuShortcut = ({ shortcut, className }: DropdownMenuShortcutProps) => {
+  if (!shortcut || !shortcut.trim()) return null;
+  return (
+    <span aria-hidden="true" className={cn("ml-auto shrink-0 pl-4", className)}>
+      <KbdChord shortcut={shortcut} density="bare" />
+    </span>
+  );
+};
+DropdownMenuShortcut.displayName = "DropdownMenuShortcut";
+
 type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitiveType.Item
 > & {
   inset?: boolean;
   destructive?: boolean;
+  /**
+   * The action whose live binding this row shows. Draws it in the trailing key
+   * column and sets `aria-keyshortcuts` from the same combo, so the visible
+   * keys and the announced ones cannot drift apart. Draws nothing when the
+   * action is unbound.
+   */
+  keybinding?: string;
 };
 
 /* Leading icons: mark the icon `data-menu-icon` and the text-only items in the
  * same menu pick up a matching gutter from the `[role="menu"]:has(...)` rule in
  * index.css — and lose it again when the icon-bearing items are filtered out.
  * `inset` is the static alternative for a menu whose shape never changes. */
-const DropdownMenuItem = React.forwardRef<
+const DropdownMenuItemBase = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
-  DropdownMenuItemProps
+  Omit<DropdownMenuItemProps, "keybinding">
 >(({ className, inset, destructive, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
@@ -465,6 +493,35 @@ const DropdownMenuItem = React.forwardRef<
     />
   );
 });
+DropdownMenuItemBase.displayName = "DropdownMenuItemBase";
+
+/* A row that shows an action's binding. Its own component so only rows that
+ * carry one subscribe to keybinding changes. */
+const DropdownMenuKeyboundItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
+  Omit<DropdownMenuItemProps, "keybinding"> & { keybinding: string }
+>(({ keybinding, children, ...props }, ref) => {
+  const combo = useEffectiveCombo(keybinding);
+  const ariaKeyshortcuts = useAriaKeyshortcuts(keybinding);
+  return (
+    <DropdownMenuItemBase ref={ref} aria-keyshortcuts={ariaKeyshortcuts} {...props}>
+      {children}
+      <DropdownMenuShortcut shortcut={combo} />
+    </DropdownMenuItemBase>
+  );
+});
+DropdownMenuKeyboundItem.displayName = "DropdownMenuKeyboundItem";
+
+const DropdownMenuItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
+  DropdownMenuItemProps
+>(({ keybinding, ...props }, ref) =>
+  keybinding ? (
+    <DropdownMenuKeyboundItem ref={ref} keybinding={keybinding} {...props} />
+  ) : (
+    <DropdownMenuItemBase ref={ref} {...props} />
+  )
+);
 DropdownMenuItem.displayName = "DropdownMenuItem";
 
 type DropdownMenuActionItemProps = DropdownMenuItemProps & {
@@ -547,16 +604,6 @@ const DropdownMenuLabel = React.forwardRef<
   );
 });
 DropdownMenuLabel.displayName = "DropdownMenuLabel";
-
-const DropdownMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
-  return (
-    <span
-      className={cn("ml-auto pl-2 text-2xs font-mono text-text-secondary", className)}
-      {...props}
-    />
-  );
-};
-DropdownMenuShortcut.displayName = "DropdownMenuShortcut";
 
 /* Trailing muted slot for item METADATA — a count, a state, a reason an item is
  * disabled. Deliberately not `DropdownMenuShortcut`: a count is not a keybinding,

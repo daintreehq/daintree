@@ -11,7 +11,7 @@ import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
 import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMessage";
 import { FleetCountChip } from "./FleetCountChip";
-import { fleetExitChordLabel } from "./fleetKeys";
+import { FLEET_EXIT_COMBO } from "./fleetKeys";
 import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
 import { SaveFleetDialog } from "./SaveFleetDialog";
@@ -34,7 +34,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Kbd } from "@/components/ui/Kbd";
+import { KbdChord } from "@/components/ui/Kbd";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import {
   FLEET_RIBBON_ICON_BUTTON_CLASS,
   FLEET_RIBBON_SHELL_CLASS,
@@ -500,10 +501,10 @@ export function FleetArmingRibbon(): ReactElement | null {
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-3 text-2xs text-text-secondary">
               <span className="inline-flex items-center gap-1">
-                <Kbd>Enter</Kbd> to confirm
+                <KbdChord shortcut="Enter" density="compact" /> to confirm
               </span>
               <span className="inline-flex items-center gap-1">
-                <Kbd>Esc</Kbd> to cancel
+                <KbdChord shortcut="Escape" density="compact" /> to cancel
               </span>
             </div>
           </div>
@@ -635,7 +636,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         transition: { type: "spring" as const, duration: 0.2, bounce: 0.12 },
       };
 
-  const exitChordLabel = fleetExitChordLabel(isMac());
+  const exitAriaShortcut = comboToAriaKeyshortcuts(FLEET_EXIT_COMBO, isMac());
 
   return (
     <>
@@ -761,12 +762,13 @@ export function FleetArmingRibbon(): ReactElement | null {
               <button
                 type="button"
                 onClick={exitFleet}
-                aria-label={`Exit fleet mode (${exitChordLabel})`}
+                aria-label="Exit fleet mode"
+                aria-keyshortcuts={exitAriaShortcut}
                 data-testid="fleet-exit"
                 className={FLEET_RIBBON_TEXT_BUTTON_CLASS}
               >
                 <span>Exit</span>
-                <Kbd>{exitChordLabel}</Kbd>
+                <KbdChord shortcut={FLEET_EXIT_COMBO} density="compact" />
               </button>
             </div>
             {/* A 2px delivery track along the bottom edge: the only graphical

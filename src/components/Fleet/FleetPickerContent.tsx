@@ -4,8 +4,7 @@ import { CheckIcon, MinusIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
-import { Kbd } from "@/components/ui/Kbd";
-import { isMac } from "@/lib/platform";
+import { KbdChord } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
 import { CircleHelp } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -317,16 +316,19 @@ function ShortcutsPopover(): ReactElement {
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col gap-1.5 text-xs leading-[inherit] text-text-secondary">
-          <span className="inline-flex items-center gap-1">
-            <Kbd>{isMac() ? "⌘A" : "Ctrl+A"}</Kbd>
+          <span className="inline-flex items-center gap-1.5">
+            <KbdChord shortcut="Cmd+A" />
             <span>Select all</span>
           </span>
-          <span className="inline-flex items-center gap-1">
-            <Kbd>Shift</Kbd>+<Kbd>Click</Kbd>
+          {/* A pointer gesture, drawn with the key's own chip: Shift is a key,
+              the click is not, so the click is a word. */}
+          <span className="inline-flex items-center gap-1.5">
+            <KbdChord shortcut="Shift" />
+            <span>+ click</span>
             <span>Range</span>
           </span>
-          <span className="inline-flex items-center gap-1">
-            <Kbd>{isMac() ? "⌘⇧I" : "Ctrl+Shift+I"}</Kbd>
+          <span className="inline-flex items-center gap-1.5">
+            <KbdChord shortcut="Cmd+Shift+I" />
             <span>Invert</span>
           </span>
         </div>

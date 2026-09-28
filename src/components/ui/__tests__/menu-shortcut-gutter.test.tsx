@@ -1,19 +1,19 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ContextMenuShortcut } from "../context-menu";
 import { DropdownMenuShortcut } from "../dropdown-menu";
 
 afterEach(cleanup);
 
-// Both primitives are plain spans with no `useRadixPrimitives()` call, so they
-// render standalone — no `primeRadix()` needed.
+// Both primitives are plain spans around a KbdChord with no `useRadixPrimitives()`
+// call, so they render standalone — no `primeRadix()` needed.
 const PRIMITIVES = [
   { name: "ContextMenuShortcut", Shortcut: ContextMenuShortcut },
   { name: "DropdownMenuShortcut", Shortcut: DropdownMenuShortcut },
 ] as const;
 
-const COMBO = "⌘I";
+const COMBO = "Cmd+I";
 
 // An inline-start padding utility at a non-zero scale. `pl-0`/`px-0` would
 // satisfy a bare `p[lx]-` match while leaving the hint flush, so they have to
@@ -21,8 +21,8 @@ const COMBO = "⌘I";
 const GUTTER = /^p[lx]-(?!0$)/;
 
 function renderShortcut(Shortcut: (typeof PRIMITIVES)[number]["Shortcut"]): HTMLElement {
-  render(<Shortcut>{COMBO}</Shortcut>);
-  return screen.getByText(COMBO);
+  const { container } = render(<Shortcut shortcut={COMBO} />);
+  return container.firstElementChild as HTMLElement;
 }
 
 function classesOf(el: HTMLElement): string[] {

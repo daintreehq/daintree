@@ -31,7 +31,6 @@ import {
   useProjectSettings,
   useWorktreeActions,
   useAriaKeyshortcuts,
-  useKeybindingDisplay,
   useEffectiveCombo,
   useDohertyGate,
   useKeepMounted,
@@ -58,6 +57,8 @@ import {
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
+import { labelWithShortcut } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation, DeletedWorktree } from "@/store/worktreeStore";
@@ -134,7 +135,7 @@ const LazyRecipeManager = lazy(() =>
 const SIDEBAR_DEFER_FILTER_MIN_WORKTREES = 60;
 
 function formatButtonTitle(label: string, shortcut?: string | null): string {
-  return shortcut ? `${label} (${shortcut})` : label;
+  return labelWithShortcut(label, shortcut, isMac());
 }
 
 const NO_MATCH_QUERY_MAX = 40;
@@ -377,9 +378,9 @@ interface SidebarContentProps {
 }
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
-  const overviewShortcut = useKeybindingDisplay("worktree.overview");
+  const overviewShortcut = useEffectiveCombo("worktree.overview");
   const refreshShortcut = useEffectiveCombo("worktree.refresh");
-  const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
+  const createWorktreeShortcut = useEffectiveCombo("worktree.createDialog.open");
   const overviewAriaShortcut = useAriaKeyshortcuts("worktree.overview");
   const refreshAriaShortcut = useAriaKeyshortcuts("worktree.refresh");
   const createWorktreeAriaShortcut = useAriaKeyshortcuts("worktree.createDialog.open");
@@ -1748,10 +1749,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               title="Open a Git repository"
               action={
                 <span className="text-xs text-text-secondary">
-                  Use{" "}
-                  <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
-                    File → Open Project
-                  </kbd>
+                  {/* A menu path, not a key — set as words, never as a key chip. */}
+                  Use <span className="text-text-primary">File → Open Project</span>
                 </span>
               }
               className="flex-1"
