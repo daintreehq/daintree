@@ -1,5 +1,6 @@
 import type { ISearchOptions } from "@xterm/addon-search";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { contrastRatio } from "@shared/theme";
 
 export type SearchStatus = "idle" | "found" | "none" | "invalidRegex";
 
@@ -49,16 +50,31 @@ function toHex([r, g, b]: [number, number, number]): string {
   return `#${[r, g, b].map((c) => Math.round(c).toString(16).padStart(2, "0")).join("")}`;
 }
 
+// Every inactive match has to stay findable against the terminal, not just the
+// surface the wash was tuned on: light themes tune a faint dark ink for a light
+// canvas but run a dark terminal, where that ink composites to nothing.
+const MIN_MATCH_CONTRAST = 1.5;
+
 // xterm decorations only take opaque #RRGGBB, so a translucent match wash has to
 // be flattened. Dropping the alpha instead painted every match in the wash's
 // full-strength colour, identical to the active match and louder than the text.
+// The wash keeps its own alpha when that is visible over the terminal, and is
+// strengthened just far enough to clear MIN_MATCH_CONTRAST when it is not.
 function flattenOver(value: string, backdrop: string): string | null {
   const fg = parseRgb(value);
   if (!fg) return null;
   const bg = parseRgb(backdrop);
   if (fg.alpha >= 1 || !bg) return toHex(fg.rgb);
-  const blend = (i: 0 | 1 | 2) => fg.rgb[i] * fg.alpha + bg.rgb[i] * (1 - fg.alpha);
-  return toHex([blend(0), blend(1), blend(2)]);
+  const backdropHex = toHex(bg.rgb);
+  const at = (alpha: number) => {
+    const blend = (i: 0 | 1 | 2) => fg.rgb[i] * alpha + bg.rgb[i] * (1 - alpha);
+    return toHex([blend(0), blend(1), blend(2)]);
+  };
+  for (let alpha = fg.alpha; alpha < 1; alpha += 0.05) {
+    const flattened = at(alpha);
+    if (contrastRatio(flattened, backdropHex) >= MIN_MATCH_CONTRAST) return flattened;
+  }
+  return toHex(fg.rgb);
 }
 
 export function getSearchDecorationColors(): SearchDecorationOptions {

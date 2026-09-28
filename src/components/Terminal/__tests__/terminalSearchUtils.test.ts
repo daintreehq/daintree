@@ -5,6 +5,7 @@ import {
   buildSearchOptions,
   getSearchDecorationColors,
 } from "../terminalSearchUtils";
+import { BUILT_IN_APP_SCHEMES, contrastRatio } from "@shared/theme";
 
 afterEach(() => {
   document.documentElement.style.removeProperty("--theme-search-highlight-background");
@@ -165,6 +166,26 @@ describe("getSearchDecorationColors", () => {
       expect(Math.abs(c - backdrop[i]!)).toBeLessThanOrEqual(Math.abs(c - wash[i]!));
     });
   });
+
+  it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s] as const))(
+    "%s: every inactive match stays findable on the terminal and distinct from the active one",
+    (_id, scheme) => {
+      const root = document.documentElement.style;
+      root.setProperty(
+        "--theme-search-highlight-background",
+        scheme.tokens["search-highlight-background"]
+      );
+      root.setProperty("--theme-search-highlight-text", scheme.tokens["search-highlight-text"]);
+      root.setProperty("--theme-terminal-background", scheme.tokens["terminal-background"]);
+      const colors = getSearchDecorationColors();
+      const match = colors.matchBackground ?? "";
+      expect(match).toMatch(/^#[0-9a-f]{6}$/);
+      expect(contrastRatio(match, scheme.tokens["terminal-background"])).toBeGreaterThanOrEqual(
+        1.5
+      );
+      expect(match).not.toBe(colors.activeMatchBackground?.toLowerCase());
+    }
+  );
 
   it("flattens over the canvas when the terminal background is not set", () => {
     document.documentElement.style.setProperty(
