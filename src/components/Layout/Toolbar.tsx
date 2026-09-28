@@ -2388,6 +2388,7 @@ export function Toolbar({
                         onSelect={projectSwitcher.selectRow}
                         onHoverProject={projectSwitcher.onHoverProject}
                         onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+                        onHoverRow={projectSwitcher.hoverRow}
                         fleetLiveness={projectSwitcher.fleetLiveness}
                         onClose={handlePillDropdownClose}
                         onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}

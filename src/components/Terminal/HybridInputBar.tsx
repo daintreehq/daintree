@@ -1051,6 +1051,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               isLoading={isLoading}
               staleKeys={staleItemKeys}
               onSelect={handleAutocompleteSelect}
+              onHoverIndex={setSelectedIndex}
               style={{ left: `${menuLeftPx}px` }}
               listboxId={listboxId}
               title={

@@ -2138,67 +2138,24 @@ label:focus-within .brand-mark,
   will-change: transform;
 }
 
-/* The palette's selected-row mark.
+/* The highlighted row — the one row a list, palette or picker will act on.
  *
- * A leading rail rather than the 1px ring this used to be. The ring was never a
- * free choice: `overlay-raised` clears about 1.1:1 against the palette surface,
- * so the fill cannot be the WCAG 1.4.11 indicator and `selection-outline` has to
- * be — and an indicator that must hold 3:1 against both the surface and the fill
- * lands on a mid-grey stroke. Drawn around all four sides of a row that is not
- * the DOM focus target, that reads as an empty form field: a strong edge with no
- * body. No shipping palette does it (VS Code leaves `list.focusOutline` unset in
- * quick pick; Linear, Raycast, Spotlight, Arc and Slack are fill-led).
+ * A fill, and nothing else. It used to carry a 3px leading rail as well, read
+ * as the WCAG 1.4.11 indicator because the fill alone clears only ~1.1-1.2:1
+ * against the surface. That reading asked more of 1.4.11 than it asks: the
+ * Understanding text for WCAG 2.2 says a colour change between states of one
+ * component is not held to 3:1, and hover treatments are supplemental. The rail
+ * also meant the pointer and the keyboard drew different rows differently, and
+ * every shipping palette (VS Code, Linear, Raycast, macOS menus, Radix) marks the
+ * active row with a fill alone. So the rail is gone, the fill is its own
+ * `overlay-highlight` step, and the two increased-contrast blocks further down
+ * draw an outline where the user has asked for one.
  *
- * Making the fill carry 3:1 instead is not the way out — it needs roughly 33%
- * white on these surfaces, a light-grey block far heavier than the ring it
- * replaces. A rail keeps the same token and the same 3:1 pair while spending a
- * fraction of the ink on it, which is what 1.4.11 allows: the indicator has to
- * meet the ratio, not enclose the component.
- *
- * Inset and separately rounded rather than an inset box-shadow, which would
- * follow the card's own radius and taper to a crescent at both ends.
- *
- * `forced-colors` strips its `background-color`, so that block re-asserts the
- * rail in CanvasText beside the system-outline fallback further down.
- */
-.palette-row::before {
-  content: "";
-  position: absolute;
-  /* On the card's outer edge, not inside its padding. An absolutely positioned
-     child is offset from the padding box, so an inset here would have started
-     the rail past the reserved border and landed it about 2px from the status
-     mark — two small marks clustered in one gutter, which is the collision that
-     makes leading rails a bad idea on rows that already carry a status dot.
-     Pulled back onto the boundary, the rail belongs to the card and the dot
-     belongs to the content grid, with 6px of clear space between them.
-
-     Logical, not `left`: this is the leading edge, which flips under RTL. */
-  inset-inline-start: -1px;
-  inset-block: 6px;
-  width: 3px;
-  /* A pill, not a scale step: the rail is 3px wide, so any radius above 1.5px
-     is the same shape and the scale would only make it theme-dependent. */
-  border-radius: 9999px;
-  background: var(--color-selection-outline);
-  opacity: 0;
-  pointer-events: none;
-  /* The same slot the row's fill fades in on. Cross-fading one and popping the
-     other put the mark on the new row while the surface behind it was still
-     arriving. */
-  transition: opacity var(--duration-150) ease-out;
-}
-
-.palette-row[aria-selected="true"]::before,
-.palette-row[data-selected="true"]::before {
-  opacity: 1;
-}
-
-/* Both triggers, and both signals. The bare media query would honour the OS
-   preference but not Daintree's own "Reduce UI animations" toggle, and dropping
-   only the rail's transition would leave the fill still fading under it. */
+ * A leading rail still means something in this app — the one place you are, in
+ * a navigation column — which is exactly why it cannot also mean "the row under
+ * the pointer". */
 @variant reduce-motion {
-  .palette-row,
-  .palette-row::before {
+  .palette-row {
     transition: none;
   }
 }
@@ -2763,17 +2720,17 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: -2px;
   }
 
-  /* The palette selected row is a raised fill plus a neutral leading rail, both
-     stripped here, so it falls back to a system outline like the Radix rule
-     above. Deliberately an outline and not a SelectedItem fill: these rows carry
-     independently surfaced children (theme "Active" badges, action category
-     chips, panel-kind icons with inline colour), and the engine maps each of
-     those to the forced palette on its own — a fill would leave them painting
-     CanvasText-on-SelectedItem, a pair with no contrast guarantee. An outline
-     leaves the whole subtree on its Canvas/CanvasText pair and still marks the
-     row. Scoped to the `.palette-row` marker rather than [role="option"], which
-     the file pane, the settings selectors and the agent/forge dropdowns use
-     too. */
+  /* The highlighted palette row is a fill, which this mode strips, so it falls
+     back to the same `Highlight` outline as the Radix rule above — one treatment
+     for "the row Enter acts on" whichever family drew it. `Highlight` rather
+     than `SelectedItem`: several OS palettes pair SelectedItem with Canvas at
+     well under 3:1 (Chromium's own default is about 1.7:1), and this is the
+     cursor, not a selection. Deliberately an outline and not a fill: these rows
+     carry independently surfaced children (theme "Active" badges, action
+     category chips, panel-kind icons with inline colour), and a fill would
+     leave them painting on a pair with no contrast guarantee. Scoped to the
+     `.palette-row` marker rather than [role="option"], which the file pane, the
+     settings selectors and the agent/forge dropdowns use too. */
   /* The row's `border border-transparent` is a layout reservation — it holds
      every row's content box on one column — but forced colors remaps border
      colours from the system palette, so a border that paints nothing in every
@@ -2789,20 +2746,8 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
 
   .palette-row[aria-selected="true"],
   .palette-row[data-selected="true"] {
-    outline: 2px solid SelectedItem;
+    outline: 2px solid Highlight;
     outline-offset: -2px;
-  }
-
-  /* …and the leading rail again, in CanvasText, as a second cue. SelectedItem
-     is whatever the OS theme picks, and several pair it with Canvas at well
-     under 3:1 — Chromium's own default is a pale blue on white at about 1.7:1 —
-     so on those the outline alone was a faint box. CanvasText is the one colour
-     the mode guarantees against Canvas. The rail's fill is a background, which
-     forced colours strip, so it has to be re-asserted with !important, exactly
-     like the inbox unread dot below. */
-  .palette-row[aria-selected="true"]::before,
-  .palette-row[data-selected="true"]::before {
-    background-color: CanvasText !important;
   }
 
   /* The selected session tab is a raised fill plus a neutral rail, and forced
@@ -2815,28 +2760,16 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: -2px;
   }
 
-  /* The forge issue/PR rows draw the same leading rail, but from a `data-active`
-     attribute rather than `aria-selected` — that grid spends `aria-selected` on
-     bulk membership, so the two marks have to be keyed apart. The rail is a
-     `background-color`, stripped here like every other, and the `.palette-row`
-     rule above is deliberately scoped away from `[role="row"]`, so without this
-     the keyboard cursor vanishes entirely in Windows High Contrast. Highlight
-     rather than SelectedItem: this is the cursor, not the selection. */
-  .forge-row[aria-selected="true"] {
-    outline: 2px solid SelectedItem;
+  /* The forge issue/PR and local-commit rows mark their cursor with the
+     highlight fill, keyed on `data-active` because the issue grid spends
+     `aria-selected` on bulk membership. This mode strips the fill, and the
+     `.palette-row` rule above is deliberately scoped away from `[role="row"]`,
+     so without this the cursor vanishes in Windows High Contrast. Membership
+     needs no outline of its own: its filled checkbox is the mark, and the
+     engine redraws that glyph from system colours. */
+  .forge-row[data-active="true"] {
+    outline: 2px solid Highlight;
     outline-offset: -2px;
-  }
-
-  /* Two independent states on one row — the keyboard cursor and bulk
-     membership — so they cannot both be an outline: the later rule would
-     simply overwrite the earlier one and a selected row under the cursor would
-     lose the cursor. Membership keeps the outline (above); the cursor keeps
-     its leading rail, redrawn here from a system colour because the
-     `background-color` it normally paints with is stripped in this mode. */
-  .forge-row[data-active="true"]::before {
-    background: Highlight;
-    forced-color-adjust: none;
-    opacity: 1;
   }
 
   /* The worktree overview grid has the same two states as the forge rows, and
@@ -3347,6 +3280,42 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   .panel-voice-dictation-locked,
   .panel-state-arming {
     border-width: 2px;
+  }
+
+  /* The highlighted row is a fill everywhere else, and a fill is the quietest
+     mark there is — right for everyday lists, not for a user whose whole
+     request is "more contrast". Here every family outlines it: palette rows
+     (the aria-activedescendant cursor and list-detail selection alike), the
+     forge and commit rows' cursor, and the
+     Radix menu, context-menu and select rows, whether the pointer or the keys
+     put the highlight there. `selection-outline` because it is the one ink held
+     to 3:1 against both the highlight fill and the surface around it
+     (`getPaletteSelectionWarnings`). Width and style are spelled out rather
+     than using the shorthand so a keyboard-focused row still takes the 3px
+     focus width below. */
+  .palette-row[aria-selected="true"],
+  .palette-row[data-selected="true"],
+  .forge-row[data-active="true"],
+  [data-highlighted]:is(
+    [role="menuitem"],
+    [role="menuitemcheckbox"],
+    [role="menuitemradio"],
+    [role="option"]
+  ) {
+    outline-style: solid;
+    outline-width: 2px;
+    outline-color: var(--color-selection-outline);
+    outline-offset: -2px;
+  }
+
+  .palette-row[aria-selected="true"]:focus-visible,
+  [data-highlighted]:is(
+      [role="menuitem"],
+      [role="menuitemcheckbox"],
+      [role="menuitemradio"],
+      [role="option"]
+    ):focus-visible {
+    outline-width: 3px;
   }
 
   *:focus-visible {

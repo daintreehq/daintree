@@ -915,6 +915,7 @@ function SettingsDialogInner({
                   cleanQuery={cleanSearchQuery}
                   onResultClick={handleResultClick}
                   activeIndex={activeResultIndex}
+                  onResultHover={setActiveResultIndex}
                   activeScope={activeScope}
                   projectLabel={hasProject ? projectLabel : null}
                 />
@@ -1854,6 +1855,8 @@ interface SearchResultsProps {
     requiresEnabled?: { settingId: string; label: string }
   ) => void;
   activeIndex?: number;
+  /** Moves the active result to the row under the pointer — one cursor for pointer and keys. */
+  onResultHover?: (index: number) => void;
   activeScope: SettingsScope;
   /** null when no project is open. */
   projectLabel: string | null;
@@ -1865,6 +1868,7 @@ export function SearchResults({
   cleanQuery,
   onResultClick,
   activeIndex = -1,
+  onResultHover,
   activeScope,
   projectLabel,
 }: SearchResultsProps) {
@@ -1942,6 +1946,9 @@ export function SearchResults({
               tabIndex={-1}
               aria-selected={index === activeIndex}
               ref={index === activeIndex ? activeRef : undefined}
+              onPointerMove={
+                onResultHover && index !== activeIndex ? () => onResultHover(index) : undefined
+              }
               onClick={() =>
                 onResultClick(
                   { tab: result.tab, subtab: result.subtab, sectionId: result.id },
@@ -1949,11 +1956,10 @@ export function SearchResults({
                 )
               }
               className={cn(
-                // The app's one "Enter acts on this row" treatment — the neutral
-                // selection-outline rail carries the 3:1 the raised fill cannot.
+                // The app's one "Enter acts on this row" treatment, moved by the
+                // pointer as well as the arrow keys so only one row is ever lit.
                 PALETTE_ROW_CLASS,
                 "group w-full text-left p-3 rounded-[var(--radius-md)]",
-                "hover:bg-overlay-soft",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
               )}
             >

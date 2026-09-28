@@ -160,8 +160,7 @@ function ActionPaletteItemInner({
       className={cn(
         PALETTE_ROW_CLASS,
         "group w-full flex items-start gap-3 px-3 py-1.5 rounded-[var(--radius-md)]",
-        "text-text-secondary",
-        "hover:bg-overlay-subtle"
+        "text-text-secondary"
       )}
       id={`action-option-${item.id}`}
       role="option"

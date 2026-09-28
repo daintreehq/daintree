@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 vi.mock("@/components/ui/ScrollShadow", () => ({
   ScrollShadow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -23,6 +23,39 @@ import {
 const noop = () => {};
 
 describe("AutocompleteMenu", () => {
+  it("moves the one cursor with the pointer instead of lighting a second row", () => {
+    const onHoverIndex = vi.fn();
+    const rows: AutocompleteItem[] = ["/one", "/two", "/three"].map((label) => ({
+      key: label,
+      label,
+      insertText: label,
+    }));
+    render(
+      <AutocompleteMenu
+        isOpen
+        items={rows}
+        selectedIndex={0}
+        staleKeys={new Set(["/three"])}
+        onSelect={noop}
+        onHoverIndex={onHoverIndex}
+        emptyMessage="No matches"
+      />
+    );
+    const options = screen.getAllByRole("option");
+
+    fireEvent.pointerMove(options[1]!);
+    expect(onHoverIndex).toHaveBeenCalledWith(1);
+
+    // A stale row is inert: it cannot take the cursor.
+    onHoverIndex.mockClear();
+    fireEvent.pointerMove(options[2]!);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+
+    for (const option of options) {
+      expect(option.className.split(/\s+/).filter((t) => t.startsWith("hover:bg-"))).toEqual([]);
+    }
+  });
+
   it("returns nothing when isOpen is false", () => {
     const { container } = render(
       <AutocompleteMenu

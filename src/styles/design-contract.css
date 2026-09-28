@@ -111,6 +111,7 @@
   --color-overlay-selected: var(--theme-overlay-selected);
   --color-overlay-elevated: var(--theme-overlay-elevated);
   --color-overlay-raised: var(--theme-overlay-raised);
+  --color-overlay-highlight: var(--theme-overlay-highlight);
   --color-filter-selected-bg-soft: var(--theme-filter-selected-bg-soft);
   --color-filter-selected-bg-strong: var(--theme-filter-selected-bg-strong);
   --color-wash-subtle: var(--theme-wash-subtle);

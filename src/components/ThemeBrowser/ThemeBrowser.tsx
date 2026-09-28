@@ -96,7 +96,11 @@ function ThemeRow({
         PALETTE_ROW_CLASS,
         "w-full flex items-center gap-2.5 px-2.5 py-2 text-left cursor-pointer",
         "duration-150 ease-out",
-        !isActive && "hover:bg-surface-hover"
+        // A click picks the row this browser previews, so this is a list-detail
+        // selection rather than a roving cursor, and hover stays a separate,
+        // lighter step — the same one every list-detail browser uses, well
+        // under the highlight fill so the two can never be mistaken.
+        !isActive && "hover:bg-overlay-subtle"
       )}
     >
       {scheme.heroImage && !error ? (

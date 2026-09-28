@@ -24,6 +24,8 @@ interface PanelPaletteProps {
   onSelectPrevious: () => void;
   onSelectNext: () => void;
   onSelect: (kind: PanelKindOption) => void;
+  /** Moves the cursor to the row under the pointer, so pointer and keys share one highlight. */
+  onHoverIndex?: (index: number) => void;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -45,6 +47,7 @@ export function PanelPalette({
   onSelectPrevious,
   onSelectNext,
   onSelect,
+  onHoverIndex,
   onConfirm,
   onClose,
 }: PanelPaletteProps) {
@@ -140,6 +143,9 @@ export function PanelPalette({
         id={`panel-option-${kind.id}`}
         tabIndex={-1}
         onPointerDown={(e) => e.preventDefault()}
+        onPointerMove={
+          onHoverIndex && index !== selectedIndex ? () => onHoverIndex(index) : undefined
+        }
         role="option"
         aria-selected={index === selectedIndex}
         ref={(el) => {
@@ -149,7 +155,7 @@ export function PanelPalette({
         className={cn(
           PALETTE_ROW_CLASS,
           "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+          "text-text-secondary"
         )}
         onClick={() => onSelect(kind)}
       >

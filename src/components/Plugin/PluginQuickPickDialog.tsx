@@ -160,7 +160,7 @@ export function PluginQuickPickDialog() {
           className={cn(
             PALETTE_ROW_CLASS,
             "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-            "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+            "text-text-secondary"
           )}
         >
           {canSelectMany && (

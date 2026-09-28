@@ -285,6 +285,8 @@ interface LocalCommitRowProps {
   isCopied: boolean;
   onToggle: (hash: string) => void;
   onCopy: (commit: GitCommit) => void;
+  /** Moves the list's cursor here on real pointer movement — one cursor for pointer and keys. */
+  onPointerActivate: () => void;
 }
 
 function LocalCommitRow({
@@ -296,6 +298,7 @@ function LocalCommitRow({
   isCopied,
   onToggle,
   onCopy,
+  onPointerActivate,
 }: LocalCommitRowProps) {
   const trimmedBody = reflowCommitBody(commit.body?.trim() ?? "");
   const hasBody = trimmedBody.length > 0;
@@ -332,16 +335,11 @@ function LocalCommitRow({
         // under the cursor is never the one being washed out.
         "scroll-my-8",
         hasBody ? "cursor-pointer" : "cursor-default",
-        // The forge rows' neutral ladder: hover is the lightest fill, the
-        // keyboard cursor adds a heavier fill plus the leading rail, which is
-        // what carries 1.4.11 — the fill alone cannot on these surfaces.
-        "hover:bg-overlay-subtle",
-        isActive && "bg-overlay-soft hover:bg-overlay-soft",
-        "before:absolute before:inset-y-1.5 before:-start-px before:w-[3px] before:rounded-full",
-        "before:bg-selection-outline before:opacity-0 before:transition-opacity before:duration-150",
-        "before:content-[''] before:pointer-events-none",
-        isActive && "before:opacity-100"
+        // The app's highlighted-row fill on the one row the pointer or the
+        // arrow keys last put the cursor on — never a second, hover-only row.
+        isActive && "bg-overlay-highlight"
       )}
+      onPointerMove={isActive ? undefined : onPointerActivate}
     >
       <div role="gridcell" className="flex items-start gap-2 px-3 py-2.5">
         {hasBody ? (
@@ -1072,6 +1070,7 @@ export function LocalCommitsDropdown({
                         isCopied={copiedHash === commit.hash}
                         onToggle={toggleCommitExpanded}
                         onCopy={copyHash}
+                        onPointerActivate={() => setCursorIndex(index)}
                       />
                     ))}
                   </div>
@@ -1084,13 +1083,14 @@ export function LocalCommitsDropdown({
                       data-active={isLoadMoreActive ? "true" : undefined}
                       className={cn(
                         "forge-row relative scroll-my-8 border-t border-[var(--border-divider)] p-2",
-                        // The same rail as a commit row: the fill alone can't
-                        // carry 3:1, and this is where the cursor lands last.
-                        "before:absolute before:inset-y-1.5 before:-start-px before:w-[3px] before:rounded-full",
-                        "before:bg-selection-outline before:opacity-0 before:transition-opacity before:duration-150",
-                        "before:content-[''] before:pointer-events-none",
-                        isLoadMoreActive && "before:opacity-100"
+                        "transition-colors duration-150 ease-out",
+                        // The same highlight as a commit row: this is where the
+                        // cursor lands last.
+                        isLoadMoreActive && "bg-overlay-highlight"
                       )}
+                      onPointerMove={
+                        isLoadMoreActive ? undefined : () => setCursorIndex(data.length)
+                      }
                     >
                       <div role="gridcell">
                         {loadMoreError ? (

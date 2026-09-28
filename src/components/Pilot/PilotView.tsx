@@ -199,8 +199,12 @@ function quietPhrase(count: number): string {
   return count === 1 ? "Agent has gone quiet" : `${count} agents have gone quiet`;
 }
 
-/** The resting tone. Selected is the shared row class's to own, off the attribute. */
-const ROW_TONE = "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary";
+/**
+ * The resting tone. Selected is the shared row class's to own, off the
+ * attribute — and the pointer moves that selection rather than painting a
+ * second row of its own.
+ */
+const ROW_TONE = "text-text-secondary";
 
 /**
  * 16px, down from the switcher's 32px.

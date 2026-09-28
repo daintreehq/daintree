@@ -39,7 +39,7 @@ function WorktreeListItem({
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "group w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
-          "bg-surface-canvas hover:bg-surface"
+          "bg-surface-canvas"
         )}
         // The cursor is aria-selected; the worktree you are in is aria-current
         // with a neutral check, as in the rest of the palette family.

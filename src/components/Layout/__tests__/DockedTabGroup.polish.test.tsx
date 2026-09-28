@@ -356,7 +356,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
   });
 
   describe("overflow dropdown active marker (item 3)", () => {
-    it("marks the active row with the leading accent bar and inactive rows without it", () => {
+    it("marks the active row with a check, the committed-value mark, and inactive rows without it", () => {
       mockHiddenTabIds = new Set<string>(["t-2", "t-3"]);
       mockActiveDockTerminalId = "t-2";
       mockTabGroups.set("g-1", makeGroup(["t-1", "t-2", "t-3"], "t-2"));
@@ -375,7 +375,9 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       const activeRow = rows[0]!;
       expect(activeRow.getAttribute("aria-current")).toBe("true");
       expect(activeRow.className).toContain("font-medium");
-      expect(activeRow.className).toContain("before:bg-accent-primary");
+      expect(activeRow.querySelector("svg.lucide-check")).not.toBeNull();
+      // A rail would read as the highlighted row, not the tab on screen.
+      expect(activeRow.className).not.toContain("before:");
 
       // The non-active hidden row must NOT carry the active marker.
       const allRows = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).filter(
@@ -383,7 +385,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       );
       expect(allRows.length).toBeGreaterThan(0);
       for (const row of allRows) {
-        expect(row.className).not.toContain("before:bg-accent-primary");
+        expect(row.querySelector("svg.lucide-check")).toBeNull();
         expect(row.className).not.toContain("font-medium");
       }
     });

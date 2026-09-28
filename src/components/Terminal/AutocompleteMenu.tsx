@@ -136,6 +136,13 @@ export interface AutocompleteMenuProps {
    *  Per-item so a stale async `@file` search can't dim fresh `$`/`@diff`. */
   staleKeys?: ReadonlySet<string>;
   onSelect: (item: AutocompleteItem) => void;
+  /**
+   * Moves the cursor to a row the pointer is over, so the pointer and the arrow
+   * keys drive one highlight and Enter acts on the row that looks lit. Fired on
+   * `pointermove`, never `pointerenter`, so rows scrolling under a resting
+   * pointer cannot steal the cursor from the keys.
+   */
+  onHoverIndex?: (index: number) => void;
   style?: React.CSSProperties;
   /**
    * The listbox's DOM id. The composer's editor is the combobox and names this
@@ -156,6 +163,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       isLoading = false,
       staleKeys,
       onSelect,
+      onHoverIndex,
       style,
       listboxId,
       title,
@@ -298,9 +306,12 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                     PALETTE_ROW_FOCUS_CLASS,
                     "flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left",
                     "text-text-secondary",
-                    // An inert row doesn't answer the pointer either.
-                    isRowStale ? "opacity-50" : "hover:bg-overlay-subtle hover:text-text-primary"
+                    isRowStale && "opacity-50"
                   )}
+                  // An inert row doesn't answer the pointer either.
+                  onPointerMove={
+                    isRowStale || !onHoverIndex || isSelected ? undefined : () => onHoverIndex(idx)
+                  }
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     if (isRowStale) return;

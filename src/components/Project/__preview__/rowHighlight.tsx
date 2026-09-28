@@ -117,6 +117,7 @@ function ProjectSwitcherSurface() {
       onSelectNext={() => setSelectedIndex((i) => Math.min(PROJECTS.length - 1, i + 1))}
       onSelect={noop}
       onClose={noop}
+      onHoverRow={(id) => setSelectedIndex(PROJECTS.findIndex((p) => p.id === id))}
     />
   );
 }

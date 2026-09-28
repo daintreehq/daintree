@@ -283,7 +283,7 @@ export function CommandPicker({
               className={cn(
                 PALETTE_ROW_CLASS,
                 "flex w-full flex-col gap-0.5 px-3 py-2 rounded-[var(--radius-md)] text-left text-text-secondary",
-                cmd.enabled ? "cursor-pointer hover:bg-overlay-subtle" : "cursor-not-allowed"
+                cmd.enabled ? "cursor-pointer" : "cursor-not-allowed"
               )}
             >
               <div className="flex min-w-0 items-center justify-between gap-3">

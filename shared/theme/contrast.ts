@@ -604,8 +604,8 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     }
   }
 
-  // Palette selected-row indicator (#11686) — the rail is the whole non-text
-  // signal there, so it carries 1.4.11 on its own.
+  // The outline drawn on a highlighted row (focus ring, increased-contrast
+  // outline) against the highlight fill and the surface around it.
   warnings.push(...getPaletteSelectionWarnings(scheme));
   warnings.push(...getRecentActivityDotWarnings(scheme));
 
@@ -635,7 +635,7 @@ const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
 // sidebar is the flattering end of the range, not the conservative one. The
 // backdrop isn't knowable here, so we score against all of them and keep the
 // worst: a lighter backdrop lifts the surface and the fill together and closes
-// the gap the rail has to hold.
+// the gap the outline has to hold.
 const DARK_PALETTE_BACKDROPS: AppThemeTokenKey[] = [
   "surface-grid",
   "surface-canvas",
@@ -662,16 +662,16 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
   ];
 }
 
-const SELECTION_RAIL_MIN_CONTRAST = 3.0;
+const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
 
-// A destructive menu row replaces the raised fill with `status-danger/10`
+// A destructive menu row replaces the highlight fill with `status-danger/10`
 // (`data-[highlighted]:bg-status-danger/10` in the item primitives, which
-// tailwind-merge resolves in favour of the later class). The rail has to hold
+// tailwind-merge resolves in favour of the later class). The outline has to hold
 // its floor on that backdrop too, so the alpha is pinned here rather than left
 // implicit in the class string.
 const DESTRUCTIVE_ROW_FILL_OPACITY = 0.1;
 
-/** WCAG 1.4.11's non-text floor, same basis as the selection rail above. */
+/** WCAG 1.4.11's non-text floor, same basis as the selection outline above. */
 const RECENT_ACTIVITY_DOT_MIN_CONTRAST = 3.0;
 
 // The pixel a token actually paints when it lands on `backdrop`. Tokens reach us
@@ -712,22 +712,24 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
   return null;
 }
 
-// WCAG 1.4.11 for the palette selected row. The raised fill clears barely
-// 1.1-1.2:1 against the surface in every built-in theme, so it cannot be the
-// indicator; `selection-outline` is, and it has to hold 3:1 against BOTH
-// neighbours it touches. The token paints a leading rail sitting on the row's
-// boundary, so it really does touch both: the fill on one side, the surrounding
-// surface on the other. The fill is the binding one — on dark the row lifts
-// *towards* the rail, so the pair that looks safe against the surrounding
-// surface can still fail against the row it marks.
+// WCAG 1.4.11 for the outline drawn on a highlighted row. The highlight itself
+// is a fill, and a fill changing between states is not held to 3:1. But
+// `selection-outline` is drawn ON that fill wherever the row carries an outline
+// — the inset keyboard ring on menu, context-menu and select items, and the
+// increased-contrast outline every highlighted row takes — and an outline is an
+// indicator, so it has to hold 3:1 against BOTH neighbours it touches: the fill
+// on the inside, the surrounding surface on the outside. The fill is the
+// binding one — on dark the row lifts *towards* the outline, so the pair that
+// looks safe against the surrounding surface can still fail against the row it
+// marks.
 /**
  * The switcher's "agents will resume" dot is a filled `text-secondary` disc
  * drawn in the project row's status slot (#11791, re-pointed by #11801).
  *
  * It gets its own gate rather than a CONTRAST_PAIRS entry because the palette
  * row is not one of DISPLAY_SURFACES: rows are transparent until selected, so
- * the dot lands on the composited palette surface, and on the selected row it
- * lands on `overlay-raised` over that surface. Both are backgrounds it can
+ * the dot lands on the composited palette surface, and on the highlighted row
+ * it lands on `overlay-highlight` over that surface. Both are backgrounds it can
  * actually paint on, and a dot that clears one but not the other is invisible
  * exactly half the time it matters.
  *
@@ -744,7 +746,7 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
 function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
   const dotToken = scheme.tokens["text-secondary"];
-  const fillToken = scheme.tokens["overlay-raised"];
+  const fillToken = scheme.tokens["overlay-highlight"];
 
   const surfaces = resolvePaletteSurfaces(scheme);
   if (surfaces === null) {
@@ -762,7 +764,7 @@ function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidatio
     if (fill === null) {
       warnings.push({
         kind: "unevaluable",
-        message: `Cannot evaluate recent-activity dot contrast: overlay-raised="${fillToken}" is neither hex nor rgba()`,
+        message: `Cannot evaluate recent-activity dot contrast: overlay-highlight="${fillToken}" is neither hex nor rgba()`,
       });
       return warnings;
     }
@@ -799,8 +801,8 @@ function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidatio
 
 function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
-  const railToken = scheme.tokens["selection-outline"];
-  const fillToken = scheme.tokens["overlay-raised"];
+  const outlineToken = scheme.tokens["selection-outline"];
+  const fillToken = scheme.tokens["overlay-highlight"];
   const dangerToken = scheme.tokens["status-danger"];
 
   const surfaces = resolvePaletteSurfaces(scheme);
@@ -826,16 +828,16 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
     if (fill === null) {
       warnings.push({
         kind: "unevaluable",
-        message: `Cannot evaluate palette selection contrast: overlay-raised="${fillToken}" is neither hex nor rgba()`,
+        message: `Cannot evaluate palette selection contrast: overlay-highlight="${fillToken}" is neither hex nor rgba()`,
       });
       return warnings;
     }
 
-    const rail = resolveOverBackdrop(railToken, fill);
-    if (rail === null) {
+    const outline = resolveOverBackdrop(outlineToken, fill);
+    if (outline === null) {
       warnings.push({
         kind: "unevaluable",
-        message: `Cannot evaluate palette selection contrast: selection-outline="${railToken}" is neither hex nor rgba()`,
+        message: `Cannot evaluate palette selection contrast: selection-outline="${outlineToken}" is neither hex nor rgba()`,
       });
       return warnings;
     }
@@ -849,13 +851,13 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
     // Score the ordinary row before anything optional runs. These two pairs
     // predate the destructive one and must not be lost to it: a theme whose
     // `status-danger` this math cannot read would otherwise report only that,
-    // and an author fixing the unreadable token would never learn the rail was
-    // also failing the row it marks.
-    record("the selected row fill", rail, fill);
-    record("the surrounding palette surface", rail, surface);
+    // and an author fixing the unreadable token would never learn the outline
+    // was also failing the row it marks.
+    record("the highlighted row fill", outline, fill);
+    record("the surrounding palette surface", outline, surface);
 
     // The menu, context-menu and select item primitives draw this same token as
-    // an inset focus ring, on the same raised fill over the same
+    // an inset focus ring, on the same highlight fill over the same
     // `.surface-overlay` the palette floats on — so the pair above already
     // covers the ordinary row. A destructive item is the one row that swaps the
     // fill out, and a ring that vanishes only on "Delete" is the worst place to
@@ -866,27 +868,27 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
       continue;
     }
     const dangerFill = blendOverBackground(dangerBase, surface, DESTRUCTIVE_ROW_FILL_OPACITY);
-    const dangerRail = resolveOverBackdrop(railToken, dangerFill);
-    if (dangerRail === null) {
-      unevaluableDanger ??= `Cannot evaluate palette selection contrast: selection-outline="${railToken}" is neither hex nor rgba()`;
+    const dangerOutline = resolveOverBackdrop(outlineToken, dangerFill);
+    if (dangerOutline === null) {
+      unevaluableDanger ??= `Cannot evaluate palette selection contrast: selection-outline="${outlineToken}" is neither hex nor rgba()`;
       continue;
     }
 
-    record("a destructive menu row's fill", dangerRail, dangerFill);
+    record("a destructive menu row's fill", dangerOutline, dangerFill);
     // The ring is inset by its own width, so its outer edge sits on the row's
-    // boundary and its ink still meets the surface — and a translucent rail
+    // boundary and its ink still meets the surface — and a translucent outline
     // composited over the danger wash is not the same pixel as one composited
-    // over the raised fill. Its own label, not the ordinary surface pair's: an
+    // over the highlight fill. Its own label, not the ordinary surface pair's: an
     // author sent to a pair that measures 3:1 on the row they are looking at has
     // been sent to the wrong row.
-    record("the surface behind a destructive row", dangerRail, surface);
+    record("the surface behind a destructive row", dangerOutline, surface);
   }
 
   for (const [label, ratio] of worstByLabel) {
-    if (ratio < SELECTION_RAIL_MIN_CONTRAST) {
+    if (ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
       warnings.push({
         kind: "low-contrast",
-        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_RAIL_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
       });
     }
   }

@@ -245,14 +245,13 @@ type DropdownMenuSubTriggerProps = React.ComponentPropsWithoutRef<
 /* Highlighted-row focus ring, shared by every item-shaped primitive below.
  *
  * `data-[highlighted]` is Radix's own highlight and fires for pointer and keyboard
- * alike, so it stays the fill. It cannot be the WCAG 1.4.11 indicator on its own:
- * `overlay-raised` clears about 1.1:1 against the surface these menus float on
- * (`shared/theme/contrast.ts`), which is why the palette row grew a separate rail
- * rather than a heavier fill. Keyboard focus gets the indicator instead.
+ * alike, so it is the fill — `overlay-highlight`, the same step every palette row
+ * uses. These rows also hold real DOM focus, so keyboard focus gets a ring on top,
+ * as every focused control in the app does.
  *
  * `selection-outline` rather than the accent the generic inset-ring recipe names:
  * `getPaletteSelectionWarnings` holds that token to 3:1 against all three colours an
- * inset ring on one of these rows can touch — the raised fill, the `status-danger`
+ * inset ring on one of these rows can touch — the highlight fill, the `status-danger`
  * wash a destructive row swaps in for it, and the `.surface-overlay` behind both.
  * Accent is only scored against the display surfaces, so it has no guarantee against
  * any of them.
@@ -273,7 +272,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
     <SubTrigger
       ref={ref}
       className={cn(
-        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-raised",
+        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-highlight",
         inset && "pl-8",
         className
       )}
@@ -482,7 +481,7 @@ const DropdownMenuItemBase = React.forwardRef<
     <Item
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         inset && "pl-8",
         destructive &&
           "text-status-danger data-[highlighted]:text-status-danger data-[highlighted]:bg-status-danger/10",
@@ -651,7 +650,7 @@ const DropdownMenuRadioItem = React.forwardRef<
     <RadioItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       {...props}
@@ -684,7 +683,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
     <CheckboxItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       checked={checked}

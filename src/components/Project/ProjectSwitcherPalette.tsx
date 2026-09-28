@@ -142,6 +142,12 @@ export interface ProjectSwitcherPaletteProps {
   onHoverProject?: (projectId: string, pointerType: string) => void;
   /** Pointer-leave callback used to cancel a pending hover prefetch. */
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * Moves the palette's one cursor to the row under the pointer, so the row the
+   * pointer lights is the row Enter commits. Fired on `pointermove`, never
+   * `pointerenter`: rows scrolling under a resting pointer must not steal it.
+   */
+  onHoverRow?: (rowId: string) => void;
   onOpenProjectSettings?: () => void;
   /**
    * What is executing across every workspace, for the header's one-line answer
@@ -247,6 +253,12 @@ interface ProjectListItemProps {
   onSelectNewWindow?: (project: SearchableProject) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * Moves the palette's one cursor to the row under the pointer, so the row the
+   * pointer lights is the row Enter commits. Fired on `pointermove`, never
+   * `pointerenter`: rows scrolling under a resting pointer must not steal it.
+   */
+  onHoverRow?: (rowId: string) => void;
 }
 
 /**
@@ -665,6 +677,7 @@ function ProjectListItem({
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onHoverRow,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
   const showSleep = canSleepProject(project);
@@ -695,21 +708,21 @@ function ProjectListItem({
         PALETTE_ROW_CLASS,
         "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
         project.isActive
-          ? // Hover still has to answer: the band wash used to sit under this
-            // row permanently, which both marked it and made it look hovered
-            // already, so pointing at it said nothing back.
-            "text-text-primary hover:bg-overlay-subtle"
+          ? "text-text-primary"
           : project.isMissing
             ? // A missing project stays dimmed while selected: the row's own
               // brightness is what says the folder is gone, and restoring it
               // under the highlight would erase that.
-              "text-daintree-text/50 hover:bg-overlay-subtle aria-selected:text-daintree-text/50"
-            : "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+              "text-daintree-text/50 aria-selected:text-daintree-text/50"
+            : "text-text-secondary"
       )}
       // The current project is selectable too: picking where you already are is
       // a "never mind", and the handler closes the palette rather than sitting
       // there doing nothing.
       onClick={() => onSelect(project, "pointer")}
+      // The pointer moves the palette's one cursor, so the lit row is always the
+      // one Enter switches to; the prefetch below is a separate concern.
+      onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(project.id) : undefined}
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
@@ -912,12 +925,14 @@ function ScratchListItem({
   isSelected,
   nowMs,
   onSelect,
+  onHoverRow,
 }: {
   scratch: ProjectSwitcherScratchRow;
   isSelected: boolean;
   /** The clock this row renders against, passed rather than read — see `ProjectListItemProps`. */
   nowMs: number;
   onSelect: (row: ProjectSwitcherScratchRow) => void;
+  onHoverRow?: (rowId: string) => void;
 }) {
   const status = getScratchRowStatus(scratch, nowMs);
   const showResumeDot = showResumableAgentMark(status, scratch);
@@ -934,10 +949,9 @@ function ScratchListItem({
       className={cn(
         PALETTE_ROW_CLASS,
         "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
-        scratch.isActive
-          ? "text-text-primary hover:bg-overlay-subtle"
-          : "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+        scratch.isActive ? "text-text-primary" : "text-text-secondary"
       )}
+      onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(scratch.id) : undefined}
       onClick={() => onSelect(scratch)}
     >
       <StatusDot status={status} showResumeDot={showResumeDot} />
@@ -1264,6 +1278,12 @@ interface ProjectListContentProps {
   onSelectNewWindow?: (project: SearchableProject) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * Moves the palette's one cursor to the row under the pointer, so the row the
+   * pointer lights is the row Enter commits. Fired on `pointermove`, never
+   * `pointerenter`: rows scrolling under a resting pointer must not steal it.
+   */
+  onHoverRow?: (rowId: string) => void;
   /** Hands focus back to the search box after the sort menu closes. */
   onReturnFocus?: () => void;
 }
@@ -1288,6 +1308,7 @@ function ProjectListContent({
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onHoverRow,
   onReturnFocus,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
@@ -1395,6 +1416,7 @@ function ProjectListContent({
             isSelected={isSelected}
             nowMs={nowMs}
             onSelect={onSelect}
+            onHoverRow={onHoverRow}
           />
         ) : (
           <ProjectListItem
@@ -1412,6 +1434,7 @@ function ProjectListContent({
             onSelectNewWindow={onSelectNewWindow}
             onHoverProject={onHoverProject}
             onHoverProjectEnd={onHoverProjectEnd}
+            onHoverRow={onHoverRow}
           />
         )}
       </div>
@@ -2205,6 +2228,12 @@ interface ProjectPaletteInnerProps {
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
   /**
+   * Moves the palette's one cursor to the row under the pointer, so the row the
+   * pointer lights is the row Enter commits. Fired on `pointermove`, never
+   * `pointerenter`: rows scrolling under a resting pointer must not steal it.
+   */
+  onHoverRow?: (rowId: string) => void;
+  /**
    * True while `results` is the ranked list carrying the scratches, so the
    * pinned section below can stand down. Trails the query by a commit; defaults
    * to the live query for callers that don't track it.
@@ -2247,6 +2276,7 @@ function ProjectPaletteInner({
   onCopyPath,
   onHoverProject,
   onHoverProjectEnd,
+  onHoverRow,
   rankedSearch,
   scratchResults,
   onCreateScratch,
@@ -2445,6 +2475,7 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
+          onHoverRow={onHoverRow}
           onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
@@ -2577,6 +2608,7 @@ function ModalContent({
         onSelectNewWindow={innerProps.onSelectNewWindow}
         onHoverProject={innerProps.onHoverProject}
         onHoverProjectEnd={innerProps.onHoverProjectEnd}
+        onHoverRow={innerProps.onHoverRow}
         rankedSearch={innerProps.rankedSearch}
         scratchResults={innerProps.scratchResults}
         onCreateScratch={innerProps.onCreateScratch}
@@ -2700,6 +2732,7 @@ function DropdownContent({
           onSelectNewWindow={innerProps.onSelectNewWindow}
           onHoverProject={innerProps.onHoverProject}
           onHoverProjectEnd={innerProps.onHoverProjectEnd}
+          onHoverRow={innerProps.onHoverRow}
           rankedSearch={innerProps.rankedSearch}
           scratchResults={innerProps.scratchResults}
           onCreateScratch={innerProps.onCreateScratch}
@@ -2827,6 +2860,7 @@ export function ProjectSwitcherPalette({
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onHoverRow,
   onOpenProjectSettings,
   onDropdownCloseAutoFocus,
   dropdownAlign,
@@ -2897,6 +2931,7 @@ export function ProjectSwitcherPalette({
         onSelectNewWindow={onSelectNewWindow}
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
+        onHoverRow={onHoverRow}
         onOpenProjectSettings={onOpenProjectSettings}
         onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
         dropdownAlign={dropdownAlign}
@@ -2939,6 +2974,7 @@ export function ProjectSwitcherPalette({
         onSelectNewWindow={onSelectNewWindow}
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
+        onHoverRow={onHoverRow}
         onOpenProjectSettings={onOpenProjectSettings}
         rankedSearch={rankedSearch}
         scratchResults={scratchResults}

@@ -360,7 +360,7 @@ export function PluginSendToAgentDialog() {
             tabIndex={-1}
             role="option"
             // The shell can park the index on a disabled row for a frame (an
-            // all-disabled open); the rail must not claim a row Enter refuses.
+            // all-disabled open); the highlight must not claim a row Enter refuses.
             aria-selected={isSelected && enabled}
             aria-disabled={!enabled}
             aria-label={[heading ?? undefined, label, detail].filter(Boolean).join(", ")}
@@ -375,8 +375,7 @@ export function PluginSendToAgentDialog() {
             className={cn(
               PALETTE_ROW_CLASS,
               "group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left",
-              "text-text-secondary",
-              enabled && "hover:bg-overlay-subtle hover:text-text-primary"
+              "text-text-secondary"
             )}
           >
             <span className="shrink-0 text-text-secondary" aria-hidden="true">

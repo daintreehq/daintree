@@ -50,12 +50,8 @@ function RecipeListItem({
           // Was a hand-rolled copy of the shared row and drifted out of step
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
-          "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex items-center gap-2",
-          // No resting fill. A backplate on every row made three recipes read as
-          // three stacked cards, so the selected one had to out-shout two
-          // neighbours instead of being the only lit row. Every other palette in
-          // the app rests flat and lets PALETTE_ROW_CLASS's rail carry selection.
-          "hover:bg-overlay-subtle"
+          // No resting fill and no hover fill — see the recipe row below.
+          "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex items-center gap-2"
         )}
         aria-selected={isSelected}
         role="option"
@@ -79,12 +75,13 @@ function RecipeListItem({
       onClick={onClick}
       className={cn(
         PALETTE_ROW_CLASS,
-        "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
         // No resting fill. A backplate on every row made three recipes read as
         // three stacked cards, so the selected one had to out-shout two
-        // neighbours instead of being the only lit row. Every other palette in
-        // the app rests flat and lets PALETTE_ROW_CLASS's rail carry selection.
-        "hover:bg-overlay-subtle"
+        // neighbours instead of being the only lit row. No hover fill either:
+        // these rows deliberately don't move the cursor (see the palette's
+        // `onHoverIndex`), so a hover fill here would be a second lit row beside
+        // the one Enter acts on.
+        "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5"
       )}
       aria-selected={isSelected}
       role="option"

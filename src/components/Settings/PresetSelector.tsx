@@ -231,7 +231,7 @@ export function PresetSelector({
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           listboxRef.current?.focus();
-          // Bring the current preset's row, and its rail, into view on opening.
+          // Bring the current preset's row into view on opening.
           document.getElementById(optionDomId(activeIndex))?.scrollIntoView?.({ block: "nearest" });
         }}
       >
@@ -313,9 +313,9 @@ function PresetOption({
       id={domId}
       role="option"
       // The palettes' contract: `aria-selected` is the row Enter acts on, and the
-      // shared row class draws it as a fill plus a leading `selection-outline` rail
-      // (3:1 where the fill alone is ~1.1:1). The committed value is `aria-current`
-      // with a check mark, so the two never compete for one treatment.
+      // shared row class draws it as the highlight fill. The committed value is
+      // `aria-current` with a check mark, so the two never compete for one
+      // treatment.
       aria-selected={isActive}
       aria-current={isSelected ? "true" : undefined}
       data-testid={testid}

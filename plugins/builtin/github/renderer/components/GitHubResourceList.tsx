@@ -149,7 +149,7 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
               variant="ghost"
               size="sm"
               onClick={isTokenError ? onOpenSettings : onLoadMore}
-              className={cn("mt-1 h-6 text-xs", isLoadMoreActive && "bg-overlay-soft")}
+              className={cn("mt-1 h-6 text-xs", isLoadMoreActive && "bg-overlay-highlight")}
             >
               {isTokenError ? (
                 <>
@@ -172,7 +172,7 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
               // Neutral, not accent: the keyboard cursor uses the same neutral
               // lift here that it uses on a row, so the two can never both claim
               // the accent at once.
-              isLoadMoreActive && "bg-overlay-soft text-text-primary"
+              isLoadMoreActive && "bg-overlay-highlight text-text-primary"
             )}
           >
             {showLoadingMoreSpinner ? (
@@ -1610,6 +1610,7 @@ export function GitHubResourceList({
                     onMenuClose={focusSearchInput}
                     onOpenExternalUrl={handleOpenUrlExternal}
                     isActive={activeIndex === index}
+                    onPointerActivate={() => setActiveIndex(index)}
                     isSelected={selection.selectedIds.has(item.number)}
                     isSelectionActive={selection.isSelectionActive}
                     onToggleSelect={(e: { shiftKey: boolean }) => {

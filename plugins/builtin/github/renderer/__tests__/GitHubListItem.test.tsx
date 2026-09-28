@@ -387,7 +387,8 @@ describe("GitHubListItem", () => {
   it("separates the keyboard cursor from membership, and spends no accent on either", () => {
     // Three distinct states have to stay distinguishable: resting, the row
     // Enter would act on, and the rows bulk actions would act on. The cursor
-    // gets the leading rail; membership gets the heavier fill. Accent is
+    // gets the highlight fill; membership gets the filled checkbox and no fill
+    // of its own, so the two can never be read as one another. Accent is
     // reserved for the one focus anchor in the region (the search field).
     const resting = render(<GitHubListItem item={baseIssue} type="issue" />);
     const restingClass = resting.container.querySelector("[role='row']")!.className;
@@ -410,7 +411,9 @@ describe("GitHubListItem", () => {
     );
     const selectedOption = selected.container.querySelector("[role='row']")!;
     expect(selectedOption.getAttribute("aria-selected")).toBe("true");
-    expect(selectedOption.className).not.toBe(restingClass);
+    // Membership's mark is the checked box, not a fill that competes with the
+    // cursor's.
+    expect(selectedOption.querySelector("svg.lucide-check")).not.toBeNull();
     expect(selectedOption.className).not.toBe(activeOption.className);
 
     for (const cls of [restingClass, activeOption.className, selectedOption.className]) {

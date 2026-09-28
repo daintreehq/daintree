@@ -85,11 +85,10 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
                     className={cn(
                       "relative flex h-8 w-1/9 min-w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-lg leading-none transition-colors",
                       // Pointer and arrow keys drive the same `data-active`, and
-                      // Enter acts on it. The raised fill alone clears about
-                      // 1.1-1.3:1, so the neutral outline carries the 3:1 — the
-                      // menu rows' highlighted treatment, and it survives forced
-                      // colours where the fill is stripped.
-                      "data-[active]:bg-overlay-raised data-[active]:outline-solid data-[active]:outline-2 data-[active]:outline-selection-outline data-[active]:outline-offset-[-2px]"
+                      // Enter acts on it — the app's highlighted-row fill, and
+                      // nothing more, like every list and menu row. Forced colours
+                      // strip the fill, so that mode outlines the cell instead.
+                      "data-[active]:bg-overlay-highlight forced-colors:data-[active]:outline-solid forced-colors:data-[active]:outline-2 forced-colors:data-[active]:outline-[color:Highlight] forced-colors:data-[active]:outline-offset-[-2px]"
                     )}
                     {...props}
                   >
