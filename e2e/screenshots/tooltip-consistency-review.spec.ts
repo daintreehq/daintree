@@ -123,12 +123,12 @@ const TRIGGERS: TriggerDef[] = [
   {
     cell: "saved-fleets",
     trigger: "long-chip",
-    selector: '[data-testid="fleet-picker-saved-fleet"][title^="Release train"]',
+    selector: '[data-testid="fleet-picker-saved-fleet"]:has-text("Release train")',
   },
   {
     cell: "saved-fleets",
     trigger: "short-chip",
-    selector: '[data-testid="fleet-picker-saved-fleet"][title="Bugfix pair"]',
+    selector: '[data-testid="fleet-picker-saved-fleet"]:has-text("Bugfix pair")',
   },
   {
     cell: "color-picker",
@@ -174,14 +174,14 @@ const TRIGGERS: TriggerDef[] = [
   {
     cell: "plugin-manager",
     trigger: "installed-row-long",
-    selector: 'li button.row-select-target[title^="Enterprise Compliance"]',
+    selector: 'li button.row-select-target:has-text("Enterprise Compliance")',
     region: "around",
     page: "plugin-manager",
   },
   {
     cell: "plugin-manager",
     trigger: "project-row",
-    selector: 'li button.row-select-target[title^="Release checklist"]',
+    selector: 'li button.row-select-target:has-text("Release checklist")',
     region: "around",
     page: "plugin-manager",
   },
@@ -640,7 +640,9 @@ async function capture(
         height: t.height + 220,
       });
     }
-    let clip = region;
+    // The trigger always belongs in the frame, even when a tall surface's region
+    // band misses it.
+    let clip = union(region, probe.triggerRect);
     if (probe.tooltipRect) clip = union(clip, probe.tooltipRect);
     if (probe.annotationRect) clip = union(clip, probe.annotationRect);
     clip = intersect(
