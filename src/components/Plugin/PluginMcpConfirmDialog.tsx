@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { AlertTriangle, ChevronRight } from "lucide-react";
+import { Callout } from "@/components/ui/Callout";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -268,22 +269,8 @@ function ChangeNotice({ reason, tier }: { reason: string; tier: PluginMcpDangerT
   if (heading === null) return null;
 
   return (
-    <div
-      className={cn(
-        "flex items-start gap-2 rounded-[var(--radius-md)] p-3",
-        isRaisedDanger
-          ? "border border-status-danger/20 bg-status-danger/10"
-          : "border border-status-warning/20 bg-status-warning/10"
-      )}
-    >
-      <AlertTriangle
-        aria-hidden="true"
-        className={cn(
-          "w-4 h-4 shrink-0 mt-px",
-          isRaisedDanger ? "text-status-danger" : "text-status-warning"
-        )}
-      />
-      <div className="min-w-0 space-y-1">
+    <Callout severity={isRaisedDanger ? "danger" : "warning"}>
+      <div className="space-y-1">
         <div
           className={cn(
             SECTION_LABEL_CLASS,
@@ -292,9 +279,9 @@ function ChangeNotice({ reason, tier }: { reason: string; tier: PluginMcpDangerT
         >
           {heading}
         </div>
-        <div className="text-xs text-text-primary break-words">{changeBodyFor(reason, tier)}</div>
+        <div>{changeBodyFor(reason, tier)}</div>
       </div>
-    </div>
+    </Callout>
   );
 }
 

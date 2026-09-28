@@ -1,4 +1,6 @@
 import { AlertCircle, Package, RefreshCw } from "lucide-react";
+import { InlineError } from "@/components/ui/field";
+import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { PluginLogsSection, usePluginLogs } from "@/components/Plugin/PluginLogsSection";
@@ -249,10 +251,9 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
       </div>
 
       {plugin.state === "invalid" && plugin.error && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-danger break-words">{plugin.error}</p>
-        </div>
+        <Callout severity="error" size="compact">
+          <p>{plugin.error}</p>
+        </Callout>
       )}
 
       {/* The plugin loaded; running it is what went wrong. Same treatment as an
@@ -262,20 +263,18 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
           a phase the channel doesn't record. The stack stays out of the manager;
           the panel's own error boundary is where a developer reads it. */}
       {plugin.loadError && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-danger break-words">{plugin.loadError.message}</p>
-        </div>
+        <Callout severity="error" size="compact">
+          <p>{plugin.loadError.message}</p>
+        </Callout>
       )}
 
       {plugin.collidesWithGlobal && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-warning break-words">
+        <Callout severity="warning" size="compact">
+          <p>
             An installed plugin already uses this id. Both load — this one under the project — so
             check which one a command or panel came from.
           </p>
-        </div>
+        </Callout>
       )}
 
       {granted.length > 0 && (
@@ -381,7 +380,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             )}
           </div>
         )}
-        {error && <p className="text-2xs text-status-danger leading-tight">{error}</p>}
+        {error && <InlineError className="text-2xs">{error}</InlineError>}
       </div>
     </div>
   );

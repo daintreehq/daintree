@@ -9,8 +9,10 @@ import {
   useRef,
   useContext,
   memo,
+  type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { InsetSurface } from "@/components/ui/insetSurface";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { logError } from "@/utils/logger";
 import {
@@ -906,7 +908,7 @@ function SettingsDialogInner({
             </div>
           )}
 
-          <ScrollShadow className="flex-1" scrollClassName="py-6 dialog-body-inset">
+          <SettingsPageScroll className="flex-1" scrollClassName="py-6 dialog-body-inset">
             {isSearching && (
               <div role="region" aria-label="Search results">
                 <SearchResults
@@ -1070,7 +1072,7 @@ function SettingsDialogInner({
                 )}
               </>
             </div>
-          </ScrollShadow>
+          </SettingsPageScroll>
         </div>
       </div>
     </AppDialog>
@@ -2003,5 +2005,14 @@ export function SearchResults({
         })}
       </div>
     </div>
+  );
+}
+
+/** The page column: inset content, so a status banner in it is a box, not a band. */
+function SettingsPageScroll(props: ComponentProps<typeof ScrollShadow>) {
+  return (
+    <InsetSurface>
+      <ScrollShadow {...props} />
+    </InsetSurface>
   );
 }

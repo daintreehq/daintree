@@ -235,6 +235,9 @@ export function IssueSelector({
           // refetch cannot leave the previous list reading as current.
           <InlineStatusBanner
             severity="error"
+            // A strip across the popover, even when the popover opens from a
+            // dialog body, whose inset context would otherwise make it a box.
+            inset={false}
             icon={XCircle}
             title="Couldn't load issues"
             description="The forge didn't answer."

@@ -1,7 +1,8 @@
 import { createContext, use, useId } from "react";
 import type { ReactNode } from "react";
-import { CircleAlert, Info } from "lucide-react";
+import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { InlineError } from "@/components/ui/field";
 import { SettingsResetButton } from "./SettingsResetButton";
 
 /**
@@ -355,31 +356,27 @@ interface SettingsInlineErrorProps {
   id?: string;
   className?: string;
   role?: "alert" | "status";
+  /** A trailing control on the error's line — a Retry for a load that failed. */
+  action?: ReactNode;
   "data-testid"?: string;
 }
 
 /**
- * A settings error as words: the glyph carries the severity and the words stay
- * neutral, because severity-coloured text falls under 4.5:1 on most themes. The
- * form every settings error takes, a row's own or one a custom control states.
+ * A settings error as words: the shared `InlineError`, the form every settings
+ * error takes, a row's own or one a custom control states.
  */
 export function SettingsInlineError({
   children,
   id,
   className,
   role,
+  action,
   "data-testid": testId,
 }: SettingsInlineErrorProps) {
   return (
-    <p
-      id={id}
-      role={role}
-      data-testid={testId}
-      className={cn("flex items-start gap-1.5 text-xs text-text-primary", className)}
-    >
-      <CircleAlert className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
-      <span className="min-w-0">{children}</span>
-    </p>
+    <InlineError id={id} role={role} data-testid={testId} className={className} action={action}>
+      {children}
+    </InlineError>
   );
 }
 

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleAlert,
   FolderInput,
   FolderSearch,
   HelpCircle,
@@ -507,9 +509,7 @@ function MoveOrRenameProjectDialogInner({
                     // described-by association announce it on focus, and the
                     // footer status says once that the name needs fixing.
                     folderNameError && (
-                      <p id={folderErrorId} className="text-xs text-status-error">
-                        {folderNameError}
-                      </p>
+                      <InlineError id={folderErrorId}>{folderNameError}</InlineError>
                     )
                   }
                 >
@@ -626,9 +626,12 @@ function RelocationPreviewSection({
           {preview.blockers.map((blocker, i) => (
             <li
               key={`${blocker.reason}-${i}`}
-              className="flex items-start gap-2 text-xs text-status-error"
+              className="flex items-start gap-1.5 text-xs text-text-primary"
             >
-              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <CircleAlert
+                className="mt-px h-3.5 w-3.5 shrink-0 text-status-error"
+                aria-hidden="true"
+              />
               <span>{blocker.message}</span>
             </li>
           ))}

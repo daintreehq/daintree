@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, type CSSProperties } from "react";
+import React, { use, useState, useEffect, useRef, type CSSProperties } from "react";
+import { InsetSurfaceContext } from "@/components/ui/insetSurface";
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, type ButtonProps } from "@/components/ui/button";
@@ -12,6 +13,8 @@ import { BANNER_TINT_ALPHA, type BannerSeverity } from "@shared/config/windowChr
 type ButtonVariant = "primary" | "accent" | "dismiss" | "danger" | "dangerFilled";
 
 const TINT_PERCENT = `${BANNER_TINT_ALPHA * 100}%`;
+/** The band's edge — the same /20 a `Callout` draws its border at. */
+const BORDER_PERCENT = "20%";
 
 /** Marks a banner root (see the root's `data-inline-status-banner`), so a stack of sibling banners can find each other. */
 const STACK_MEMBER_ATTR = "data-inline-status-banner";
@@ -100,6 +103,13 @@ interface BaseInlineStatusBannerProps {
    * not rendered.
    */
   layout?: "stacked" | "strip" | "pane" | "inline";
+  /**
+   * A box among inset content rather than a band across a pane's top: full
+   * hairline border and the `--radius-md` corner, the `Callout` recipe. Read
+   * from `InsetSurfaceContext` when omitted, so a dialog body or the settings
+   * column gets it without asking.
+   */
+  inset?: boolean;
   /**
    * Secondary control rendered after the action buttons and before the
    * dismiss (e.g. a Popover trigger, a ghost link). This is the escape hatch
@@ -289,6 +299,7 @@ export function InlineStatusBanner({
   closeTitle,
   closeDisabled,
   layout = "stacked",
+  inset,
   trailingSlot,
   descriptionExtras,
   autoDismissAfter,
@@ -459,6 +470,17 @@ export function InlineStatusBanner({
   const isPane = layout === "pane";
   const isInline = layout === "inline";
   const wrapsControls = isStrip || isPane;
+  const insetFromSurface = use(InsetSurfaceContext);
+  const isInset = inset ?? insetFromSurface;
+  const isUntinted = isNeutral || (isInline && severity !== "error");
+  // A tinted band draws its edge inline, in its severity's colour; an untinted
+  // one needs a class. Inset, that edge wraps the whole box; at a pane's top it
+  // is the inline layout's bottom rule.
+  const edgeClass = isInset
+    ? cn("rounded-[var(--radius-md)]", isUntinted && "border border-border-default")
+    : isInline
+      ? "border-b border-divider"
+      : undefined;
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -605,7 +627,7 @@ export function InlineStatusBanner({
         stacked
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : isInline
-            ? "flex items-start px-3 py-2 shrink-0 border-b border-divider"
+            ? "flex items-start px-3 py-2 shrink-0"
             : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
         // The strip wraps its controls beneath the text once the container is
         // narrower than a two-line sentence plus three actions can share.
@@ -616,7 +638,8 @@ export function InlineStatusBanner({
         // scale, which is what generates this utility.
         shouldAnimate && "transition-[opacity,translate] duration-250",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
-        (isNeutral || (isInline && severity !== "error")) && "bg-overlay-subtle",
+        isUntinted && "bg-overlay-subtle",
+        edgeClass,
         // The native caption strip is a fixed 48px tall. A shorter banner would
         // let the tint applied to that strip bleed over the toolbar beneath it,
         // so a title-bar banner always fills the band it is colouring.
@@ -625,12 +648,17 @@ export function InlineStatusBanner({
         className
       )}
       style={{
-        ...(isNeutral || (isInline && severity !== "error")
+        ...(isUntinted
           ? undefined
-          : {
-              backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
-              borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) 20%, transparent)`,
-            }),
+          : isInset
+            ? {
+                backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
+                border: `1px solid color-mix(in oklab, var(${colorVar}) ${BORDER_PERCENT}, transparent)`,
+              }
+            : {
+                backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
+                borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) ${BORDER_PERCENT}, transparent)`,
+              }),
         ...windowControlsInset,
       }}
       role={role}

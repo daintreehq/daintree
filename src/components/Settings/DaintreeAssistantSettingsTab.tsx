@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { Callout } from "@/components/ui/Callout";
 import type { ReactNode } from "react";
 import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
 import * as semver from "semver";
@@ -17,6 +18,7 @@ import {
   SETTINGS_CONTROL_WIDTH,
   SettingsDependents,
   SettingsGroup,
+  SettingsInlineError,
   SettingsRow,
 } from "./SettingsGroup";
 import { SettingsChoicebox } from "./SettingsChoicebox";
@@ -1322,15 +1324,13 @@ export function DaintreeAssistantSettingsTab() {
         description="Help-session activity is logged locally so you can review what the assistant did"
       >
         {saveError("privacy")}
-        {privacyError && (
-          <InlineError onRetry={privacyError.retry}>{privacyError.message}</InlineError>
-        )}
+        {privacyError && <TabError onRetry={privacyError.retry}>{privacyError.message}</TabError>}
         {(auditReadFailed || auditConfigFailed) && (
-          <InlineError onRetry={() => void refreshAuditRecords()}>
+          <TabError onRetry={() => void refreshAuditRecords()}>
             {auditConfigFailed
               ? "Couldn't read the audit settings, so recording is shown as unknown."
               : "Couldn't read the audit log, so the diagnostics below may be incomplete."}
-          </InlineError>
+          </TabError>
         )}
         <SettingsGroup>
           <SettingsSwitchCard
@@ -1523,7 +1523,7 @@ export function DaintreeAssistantSettingsTab() {
         description="Share the assistant's local MCP server with other clients, such as Claude Code or Cursor"
       >
         {connectionError && (
-          <InlineError onRetry={() => void handleCopyConfig()}>{connectionError}</InlineError>
+          <TabError onRetry={() => void handleCopyConfig()}>{connectionError}</TabError>
         )}
         {loading ? (
           showLoading ? (
@@ -1606,7 +1606,7 @@ export function DaintreeAssistantSettingsTab() {
         variant="destructive"
         zIndex="nested"
       >
-        {clearAuditError && <InlineError>{clearAuditError}</InlineError>}
+        {clearAuditError && <TabError>{clearAuditError}</TabError>}
       </ConfirmDialog>
 
       <ConfirmDialog
@@ -1621,7 +1621,7 @@ export function DaintreeAssistantSettingsTab() {
         variant="destructive"
         zIndex="nested"
       >
-        {rotateError && <InlineError>{rotateError}</InlineError>}
+        {rotateError && <TabError>{rotateError}</TabError>}
       </ConfirmDialog>
     </div>
   );
@@ -1655,17 +1655,21 @@ function StatusLine({
   );
 }
 
-function InlineError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
+/** A failed load or save in this tab, said once when it happens, with its retry beside it. */
+function TabError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
   return (
-    <div role="alert" className="flex items-start gap-1.5 text-xs text-text-primary select-text">
-      <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
-      <span className="min-w-0 flex-1">{children}</span>
-      {onRetry && (
-        <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
-          Retry
-        </Button>
-      )}
-    </div>
+    <SettingsInlineError
+      role="alert"
+      action={
+        onRetry && (
+          <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
+            Retry
+          </Button>
+        )
+      }
+    >
+      {children}
+    </SettingsInlineError>
   );
 }
 
@@ -1682,18 +1686,16 @@ function AgentNotice({
   action: ReactNode;
 }) {
   return (
-    <div
+    <Callout
+      severity="warning"
       role="alert"
       data-testid={testId}
-      className="flex items-start gap-3 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-3 py-2.5"
+      title={title}
+      action={action}
+      className="select-text"
     >
-      <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" aria-hidden="true" />
-      <div className="min-w-0 flex-1 text-xs select-text">
-        <p className="font-medium text-text-primary">{title}</p>
-        <p className="mt-0.5 text-text-secondary">{body}</p>
-      </div>
-      <div className="shrink-0">{action}</div>
-    </div>
+      <p>{body}</p>
+    </Callout>
   );
 }
 
@@ -1929,7 +1931,7 @@ function NativeGrantsSection({
           Approve grant
         </Button>
       </div>
-      {issueError && <InlineError>{issueError}</InlineError>}
+      {issueError && <TabError>{issueError}</TabError>}
     </div>
   );
 }

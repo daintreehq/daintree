@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Lock, ShieldAlert, Plus } from "lucide-react";
@@ -166,16 +167,14 @@ export function EnvironmentVariablesEditor({
     ? "Unsaved changes — they're also saved when you close Settings"
     : `Applies to new terminals in ${projectLabel} — reopen a terminal to pick up changes`;
   const status = saveError ? (
-    <span role="alert" className="text-status-error">
-      {saveError}
-    </span>
+    <InlineError role="alert">{saveError}</InlineError>
   ) : errorCount > 0 ? (
     // The actions row is already a polite live region; each field names its own error.
-    <span className="text-status-error">
+    <InlineError>
       {errorCount === 1
         ? "Fix the name above to save"
         : `Fix the ${errorCount} names above to save`}
-    </span>
+    </InlineError>
   ) : (
     helperText
   );

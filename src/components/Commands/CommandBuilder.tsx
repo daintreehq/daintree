@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { InlineError } from "@/components/ui/field";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -11,7 +12,7 @@ import type {
   BuilderStep,
   BuilderField,
 } from "@shared/types/commands";
-import { Check, ChevronLeft, ChevronRight, AlertCircle } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -108,12 +109,7 @@ function builderFieldHint({
   helpId: string;
 }): React.ReactNode {
   if (error) {
-    return (
-      <p id={errorId} className="text-xs text-status-error flex items-center gap-1" role="alert">
-        <AlertCircle className="h-3 w-3" aria-hidden="true" />
-        {error}
-      </p>
-    );
+    return <InlineError id={errorId}>{error}</InlineError>;
   }
   if (helpText) {
     return (

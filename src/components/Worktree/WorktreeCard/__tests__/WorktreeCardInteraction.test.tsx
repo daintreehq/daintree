@@ -341,7 +341,7 @@ function selectOverlayClasses(): string {
 
 /** A banner root's class string, anchored on its unique test id. */
 function bannerRootClasses(testId: string): string {
-  const tag = openingTagWith(detailsSource, "div", `data-testid="${testId}"`);
+  const tag = openingTagWith(detailsSource, "Callout", `data-testid="${testId}"`);
   const classes = tag.match(/className="([^"]+)"/)?.[1];
   if (classes === undefined) throw new Error(`no root className for [data-testid="${testId}"]`);
   return classes;

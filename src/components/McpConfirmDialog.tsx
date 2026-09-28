@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Callout } from "@/components/ui/Callout";
 import {
   AlertTriangle,
   ChevronRight,
@@ -502,13 +503,12 @@ function ConsequenceNote({
   }
 
   return (
-    <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-status-danger/20 bg-status-danger/10 p-3">
-      <AlertTriangle aria-hidden="true" className="w-4 h-4 shrink-0 mt-px text-status-danger" />
-      <div className="min-w-0 space-y-1">
+    <Callout severity="danger">
+      <div className="space-y-1">
         <div className={cn(SECTION_LABEL_CLASS, "text-status-danger")}>What this does</div>
-        <div className="text-xs text-text-primary break-words">{children}</div>
+        <div>{children}</div>
       </div>
-    </div>
+    </Callout>
   );
 }
 
@@ -693,8 +693,11 @@ function TargetChecklist({
  */
 function CautionRow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-start gap-1.5 text-xs text-status-warning">
-      <AlertTriangle aria-hidden="true" className="w-3.5 h-3.5 shrink-0 mt-px" />
+    <div className="flex items-start gap-1.5 text-xs text-text-primary">
+      <AlertTriangle
+        aria-hidden="true"
+        className="w-3.5 h-3.5 shrink-0 mt-px text-status-warning"
+      />
       <span className="min-w-0 break-words">{children}</span>
     </div>
   );

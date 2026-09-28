@@ -1,6 +1,7 @@
 import { useState, useEffect, useId, useMemo, useRef } from "react";
+import { InlineError } from "@/components/ui/field";
 import { cn } from "@/lib/utils";
-import { AlertCircle, Check, ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -251,15 +252,12 @@ export function WorktreeSettingsTab() {
                 {hasPatternMessages && (
                   <div
                     id="path-pattern-error"
-                    className="space-y-1 text-xs text-status-error"
+                    className="space-y-1"
                     // A failed save interrupts; the live pattern check doesn't.
                     role={error ? "alert" : undefined}
                   >
                     {errorMessages.map((message) => (
-                      <div key={message} className="flex items-start gap-2">
-                        <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden="true" />
-                        <span>{message}</span>
-                      </div>
+                      <InlineError key={message}>{message}</InlineError>
                     ))}
                   </div>
                 )}

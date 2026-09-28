@@ -103,9 +103,11 @@ describe("CommandBuilder field rendering", () => {
     fireEvent.change(screen.getByLabelText("Issue title"), { target: { value: "abc" } });
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Too short");
-    expect(screen.getByLabelText("Issue title").getAttribute("aria-describedby")).toBe(alert.id);
+    // Found by its words, not a live role: it is re-checked on every keystroke,
+    // so the field's described-by association is what announces it.
+    const error = (await screen.findByText("Too short")).closest("p");
+    expect(error?.getAttribute("role")).toBeNull();
+    expect(screen.getByLabelText("Issue title").getAttribute("aria-describedby")).toBe(error?.id);
     expect(onExecute).not.toHaveBeenCalled();
   });
 

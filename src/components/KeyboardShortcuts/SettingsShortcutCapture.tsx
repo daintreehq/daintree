@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useId, useMemo, useRef } from "react";
+import { InlineError } from "@/components/ui/field";
 import { AlertTriangle } from "lucide-react";
 import { isMac } from "@/lib/platform";
 import {
@@ -647,15 +648,9 @@ export function SettingsShortcutCapture({
       </div>
 
       {validationError && (
-        <div
-          id={validationId}
-          className="flex items-start gap-2 text-status-error text-sm"
-          role="alert"
-          data-testid="shortcut-capture-validation-error"
-        >
-          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
-          <span>{validationError}</span>
-        </div>
+        <InlineError id={validationId} role="alert" data-testid="shortcut-capture-validation-error">
+          {validationError}
+        </InlineError>
       )}
 
       {hasConflicts && (

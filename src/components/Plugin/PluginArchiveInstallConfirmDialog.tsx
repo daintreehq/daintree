@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { AlertCircle, AlertTriangle, FileArchive, Users } from "lucide-react";
+import { Callout } from "@/components/ui/Callout";
+import { FileArchive, Users } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { notify } from "@/lib/notify";
@@ -158,13 +159,9 @@ export function PluginArchiveInstallConfirmDialog() {
         <ArchivePermissions capabilities={current.manifest.capabilities} />
         <ArchiveRecipes recipes={current.manifest.recipes} />
         {error !== null && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
-          >
-            <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-            <p className="text-2xs text-status-danger break-words min-w-0">{error}</p>
-          </div>
+          <Callout severity="error" role="alert">
+            <p>{error}</p>
+          </Callout>
         )}
       </div>
     </ConfirmDialog>
@@ -297,20 +294,14 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
       ) : (
         <>
           {worst === "danger" && (
-            <div className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-              <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-2xs text-status-danger break-words">
-                Can run arbitrary commands on your machine
-              </p>
-            </div>
+            <Callout severity="danger">
+              <p>Can run arbitrary commands on your machine</p>
+            </Callout>
           )}
           {worst === "warning" && (
-            <div className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-              <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-              <p className="text-2xs text-status-warning break-words">
-                Requests sensitive permissions — review before installing
-              </p>
-            </div>
+            <Callout severity="warning">
+              <p>Requests sensitive permissions — review before installing</p>
+            </Callout>
           )}
           <ul className="space-y-2 pt-0.5">
             {granted.map((capability: BuiltInPluginCapability) => (

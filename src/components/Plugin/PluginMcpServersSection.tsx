@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import { AlertCircle, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { InlineError } from "@/components/ui/field";
+import { Callout } from "@/components/ui/Callout";
+import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -321,19 +323,15 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
               </div>
 
               {row.info?.lastError && status === "crashed" && (
-                <div className="mx-3 mb-2.5 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-                  <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                  <p className="text-2xs text-status-danger break-words select-text">
-                    {row.info.lastError}
-                  </p>
-                </div>
+                <Callout severity="error" size="compact" className="mx-3 mb-2.5">
+                  <p className="break-words select-text">{row.info.lastError}</p>
+                </Callout>
               )}
 
               {rowRestartError && (
-                <div className="mx-3 mb-2.5 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-                  <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                  <p className="text-2xs text-status-danger break-words">{rowRestartError}</p>
-                </div>
+                <Callout severity="error" size="compact" className="mx-3 mb-2.5">
+                  <p>{rowRestartError}</p>
+                </Callout>
               )}
 
               {hasOutput && (
@@ -372,7 +370,7 @@ function StderrView({ state }: { state: StderrState | undefined }) {
     return <p className="text-2xs text-text-secondary">Loading output…</p>;
   }
   if (state.error) {
-    return <p className="text-2xs text-status-danger">{state.error}</p>;
+    return <InlineError className="text-2xs">{state.error}</InlineError>;
   }
   const result = state.result;
   if (!result || result.lines.length === 0) {
@@ -395,9 +393,8 @@ function StderrView({ state }: { state: StderrState | undefined }) {
 
 function SectionError({ message }: { message: string }) {
   return (
-    <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-      <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-      <p className="text-2xs text-status-danger break-words">{message}</p>
-    </div>
+    <Callout severity="error" size="compact">
+      <p>{message}</p>
+    </Callout>
   );
 }

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { InlineError } from "@/components/ui/field";
 import { Image, Upload, Check, FolderInput, Copy, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -756,12 +757,9 @@ export function GeneralTab({
             disabled={keepResidentBusy}
           />
           {keepResidentError && (
-            <p
-              className="whitespace-pre-line px-4 py-2.5 text-xs text-status-error select-text"
-              role="alert"
-            >
+            <InlineError className="whitespace-pre-line px-4 py-2.5" role="alert">
               {keepResidentError}
-            </p>
+            </InlineError>
           )}
         </SettingsGroup>
       </SettingsSection>
@@ -854,12 +852,9 @@ export function GeneralTab({
           )}
 
           {inRepoError && (
-            <p
-              className="whitespace-pre-line px-4 py-2.5 text-xs text-status-error select-text"
-              role="alert"
-            >
+            <InlineError className="whitespace-pre-line px-4 py-2.5" role="alert">
               {inRepoError}
-            </p>
+            </InlineError>
           )}
         </SettingsGroup>
       </SettingsSection>

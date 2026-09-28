@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useId } from "react";
+import { InlineError } from "@/components/ui/field";
 import { CheckCircle, AlertCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -309,10 +310,10 @@ export function EditorIntegrationTab() {
               label="Detected editors"
               description={
                 rescanFailed ? (
-                  <span className="text-status-error">
+                  <InlineError>
                     Couldn&apos;t re-scan — showing the previous scan. Use the re-scan button to try
                     again.
-                  </span>
+                  </InlineError>
                 ) : (
                   `${foundCount} of ${discoveredEditors.length} found on this machine`
                 )
@@ -428,17 +429,15 @@ export function EditorIntegrationTab() {
         <SettingsActions
           status={
             loadError ? (
-              <span className="text-status-error">{loadError}</span>
+              <InlineError>{loadError}</InlineError>
             ) : saveError ? (
-              <span className="text-status-error">{saveError}</span>
+              <InlineError>{saveError}</InlineError>
             ) : testResult === "ok" ? (
               <span className="flex items-center gap-1">
                 <CheckCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Open requested
               </span>
             ) : testResult === "error" ? (
-              <span className="flex items-center gap-1 text-status-error">
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Failed to open
-              </span>
+              <InlineError>Failed to open</InlineError>
             ) : isLoadingConfig ? null : preferredEditor ? (
               <span>
                 Saved:{" "}

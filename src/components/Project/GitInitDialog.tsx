@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
+import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, AlertTriangle } from "lucide-react";
+import { Check } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
@@ -460,7 +461,6 @@ export function GitInitDialog({
                 beats the Doherty gate. */}
             {keptGitignore && (
               <InlineStatusBanner
-                icon={AlertTriangle}
                 severity="warning"
                 title="Review the existing .gitignore"
                 description={keptGitignore}
@@ -629,13 +629,9 @@ export function GitInitDialog({
                 htmlFor="git-init-project-name"
                 hint={
                   isNameMissing && (
-                    <p
-                      id={nameErrorId}
-                      data-testid="git-init-name-error"
-                      className="text-xs text-status-error"
-                    >
+                    <InlineError id={nameErrorId} data-testid="git-init-name-error">
                       Enter a project name
-                    </p>
+                    </InlineError>
                   )
                 }
               >
@@ -707,13 +703,12 @@ export function GitInitDialog({
                   htmlFor="git-init-commit-message"
                   hint={
                     isCommitMessageMissing && (
-                      <p
+                      <InlineError
                         id={commitMessageErrorId}
                         data-testid="git-init-commit-message-error"
-                        className="text-xs text-status-error"
                       >
                         Enter a commit message
-                      </p>
+                      </InlineError>
                     )
                   }
                 >

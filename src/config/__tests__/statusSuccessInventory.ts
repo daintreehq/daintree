@@ -372,7 +372,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/components/Terminal/MissingCliGate.tsx": [
     {
       category: "transient",
-      signature: "border-status-success/20 bg-status-success/5",
+      signature: "border-status-success/20 bg-status-success/10",
       expectedOccurrences: 2,
       rationale: "CLI-now-available banner; the gate stops rendering once it is seen",
     },

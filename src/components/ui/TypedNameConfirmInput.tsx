@@ -53,7 +53,7 @@ export function TypedNameConfirmInput({
   );
 
   return (
-    <div className="space-y-2 p-3 bg-status-error/5 border border-status-error/20 rounded-[var(--radius-md)]">
+    <div className="space-y-2 p-3 bg-status-danger/10 border border-status-danger/20 rounded-[var(--radius-md)]">
       {hasPreamble && (
         <p id={preambleId} className="text-sm text-text-primary">
           {preamble}
