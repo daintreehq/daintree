@@ -641,6 +641,17 @@ describe("TabButton", () => {
     });
   });
 
+  describe("rename field", () => {
+    it("sits beside the tab rather than inside it", () => {
+      // A focusable input inside `role="tab"` is the nesting ARIA forbids.
+      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
+      fireEvent.doubleClick(screen.getByText("Test Agent"));
+      const input = screen.getByTestId("motion-input");
+      expect(input.closest('[role="tab"]')).toBeNull();
+      expect(input.parentElement!.contains(screen.getByRole("tab"))).toBe(true);
+    });
+  });
+
   describe("close control", () => {
     it("never takes focus or joins the tab's accessible subtree — Delete is the keyboard route", () => {
       // A focusable control inside a `tab` is the nesting ARIA forbids, and its label

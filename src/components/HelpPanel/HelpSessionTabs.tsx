@@ -178,7 +178,7 @@ function SessionTabChip({
         // Content-width, like every other tab strip in the app and every browser's. Tabs
         // may shrink when the strip is tight — three lanes at the 320px minimum — and
         // `TabLabel` keeps the identifying numeral out of the part that gives way.
-        "min-w-0 shrink px-2 py-1"
+        "min-w-0 shrink px-2 py-1.5"
       )}
     >
       {isActive && <DocumentTabIndicator />}
@@ -352,7 +352,9 @@ export function HelpSessionTabs({
   if (tabs.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-0.5 px-1 py-1 border-b border-border-default shrink-0">
+    // No bottom padding: the selected tab's underline sits on the strip's bottom
+    // rule, as it does on every document tab strip.
+    <div className="flex items-center gap-0.5 px-1 pt-1 border-b border-border-default shrink-0">
       {/* The tablist is its own element so that it owns nothing but tabs. With the
           new-session button inside it, axe's `aria-required-children` rejects the
           stray `button` in a `tablist`; as a sibling it is simply the next control. */}

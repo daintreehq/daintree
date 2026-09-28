@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   useDndMonitor,
@@ -33,6 +33,7 @@ import {
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { useTabOverflow } from "@/hooks";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -395,6 +396,29 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   );
   const activeTabIsHidden = activeTabId !== "" && hiddenTabIds.has(activeTabId);
 
+  // Keep the selected tab on screen, as the grid strip does: selecting one from
+  // the overflow menu, or opening the popover on a tab past the edge, would
+  // otherwise leave its underline scrolled away.
+  useLayoutEffect(() => {
+    if (!isOpen || !tabListEl || !activeTabId) return;
+    let tabEl: HTMLElement | null = null;
+    for (const el of tabListEl.querySelectorAll<HTMLElement>("[data-tab-id]")) {
+      if (el.getAttribute("data-tab-id") === activeTabId) {
+        tabEl = el;
+        break;
+      }
+    }
+    if (!tabEl) return;
+    const tabLeft = tabEl.offsetLeft;
+    const tabRight = tabLeft + tabEl.offsetWidth;
+    const behavior = prefersReducedMotion() ? "auto" : "smooth";
+    if (tabLeft < tabListEl.scrollLeft || tabEl.offsetWidth > tabListEl.clientWidth) {
+      tabListEl.scrollTo({ left: tabLeft, behavior });
+    } else if (tabRight > tabListEl.scrollLeft + tabListEl.clientWidth) {
+      tabListEl.scrollTo({ left: tabRight - tabListEl.clientWidth, behavior });
+    }
+  }, [isOpen, activeTabId, tabListEl]);
+
   // Handle tab reorder drag end
   const handleTabDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -502,10 +526,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       // focused (so successive arrows roam without activating), else to the
       // active tab (first arrow after entering the tablist via Tab).
       //
-      // The `+` (duplicate) button lives inside the tablist container but is
-      // not itself a tab. If focus is on a non-tab element in the tablist
-      // (i.e. the `+` button), bail out so arrows don't yank focus back into
-      // the tab strip from the user's current position.
+      // If focus is on a non-tab element in the tablist (a tab's rename
+      // field), bail out so arrows don't yank focus back into the strip.
       const focused = document.activeElement as HTMLElement | null;
       const focusedTabId = focused?.getAttribute("data-tab-id");
       if (!focusedTabId && focused && tabListEl?.contains(focused)) {
@@ -813,7 +835,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 <div className="group flex items-stretch border-b border-divider bg-surface-sidebar shrink-0 pt-2">
                   <div
                     ref={setTabListEl}
-                    className="flex items-center min-w-0 flex-1 overflow-x-auto overscroll-x-none scrollbar-none"
+                    className="flex items-center min-w-0 overflow-x-auto overscroll-x-none scrollbar-none"
                     role="tablist"
                     aria-label="Dock panel tabs"
                     onKeyDown={handleTabListKeyDown}
@@ -892,25 +914,26 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                         })}
                       </AnimatePresence>
                     )}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAddTab();
-                          }}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          className="shrink-0 focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
-                          aria-label="Duplicate panel as new tab"
-                        >
-                          <CopyPlus aria-hidden="true" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
-                    </Tooltip>
                   </div>
+                  {/* A sibling of the tablist, not a child: a tablist may own only tabs. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAddTab();
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="shrink-0 self-center focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
+                        aria-label="Duplicate panel as new tab"
+                      >
+                        <CopyPlus aria-hidden="true" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                  </Tooltip>
                   {hiddenPanels.length > 0 && (
                     <DropdownMenu>
                       <Tooltip>

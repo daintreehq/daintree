@@ -63,6 +63,8 @@ describe("PanelTabList", () => {
     const noDnd = container.querySelector("[data-no-dnd]");
     const addButton = screen.getByLabelText("Duplicate panel as new tab");
     expect(noDnd?.contains(addButton)).toBe(true);
+    // …but outside the tablist, which may own only tabs.
+    expect(screen.getByRole("tablist").contains(addButton)).toBe(false);
   });
 
   it("keeps the overflow trigger inside the [data-no-dnd] boundary", () => {

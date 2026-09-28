@@ -52,14 +52,16 @@ export function PanelTabList({
     // sensor (NoDndMouseSensor) so dragging/clicking a tab — or the add/overflow
     // buttons — never arms the parent panel drag. Inner tab reorder is a separate
     // DndContext using PointerSensor, which ignores [data-no-dnd], so it still works.
-    <div data-no-dnd className={cn("relative min-w-0 flex-1 flex", className)}>
+    // Tabs span the bar's full height so the selected tab's underline sits on
+    // the bar's bottom rule, as it does on every document tab strip.
+    <div data-no-dnd className={cn("relative min-w-0 flex-1 flex self-stretch", className)}>
       <div
         // Keyed on the mode: the two branches below mount different tab
         // elements, and the overflow observer only re-observes when the strip
         // element changes — otherwise it keeps watching the old, detached tabs.
         key={performanceMode ? "static" : "animated"}
         ref={tabListRef}
-        className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none relative"
+        className="flex items-stretch min-w-0 overflow-x-auto scrollbar-none relative"
         role="tablist"
         aria-label="Panel tabs"
         onKeyDown={onKeyDown}
@@ -67,7 +69,7 @@ export function PanelTabList({
         onBlur={onBlur}
       >
         <LayoutGroup id={layoutGroupId}>
-          <div className="flex items-center">
+          <div className="flex items-stretch">
             {performanceMode ? (
               // No wrapper here: a sortable tab's drag is restricted to its
               // parent element, and a per-tab box would pin it in place.
@@ -77,6 +79,7 @@ export function PanelTabList({
                 {tabs.map((tab) => (
                   <m.div
                     key={tab.id}
+                    className="flex"
                     layout="position"
                     transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_OUT_EXPO_FM }}
                   >
@@ -85,32 +88,33 @@ export function PanelTabList({
                 ))}
               </AnimatePresence>
             )}
-            {onAddTab && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddTab();
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    // 14px glyph in the 24px target, like the window controls
-                    // at the other end of the same bar.
-                    className="shrink-0 [&_svg]:size-3.5"
-                    aria-label="Duplicate panel as new tab"
-                  >
-                    <Plus aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{addTabTooltipContent}</TooltipContent>
-              </Tooltip>
-            )}
           </div>
         </LayoutGroup>
       </div>
-      {overflowTrigger}
+      {/* A sibling of the tablist, not a child: a tablist may own only tabs. */}
+      {onAddTab && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddTab();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              // 14px glyph in the 24px target, like the window controls
+              // at the other end of the same bar.
+              className="shrink-0 self-center [&_svg]:size-3.5"
+              aria-label="Duplicate panel as new tab"
+            >
+              <Plus aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{addTabTooltipContent}</TooltipContent>
+        </Tooltip>
+      )}
+      {overflowTrigger && <div className="flex items-center">{overflowTrigger}</div>}
     </div>
   );
 }
