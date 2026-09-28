@@ -146,7 +146,7 @@ async function freezeBar(page: Page, fraction: number): Promise<ManifestEntry["b
       const bar = document.querySelector<HTMLElement>(selector);
       if (!bar) return { present: false, transform: "", animations: 0 };
       const fill = (bar.firstElementChild as HTMLElement | null) ?? bar;
-      const animations = [bar, fill].flatMap((el) => el.getAnimations());
+      const animations = [...new Set([bar, fill])].flatMap((el) => el.getAnimations());
       for (const a of animations) {
         a.pause();
         const timing = a.effect!.getComputedTiming();
