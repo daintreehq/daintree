@@ -17,6 +17,7 @@ export {
   ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
+  BookDashed, // a Scratchpad's notes are temporary — kept only while its terminal is open; the dashed outline reads as a mode, not a warning
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CircleArrowUp, // a CLI below the version Daintree needs — the same up-arrow-in-a-circle plugins show for an available update

@@ -31,7 +31,8 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,svalbard,namib,bon
   .map((t) => t.trim())
   .filter(Boolean);
 
-type Interaction = "rest" | "editing" | "resize-hover" | "resize-focus";
+type Interaction =
+  "rest" | "editing" | "resize-hover" | "resize-focus" | "hint-hover" | "hint-focus";
 
 interface Shot {
   fixture: string;
@@ -53,6 +54,8 @@ const DEFAULT_THEME_ONLY: Shot[] = [
   { fixture: "collapsed", interaction: "rest" },
   { fixture: "notes", interaction: "resize-hover" },
   { fixture: "notes", interaction: "resize-focus" },
+  { fixture: "notes", interaction: "hint-hover" },
+  { fixture: "notes", interaction: "hint-focus" },
 ];
 
 test.use({ deviceScaleFactor: 2 });
@@ -113,6 +116,18 @@ async function capture(page: Page, shot: Shot, theme: string): Promise<string> {
       await page.getByTestId("terminal-scratchpad-resize").focus();
       await expect(page.getByTestId("terminal-scratchpad-resize")).toBeFocused();
       break;
+    case "hint-hover":
+      await page.getByTestId("terminal-scratchpad-status").getByText("Temporary").hover();
+      await page.getByRole("tooltip").waitFor({ state: "attached" });
+      break;
+    case "hint-focus": {
+      await page.mouse.move(1030, 630);
+      const hint = page.getByTestId("terminal-scratchpad-status").locator("[tabindex='0']");
+      await hint.focus();
+      await expect(hint).toBeFocused();
+      await page.getByRole("tooltip").waitFor({ state: "attached" });
+      break;
+    }
     case "rest":
       await page.mouse.move(1030, 630);
       break;

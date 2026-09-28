@@ -246,4 +246,17 @@ describe("TerminalScratchpad", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("lets a keyboard user reach the lifecycle explanation the status bar abbreviates", () => {
+    seed({ content: "", collapsed: false });
+    const { getByTestId } = renderPad();
+    const status = getByTestId("terminal-scratchpad-status");
+    const editor = getByTestId("terminal-scratchpad-editor");
+    const description = document.getElementById(editor.getAttribute("aria-describedby") ?? "");
+
+    const trigger = description?.closest("[tabindex]");
+    expect(trigger).not.toBeNull();
+    expect(trigger?.getAttribute("tabindex")).toBe("0");
+    expect(status.contains(trigger ?? null)).toBe(true);
+  });
 });
