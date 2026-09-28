@@ -923,19 +923,31 @@ const STATES: OverviewState[] = [
     slug: "22-quickstate-active",
     header: true,
     needsSessions: true,
+    // Segment 0 is "All"; segment 1 is the first status bucket.
     arrange: async (page) => {
-      await page.locator(`${MODAL} [aria-label="Filter by agent state"] button`).first().click();
+      await page
+        .locator(MODAL)
+        .getByRole("radiogroup", { name: "Quick state filter" })
+        .getByRole("radio")
+        .nth(1)
+        .click();
       await settle(page, 400);
     },
     verify: async (page) => {
       await modalVisible(page);
       await expect(
-        page.locator(`${MODAL} [aria-label="Filter by agent state"] button[aria-pressed="true"]`)
-      ).toBeVisible({ timeout: T_LONG });
+        page
+          .locator(MODAL)
+          .getByRole("radiogroup", { name: "Quick state filter" })
+          .getByRole("radio")
+          .nth(1)
+      ).toHaveAttribute("aria-checked", "true", { timeout: T_LONG });
     },
     restore: async (page) => {
       await page
-        .locator(`${MODAL} [aria-label="Filter by agent state"] button[aria-pressed="true"]`)
+        .locator(MODAL)
+        .getByRole("radiogroup", { name: "Quick state filter" })
+        .getByRole("radio")
         .first()
         .click()
         .catch(() => {});

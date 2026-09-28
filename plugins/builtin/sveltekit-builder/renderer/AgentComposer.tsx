@@ -18,7 +18,7 @@ import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
 import { PropertyRow } from "./InspectorSection.js";
@@ -528,22 +528,22 @@ export function AgentComposer({
             // than by the others going bare. Its thumb needs stable geometry so
             // the control does not shrink; the wrapper keeps any overflow
             // inside the column instead of past the drawer's edge.
-            <div className="w-fit min-w-0 max-w-full overflow-hidden">
-              <SegmentedToggle
-                density="compact"
+            <div className="flex w-fit min-w-0 max-w-full overflow-hidden">
+              <SegmentedRadioGroup
+                // Default density is 28px, matching the destination picker in the
+                // footer and the property rows above: a 24px track read as a
+                // different kind of control sitting in the same column.
+                aria-label="What the request is about"
                 options={scopes.map((scope, index) => ({
                   value: String(index),
                   label: scope.kind === "element" ? "Element" : scope.label,
                   // The file main resolved for the component, once it has: a scope
                   // is a promise about where the request will land.
-                  ...(scope.kind === "component" && scope.file ? { title: scope.file } : {}),
+                  ...(scope.kind === "component" && scope.file ? { tooltip: scope.file } : {}),
                 }))}
                 value={String(subject.scope)}
                 onChange={(value) => chooseScope(Number(value))}
-                // 28px, matching the destination picker in the footer and the
-                // property rows above: a 24px track read as a different kind of
-                // control sitting in the same column.
-                className="h-7 max-w-full"
+                className="min-w-0 max-w-full shrink"
               />
             </div>
           ) : (

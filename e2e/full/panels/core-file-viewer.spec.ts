@@ -162,7 +162,7 @@ test.describe.serial("Core: File Viewer Modal", () => {
 
     // The issue reports both modes clipping, and rendered markdown is a
     // different content subtree, so it needs its own proof.
-    await dialog.getByRole("button", { name: "Rendered", exact: true }).click();
+    await dialog.getByRole("radio", { name: "Rendered", exact: true }).click();
     await expect(dialog.locator(".markdown-document h1")).toHaveText("Tall document", {
       timeout: T_LONG,
     });

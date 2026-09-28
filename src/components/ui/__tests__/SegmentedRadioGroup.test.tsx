@@ -3,7 +3,7 @@
  */
 import { useState } from "react";
 import { describe, it, expect, afterEach, beforeAll, vi } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { act, render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { SegmentedRadioGroup } from "../SegmentedRadioGroup";
 
 class ResizeObserverStub {
@@ -81,6 +81,24 @@ describe("SegmentedRadioGroup keyboard model", () => {
 
     fireEvent.keyDown(group, { key: "End" });
     expect(onChange).toHaveBeenCalledWith("third");
+  });
+
+  it("does not tell the owner about a pick of the segment that is already checked", () => {
+    const { onChange } = renderGroup("existing");
+
+    fireEvent.click(screen.getByRole("radio", { name: "Existing branch" }));
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("leaves modified arrows to the app", () => {
+    const { onChange, group } = renderGroup("new");
+
+    fireEvent.keyDown(group, { key: "ArrowRight", altKey: true });
+    fireEvent.keyDown(group, { key: "ArrowRight", ctrlKey: true });
+    fireEvent.keyDown(group, { key: "End", metaKey: true });
+
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("leaves unrelated keys to the surrounding form", () => {
@@ -190,11 +208,230 @@ describe("SegmentedRadioGroup thumb motion", () => {
     expect(thumbSlides(container)).toBe(false);
   });
 
+  it("keeps sliding when the resize observer reports mid-slide with nothing moved", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    class RecordingObserver {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", RecordingObserver);
+    try {
+      const { container } = render(<Controlled initial="new" />);
+
+      fireEvent.click(screen.getByRole("radio", { name: "Existing branch" }));
+      // Every observer attached so far reports, as a real one does on attach.
+      act(() => {
+        for (const callback of callbacks) callback([], {} as ResizeObserver);
+      });
+
+      expect(thumbSlides(container)).toBe(true);
+    } finally {
+      vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+    }
+  });
+
   it("slides when the user picks a segment", () => {
     const { container } = render(<Controlled initial="new" />);
 
     fireEvent.click(screen.getByRole("radio", { name: "Existing branch" }));
 
     expect(thumbSlides(container)).toBe(true);
+  });
+});
+
+describe("SegmentedRadioGroup disabled segments", () => {
+  const WITH_DISABLED = [
+    { value: "a", label: "Alpha" },
+    { value: "b", label: "Bravo", disabled: true },
+    { value: "c", label: "Charlie" },
+    { value: "d", label: "Delta", disabled: true },
+  ];
+
+  function renderWith(value: string, options = WITH_DISABLED) {
+    const onChange = vi.fn();
+    render(
+      <SegmentedRadioGroup options={options} value={value} onChange={onChange} aria-label="Mode" />
+    );
+    return { onChange, group: screen.getByRole("radiogroup", { name: "Mode" }) };
+  }
+
+  const enabledValues = (options: typeof WITH_DISABLED) =>
+    new Set(options.filter((o) => !o.disabled).map((o) => o.value));
+
+  it("never lands the arrow keys or Home/End on a disabled segment", () => {
+    const { onChange, group } = renderWith("a");
+    const allowed = enabledValues(WITH_DISABLED);
+
+    for (const key of ["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"]) {
+      fireEvent.keyDown(group, { key });
+    }
+
+    expect(onChange).toHaveBeenCalled();
+    for (const [picked] of onChange.mock.calls) expect(allowed.has(picked as string)).toBe(true);
+  });
+
+  it("steps over a disabled segment to the next enabled one rather than stopping at it", () => {
+    const allowed = enabledValues(WITH_DISABLED);
+    for (const from of allowed) {
+      for (const key of ["ArrowRight", "ArrowLeft"]) {
+        cleanup();
+        const { onChange, group } = renderWith(from);
+        fireEvent.keyDown(group, { key });
+        const picked = onChange.mock.calls[0]?.[0] as string | undefined;
+        expect(picked, `${key} from ${from}`).toBeDefined();
+        expect(allowed.has(picked!), `${key} from ${from}`).toBe(true);
+        expect(picked, `${key} from ${from}`).not.toBe(from);
+      }
+    }
+  });
+
+  it("keeps exactly one tab stop, and never on a disabled segment, whatever is checked", () => {
+    for (const value of ["a", "b", "c", "d", "nothing"]) {
+      cleanup();
+      renderWith(value);
+      const stops = screen
+        .getAllByRole("radio")
+        .filter((radio) => radio.getAttribute("tabindex") === "0");
+      expect(stops, `value=${value}`).toHaveLength(1);
+      expect((stops[0] as HTMLButtonElement).disabled, `value=${value}`).toBe(false);
+    }
+  });
+
+  it("still shows a disabled segment as the checked one when it is", () => {
+    renderWith("b");
+
+    expect(screen.getByRole("radio", { name: "Bravo" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("does nothing when every segment is disabled", () => {
+    const { onChange, group } = renderWith("a", [
+      { value: "a", label: "Alpha", disabled: true },
+      { value: "b", label: "Bravo", disabled: true },
+    ]);
+
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+    fireEvent.keyDown(group, { key: "End" });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("SegmentedRadioGroup inside a larger keyboard domain", () => {
+  it("keeps the keys it handles from reaching a surrounding list, and passes the rest", () => {
+    const outer = vi.fn();
+    render(
+      <div onKeyDown={(event) => outer(event.key)}>
+        <SegmentedRadioGroup options={OPTIONS} value="new" onChange={() => {}} aria-label="Mode" />
+      </div>
+    );
+    const group = screen.getByRole("radiogroup", { name: "Mode" });
+
+    for (const key of ["ArrowRight", "ArrowLeft", "Home", "End", "Enter", "Escape"]) {
+      fireEvent.keyDown(group, { key });
+    }
+
+    expect(outer.mock.calls.map(([key]) => key)).toEqual(["Enter", "Escape"]);
+  });
+});
+
+describe("SegmentedRadioGroup naming", () => {
+  it("names each segment by its ariaLabel when the visible label is an abbreviation", () => {
+    render(
+      <SegmentedRadioGroup
+        options={[
+          { value: "60", label: "60d", ariaLabel: "60 days" },
+          { value: "120", label: "120d", ariaLabel: "120 days" },
+        ]}
+        value="60"
+        onChange={() => {}}
+        aria-label="Range"
+      />
+    );
+
+    expect(screen.getByRole("radio", { name: "60 days" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+    expect(screen.getByRole("radio", { name: "120 days" })).toBeTruthy();
+  });
+
+  it("derives a distinct test id per segment from the group's", () => {
+    render(
+      <SegmentedRadioGroup
+        options={OPTIONS}
+        value="new"
+        onChange={() => {}}
+        aria-label="Mode"
+        testId="mode"
+      />
+    );
+
+    const group = screen.getByTestId("mode");
+    const ids = screen.getAllByRole("radio").map((radio) => radio.getAttribute("data-testid"));
+    expect(group.getAttribute("role")).toBe("radiogroup");
+    expect(new Set(ids).size).toBe(OPTIONS.length);
+    for (const id of ids) expect(id?.startsWith("mode-")).toBe(true);
+  });
+});
+
+describe("SegmentedRadioGroup thumb", () => {
+  /** Tailwind's `z-<n>` — jsdom has no stylesheet to compute against. */
+  const stackLevel = (el: Element) => {
+    const match = /(?:^|\s)z-(\d+)(?=\s|$)/.exec(el.className);
+    return match?.[1] === undefined ? 0 : Number(match[1]);
+  };
+  const dims = (el: Element) =>
+    el.className.split(/\s+/).some((utility) => {
+      const match = /(?:^|:)opacity-(\d+)$/.exec(utility);
+      return match?.[1] !== undefined && Number(match[1]) < 100;
+    });
+
+  it("keeps every segment stacked above the thumb, so a sliding thumb never covers a label", () => {
+    const { container } = render(
+      <SegmentedRadioGroup options={OPTIONS} value="new" onChange={() => {}} aria-label="Mode" />
+    );
+    const thumb = container.querySelector('[data-slot="segmented-thumb"]');
+
+    expect(thumb).not.toBeNull();
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(stackLevel(radio)).toBeGreaterThan(stackLevel(thumb!));
+    }
+  });
+
+  it("dims the thumb with a checked segment that is disabled, rather than dropping it", () => {
+    const { container } = render(
+      <SegmentedRadioGroup
+        options={[
+          { value: "a", label: "Alpha", disabled: true },
+          { value: "b", label: "Bravo" },
+        ]}
+        value="a"
+        onChange={() => {}}
+        aria-label="Mode"
+      />
+    );
+    const thumb = container.querySelector('[data-slot="segmented-thumb"]');
+
+    expect(thumb).not.toBeNull();
+    expect(dims(thumb!)).toBe(true);
+  });
+
+  it("leaves the thumb at full strength when only an unchecked segment is disabled", () => {
+    const { container } = render(
+      <SegmentedRadioGroup
+        options={[
+          { value: "a", label: "Alpha" },
+          { value: "b", label: "Bravo", disabled: true },
+        ]}
+        value="a"
+        onChange={() => {}}
+        aria-label="Mode"
+      />
+    );
+
+    expect(dims(container.querySelector('[data-slot="segmented-thumb"]')!)).toBe(false);
   });
 });

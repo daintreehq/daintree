@@ -612,7 +612,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
 
       await waitFor(() =>
         expect(screen.getByRole("status", { name: /loading changes vs main/i })).toBeTruthy()
@@ -631,7 +631,7 @@ describe("ReviewHub", () => {
       );
       await waitFor(() => screen.getByText("index.ts"));
 
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(1));
 
       // Close mid-load, then reopen.
@@ -641,7 +641,7 @@ describe("ReviewHub", () => {
 
       // Switching to base-branch again must trigger a fresh fetch, proving
       // baseBranchLoading was cleared on close (no stuck skeleton).
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(2));
     });
   });

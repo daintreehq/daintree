@@ -318,10 +318,10 @@ function renderViewer(filePath: string | null, opts: ViewerOpts = {}) {
   return render(viewerJsx(filePath, opts));
 }
 
-// SegmentedToggle renders literal-text buttons; its accessible name is the
-// visible label, so click by role + name.
+// Each segment is a radio whose accessible name is its visible label, so
+// click by role + name.
 async function clickMode(label: "Source" | "Rendered") {
-  const button = await screen.findByRole("button", { name: label });
+  const button = await screen.findByRole("radio", { name: label });
   await act(async () => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
@@ -362,7 +362,7 @@ beforeEach(() => {
   setMarkdownFontSizeMock.mockReset();
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
-  // SegmentedToggle's motion hook (and InlineStatusBanner) read matchMedia at
+  // SegmentedRadioGroup's motion hook (and InlineStatusBanner) read matchMedia at
   // render time; jsdom does not implement it, so provide a no-op stub.
   if (typeof window.matchMedia !== "function") {
     Object.defineProperty(window, "matchMedia", {
@@ -387,8 +387,8 @@ describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
     renderViewer("/repo/docs/spec.md");
     // Default preserves the pane's long-standing rendered-first behaviour.
     await waitFor(() => expect(currentViewMode()).toBe("rendered"));
-    expect(screen.getByRole("button", { name: "Source" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Rendered" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Source" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Rendered" })).toBeTruthy();
   });
 
   it("switches the markdown viewer between source and rendered", async () => {
@@ -426,8 +426,8 @@ describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
 
     rerender(viewerJsx("/repo/src/notes.txt"));
     await screen.findByTestId("code-viewer-mock");
-    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Source" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
   });
 
@@ -444,10 +444,8 @@ describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
     expect(source.getAttribute("data-file-path")).toBe("/repo/page.html");
     expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
     // The segment the reader sees selected has to agree with what is on screen.
-    expect(screen.getByRole("button", { name: "Source" }).getAttribute("aria-pressed")).toBe(
-      "true"
-    );
-    expect(screen.getByRole("button", { name: "Rendered" }).getAttribute("aria-pressed")).toBe(
+    expect(screen.getByRole("radio", { name: "Source" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "Rendered" }).getAttribute("aria-checked")).toBe(
       "false"
     );
   });
@@ -521,10 +519,10 @@ describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
     // is only suspended, not discarded — the reader picked it once.
     rerender(viewerJsx("/repo/src/notes.txt"));
     await screen.findByTestId("code-viewer-mock");
-    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Rendered" })).toBeNull();
 
     rerender(viewerJsx(null));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("radio", { name: "Rendered" })).toBeNull());
 
     rerender(viewerJsx("/repo/page.html"));
     await screen.findByTestId("html-viewer-mock");
@@ -1589,7 +1587,7 @@ describe("plugin-contributed editing in the file browser", () => {
   it("enables the plugin from GEMINI.md and mounts its Edit tab in the existing viewer", async () => {
     const viewer = renderViewer("/repo/GEMINI.md", { editorContext: context });
     const enableButton = await screen.findByRole("button", { name: "Enable and edit" });
-    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Edit" })).toBeNull();
     fireEvent.click(enableButton);
     expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
     expect(enable).toHaveBeenCalledWith(pluginId, true);
@@ -1599,37 +1597,37 @@ describe("plugin-contributed editing in the file browser", () => {
       rootPath: "/repo",
       ...context,
     });
-    expect(screen.getByRole("button", { name: "Edit" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("radio", { name: "Edit" }).getAttribute("aria-checked")).toBe("true");
     expect(dispatchMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Source" }));
     expect(screen.queryByTestId("plugin-editor")).toBeNull();
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Edit" }));
     expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
     viewer.unmount();
     renderViewer("/repo/another.md", { editorContext: context });
-    expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(await screen.findByRole("radio", { name: "Edit" })).toBeTruthy();
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
   });
 
   it("hands focus to the Rendered segment, not the first one, when leaving Edit for Rendered", async () => {
     enabled = true;
     renderViewer("/repo/notes.md", { editorContext: context });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Edit" }));
     expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
     expect(document.activeElement).toBe(document.body);
-    fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
-    const rendered = screen.getByRole("button", { name: "Rendered" });
-    expect(rendered.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
+    const rendered = screen.getByRole("radio", { name: "Rendered" });
+    expect(rendered.getAttribute("aria-checked")).toBe("true");
     expect(document.activeElement).toBe(rendered);
   });
 
   it("offers Edit without a hint when the plugin is already enabled", async () => {
     enabled = true;
     renderViewer("/repo/notes.md", { editorContext: context });
-    expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(await screen.findByRole("radio", { name: "Edit" })).toBeTruthy();
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
     expect(enable).not.toHaveBeenCalled();
   });
@@ -1639,7 +1637,7 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(await screen.findByTestId("file-editor-hint")).toBeTruthy();
     enabled = true;
     act(() => usePluginRuntimeStore.getState().refresh());
-    expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(await screen.findByRole("radio", { name: "Edit" })).toBeTruthy();
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
     expect(enable).not.toHaveBeenCalled();
   });
@@ -1659,7 +1657,7 @@ describe("plugin-contributed editing in the file browser", () => {
       activationStatus = {};
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
       expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Source" }));
+      fireEvent.click(screen.getByRole("radio", { name: "Source" }));
       expect(screen.queryByTestId("file-editor-hint")).toBeNull();
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     }
@@ -1680,7 +1678,7 @@ describe("plugin-contributed editing in the file browser", () => {
       renderViewer(path, { editorContext: context });
       await waitFor(() => expect(readMock).toHaveBeenCalled());
       expect(screen.queryByRole("button", { name: "Enable and edit" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+      expect(screen.queryByRole("radio", { name: "Edit" })).toBeNull();
     }
   );
 
@@ -1688,23 +1686,21 @@ describe("plugin-contributed editing in the file browser", () => {
     enabled = true;
     registerFileEditor({ id: "text", pluginId, slot: "test.editor", extensions: ["txt"] });
     renderViewer("/repo/note.txt", { editorContext: context });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Edit" }));
     expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
     expect(editorProps.at(-1)).toMatchObject({ filePath: "/repo/note.txt" });
-    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Rendered" })).toBeNull();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("removes Edit live when the plugin is disabled", async () => {
     enabled = true;
     renderViewer("/repo/notes.md", { editorContext: context });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Edit" }));
     expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
     act(() => usePluginRuntimeStore.setState({ disabledPluginIds: new Set([pluginId]) }));
     expect(screen.queryByTestId("plugin-editor")).toBeNull();
-    expect(screen.getByRole("button", { name: "Source" }).getAttribute("aria-pressed")).toBe(
-      "true"
-    );
+    expect(screen.getByRole("radio", { name: "Source" }).getAttribute("aria-checked")).toBe("true");
   });
 });
 
@@ -1785,7 +1781,7 @@ describe("viewer at tight widths and keyboard continuity", () => {
     const trigger = await screen.findByRole("button", { name: /^View mode: Rendered$/ });
     expect(trigger).toBeTruthy();
     // No segmented pair beside it: one control, not both.
-    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Source" })).toBeNull();
   });
 
   it("keeps the segmented control wherever it fits", async () => {
@@ -1793,7 +1789,7 @@ describe("viewer at tight widths and keyboard continuity", () => {
     readMock.mockResolvedValue({ content: "# Title" });
     renderViewer("/repo/docs/readme.md");
 
-    expect(await screen.findByRole("button", { name: "Source" })).toBeTruthy();
+    expect(await screen.findByRole("radio", { name: "Source" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^View mode/ })).toBeNull();
   });
 
@@ -1867,8 +1863,8 @@ describe("viewer at tight widths and keyboard continuity", () => {
     readMock.mockRejectedValue(new ClientAppError("FILE_TOO_LARGE", "FILE_TOO_LARGE"));
     renderViewer("/repo/docs/huge.md");
     await screen.findByTestId("file-browser-unavailable");
-    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Source" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
     // Identity and the way out survive.
     expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();

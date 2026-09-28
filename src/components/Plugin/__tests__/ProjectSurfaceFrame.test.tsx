@@ -186,6 +186,11 @@ describe("ProjectSurfaceFrame", () => {
 
   const strip = () => screen.getByRole("group", { name: "Empty canvas" });
   const stripButton = (name: string) => within(strip()).getByRole("button", { name });
+  /** A segment of the strip's "Canvas view" switch, which is a radiogroup. */
+  const segment = (name: string) =>
+    within(within(strip()).getByRole("radiogroup", { name: "Canvas view" })).getByRole("radio", {
+      name,
+    });
   const notice = () => screen.getByRole("status");
 
   it("adds nothing when no surface is claimed", () => {
@@ -196,6 +201,7 @@ describe("ProjectSurfaceFrame", () => {
     // canvas out inside of.
     expect(screen.queryByRole("group", { name: "Empty canvas" })).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
   });
 
   it("adds nothing when the claimed kind has not registered", () => {
@@ -206,6 +212,7 @@ describe("ProjectSurfaceFrame", () => {
     // Offering a switch to a surface that cannot render would be a control that
     // visibly does nothing.
     expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
   });
 
   it("adds nothing until the claim's answer is known", () => {
@@ -215,7 +222,7 @@ describe("ProjectSurfaceFrame", () => {
     renderFrame(<div data-testid="stock" />);
 
     // The canvas stays stock until then, so a strip would show the surface
-    // pressed over the launcher — and a project that answered long ago must not
+    // checked over the launcher — and a project that answered long ago must not
     // flash the question while the read is in flight.
     expect(screen.getByTestId("stock")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Empty canvas" })).toBeNull();
@@ -237,7 +244,7 @@ describe("ProjectSurfaceFrame", () => {
     expect(region.contains(setup)).toBe(false);
 
     // The launcher needs no plugin set up.
-    await press(stripButton("Launcher"));
+    await press(segment("Launcher"));
     expect(screen.queryByTestId("plugin-setup-strip")).toBeNull();
   });
 
@@ -247,8 +254,8 @@ describe("ProjectSurfaceFrame", () => {
 
     renderFrame();
 
-    expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
-    expect(stripButton("Launcher").getAttribute("aria-pressed")).toBe("false");
+    expect(segment("Mission Control").getAttribute("aria-checked")).toBe("true");
+    expect(segment("Launcher").getAttribute("aria-checked")).toBe("false");
   });
 
   it("puts nothing in the strip that is not a control", () => {
@@ -264,8 +271,12 @@ describe("ProjectSurfaceFrame", () => {
     //
     // The rule, not the label: any text in the strip belongs to a control.
     let stray = strip().textContent ?? "";
-    for (const button of within(strip()).getAllByRole("button")) {
-      stray = stray.replace(button.textContent ?? "", "");
+    const controls = [
+      ...within(strip()).getAllByRole("radio"),
+      ...within(strip()).getAllByRole("button"),
+    ];
+    for (const control of controls) {
+      stray = stray.replace(control.textContent ?? "", "");
     }
     expect(stray.trim()).toBe("");
   });
@@ -290,7 +301,7 @@ describe("ProjectSurfaceFrame", () => {
     expect(notice().className).toMatch(/\bitems-center\b/);
 
     failNextSave = true;
-    await press(stripButton("Launcher"));
+    await press(segment("Launcher"));
     const failed = screen.getByRole("alert");
     expect(failed.className).not.toMatch(/\bflex-col\b/);
     expect(failed.className).toMatch(/\bitems-center\b/);
@@ -320,8 +331,8 @@ describe("ProjectSurfaceFrame", () => {
     expect(region.contains(view)).toBe(true);
     expect(strip().contains(view)).toBe(false);
 
-    // Two buttons read "Launcher" on screen; the strip's is the host's.
-    await press(stripButton("Launcher"));
+    // Two controls read "Launcher" on screen; the strip's radio is the host's.
+    await press(segment("Launcher"));
     expect(canvasChoice()).toBe("stock");
   });
 
@@ -330,12 +341,12 @@ describe("ProjectSurfaceFrame", () => {
     setClaim(answer("surface"));
     renderFrame();
 
-    await press(stripButton("Launcher"));
+    await press(segment("Launcher"));
     expect(setProjectSurfaceChoice).toHaveBeenLastCalledWith("emptyCanvas", "stock");
     expect(disk).toEqual(answer("stock"));
-    expect(stripButton("Launcher").getAttribute("aria-pressed")).toBe("true");
+    expect(segment("Launcher").getAttribute("aria-checked")).toBe("true");
 
-    await press(stripButton("Mission Control"));
+    await press(segment("Mission Control"));
     expect(setProjectSurfaceChoice).toHaveBeenLastCalledWith("emptyCanvas", "surface");
     expect(disk).toEqual(answer("surface"));
   });
@@ -345,9 +356,9 @@ describe("ProjectSurfaceFrame", () => {
     setClaim();
     renderFrame();
 
-    // Unanswered, the surface segment is already pressed: pressing it must not
+    // Unanswered, the surface segment is already checked: pressing it must not
     // quietly answer the question the notice is asking.
-    await press(stripButton("Mission Control"));
+    await press(segment("Mission Control"));
 
     expect(setProjectSurfaceChoice).not.toHaveBeenCalled();
     expect(notice()).toBeTruthy();
@@ -362,7 +373,7 @@ describe("ProjectSurfaceFrame", () => {
     expect(h.dispatch).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
 
     // The stock launcher is its own empty state, anchor included.
-    await press(stripButton("Launcher"));
+    await press(segment("Launcher"));
     expect(within(strip()).queryByRole("button", { name: PALETTE_ENTRY })).toBeNull();
   });
 
@@ -373,13 +384,13 @@ describe("ProjectSurfaceFrame", () => {
 
     renderFrame();
 
-    const [panelSegment] = within(strip()).getAllByRole("button");
+    const [panelSegment] = within(strip()).getAllByRole("radio");
     const shown = panelSegment?.textContent ?? "";
     expect(shown.length).toBeLessThan(longName.length);
     expect(longName.startsWith(shown.slice(0, -1))).toBe(true);
     // The full name stays the accessible one.
     expect(panelSegment?.getAttribute("aria-label")).toBe(longName);
-    expect(stripButton("Launcher")).toBeTruthy();
+    expect(segment("Launcher")).toBeTruthy();
   });
 
   it("asks once, naming the plugin, the first time the surface would show", async () => {
@@ -410,13 +421,13 @@ describe("ProjectSurfaceFrame", () => {
     // only name that answers it is the one the user sees in settings.
     expect(notice().textContent).toContain("Acme Dashboard");
     // Unanswered is the manifest's own intent: the surface is already showing.
-    expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
+    expect(segment("Mission Control").getAttribute("aria-checked")).toBe("true");
 
     await press(within(notice()).getByRole("button", { name: "Keep it" }));
 
     expect(setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "surface");
     expect(screen.queryByRole("status")).toBeNull();
-    expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
+    expect(segment("Mission Control").getAttribute("aria-checked")).toBe("true");
   });
 
   it("puts focus in the strip after the notice is answered from the keyboard", async () => {
@@ -433,7 +444,7 @@ describe("ProjectSurfaceFrame", () => {
     });
 
     expect(screen.queryByRole("status")).toBeNull();
-    expect(document.activeElement).toBe(stripButton("Launcher"));
+    expect(document.activeElement).toBe(segment("Launcher"));
   });
 
   it("keeps the ring for a keyboard answer and drops it for a pointer one", async () => {
@@ -447,7 +458,7 @@ describe("ProjectSurfaceFrame", () => {
     // point and it is easy to get backwards: a keyboard user who loses the ring
     // is stranded with no idea where focus went, while a stray ring costs a
     // mouse user nothing.
-    const keyboardTarget = stripButton("Launcher");
+    const keyboardTarget = segment("Launcher");
     const keyboardSpy = vi.spyOn(keyboardTarget, "focus");
     await press(within(notice()).getByRole("button", { name: "Use the launcher" }));
     expect(keyboardSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: true });
@@ -455,7 +466,7 @@ describe("ProjectSurfaceFrame", () => {
     // Same answer, reached by pointer this time.
     setClaim();
     await flush();
-    const pointerTarget = stripButton("Launcher");
+    const pointerTarget = segment("Launcher");
     const pointerSpy = vi.spyOn(pointerTarget, "focus");
     const answerButton = within(notice()).getByRole("button", { name: "Use the launcher" });
     await act(async () => {
@@ -484,7 +495,7 @@ describe("ProjectSurfaceFrame", () => {
 
     expect(surface.result.current).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
-    expect(stripButton("Launcher").getAttribute("aria-pressed")).toBe("true");
+    expect(segment("Launcher").getAttribute("aria-checked")).toBe("true");
   });
 
   it("still releases the slot when the plugin unloads after a reload", async () => {
@@ -515,13 +526,13 @@ describe("ProjectSurfaceFrame", () => {
     renderFrame();
 
     failNextSave = true;
-    await press(stripButton("Launcher"));
+    await press(segment("Launcher"));
 
     expect(screen.getByText(SAVE_FAILED)).toBeTruthy();
     expect(screen.queryByText(/replaced the launcher/)).toBeNull();
     // Nothing was recorded, so nothing changed.
     expect(canvasChoice()).toBeNull();
-    expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
+    expect(segment("Mission Control").getAttribute("aria-checked")).toBe("true");
 
     await press(screen.getByRole("button", { name: "Retry" }));
 
@@ -531,7 +542,7 @@ describe("ProjectSurfaceFrame", () => {
     // Every control in a notice row does — an answer, a retry, a dismissal — so
     // each one owes the same handoff: focus lands on the segment now showing,
     // never on the body.
-    expect(document.activeElement).toBe(stripButton("Launcher"));
+    expect(document.activeElement).toBe(segment("Launcher"));
   });
 
   it("hands focus back to the strip when a failed save is dismissed", async () => {
@@ -540,12 +551,12 @@ describe("ProjectSurfaceFrame", () => {
     renderFrame();
 
     failNextSave = true;
-    await press(stripButton("Launcher"));
+    await press(segment("Launcher"));
     await press(screen.getByRole("button", { name: "Dismiss" }));
 
     expect(screen.queryByText(SAVE_FAILED)).toBeNull();
     // Dismissing recorded no answer, so the surface is still what is showing.
-    expect(document.activeElement).toBe(stripButton("Mission Control"));
+    expect(document.activeElement).toBe(segment("Mission Control"));
   });
 
   it("asks the new owner instead of offering a retry once the slot changes hands", async () => {
@@ -554,7 +565,7 @@ describe("ProjectSurfaceFrame", () => {
     renderFrame();
 
     failNextSave = true;
-    await press(stripButton("Launcher"));
+    await press(segment("Launcher"));
     expect(screen.getByText(SAVE_FAILED)).toBeTruthy();
 
     // A reload hands the slot to a different plugin: the failed answer was
@@ -577,7 +588,7 @@ describe("ProjectSurfaceFrame", () => {
     renderFrame();
 
     expect(notice()).toBeTruthy();
-    expect(stripButton("Mission Control").getAttribute("aria-pressed")).toBe("true");
+    expect(segment("Mission Control").getAttribute("aria-checked")).toBe("true");
   });
 
   it("keeps rendering its children in both states", async () => {
@@ -587,7 +598,7 @@ describe("ProjectSurfaceFrame", () => {
     renderFrame(<div data-testid="content" />);
     expect(screen.getByTestId("content")).toBeTruthy();
 
-    await press(stripButton("Launcher"));
+    await press(segment("Launcher"));
     expect(screen.getByTestId("content")).toBeTruthy();
   });
 });

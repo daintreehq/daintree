@@ -1026,7 +1026,7 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
 
   it("shows the Source/Rendered toggle for an .html file", async () => {
     renderPane("/repo/dist/report.html");
-    // SegmentedToggle labels are literal text; both appear only for renderable files.
+    // Segment labels are literal text; both appear only for renderable files.
     expect(await screen.findByText("Rendered")).toBeTruthy();
     expect(screen.getByText("Source")).toBeTruthy();
   });
@@ -1308,7 +1308,7 @@ describe("FilePane rendered-swap height hold (#11255)", () => {
   }
 
   async function clickToggle(label: string) {
-    const button = screen.getByRole("button", { name: label });
+    const button = screen.getByRole("radio", { name: label });
     await act(async () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -1446,7 +1446,7 @@ describe("FilePane diff mode (#11274)", () => {
 
   function toggleLabels(): string[] {
     return screen
-      .getAllByRole("button")
+      .queryAllByRole("radio")
       .map((b) => b.textContent ?? "")
       .filter((label) => label === "Source" || label === "Rendered" || label === "Diff");
   }
@@ -1929,7 +1929,7 @@ describe("FilePane diff mode (#11274)", () => {
 
       await act(async () => {
         screen
-          .getByRole("button", { name: "Diff" })
+          .getByRole("radio", { name: "Diff" })
           .dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
 
@@ -3683,7 +3683,7 @@ describe("FilePane edit mode (#12323)", () => {
 
   function toggleLabels(): string[] {
     return screen
-      .getAllByRole("button")
+      .queryAllByRole("radio")
       .map((b) => b.textContent ?? "")
       .filter((label) => ["Source", "Rendered", "Diff", "Edit"].includes(label));
   }
@@ -3800,8 +3800,8 @@ describe("FilePane edit mode (#12323)", () => {
     };
     view.rerender(paneElement());
     await act(async () => {});
-    const rendered = screen.getByRole("button", { name: "Rendered" });
-    expect(rendered.getAttribute("aria-pressed")).toBe("true");
+    const rendered = screen.getByRole("radio", { name: "Rendered" });
+    expect(rendered.getAttribute("aria-checked")).toBe("true");
     expect(document.activeElement).toBe(rendered);
   });
 

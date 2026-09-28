@@ -99,7 +99,7 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
 
   test("Rendered mode renders the document with theme-token colors", async () => {
     const dialog = ctx.window.locator(SEL.fileViewer.dialog);
-    await dialog.getByRole("button", { name: "Rendered", exact: true }).click();
+    await dialog.getByRole("radio", { name: "Rendered", exact: true }).click();
 
     // Rendered document, not raw markdown: a real <h1> without the "#" marker.
     const heading = dialog.locator(".markdown-document h1");
@@ -148,7 +148,7 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
     const pane = filePanes(ctx.window).first();
     const panel = ctx.window.locator(SEL.panel.gridPanel).filter({ has: pane });
 
-    await panel.getByRole("button", { name: "Source", exact: true }).click();
+    await panel.getByRole("radio", { name: "Source", exact: true }).click();
     await expect(pane.locator(".cm-content")).toContainText("# Markdown E2E Spec", {
       timeout: T_LONG,
     });
@@ -164,7 +164,7 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
     await wrapToggle.click();
     await expect(pane.locator(".cm-content.cm-lineWrapping")).toBeVisible({ timeout: T_SHORT });
 
-    await panel.getByRole("button", { name: "Rendered", exact: true }).click();
+    await panel.getByRole("radio", { name: "Rendered", exact: true }).click();
     await expect(pane.locator(".markdown-document h1")).toBeVisible({ timeout: T_MEDIUM });
   });
 
@@ -188,7 +188,7 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
     });
 
     const cssPanel = ctx.window.locator(SEL.panel.gridPanel).filter({ has: cssPane });
-    await expect(cssPanel.getByRole("button", { name: "Rendered", exact: true })).toHaveCount(0);
+    await expect(cssPanel.getByRole("radio", { name: "Rendered", exact: true })).toHaveCount(0);
   });
 
   test("file.read action returns markdown content for the MCP surface", async () => {

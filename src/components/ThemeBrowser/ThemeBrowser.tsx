@@ -15,6 +15,10 @@ import {
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { SearchField } from "@/components/ui/SearchField";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Button } from "@/components/ui/button";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
@@ -146,6 +150,11 @@ function ThemeRow({
     </div>
   );
 }
+
+const APPEARANCE_OPTIONS: SegmentedRadioOption<"dark" | "light">[] = [
+  { value: "dark", label: "Dark" },
+  { value: "light", label: "Light" },
+];
 
 export function ThemeBrowser() {
   useOverlayClaim("theme-browser", true);
@@ -576,49 +585,21 @@ export function ThemeBrowser() {
           placeholder="Filter themes"
           aria-label="Filter themes"
         />
-        <div
+        <SegmentedRadioGroup<"dark" | "light">
           aria-label="Appearance mode"
-          className="flex rounded-[var(--radius-md)] border border-border-default overflow-hidden shrink-0"
-        >
-          <button
-            type="button"
-            aria-pressed={typeFilter === "dark"}
-            onClick={() => {
-              if (typeFilter === "dark") return;
-              // Switching filter away from the previewed type hides the
-              // previewed row from the list. Revert the preview so the hero
-              // and committed state realign with what the user can actually
-              // see — otherwise a hidden preview could still be committed.
-              revertPreview();
-              setTypeFilter("dark");
-            }}
-            className={cn(
-              "rounded-l-md px-2.5 py-0.5 text-2xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-              typeFilter === "dark"
-                ? "bg-overlay-selected text-text-primary"
-                : "text-text-secondary hover:text-text-primary"
-            )}
-          >
-            Dark
-          </button>
-          <button
-            type="button"
-            aria-pressed={typeFilter === "light"}
-            onClick={() => {
-              if (typeFilter === "light") return;
-              revertPreview();
-              setTypeFilter("light");
-            }}
-            className={cn(
-              "rounded-r-md px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-border-default focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-              typeFilter === "light"
-                ? "bg-overlay-selected text-text-primary"
-                : "text-text-secondary hover:text-text-primary"
-            )}
-          >
-            Light
-          </button>
-        </div>
+          density="compact"
+          options={APPEARANCE_OPTIONS}
+          value={typeFilter}
+          onChange={(next) => {
+            if (next === typeFilter) return;
+            // Switching filter away from the previewed type hides the
+            // previewed row from the list. Revert the preview so the hero
+            // and committed state realign with what the user can actually
+            // see — otherwise a hidden preview could still be committed.
+            revertPreview();
+            setTypeFilter(next);
+          }}
+        />
       </div>
 
       {/* Scrollable theme list, sized to its content rather than to the panel.

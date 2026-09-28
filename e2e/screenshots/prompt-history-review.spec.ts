@@ -222,9 +222,9 @@ test("prompt history palette — states, interactions and themes", async ({ page
       const dialog = await open(page, "populated", theme);
       await expect(row(dialog, "fix the failing typecheck")).toBeVisible({ timeout });
       await expect(row(dialog, "Helios dashboard")).toHaveCount(0);
-      await dialog.getByRole("button", { name: "All projects" }).click();
-      await expect(dialog.getByRole("button", { name: "All projects" })).toHaveAttribute(
-        "aria-pressed",
+      await dialog.getByRole("radio", { name: "All projects" }).click();
+      await expect(dialog.getByRole("radio", { name: "All projects" })).toHaveAttribute(
+        "aria-checked",
         "true"
       );
       await expect(row(dialog, "Helios dashboard")).toBeVisible({ timeout });

@@ -35,6 +35,9 @@ import {
   updateComposerMemory,
 } from "../composerMemory";
 import { usePanelStore } from "@/store/panelStore";
+// The plugin renders inside the app's TooltipProvider (App.tsx); its segmented
+// controls carry Radix tooltips, so the harness supplies the same ancestor.
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   FILE,
   OBSERVATION,
@@ -99,13 +102,13 @@ function boundState(request: { panelId: string; mode?: "browse" | "select" }) {
 
 function mount() {
   switchOn();
-  return render(<Builder />);
+  return render(<Builder />, { wrapper: TooltipProvider });
 }
 
 async function mountBound() {
   mount();
   await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalled());
-  await screen.findByRole("button", { name: "Browse" });
+  await screen.findByRole("radio", { name: "Browse" });
   await act(async () => host.documentReady(0));
 }
 
@@ -332,12 +335,12 @@ describe("preview binding", () => {
       adapterId: GUEST_ADAPTER_ID,
       mode: "select",
     });
-    await screen.findByRole("button", { name: "Browse" });
+    await screen.findByRole("radio", { name: "Browse" });
   });
 
   it("switches the preview between Browse and Select", async () => {
     await mountBound();
-    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     await waitFor(() =>
       expect(host.sitePreview.setMode).toHaveBeenCalledWith({
         sessionId: "session-1",
@@ -345,7 +348,7 @@ describe("preview binding", () => {
       })
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Browse" }).getAttribute("aria-pressed")).toBe(
+      expect(screen.getByRole("radio", { name: "Browse" }).getAttribute("aria-checked")).toBe(
         "true"
       )
     );
@@ -737,9 +740,12 @@ describe("selection identity", () => {
       for (const answer of answers) answer("src/lib/Card.svelte");
     });
     await waitFor(() => expect(sendButton().disabled).toBe(false));
-    expect(
-      screen.getByRole("button", { name: "PricingCard", pressed: true }).getAttribute("title")
-    ).toBe("src/lib/Card.svelte");
+    // The resolved file is the checked scope's hover detail.
+    const scope = screen.getByRole("radio", { name: "PricingCard", checked: true });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.focus(scope);
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe("src/lib/Card.svelte");
   });
 });
 
@@ -812,7 +818,9 @@ describe("request scope", () => {
     await mountBound();
     await act(async () => host.select(0));
     await screen.findByRole("combobox", { name: "What the request is about" });
-    expect(screen.queryByRole("button", { name: "Element", pressed: true })).toBeNull();
+    // A list, not a row of segments: no scope radio is drawn beside the picker.
+    expect(screen.queryByRole("radiogroup", { name: "What the request is about" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Element" })).toBeNull();
   });
 });
 
@@ -1317,9 +1325,9 @@ describe("stale selections", () => {
     expect(within(reselected()).queryByRole("button", { name: "PricingCard" })).toBeNull();
     // And the request is about it: the composer's About control follows the
     // page's answer, not the crumb, so it names what was actually selected.
-    const about = within(reselected().parentElement!.parentElement!).getAllByRole("button", {
+    const about = within(reselected().parentElement!.parentElement!).getAllByRole("radio", {
       name: "PricingCard",
-      pressed: true,
+      checked: true,
     });
     expect(about).toHaveLength(1);
   });
@@ -1435,7 +1443,7 @@ describe("stale selections", () => {
     // The page only answers a selection request in Inspect mode. A crumb that
     // is a button in Browse mode is a button that does nothing.
     await mountSelected();
-    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     await waitFor(() => expect(session().getSnapshot().mode).toBe("browse"));
     const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
     expect(within(strip).getByRole("navigation", { name: "Breadcrumb" }).textContent).toContain(
@@ -1784,7 +1792,7 @@ describe("stale selections", () => {
 
   it("says the file changed while browsing, and asks the page once selecting again", async () => {
     await mountSelected();
-    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     await waitFor(() => expect(host.sitePreview.setMode).toHaveBeenCalled());
     await act(async () => changed(FILE));
     // The page answers only in Inspect mode, so this one is the user's to see.
@@ -1792,7 +1800,7 @@ describe("stale selections", () => {
     await act(async () => new Promise((resolve) => setTimeout(resolve, 1300)));
     expect(host.sitePreview.reselect).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Inspect" }));
     await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2), {
       timeout: 4000,
     });
@@ -1933,7 +1941,7 @@ describe("stale selections", () => {
       droppedMessages: 0,
       suspended: false,
     }));
-    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     await screen.findByText("Select again — the page reloaded");
   });
 
@@ -2012,7 +2020,7 @@ describe("lifetime", () => {
       return disabled ? null : <Builder />;
     }
     switchOn();
-    render(<Gated />);
+    render(<Gated />, { wrapper: TooltipProvider });
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(1));
 
@@ -2046,7 +2054,7 @@ describe("lifetime", () => {
     });
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
-    await screen.findByRole("button", { name: "Browse" });
+    await screen.findByRole("radio", { name: "Browse" });
     await act(async () => host.documentReady(0));
     await act(async () => host.select(0));
     await screen.findByRole("textbox", { name: "Request for the agent" });
@@ -2106,7 +2114,7 @@ describe("preview reattach", () => {
     );
 
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2), { timeout: 2000 });
-    await screen.findByRole("button", { name: "Browse" });
+    await screen.findByRole("radio", { name: "Browse" });
   });
 
   it("says it paused while the preview shows a page outside the local dev server, and picks up again", async () => {
@@ -2241,7 +2249,7 @@ describe("builder lifetime while switched on", () => {
       startDevPreviewToolSessions();
       publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
       useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
-      render(<Builder />);
+      render(<Builder />, { wrapper: TooltipProvider });
       await screen.findByText("Waiting for the page to load");
       // A cold dev server: long enough for the backoff to reach its long steps.
       await act(async () => {
@@ -2305,7 +2313,7 @@ describe("builder lifetime while switched on", () => {
       startDevPreviewToolSessions();
       publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
       useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
-      render(<Builder />);
+      render(<Builder />, { wrapper: TooltipProvider });
       await screen.findByText("Waiting for the page to load");
       // Through every step but the last, whose attempt is the one held open.
       await act(async () => {
@@ -2522,14 +2530,14 @@ describe("issue recovery", () => {
   it("offers the mode change that failed again, and asks for the mode that failed", async () => {
     await mountBound();
     host.sitePreview.setMode.mockRejectedValueOnce(new Error("the page went away"));
-    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
 
     await waitFor(() => expect(notice().textContent).toContain("the page went away"));
     // The way out is a way forward, not a way to make it go away.
     expect(within(notice()).queryByRole("button", { name: "Dismiss" })).not.toBeNull();
     const retry = within(notice()).getByRole("button", { name: "Retry" });
     // Inspect is still what the preview is on: the failure rolled the mode back.
-    expect(screen.getByRole("button", { name: "Inspect" }).getAttribute("aria-pressed")).toBe(
+    expect(screen.getByRole("radio", { name: "Inspect" }).getAttribute("aria-checked")).toBe(
       "true"
     );
 
@@ -2545,7 +2553,7 @@ describe("issue recovery", () => {
     );
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Browse" }).getAttribute("aria-pressed")).toBe(
+      expect(screen.getByRole("radio", { name: "Browse" }).getAttribute("aria-checked")).toBe(
         "true"
       )
     );

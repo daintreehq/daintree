@@ -716,7 +716,7 @@ describe("ReviewHub windowed file list (#12241)", () => {
     render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByTestId("file-stage-row-src/staged/file-000.ts"));
 
-    act(() => void fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+    act(() => void fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
     await waitFor(() => screen.getByText("file-000.ts"));
 
     // Windowed, but still the same read-only rows: a native button per file,

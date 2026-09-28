@@ -91,10 +91,15 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     expect(content).toContain('"pulse-card-header');
   });
 
-  it("inline selector active item uses neutral selected tokens, not accent (issue #5979)", async () => {
+  it("range selector's active segment is neutral, never accent (issue #5979)", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("bg-overlay-selected");
-    expect(content).toContain("border-border-strong");
+    // The active range is drawn by the shared segmented thumb, whose neutral
+    // fill and boundary follow the "Segmented Toggle Group Active State" recipe.
+    // The card must not paint a selected state of its own on top — least of all
+    // the overlay-selected + border-strong pair that recipe rejects — and must
+    // never reach for accent.
+    expect(content).toMatch(/<SegmentedRadioGroup<RangeKey>/);
+    expect(content).not.toMatch(/\bbg-overlay-selected\b[^"]*\bborder-border-strong\b/);
     expect(content).not.toContain(
       "color-mix(in oklab, var(--color-accent-primary) 12%, transparent)"
     );
@@ -184,35 +189,35 @@ describe("ProjectPulseCard — slot stability (issue #7671)", () => {
 });
 
 describe("ProjectPulseCard — accessibility (issue #7229)", () => {
-  it("range selector uses radiogroup semantics with descriptive label", async () => {
+  // The range picker renders through the shared SegmentedRadioGroup, which owns
+  // the radiogroup/radio semantics, the roving tabindex and the arrow/Home/End
+  // keyboard model (covered by its own suite). What the card owns is the group's
+  // name, the options' spoken names, and not hand-rolling a second copy of the
+  // semantics that could drift from the primitive's.
+  it("range selector renders through the shared radiogroup with a descriptive label", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain('role="radiogroup"');
-    expect(content).toContain('aria-label="Activity range"');
+    const group = content.match(/<SegmentedRadioGroup<RangeKey>[\s\S]*?\/>/)?.[0] ?? "";
+    expect(group, "range selector is not a SegmentedRadioGroup").not.toBe("");
+    expect(group).toContain('aria-label="Activity range"');
     expect(content).not.toContain('aria-label="Select pulse range"');
   });
 
-  it("range buttons use role=radio + aria-checked, not aria-pressed", async () => {
+  it("range selector does not hand-roll radio semantics or its own keyboard model", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain('role="radio"');
-    expect(content).toContain("aria-checked={isActive}");
-    expect(content).not.toContain("aria-pressed={isActive}");
+    expect(content).not.toContain('role="radiogroup"');
+    expect(content).not.toContain('role="radio"');
+    expect(content).not.toContain("aria-pressed");
+    expect(content).not.toContain("handleRangeKeyDown");
+    expect(content).not.toContain("rangeButtonRefs");
   });
 
-  it("radiogroup uses roving tabindex (active=0, others=-1) and arrow-key handler", async () => {
+  it("abbreviated range labels carry spoken names", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("tabIndex={isActive ? 0 : -1}");
-    expect(content).toContain("handleRangeKeyDown");
-    expect(content).toContain("rangeButtonRefs");
-    expect(content).toContain("ArrowRight");
-    expect(content).toContain("ArrowLeft");
-  });
-
-  it("range buttons expose screen-reader-friendly labels", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("srLabel");
-    expect(content).toContain('"60 days"');
-    expect(content).toContain('"120 days"');
-    expect(content).toContain('"180 days"');
+    for (const days of ["60", "120", "180"]) {
+      expect(content).toContain(
+        `{ value: "${days}", label: "${days}d", ariaLabel: "${days} days" }`
+      );
+    }
   });
 
   it("card region surfaces aria-busy during background refresh", async () => {

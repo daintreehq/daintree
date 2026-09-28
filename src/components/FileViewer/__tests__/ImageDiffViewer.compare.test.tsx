@@ -108,7 +108,7 @@ describe("ImageDiffViewer comparison", () => {
   it("clips HEAD and the working tree to complementary halves at every divider position", async () => {
     mockReadFileVersions.mockResolvedValue(versions());
     render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Swipe" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Swipe" }));
     const divider = screen.getByRole("slider", { name: "Swipe divider" });
 
     const insets = () => {
@@ -130,7 +130,7 @@ describe("ImageDiffViewer comparison", () => {
   it("describes the divider position for assistive tech as it moves", async () => {
     mockReadFileVersions.mockResolvedValue(versions());
     render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Swipe" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Swipe" }));
     const divider = screen.getByRole("slider", { name: "Swipe divider" });
     const before = divider.getAttribute("aria-valuetext");
     fireEvent.keyDown(divider, { key: "End" });
@@ -216,7 +216,7 @@ describe("ImageDiffViewer comparison", () => {
       async (mode) => {
         mockReadFileVersions.mockResolvedValue(versions());
         render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
-        fireEvent.click(await screen.findByRole("button", { name: mode }));
+        fireEvent.click(await screen.findByRole("radio", { name: mode }));
 
         const head = renderedWidth("HEAD version of logo.png");
         const working = renderedWidth("Working tree version of logo.png");
@@ -233,12 +233,12 @@ describe("ImageDiffViewer comparison", () => {
       async (mode) => {
         mockReadFileVersions.mockResolvedValue(versions());
         render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
-        fireEvent.click(await screen.findByRole("button", { name: mode }));
-        fireEvent.click(screen.getByRole("button", { name: "Actual size" }));
+        fireEvent.click(await screen.findByRole("radio", { name: mode }));
+        fireEvent.click(screen.getByRole("radio", { name: "Actual size" }));
 
         expect(renderedWidth("HEAD version of logo.png")).toBe(NATURAL[HEAD_URL]!.w);
         expect(renderedWidth("Working tree version of logo.png")).toBe(NATURAL[WORKING_URL]!.w);
-        fireEvent.click(screen.getByRole("button", { name: "Fit to screen" }));
+        fireEvent.click(screen.getByRole("radio", { name: "Fit to screen" }));
         expect(renderedWidth("Working tree version of logo.png")).toBeLessThanOrEqual(300);
       }
     );
@@ -246,11 +246,11 @@ describe("ImageDiffViewer comparison", () => {
     it("gives both two-up panes the same canvas, so differently sized versions line up", async () => {
       mockReadFileVersions.mockResolvedValue(versions());
       render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
-      await screen.findByRole("button", { name: "Swipe" });
+      await screen.findByRole("radio", { name: "Swipe" });
 
       const canvasOf = (alt: string) => screen.getByAltText(alt).parentElement!;
       for (const zoom of ["Fit to screen", "Actual size"]) {
-        fireEvent.click(screen.getByRole("button", { name: zoom }));
+        fireEvent.click(screen.getByRole("radio", { name: zoom }));
         const head = canvasOf("HEAD version of logo.png");
         const working = canvasOf("Working tree version of logo.png");
         expect(head.style.width).not.toBe("");
@@ -262,7 +262,7 @@ describe("ImageDiffViewer comparison", () => {
     it("keeps both two-up panes on the same region when one scrolls at 100%", async () => {
       mockReadFileVersions.mockResolvedValue(versions());
       render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
-      fireEvent.click(await screen.findByRole("button", { name: "Actual size" }));
+      fireEvent.click(await screen.findByRole("radio", { name: "Actual size" }));
 
       const frameOf = (alt: string) =>
         screen.getByAltText(alt).closest<HTMLElement>("[data-image-frame]")!;
@@ -284,10 +284,10 @@ describe("ImageDiffViewer comparison", () => {
       try {
         mockReadFileVersions.mockResolvedValue(versions());
         render(<ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" />);
-        await screen.findByRole("button", { name: "Swipe" });
+        await screen.findByRole("radio", { name: "Swipe" });
         expect(renderedWidth("HEAD version of logo.png")).toBe(64);
         // Everything already shows at actual size, so 100% would change nothing.
-        expect(screen.getByRole("button", { name: "Actual size" }).hasAttribute("disabled")).toBe(
+        expect(screen.getByRole("radio", { name: "Actual size" }).hasAttribute("disabled")).toBe(
           true
         );
       } finally {

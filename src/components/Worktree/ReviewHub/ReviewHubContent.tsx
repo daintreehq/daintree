@@ -54,7 +54,7 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { basename, join } from "@shared/utils/path";
 import {
@@ -1715,6 +1715,10 @@ export function ReviewHubContent({
       return;
     }
     if (document.activeElement?.closest('[role="menu"]')) return;
+    // A radiogroup (the diff mode switch) answers its own arrow keys, the way it
+    // does everywhere else; this capture listener would otherwise take Up/Down
+    // before the group ever sees them.
+    if (target?.closest('[role="radiogroup"]')) return;
     // A diff overlay owns the keyboard while open; don't move the list beneath it.
     if (selectedFile || selectedBaseBranchFile) return;
     // The file list is collapsed — no rows are visible, so don't let keys mutate
@@ -1914,16 +1918,11 @@ export function ReviewHubContent({
             />
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* Diff mode toggle. Uses the shared SegmentedToggle rather than a
-                local pair of buttons: this was the only segmented control in the
-                app still drawing its selection as a filled block, while the diff,
-                file and file-browser surfaces all use the primitive's thumb. It
-                also drops a bare `rounded` and a restated focus ring — the global
-                `*:focus-visible` rule owns that, and a box-shadow ring vanishes
-                under forced-colors. */}
-            <SegmentedToggle
+            {/* Diff mode switch: the shared segmented control, so it looks,
+                answers the keyboard and slides like every other mode switch. */}
+            <SegmentedRadioGroup
               density="compact"
-              ariaLabel="Diff mode"
+              aria-label="Diff mode"
               testId="review-hub-diff-mode"
               value={diffMode}
               onChange={handleDiffModeChange}

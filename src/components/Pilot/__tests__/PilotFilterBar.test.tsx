@@ -288,6 +288,16 @@ describe("PilotFilterBar", () => {
       // ...but everything else still bubbles, so Escape still closes.
       expect(outer).toHaveBeenCalledTimes(2);
     });
+
+    it("leaves modified arrows and Home/End to the app", () => {
+      const { onChange } = renderBar("all");
+      const group = screen.getByRole("radiogroup");
+
+      expect(fireEvent.keyDown(group, { key: "ArrowRight", altKey: true })).toBe(true);
+      expect(fireEvent.keyDown(group, { key: "ArrowLeft", ctrlKey: true })).toBe(true);
+      expect(fireEvent.keyDown(group, { key: "End", metaKey: true })).toBe(true);
+      expect(onChange).not.toHaveBeenCalled();
+    });
   });
 
   describe("empty buckets", () => {

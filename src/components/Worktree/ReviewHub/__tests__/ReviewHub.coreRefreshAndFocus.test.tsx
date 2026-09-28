@@ -772,9 +772,9 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       expect(
-        screen.getByRole("button", { name: /working tree/i }).getAttribute("aria-pressed")
+        screen.getByRole("radio", { name: /working tree/i }).getAttribute("aria-checked")
       ).toBe("true");
-      expect(screen.getByRole("button", { name: /vs main/i }).getAttribute("aria-pressed")).toBe(
+      expect(screen.getByRole("radio", { name: /vs main/i }).getAttribute("aria-checked")).toBe(
         "false"
       );
     });
@@ -790,7 +790,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => {
@@ -817,7 +817,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => {
@@ -836,7 +836,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => {
@@ -850,7 +850,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => {
@@ -862,7 +862,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
@@ -877,7 +877,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       // Switch to base-branch mode
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
 
       // Close and reopen
@@ -886,18 +886,18 @@ describe("ReviewHub", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByRole("button", { name: /working tree/i }).getAttribute("aria-pressed")
+          screen.getByRole("radio", { name: /working tree/i }).getAttribute("aria-checked")
         ).toBe("true");
       });
     });
 
-    it("disables vs-branch button when current branch matches main branch", async () => {
+    it("disables the vs-branch segment when current branch matches main branch", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ currentBranch: "main" }));
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       expect(toggle.hasAttribute("disabled")).toBe(true);
     });
 
@@ -907,7 +907,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       fireEvent.click(toggle);
 
       expect(compareWorktreesMock).not.toHaveBeenCalled();
@@ -918,14 +918,14 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       // First toggle
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(1));
 
       // Toggle back to working-tree
-      act(() => fireEvent.click(screen.getByRole("button", { name: /working tree/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /working tree/i })));
 
       // Toggle again to base-branch — should NOT re-fetch since files are cached
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
 
       // Still only 1 call
       expect(compareWorktreesMock).toHaveBeenCalledTimes(1);

@@ -1,25 +1,25 @@
-import { useCallback, useEffect, useId, useMemo, useState, type ReactElement } from "react";
-import { m } from "framer-motion";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { FleetPickerContent, FleetPickerFooterHint } from "@/components/Fleet/FleetPickerContent";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
-import { useUiMotionTransition } from "@/hooks/useShouldSkipMotion";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { handleSegmentedRadioKeyDown } from "./segmentedRadioKeys";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { SavedFleetQuickRecall } from "./SavedFleetQuickRecall";
 import { SavedFleetsDialog } from "./SavedFleetsDialog";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 
 type CommitMode = "replace" | "append";
 
-const COMMIT_MODES: { mode: CommitMode; label: string }[] = [
-  { mode: "replace", label: "Replace" },
-  { mode: "append", label: "Append" },
+const COMMIT_MODES: SegmentedRadioOption<CommitMode>[] = [
+  { value: "replace", label: "Replace" },
+  { value: "append", label: "Append" },
 ];
-const COMMIT_MODE_VALUES: readonly CommitMode[] = ["replace", "append"];
 
 export interface FleetPickerPaletteProps {
   isOpen: boolean;
@@ -48,11 +48,6 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const armedIds = useFleetArmingStore((s) => s.armedIds);
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
   const [manageOpen, setManageOpen] = useState(false);
-  const thumbLayoutId = `${useId()}-segmented-thumb`;
-  const uiMotionTransition = useUiMotionTransition();
-  // Closing resets the mode to Replace while the palette is still fading out, which
-  // would otherwise slide the thumb back across a disappearing dialog.
-  const thumbTransition = isOpen ? uiMotionTransition : { ...uiMotionTransition, duration: 0 };
 
   useEffect(() => {
     if (!isOpen) setCommitMode("replace");
@@ -278,57 +273,19 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
               </div>
 
               <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-border-default px-3 py-2">
-                <div
-                  // A visible track. Without one the inactive half is bare dim
-                  // text beside a filled chip, so the pair reads as "a button and
-                  // some grey words" rather than a two-position switch.
-                  className="relative isolate flex rounded-sm border border-border-default bg-tint/[0.04] p-0.5 text-2xs"
-                  role="radiogroup"
+                {/* The shared segmented control. Its thumb only slides on the
+                    user's own pick, so the reset to Replace on close snaps
+                    rather than sliding across a dialog that is fading out, and
+                    the arrow keys it handles stop there instead of also moving
+                    the palette's row selection. */}
+                <SegmentedRadioGroup<CommitMode>
                   aria-label="Commit mode"
-                  data-testid="fleet-picker-cold-start-commit-mode"
-                  // Arrow keys move within the group; stopping them here keeps the
-                  // palette's row navigation from also acting on the same press.
-                  onKeyDown={(e) =>
-                    handleSegmentedRadioKeyDown(e, COMMIT_MODE_VALUES, commitMode, setCommitMode)
-                  }
-                >
-                  {COMMIT_MODES.map(({ mode, label }) => {
-                    const isActive = commitMode === mode;
-
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        aria-checked={isActive}
-                        tabIndex={isActive ? 0 : -1}
-                        data-value={mode}
-                        onClick={() => setCommitMode(mode)}
-                        data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
-                        className={cn(
-                          "relative rounded-xs px-2 py-1 transition-colors duration-150",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-                          isActive
-                            ? "text-text-primary"
-                            : "text-text-secondary hover:bg-tint/[0.04]"
-                        )}
-                      >
-                        {isActive && (
-                          <m.div
-                            data-slot="segmented-thumb"
-                            layout
-                            layoutId={thumbLayoutId}
-                            layoutCrossfade={false}
-                            transition={thumbTransition}
-                            className="absolute inset-0 z-0 rounded-xs bg-tint/[0.10] pointer-events-none"
-                            aria-hidden="true"
-                          />
-                        )}
-                        <span className="relative z-10">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                  density="compact"
+                  testId="fleet-picker-cold-start-commit-mode"
+                  options={COMMIT_MODES}
+                  value={commitMode}
+                  onChange={setCommitMode}
+                />
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"

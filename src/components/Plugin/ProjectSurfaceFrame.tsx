@@ -4,7 +4,7 @@ import type { ProjectSurfaceChoice } from "@shared/types/plugin";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { Button } from "@/components/ui/button";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRenderableSurfaceClaim } from "@/hooks/useRenderableSurfaceClaim";
@@ -172,14 +172,16 @@ export function ProjectSurfaceFrame({ children }: { children: ReactNode }) {
             narrow window would otherwise push the Launcher segment, the way
             back, off the end of the row. */}
         <div className="flex min-w-0 items-center">
-          <SegmentedToggle
+          <SegmentedRadioGroup
             className="min-w-0 shrink"
             density="compact"
+            aria-label="Canvas view"
             options={[
               {
                 value: "surface",
                 label: panelLabel,
                 ariaLabel: panelLabel === config.name ? undefined : config.name,
+                tooltip: panelLabel === config.name ? undefined : config.name,
               },
               { value: "stock", label: "Launcher" },
             ]}

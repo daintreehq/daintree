@@ -349,7 +349,7 @@ export function FileBrowserViewer({
     ) {
       const toggle = modeToggleRef.current;
       (
-        toggle?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]') ??
+        toggle?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]') ??
         toggle?.querySelector<HTMLButtonElement>("button")
       )?.focus({ preventScroll: true });
     }
