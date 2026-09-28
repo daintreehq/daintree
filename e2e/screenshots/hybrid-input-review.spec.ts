@@ -24,6 +24,12 @@
  *   DAINTREE_SHOT_HYBRIDINPUT=1 DAINTREE_SHOT_DIR=/abs/out \
  *     npx playwright test --project=screenshots hybrid-input-review
  *
+ * A second test captures the control row (`❯`, attach, stash, mic) at rest, under
+ * hover on each control with its tooltip open, disabled, and with the pointer
+ * over a disabled control. Run it alone with
+ * DAINTREE_SHOT_COMPOSER_CONTROLS instead; the two share an output directory, so
+ * run one at a time.
+ *
  * Env knobs:
  *   DAINTREE_SHOT_HYBRIDINPUT  required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR          required — an ABSOLUTE output directory outside the repo.
@@ -43,7 +49,9 @@ import path from "path";
 import { createServer, type ViteDevServer } from "vite";
 import { WIDTHS, TILE_AGENTS } from "../../src/components/Terminal/__preview__/hybridInputFixtures";
 
-const ENABLED = !!process.env.DAINTREE_SHOT_HYBRIDINPUT;
+const LAYOUT_ENABLED = !!process.env.DAINTREE_SHOT_HYBRIDINPUT;
+const CONTROLS_ENABLED = !!process.env.DAINTREE_SHOT_COMPOSER_CONTROLS;
+const ENABLED = LAYOUT_ENABLED || CONTROLS_ENABLED;
 const OUT_DIR = process.env.DAINTREE_SHOT_DIR ?? "";
 const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
   .split(",")
@@ -289,7 +297,7 @@ test("hybrid input layout review", async ({ page }) => {
     type: "conditional-skip",
     description: "DAINTREE_SHOT_HYBRIDINPUT is required for the hybrid-input capture",
   });
-  test.skip(!ENABLED, "set DAINTREE_SHOT_HYBRIDINPUT=1 to run the capture");
+  test.skip(!LAYOUT_ENABLED, "set DAINTREE_SHOT_HYBRIDINPUT=1 to run the capture");
   test.setTimeout(240_000);
 
   await stubViteHmrClient(page);
@@ -373,4 +381,66 @@ test("hybrid input layout review", async ({ page }) => {
   expect(onDisk.length).toBe(written.length);
   expect(onDisk.length).toBe(THEMES.length * 7);
   console.log(`[hybrid-input-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
+});
+
+const CONTROL_NAMES = [
+  ["picker", "Open command picker"],
+  ["attach", "Attach files"],
+  ["stash", "Restore stashed input"],
+  ["mic", "Start voice recording"],
+] as const;
+
+test("composer control row states", async ({ page }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_COMPOSER_CONTROLS is required for the control-row capture",
+  });
+  test.skip(!CONTROLS_ENABLED, "set DAINTREE_SHOT_COMPOSER_CONTROLS=1 to run the capture");
+  test.setTimeout(240_000);
+
+  await stubViteHmrClient(page);
+  const written: string[] = [];
+
+  for (const theme of THEMES) {
+    const sheet = await open(page, { case: "controls", theme, stash: true });
+    await proveComposersMounted(page, 2);
+    await fitViewport(page, sheet);
+    const enabled = page.locator('[data-hybrid-input-root="controls-enabled"]');
+    const disabled = page.locator('[data-hybrid-input-root="controls-disabled"]');
+
+    // All four controls on both composers, and the disabled one's natively
+    // disabled — a disabled capture of live buttons is the believable wrong
+    // picture. Not `toBeDisabled`: it inherits the shell's `aria-disabled`, and
+    // passed on a stash button that ignored `disabled` entirely.
+    for (const [, name] of CONTROL_NAMES) {
+      await expect(enabled.getByRole("button", { name })).toHaveJSProperty("disabled", false);
+      await expect(disabled.getByRole("button", { name })).toHaveJSProperty("disabled", true);
+    }
+
+    await page.mouse.move(0, 0);
+    written.push(await snap(sheet, `controls--${theme}--rest.png`));
+
+    for (const [key, name] of CONTROL_NAMES) {
+      await enabled.getByRole("button", { name }).hover();
+      await expect(page.getByRole("tooltip")).toBeVisible({ timeout: 3000 });
+      written.push(await snap(sheet, `controls--${theme}--hover-${key}.png`));
+      await page.mouse.move(0, 0);
+      await expect(page.getByRole("tooltip")).toHaveCount(0, { timeout: 3000 });
+    }
+
+    // The pointer over a disabled control: the unavailable composer is inert
+    // to the pointer as a whole, so no control under it may wash or tooltip.
+    const box = await disabled.getByRole("button", { name: "Attach files" }).boundingBox();
+    if (!box) throw new Error("disabled attach has no box — refusing to write");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(900);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+    written.push(await snap(sheet, `controls--${theme}--hover-disabled.png`));
+    await page.mouse.move(0, 0);
+  }
+
+  const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
+  expect(onDisk.length).toBe(written.length);
+  expect(onDisk.length).toBe(THEMES.length * (2 + CONTROL_NAMES.length));
+  console.log(`[composer-controls-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
