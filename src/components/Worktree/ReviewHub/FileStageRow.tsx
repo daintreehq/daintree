@@ -11,6 +11,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { isGeneratedFile } from "../generatedFileClassifier";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
   modified: {
@@ -165,6 +166,7 @@ function FileStageRowComponent({
       id={id}
       role="option"
       data-row-index={rowIndex}
+      onMouseDown={suppressShiftClickTextSelection}
       onClick={handleClick}
       data-testid={`file-stage-row-${file.path}`}
       data-selected={isSelected || undefined}

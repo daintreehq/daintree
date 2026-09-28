@@ -19,6 +19,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import {
   ContextMenu,
   ContextMenuActionItem,
@@ -360,6 +361,7 @@ export function WorktreeOverviewRow({
             data-worktree-overview-cell={worktree.id}
             data-overview-cursor={isCursor ? "true" : undefined}
             aria-current={isCurrent ? "true" : undefined}
+            onMouseDown={suppressShiftClickTextSelection}
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey) {
                 onToggleSelect(worktree.id, e);

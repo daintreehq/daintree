@@ -16,6 +16,7 @@ import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import {
   useProjectSettingsStore,
   areProjectNotificationsMuted,
@@ -1029,6 +1030,7 @@ export function WorktreeCard({
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
           aria-label={`Worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}`}
+          onMouseDown={isMultiSelectEnabled ? suppressShiftClickTextSelection : undefined}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
           onPointerEnter={handlePointerEnter}
