@@ -1,5 +1,6 @@
 import type React from "react";
 import { useId } from "react";
+import { Input } from "./input";
 
 export interface TypedNameConfirmInputProps {
   target: string;
@@ -61,7 +62,7 @@ export function TypedNameConfirmInput({
       <p id={instructionsId} className="text-sm text-text-primary">
         {instructions ?? defaultInstructions}
       </p>
-      <input
+      <Input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -80,9 +81,10 @@ export function TypedNameConfirmInput({
         aria-invalid={value.length > 0 && !isMatched}
         autoComplete="off"
         spellCheck={false}
-        // Scroll margin so focusing the field in a scrolled dialog body brings
-        // it clear of the body's bottom fade rather than parking it beneath.
-        className="w-full px-3 py-2 text-sm font-mono bg-surface-canvas border border-border-input rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error disabled:opacity-50 read-only:opacity-50 scroll-mb-8"
+        // The field's own chrome, with the ring in danger ink like a
+        // destructive button's. Scroll margin so focusing the field in a
+        // scrolled dialog body brings it clear of the body's bottom fade.
+        className="font-mono focus-visible:outline-status-error read-only:opacity-50 scroll-mb-8"
         data-testid={testId}
       />
       <span className="sr-only" aria-live="polite">
