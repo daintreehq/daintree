@@ -26,6 +26,9 @@ const PANE_TOOLBAR_FILES = [
   "src/components/Worktree/ReviewHub/FileSection.tsx",
   "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
   "src/components/FileViewer/ZoomableImage.tsx",
+  "src/components/DevPreview/ConsoleDrawer.tsx",
+  "src/components/DevPreview/ConsolePanel.tsx",
+  "src/components/DevPreview/DiagnosticsPanel.tsx",
 ];
 
 /**

@@ -9,6 +9,11 @@ import type {
 } from "@shared/types/ipc/devPreview";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 interface DiagnosticsPanelProps {
   paneId: string;
@@ -258,17 +263,17 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface-canvas text-xs">
-      <div className="flex shrink-0 items-center justify-between border-b border-overlay/50 px-3 py-1.5">
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-overlay bg-surface pl-3 pr-1">
         <span className="font-semibold text-text-secondary">Session diagnostics</span>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
               onClick={fetchDiagnostics}
-              className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-overlay-medium hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               aria-label="Refresh diagnostics"
             >
-              <RotateCw className="h-3.5 w-3.5" />
+              <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Refresh diagnostics</TooltipContent>
@@ -279,18 +284,14 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
         {loadFailed ? (
           <div className="flex flex-col items-start gap-2 p-3">
             <p className="text-text-secondary">Couldn't load diagnostics for this preview.</p>
-            <button
-              type="button"
-              onClick={fetchDiagnostics}
-              className="rounded border border-overlay/50 px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-medium"
-            >
+            <Button variant="subtle" size="xs" onClick={fetchDiagnostics}>
               Retry
-            </button>
+            </Button>
           </div>
         ) : (
           <>
             {session && (
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-overlay/40 px-3 py-2">
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-overlay px-3 py-2">
                 <SummaryRow
                   label="Status"
                   value={`${session.status}${session.restoredFromManifest ? " (restored)" : ""}`}

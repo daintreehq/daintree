@@ -12,6 +12,11 @@ export interface SegmentedRadioOption<T extends string> {
   ariaLabel?: string;
   /** Hover detail — a shortcut, or the full name behind a truncated label. */
   tooltip?: ReactNode;
+  /**
+   * A tally after the label (the console's error and warning counts). Visual
+   * only: pair it with an `ariaLabel` that says the count in words.
+   */
+  trailing?: ReactNode;
 }
 
 interface SegmentedRadioGroupProps<T extends string> {
@@ -299,7 +304,16 @@ export function SegmentedRadioGroup<T extends string>({
             {/* `block truncate`: an inline label has no width of its own to
                 overflow, so a shrinking segment would clip it mid-glyph instead
                 of ellipsing it. */}
-            <span className="block truncate">{option.label}</span>
+            {option.trailing === undefined ? (
+              <span className="block truncate">{option.label}</span>
+            ) : (
+              <span className="flex min-w-0 items-baseline gap-1">
+                <span className="truncate">{option.label}</span>
+                <span aria-hidden="true" className="shrink-0 tabular-nums">
+                  {option.trailing}
+                </span>
+              </span>
+            )}
           </button>
         );
         if (option.tooltip === undefined) return segment;

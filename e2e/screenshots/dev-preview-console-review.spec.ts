@@ -103,9 +103,9 @@ async function open(page: Page, name: ConsoleFixtureName, theme: string): Promis
     await page.goto(url, { waitUntil: "load" });
     await expect(frame).toBeAttached({ timeout: 30_000 });
   }
-  // The console toolbar's filter buttons prove the panel mounted and styled.
-  await expect(page.getByRole("button", { name: /^Errors/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^All/ })).toHaveCSS("border-radius", /px/);
+  // The console toolbar's level filter proves the panel mounted and styled.
+  await expect(page.getByRole("radio", { name: /^Errors/ })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /^All/ })).toHaveCSS("border-radius", /px/);
   await page.addStyleTag({ content: FREEZE_CSS });
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(150);

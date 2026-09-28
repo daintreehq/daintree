@@ -1,12 +1,6 @@
-import type { ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { UnderlineTabs, type UnderlineTabItem } from "@/components/ui/UnderlineTabs";
 
-export interface SettingsSubtabItem {
-  id: string;
-  label: string;
-  renderIcon?: (isActive: boolean) => ReactNode;
-  trailing?: ReactNode;
-}
+export type SettingsSubtabItem = UnderlineTabItem;
 
 interface SettingsSubtabBarProps {
   subtabs: SettingsSubtabItem[];
@@ -50,83 +44,18 @@ export function SettingsSubtabBar({
   group,
   ariaLabel,
 }: SettingsSubtabBarProps) {
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
-    const focusedIndex = tabs.indexOf(document.activeElement as HTMLElement);
-    if (focusedIndex === -1) return;
-
-    let nextIndex: number | null = null;
-
-    switch (e.key) {
-      case "ArrowRight":
-        nextIndex = (focusedIndex + 1) % tabs.length;
-        break;
-      case "ArrowLeft":
-        nextIndex = (focusedIndex - 1 + tabs.length) % tabs.length;
-        break;
-      case "Home":
-        nextIndex = 0;
-        break;
-      case "End":
-        nextIndex = tabs.length - 1;
-        break;
-      default:
-        return;
-    }
-
-    e.preventDefault();
-    tabs[nextIndex]!.focus();
-    const nextTabId = tabs[nextIndex]!.dataset.tab;
-    if (nextTabId) onChange(nextTabId);
-  };
-
   if (subtabs.length === 0) return null;
 
   return (
     <div className="border-b border-border-default mb-6">
-      <div
-        role="tablist"
+      <UnderlineTabs
+        tabs={subtabs}
+        activeId={activeId}
+        onChange={onChange}
         aria-label={ariaLabel}
-        onKeyDown={handleKeyDown}
-        className="flex gap-x-1 -mb-px"
-      >
-        {subtabs.map((subtab) => {
-          const isActive = subtab.id === activeId;
-          return (
-            <button
-              key={subtab.id}
-              role="tab"
-              id={tabId(group, subtab.id)}
-              aria-selected={isActive}
-              aria-controls={panelId(group, subtab.id)}
-              tabIndex={isActive ? 0 : -1}
-              data-tab={subtab.id}
-              onClick={() => onChange(subtab.id)}
-              className={cn(
-                "inline-flex items-center gap-2 px-3 pb-2.5 pt-0.5 text-sm font-medium",
-                "transition-[color] duration-150 flex-shrink-0",
-                // -outline-offset keeps the ring inside the button's own box. With a
-                // positive offset the top edge was clipped by the scrollport whenever the
-                // bar sat against the dialog header, leaving an open-topped "U".
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 focus-visible:rounded-[var(--radius-sm)]",
-                isActive
-                  ? // forced-colors replaces every author colour with a system one, so an
-                    // accent underline against a transparent sibling underline becomes two
-                    // identical lines and the active tab is unidentifiable. A Highlight
-                    // outline is the one selection cue that survives there.
-                    "border-b-2 border-accent-primary text-text-primary forced-colors:outline forced-colors:outline-2 forced-colors:[outline-color:Highlight] forced-colors:rounded-[var(--radius-sm)]"
-                  : "border-b-2 border-transparent text-text-secondary hover:border-border-default hover:text-text-primary"
-              )}
-            >
-              {subtab.renderIcon?.(isActive)}
-              <span>{subtab.label}</span>
-              {subtab.trailing && (
-                <span className="flex items-center gap-1 shrink-0">{subtab.trailing}</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+        tabId={(id) => tabId(group, id)}
+        panelId={(id) => panelId(group, id)}
+      />
       {subtabs
         .filter((subtab) => subtab.id !== activeId)
         .map((subtab) => (

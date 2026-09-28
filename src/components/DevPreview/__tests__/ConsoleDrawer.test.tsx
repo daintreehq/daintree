@@ -96,6 +96,36 @@ describe("ConsoleDrawer", () => {
     vi.restoreAllMocks();
   });
 
+  describe("collapsed drawer", () => {
+    it("takes its hidden controls out of the tab order", () => {
+      const { container } = renderDrawer({ defaultOpen: false });
+      const region = container.querySelector<HTMLElement>(`#console-drawer-${mockTerminalId}`)!;
+      expect(region.hasAttribute("inert")).toBe(true);
+      fireEvent.click(getToggleButton());
+      expect(region.hasAttribute("inert")).toBe(false);
+    });
+
+    it("hands focus back to the toggle when it closes around it", () => {
+      // Closed from outside (an action, a shortcut) while focus is in a tab.
+      const { rerender } = render(
+        <ConsoleDrawer terminalId={mockTerminalId} paneId={mockPaneId} isOpen={true} />
+      );
+      const tab = screen.getByRole("tab", { name: /^Console/ });
+      tab.focus();
+      expect(document.activeElement).toBe(tab);
+      rerender(<ConsoleDrawer terminalId={mockTerminalId} paneId={mockPaneId} isOpen={false} />);
+      expect(document.activeElement).toBe(getToggleButton());
+    });
+
+    it("keeps every tab's aria-controls pointing at a real panel", () => {
+      const { container } = renderDrawer({ defaultOpen: true });
+      for (const tab of Array.from(container.querySelectorAll('[role="tab"]'))) {
+        const target = container.querySelector(`#${tab.getAttribute("aria-controls")}`);
+        expect(target?.getAttribute("role")).toBe("tabpanel");
+      }
+    });
+  });
+
   describe("XtermAdapter mounting", () => {
     it("renders XtermAdapter unconditionally even when closed", () => {
       renderDrawer({ defaultOpen: false });

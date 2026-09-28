@@ -160,7 +160,7 @@ describe("DiagnosticsDock — roving tabindex on the tab strip", () => {
     for (const tab of ["problems", "logs", "events", "telemetry", "perf", "whySlow"] as const) {
       useDiagnosticsStore.setState({ activeTab: tab });
       const { container, unmount } = render(<DiagnosticsDock />);
-      const panel = container.querySelector<HTMLElement>('[role="tabpanel"]');
+      const panel = container.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden])');
       expect(panel?.tabIndex).toBe(0);
       unmount();
     }
@@ -294,25 +294,27 @@ describe("DiagnosticsDock — badge cap", () => {
     });
   }
 
+  const badgeIn = (container: HTMLElement) =>
+    container.querySelector('[id="diagnostics-problems-tab"] [data-slot="badge"]');
+
   it("shows exact count when errors <= 99", () => {
     setErrors(99);
     const { container } = render(<DiagnosticsDock />);
-    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
-    expect(badge?.textContent).toBe("99");
+    expect(badgeIn(container)?.querySelector('[aria-hidden="true"]')?.textContent).toBe("99");
   });
 
-  it("caps at 99+ when errors >= 100", () => {
+  it("caps the numeral at 99+ but says the exact count", () => {
     setErrors(100);
     const { container } = render(<DiagnosticsDock />);
-    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
-    expect(badge?.textContent).toBe("99+");
+    const badge = badgeIn(container);
+    expect(badge?.querySelector('[aria-hidden="true"]')?.textContent).toBe("99+");
+    expect(badge?.querySelector(".sr-only")?.textContent).toBe("100 errors");
   });
 
   it("shows no badge when error count is zero", () => {
     setErrors(0);
     const { container } = render(<DiagnosticsDock />);
-    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
-    expect(badge).toBeNull();
+    expect(badgeIn(container)).toBeNull();
   });
 });
 

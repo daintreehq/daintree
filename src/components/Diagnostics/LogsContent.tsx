@@ -308,6 +308,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
             className="flex w-full items-center gap-1.5 px-3 py-1 text-left text-xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <ChevronRight
+              data-animated-chevron
               aria-hidden="true"
               className={cn(
                 "h-3.5 w-3.5 shrink-0 transition-transform duration-150 ease-out",
