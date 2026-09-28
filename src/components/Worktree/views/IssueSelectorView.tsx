@@ -75,7 +75,6 @@ export function AssignIssueToggle({
         checked={assignWorktreeToSelf}
         onCheckedChange={(checked) => onSetAssignWorktreeToSelf(checked === true)}
         disabled={disabled}
-        aria-label="Assign issue to me when creating worktree"
       />
       {/* One 16px slot either way, so the label starts at the same x. */}
       {currentUser ? (
