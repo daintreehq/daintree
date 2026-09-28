@@ -162,7 +162,7 @@ function MenuSurface() {
         <DropdownMenuContent align="start" className="w-64">
           <DropdownMenuItem>
             Copy full context
-            <DropdownMenuShortcut>⌘⇧C</DropdownMenuShortcut>
+            <DropdownMenuShortcut shortcut="Cmd+Shift+C" />
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuLabel>Recent</DropdownMenuLabel>
