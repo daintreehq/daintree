@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { render, fireEvent } from "@testing-library/react";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { describe, expect, it, vi } from "vitest";
 
 import { Button, buttonVariants } from "../button";
@@ -189,6 +191,62 @@ describe("Button loading state", () => {
       const spinner = container.querySelector('[data-slot="button-spinner"]')!;
       expect(spinner).toBeTruthy();
       expect(spinner.querySelector("svg")).toBeTruthy();
+    }
+  });
+});
+
+describe("link variant", () => {
+  const classesOf = (element: HTMLElement) => new Set(element.className.split(/\s+/));
+
+  it("is underlined at rest, not only on hover", () => {
+    const { container } = render(<Button variant="link">Retry</Button>);
+    const classes = classesOf(container.querySelector("button")!);
+    expect(classes.has("underline")).toBe(true);
+  });
+
+  // A link sits inside a sentence: without an explicit size it must not take
+  // the default button frame, and must not force a type size of its own.
+  it("takes no box and no font size unless a size is asked for", () => {
+    const { container } = render(<Button variant="link">Retry</Button>);
+    const classes = [...classesOf(container.querySelector("button")!)];
+    const frame = buttonVariants({ size: "default" }).split(/\s+/);
+    const fontSizes = classes.filter((c) => /^text-(xs|sm|base|lg|[0-9]xs)$/.test(c));
+    expect(classes.filter((c) => /^(h|px|py)-/.test(c) && frame.includes(c))).toEqual([]);
+    expect(fontSizes).toEqual([]);
+  });
+
+  it("still honours an explicit size", () => {
+    const { container } = render(
+      <Button variant="link" size="sm">
+        Retry
+      </Button>
+    );
+    expect(classesOf(container.querySelector("button")!).has("h-7")).toBe(true);
+  });
+
+  it("keeps a type size on every boxed size, so moving it off the base changed nothing", () => {
+    for (const size of ["default", "sm", "xs", "lg", "icon", "icon-sm", "icon-xs"] as const) {
+      expect(buttonVariants({ size }), size).toMatch(/(?:^|\s)text-(sm|xs|3xs)(?:\s|$)/);
+    }
+  });
+
+  // Both high-contrast blocks frame every button; a link's underline is its
+  // affordance there, so each block must exempt it independently.
+  it("is exempt from the high-contrast button frame in both media blocks", () => {
+    const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf-8");
+    for (const marker of ["@media (forced-colors: active)", "@media (prefers-contrast: more)"]) {
+      const start = css.indexOf(marker);
+      expect(start, `${marker} block is missing`).toBeGreaterThan(-1);
+      let depth = 0;
+      let end = css.indexOf("{", start);
+      for (let i = end; i < css.length; i++) {
+        if (css[i] === "{") depth++;
+        if (css[i] === "}" && --depth === 0) {
+          end = i;
+          break;
+        }
+      }
+      expect(css.slice(start, end), marker).toContain('[data-variant="link"]');
     }
   });
 });

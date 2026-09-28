@@ -2883,6 +2883,13 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: none;
   }
 
+  /* Every link-variant button, for the same reason as the tip link: its
+     standing underline is the affordance in every mode, and a frame would turn
+     a link inside a sentence into a pill. */
+  [data-variant="link"] {
+    border: none;
+  }
+
   /* A list row whose selection target is a button beside a sibling control
      (the plugin manager's rows: select button + enable switch). The row is the
      frame and owns the selected outline; the blanket border drew a second box
@@ -3353,6 +3360,12 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      rather than merged: the launcher's teaching link must not be framed into a
      button. Its underline carries the affordance. */
   .tip-action {
+    border-width: 0;
+  }
+
+  /* Same exemption for every link-variant button, restated here for the same
+     reason as the tip link above. */
+  [data-variant="link"] {
     border-width: 0;
   }
 

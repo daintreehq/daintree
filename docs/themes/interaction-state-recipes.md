@@ -22,7 +22,19 @@ This document maps each interactive component role to its canonical Tailwind cla
 "hover:bg-overlay-soft hover:text-text-primary focus-visible:text-text-primary";
 ```
 
-**Usage:** Combine with `transition-colors` for smooth transitions. Add `focus-visible:` variant for keyboard parity. Used in `button.tsx` `ghost` variant.
+**Usage:** Reach for `<Button variant="ghost">` rather than respelling this; a raw `<button>` carrying these classes still misses the primitive's focus outline, press snap, cursor and disabled treatment.
+
+---
+
+### Link Button
+
+**Role:** A text action that reads as a link — "Retry", "Clear filter", "Show dotfiles", an action inside a sentence.
+
+```tsx
+<Button variant="link">Clear filter</Button>
+```
+
+**Usage:** One treatment app-wide: secondary ink, underlined at rest (never hover-only, so it does not rely on colour alone — WCAG 1.4.1), stepping to primary on hover. With no `size` it takes the `inline` size — no height, no padding, no type size — so it inherits the sentence it sits in; pass `className="text-xs"` when it stands alone. Both high-contrast blocks in `src/index.css` exempt `[data-variant="link"]` from the blanket button frame, for the same reason as `.tip-action`. A popover's footer actions ("Clear", "Done") are buttons, not links — use `ghost`.
 
 ---
 
@@ -271,6 +283,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Search Field | `ui/SearchField.tsx` + `styles/components/search-field.css` | Search field (neutral focus, no accent) |
 | Textarea | `ui/textarea.tsx` (`textareaVariants`) | Input focus with outline ring |
 | Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-soft |
+| Button Link | `button.tsx` (`link` variant, `inline` size) | Underlined secondary text that inherits its sentence |
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |
 | Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |
