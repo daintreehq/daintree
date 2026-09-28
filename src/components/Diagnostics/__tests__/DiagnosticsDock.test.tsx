@@ -274,6 +274,44 @@ describe("DiagnosticsDock — separator keyboard resize", () => {
   });
 });
 
+describe("DiagnosticsDock — focus on close", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  function renderWithOpener() {
+    const utils = render(
+      <>
+        <button type="button">opener</button>
+        <DiagnosticsDock />
+      </>
+    );
+    const opener = utils.getByText("opener");
+    const tab = utils.container.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')!;
+    opener.focus();
+    tab.focus();
+    expect(document.activeElement).toBe(tab);
+    return { opener, tab };
+  }
+
+  it("hands focus back to where it came from when it closes around it", () => {
+    const { opener } = renderWithOpener();
+    act(() => useDiagnosticsStore.getState().closeDock());
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("leaves focus alone when the keyboard had already left the dock", () => {
+    const { opener } = renderWithOpener();
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    act(() => useDiagnosticsStore.getState().closeDock());
+    expect(document.activeElement).toBe(elsewhere);
+    expect(document.activeElement).not.toBe(opener);
+    elsewhere.remove();
+  });
+});
+
 describe("DiagnosticsDock — badge cap", () => {
   beforeEach(() => {
     resetStores();

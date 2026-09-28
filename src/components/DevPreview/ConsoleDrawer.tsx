@@ -283,22 +283,20 @@ export function ConsoleDrawer({
                 <DropdownMenu>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <DropdownMenuTrigger asChild>
-                        <span className="inline-flex">
+                      {/* The span carries the tooltip, so it still answers hover
+                          while the button is disabled; the menu trigger sits on
+                          the button itself, where focus and aria-expanded are. */}
+                      <span className="inline-flex">
+                        <DropdownMenuTrigger asChild disabled={chevronDisabled}>
                           <button
                             type="button"
-                            disabled={chevronDisabled}
                             className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                             aria-label="More restart options"
-                            aria-disabled={chevronDisabled || undefined}
-                            onClick={(e) => {
-                              if (chevronDisabled) e.preventDefault();
-                            }}
                           >
                             <MoreHorizontal className={PANE_TOOLBAR_ICON_CLASS} />
                           </button>
-                        </span>
-                      </DropdownMenuTrigger>
+                        </DropdownMenuTrigger>
+                      </span>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">More restart options</TooltipContent>
                   </Tooltip>

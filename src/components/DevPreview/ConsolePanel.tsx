@@ -452,7 +452,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
         {/* Search */}
         <SearchField
           size="dense"
-          fieldClassName="flex-1 max-w-[160px]"
+          fieldClassName="w-40 min-w-16 shrink"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onClear={() => setSearch("")}

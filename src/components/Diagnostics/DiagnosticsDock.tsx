@@ -71,6 +71,11 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
   const resizeStartY = useRef(0);
   const resizeStartHeight = useRef(0);
   const outerRef = useRef<HTMLDivElement>(null);
+  // Where the keyboard came from when it entered the dock, and whether it is
+  // still inside. Removing the dock drops that focus on <body>, so a close from
+  // inside — its own X or a shortcut — hands it back to where it came from.
+  const focusOriginRef = useRef<HTMLElement | null>(null);
+  const focusInsideRef = useRef(false);
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
@@ -230,6 +235,30 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     restoreHeight();
   }, [setHeight]);
 
+  useLayoutEffect(() => {
+    if (isOpen || !focusInsideRef.current) return;
+    focusInsideRef.current = false;
+    const origin = focusOriginRef.current;
+    focusOriginRef.current = null;
+    if (origin?.isConnected && document.activeElement === document.body) {
+      origin.focus({ preventScroll: true });
+    }
+  }, [isOpen]);
+
+  const handleFocusCapture = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!focusInsideRef.current) {
+      const from = e.relatedTarget;
+      focusOriginRef.current =
+        from instanceof HTMLElement && !e.currentTarget.contains(from) ? from : null;
+    }
+    focusInsideRef.current = true;
+  };
+
+  const handleBlurCapture = (e: React.FocusEvent<HTMLDivElement>) => {
+    const to = e.relatedTarget;
+    if (to instanceof Node && !e.currentTarget.contains(to)) focusInsideRef.current = false;
+  };
+
   if (!isOpen) return null;
 
   const renderPanel = (tab: DiagnosticsTab) => {
@@ -275,6 +304,8 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       data-resizing={isResizing ? "true" : undefined}
       role="region"
       aria-label="Diagnostics dock"
+      onFocusCapture={handleFocusCapture}
+      onBlurCapture={handleBlurCapture}
     >
       <div
         className={cn(
@@ -314,9 +345,10 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           tabId={(id) => `diagnostics-${id}-tab`}
           panelId={(id) => `diagnostics-${id}-panel`}
           density="strip"
+          className="min-w-0 overflow-x-auto scrollbar-none"
         />
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 pl-2">
           {activeTab === "problems" && <ProblemsActions />}
           {activeTab === "logs" && <LogsActions />}
           {activeTab === "events" && <EventsActions />}

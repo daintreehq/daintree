@@ -1,6 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
+import { cloneElement } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ConsoleDrawer } from "../ConsoleDrawer";
@@ -36,7 +37,14 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  // Radix's asChild trigger merges `disabled` onto the child it wraps.
+  DropdownMenuTrigger: ({
+    children,
+    disabled,
+  }: {
+    children: React.ReactElement<{ disabled?: boolean }>;
+    disabled?: boolean;
+  }) => (disabled ? cloneElement(children, { disabled: true }) : children),
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuItem: ({
     children,
