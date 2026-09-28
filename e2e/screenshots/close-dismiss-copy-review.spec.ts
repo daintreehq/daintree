@@ -51,11 +51,14 @@ const PROBES: {
   /** A `data-shot` section, or a CSS selector for a surface that portals out of it. */
   section: string;
   name: string | RegExp;
+  /** Narrows to one `data-frame` by its caption, where two frames share a name. */
+  frame?: string;
   copy?: boolean;
 }[] = [
   { slug: "surface-close", section: "surface-close", name: "Close settings" },
   { slug: "artifacts-close", section: "surface-close", name: "Close artifacts" },
   { slug: "assistant-hide", section: "headers", name: "Hide Daintree Assistant" },
+  { slug: "assistant-more", section: "headers", name: "More actions" },
   { slug: "assistant-tip-dismiss", section: "headers", name: /^Dismiss/ },
   { slug: "workspace-browse", section: "headers", name: "Browse files" },
   { slug: "hint-dismiss", section: "dismiss", name: "Dismiss editing tip" },
@@ -64,7 +67,12 @@ const PROBES: {
     section: "[data-getting-started-checklist]",
     name: "Dismiss checklist",
   },
-  { slug: "gridbar-dismiss", section: "dismiss", name: /^Dismiss/ },
+  {
+    slug: "gridbar-dismiss",
+    section: "dismiss",
+    frame: "Grid notification bar",
+    name: /^Dismiss/,
+  },
   { slug: "command-copy", section: "copy", name: /^Copy command/, copy: true },
   { slug: "log-copy", section: "copy", name: /^Copy log entry/, copy: true },
   { slug: "diff-copy", section: "copy", name: /^Copy file diff/, copy: true },
@@ -107,15 +115,16 @@ async function load(page: Page, url: string, ready: string): Promise<void> {
 
 async function openSpecimen(page: Page, theme: string): Promise<void> {
   await page.setViewportSize({ width: 1220, height: 1500 });
-  await load(page, `${baseURL}/close-dismiss-copy-preview.html?theme=${theme}`, '[data-shot="copy"]');
+  await load(
+    page,
+    `${baseURL}/close-dismiss-copy-preview.html?theme=${theme}`,
+    '[data-shot="copy"]'
+  );
   const errors = await page.locator("[data-shot-error]").allTextContents();
   expect(errors, `sections hit their error boundary:\n${errors.join("\n")}`).toEqual([]);
 }
 
-test("Close, dismiss and copy buttons — families, states and themes", async ({
-  page,
-  context,
-}) => {
+test("Close, dismiss and copy buttons — families, states and themes", async ({ page, context }) => {
   test.info().annotations.push({
     type: "conditional-skip",
     description: "DAINTREE_SHOT_CDC is required for the close/dismiss/copy capture",
@@ -132,9 +141,7 @@ test("Close, dismiss and copy buttons — families, states and themes", async ({
   for (const [i, theme] of THEMES.entries()) {
     await openSpecimen(page, theme);
     for (const section of SECTIONS) {
-      written.push(
-        await snap(page.locator(`[data-shot="${section}"]`), `${section}-${theme}.png`)
-      );
+      written.push(await snap(page.locator(`[data-shot="${section}"]`), `${section}-${theme}.png`));
     }
     written.push(await snap(page.locator(CHECKLIST), `checklist-${theme}.png`));
     if (i !== 0) continue;
@@ -143,7 +150,10 @@ test("Close, dismiss and copy buttons — families, states and themes", async ({
       const section = page.locator(
         probe.section.startsWith("[") ? probe.section : `[data-shot="${probe.section}"]`
       );
-      const button = section.getByRole("button", { name: probe.name }).first();
+      const scope = probe.frame
+        ? section.locator("[data-frame]").filter({ hasText: probe.frame })
+        : section;
+      const button = scope.getByRole("button", { name: probe.name }).first();
       await expect(button, `${probe.slug}: no button named ${probe.name}`).toBeAttached();
       const frame = button.locator("xpath=ancestor::*[@data-frame][1]");
       const target = (await frame.count()) > 0 ? frame : section;
@@ -153,7 +163,9 @@ test("Close, dismiss and copy buttons — families, states and themes", async ({
       written.push(await snap(target, `hover-${probe.slug}-${theme}.png`));
       await page.mouse.move(0, 0);
 
-      await button.evaluate((el) => (el as HTMLElement).focus({ focusVisible: true } as FocusOptions));
+      await button.evaluate((el) =>
+        (el as HTMLElement).focus({ focusVisible: true } as FocusOptions)
+      );
       await page.waitForTimeout(250);
       written.push(await snap(target, `focus-${probe.slug}-${theme}.png`));
       await button.evaluate((el) => (el as HTMLElement).blur());
@@ -180,7 +192,10 @@ test("Close, dismiss and copy buttons — families, states and themes", async ({
     await bannerDismiss.hover();
     await page.waitForTimeout(250);
     written.push(
-      await snap(page.locator('[data-testid="agent-setup-banner"]'), `hover-welcome-banner-${theme}.png`)
+      await snap(
+        page.locator('[data-testid="agent-setup-banner"]'),
+        `hover-welcome-banner-${theme}.png`
+      )
     );
 
     // The artifact overlay's header close and its status dismiss.

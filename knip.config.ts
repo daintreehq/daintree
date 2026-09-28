@@ -120,6 +120,7 @@ const baseConfig: KnipConfig = {
     "src/components/Terminal/__preview__/typingLocator.tsx",
     "src/components/Terminal/__preview__/updateCwdPreview.tsx",
     "src/components/ui/__preview__/avatarPreview.tsx",
+    "src/components/ui/__preview__/closeDismissCopyPreview.tsx",
     "src/components/ui/__preview__/shortcutHintPreview.tsx",
     "src/components/ui/__preview__/skeletons.tsx",
     "src/components/Worktree/__preview__/preview.tsx",

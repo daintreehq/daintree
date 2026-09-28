@@ -54,8 +54,10 @@ document.body.style.margin = "0";
 
 const noop = () => {};
 
+// eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok (harness fixture)
 useNotificationStore.getState().addNotification({
   type: "info",
+  priority: "high",
   placement: "grid-bar",
   title: "Agent finished",
   message: "claude in feature/login-flow is waiting for review",
@@ -77,10 +79,10 @@ index 3b18e51..a9f2c7d 100644
 class ShotBoundary extends Component<{ name: string; children: ReactNode }, { error?: string }> {
   state: { error?: string } = {};
   static getDerivedStateFromError(error: unknown) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { error: String(error) };
   }
   componentDidCatch(error: unknown, info: ErrorInfo) {
-    console.error(`[${this.props.name}]`, error, info.componentStack);
+    console.warn(`[${this.props.name}]`, error, info.componentStack);
   }
   render() {
     if (this.state.error) {
@@ -95,7 +97,9 @@ class ShotBoundary extends Component<{ name: string; children: ReactNode }, { er
 }
 
 function Label({ children }: { children: ReactNode }) {
-  return <div className="text-3xs uppercase tracking-wider text-text-secondary mb-1">{children}</div>;
+  return (
+    <div className="text-3xs uppercase tracking-wider text-text-secondary mb-1">{children}</div>
+  );
 }
 
 function Frame({ label, width, children }: { label: string; width?: number; children: ReactNode }) {
