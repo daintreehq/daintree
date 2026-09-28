@@ -60,6 +60,7 @@ export function ForgeProviderSelectorDropdown({
       filterLabel="Filter providers"
       placeholder="Filter providers…"
       noMatches={(q) => <>No providers match &ldquo;{q}&rdquo;</>}
+      switchLabel="Switch provider"
       current={
         <>
           <SelectedIcon size={18} className="shrink-0 text-text-secondary" />

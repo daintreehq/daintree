@@ -1,5 +1,4 @@
 import { FolderCog, Package } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { SettingsSubjectPicker } from "./SettingsSubjectPicker";
 
 /** The pseudo-entry that selects the project-wide pane rather than one plugin. */
@@ -80,17 +79,11 @@ export function ProjectPluginSelectorDropdown({
       filterLabel="Filter plugins"
       placeholder="Filter plugins…"
       noMatches={(q) => <>No plugins match &ldquo;{q}&rdquo;</>}
+      switchLabel="Switch plugin"
       current={
         selected ? (
           <>
-            <Package
-              size={18}
-              className={cn(
-                "shrink-0",
-                selected.active ? "text-text-secondary" : "text-text-placeholder"
-              )}
-              aria-hidden="true"
-            />
+            <Package size={18} className="shrink-0 text-text-secondary" aria-hidden="true" />
             <span className="min-w-0 truncate text-base font-semibold">{selected.name}</span>
             <span className="shrink-0 text-xs text-text-secondary">{selected.status}</span>
           </>
@@ -114,14 +107,7 @@ export function ProjectPluginSelectorDropdown({
           </>
         ) : (
           <>
-            <Package
-              size={16}
-              className={cn(
-                "shrink-0",
-                item.active ? "text-text-secondary" : "text-text-placeholder"
-              )}
-              aria-hidden="true"
-            />
+            <Package size={16} className="shrink-0 text-text-secondary" aria-hidden="true" />
             <span className="flex-1 min-w-0 truncate">{item.name}</span>
             <span className="text-xs text-text-secondary shrink-0">{item.status}</span>
           </>

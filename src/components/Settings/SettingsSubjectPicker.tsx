@@ -22,6 +22,11 @@ interface SettingsSubjectPickerProps<T extends { id: string }> {
   onChange: (id: string) => void;
   /** The trigger's content: identity mark, name and status for the page being shown. */
   current: ReactNode;
+  /**
+   * The verb on the trigger's right segment ("Switch agent"). The name alone read
+   * as a page heading, so nothing at rest said the page's subject could change.
+   */
+  switchLabel: string;
   /** A row's content: identity mark, name and status. The current-page check is added here. */
   renderRow: (item: T) => ReactNode;
   listLabel: string;
@@ -60,6 +65,7 @@ export function SettingsSubjectPicker<T extends { id: string }>({
   activeId,
   onChange,
   current,
+  switchLabel,
   renderRow,
   listLabel,
   filterLabel,
@@ -160,17 +166,31 @@ export function SettingsSubjectPicker<T extends { id: string }>({
             pointerOpenRef.current = false;
           }}
           className={cn(
-            // Pulled 8px into the gutter so the identity mark sits on the page's own
-            // left edge, with the hover surface around it rather than inside it.
-            "-mx-2 inline-flex h-9 max-w-[calc(100%+1rem)] min-w-0 items-center gap-2 px-2",
-            "rounded-[var(--radius-md)] text-text-primary",
+            // A resting surface and edge, content-width: it has to read as a control
+            // before it is hovered (a bare name looked like the page's heading), but
+            // not as a full-width field holding one more setting.
+            "group/switcher inline-flex h-10 max-w-full min-w-0 items-stretch",
+            "rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle text-text-primary",
             "transition-colors duration-150 ease-out",
-            "hover:bg-overlay-soft data-[state=open]:bg-overlay-soft",
-            "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            "hover:border-border-strong hover:bg-overlay-soft",
+            "data-[state=open]:border-border-strong data-[state=open]:bg-overlay-soft",
+            "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           )}
         >
-          {current}
-          <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+          <span className="flex min-w-0 items-center gap-2 pl-3 pr-3">{current}</span>
+          {/* The verb, in its own segment, so "this changes what the page is about"
+              is said in words rather than left to a chevron. */}
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 border-l border-border-default px-3",
+              "text-xs font-medium text-text-secondary",
+              "transition-colors duration-150 ease-out",
+              "group-hover/switcher:text-text-primary group-data-[state=open]/switcher:text-text-primary"
+            )}
+          >
+            {switchLabel}
+            <ChevronsUpDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent

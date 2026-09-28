@@ -29,6 +29,7 @@ function renderPicker(activeId: string, onChange = vi.fn()) {
       activeId={activeId}
       onChange={onChange}
       current={<span>{activeId}</span>}
+      switchLabel="Switch thing"
       renderRow={(item) => <span>{item.name}</span>}
       listLabel="Things"
       filterLabel="Filter things"

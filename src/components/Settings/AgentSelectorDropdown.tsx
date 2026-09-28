@@ -49,6 +49,7 @@ export function AgentSelectorDropdown({
       filterLabel="Filter agents"
       placeholder="Filter agents…"
       noMatches={(q) => <>No agents match &ldquo;{q}&rdquo;</>}
+      switchLabel="Switch agent"
       current={
         selectedAgent ? (
           <>
