@@ -188,6 +188,16 @@ export const theme: BuiltInThemeSource = {
     "pulse-ring-offset": "#21221f",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #2c2c29 25%, #31322f 50%, #2c2c29 75%)",
     "dock-bg": "#131510",
+    // Menus, palettes, popovers and tooltips. The shared dark overlay is the
+    // sidebar plane, which here sits below every panel it floats over, so menus
+    // read as holes. This lifts them between panel (#21221f) and the elevated
+    // input plane (#2c2c29): above what they cover, below the search field
+    // inside them. Text on it: 11.3 / 6.2 / 5.0:1 for primary / secondary / muted.
+    "floating-surface-bg": "#262724",
+    // The one shaft of the hero's light: its sunlit bark (#9C9168) on the brand
+    // mark of the welcome screen and the empty workbench. 6.1:1 on the grid,
+    // below secondary prose and far below the waiting amber.
+    "welcome-mark-color": "#9C9168",
     "settings-dialog-bg": "#21221f",
     "settings-card-bg": "#252622",
     "settings-list-item-bg": "#252622",
@@ -209,9 +219,10 @@ export const theme: BuiltInThemeSource = {
     "toolbar-control-armed-shadow": "inset 0 0 0 1px rgba(255,255,255,0.12)",
     "toolbar-control-hover-bg": "rgba(255,255,255,0.10)",
     "toolbar-divider": "rgba(45,46,42,0.5)",
-    // Neutral white top-light, deliberately very subtle — don't re-tint it green.
+    // A warm top-light off the hero's sunlit mist, deliberately very subtle —
+    // don't re-tint it green.
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0) 70%), rgba(255,255,255,0.03)",
+      "linear-gradient(180deg, rgba(208,190,161,0.07), rgba(208,190,161,0) 70%), rgba(255,255,255,0.03)",
     "toolbar-project-border": "rgba(45,46,42,0.5)",
     "toolbar-project-chip-bg": "rgba(255,255,255,0.05)",
     "toolbar-project-chip-border": "rgba(45,46,42,0.6)",
