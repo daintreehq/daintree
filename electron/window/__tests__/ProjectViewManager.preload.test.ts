@@ -156,6 +156,7 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
+  logError: vi.fn(),
   createLogger: vi.fn(() => ({
     debug: vi.fn(),
     info: vi.fn(),

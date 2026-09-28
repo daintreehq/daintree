@@ -28,6 +28,7 @@ import {
 } from "../lifecycle/windowRecreationState.js";
 import { evictDeadView, getAvailableMemoryMb } from "./ProjectViewEvictionController.js";
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
+import { logError, logWarn } from "../utils/logger.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
@@ -151,11 +152,19 @@ export function setupViewHandlers(
     if (details.reason === "clean-exit") return;
 
     const projectId = host.webContentsToProject.get(wc.id);
-    console.error(
-      `[ProjectViewManager] View renderer gone (project: ${projectId}):`,
-      details.reason,
-      details.exitCode
-    );
+    const goneContext = {
+      process: "project-view",
+      reason: details.reason,
+      exitCode: details.exitCode,
+      webContentsId: wc.id,
+      windowId: win.isDestroyed() ? undefined : win.id,
+      projectId,
+    };
+    if (details.reason === "memory-eviction") {
+      logWarn("View renderer gone", goneContext);
+    } else {
+      logError("View renderer gone", undefined, goneContext);
+    }
     // Main survives a view renderer's death, so it is recorded as a non-fatal
     // event, never as the session's crash. Memory eviction is routine and not
     // recorded at all.
@@ -170,6 +179,14 @@ export function setupViewHandlers(
     }
 
     if (win.isDestroyed()) return;
+
+    // Before any early return or recovery branch (#12954): the assistant
+    // pinned to this renderer is capture-revoked on every death, not only
+    // through the active-view crash hook or the deferred cached eviction —
+    // the eviction reloads instead when the project is reactivated first, an
+    // outgoing view behind a paint gate is neither active nor cached, and the
+    // crash-loop branch never reaches the eviction at all.
+    host.notifyViewRendererGone(wc);
 
     const crashEntry = projectId ? host.views.get(projectId) : null;
 

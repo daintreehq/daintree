@@ -158,8 +158,19 @@ export interface ProjectViewManagerOptions {
   onViewCached?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
   onViewReady?: (webContents: Electron.WebContents) => void;
-  /** Called synchronously when a view's renderer process is gone (non-clean), before reload */
+  /**
+   * Called synchronously when the active view's renderer process is gone
+   * (non-clean), before reload — the port-owning view only
+   */
   onViewCrashed?: (webContents: Electron.WebContents) => void;
+  /**
+   * Called synchronously on every non-clean renderer death of any managed
+   * view — active, cached, or outgoing mid-switch — ahead of every recovery
+   * branch. Unlike `onViewCrashed` it is not scoped to the port-owning active
+   * view, so work that belongs to the renderer itself (the assistant pinned to
+   * it) cannot be skipped by whichever recovery the crash ends up taking.
+   */
+  onViewRendererGone?: (webContents: Electron.WebContents) => void;
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
   /**
@@ -353,6 +364,7 @@ export class ProjectViewManager {
   onViewCached?: (webContentsId: number) => void;
   onViewReady?: (webContents: Electron.WebContents) => void;
   onViewCrashed?: (webContents: Electron.WebContents) => void;
+  onViewRendererGone?: (webContents: Electron.WebContents) => void;
   assistantBackendsForProject?: (projectId: string) => Array<{
     terminalId: string;
     webContentsId: number;
@@ -441,6 +453,7 @@ export class ProjectViewManager {
     this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
     this.onViewCrashed = opts.onViewCrashed;
+    this.onViewRendererGone = opts.onViewRendererGone;
     this.assistantBackendsForProject = opts.assistantBackendsForProject;
     this.isTerminalLive = opts.isTerminalLive;
     this.mcpViewActivity = opts.mcpViewActivity;
@@ -768,6 +781,59 @@ export class ProjectViewManager {
 
   getProjectIdForWebContents(webContentsId: number): string | null {
     return this.webContentsToProject.get(webContentsId) ?? null;
+  }
+
+  /**
+   * Renderer-death hook shared by both render-process-gone handlers — the
+   * startup view's in appViewRendererGone and every other view's in
+   * ProjectViewHandlers (#12954). Fired before either picks a recovery branch
+   * (crash-loop recovery page, OOM recreate, cached eviction, reload), for any
+   * webContents this manager knows whatever its state, so renderer-owned
+   * cleanup cannot hinge on which branch runs: the deferred eviction reloads
+   * instead when the project is reactivated first, an outgoing view behind a
+   * paint gate is neither active nor cached, and the crash-loop branch never
+   * reaches the eviction at all.
+   */
+  notifyViewRendererGone(wc: Electron.WebContents): void {
+    if (!this.webContentsToProject.has(wc.id)) return;
+    this.onViewRendererGone?.(wc);
+  }
+
+  /**
+   * Crash hook for the startup view (#12954). `registerInitialView` claims the
+   * window's own app view without `setupViewHandlers` — that webContents
+   * already carries createWindow's listeners, and a second set would double
+   * every reload, Ctrl+Tab and port hand-off — so createWindow's
+   * render-process-gone calls this instead. Mirrors ProjectViewHandlers: only
+   * the active view owns the per-window port, so a cached startup view goes
+   * through `evictCrashedCachedView` instead. Returns whether the hook ran.
+   */
+  notifyActiveViewCrashed(wc: Electron.WebContents): boolean {
+    const projectId = this.webContentsToProject.get(wc.id);
+    if (!projectId || projectId !== this.activeProjectId) return false;
+    this.onViewCrashed?.(wc);
+    return true;
+  }
+
+  /**
+   * Cached-view half of the startup view's crash hook (#12954). A crashed
+   * cached project view is evicted rather than reloaded in the background —
+   * ProjectViewHandlers does this for every view it created, so the dead
+   * renderer is not respawned in the background. (The assistant pinned to it
+   * was already captured by `notifyViewRendererGone`.) Returns whether the eviction was taken on, in which
+   * case the caller must skip its own reload and toast. The switch-back
+   * cold-starts a fresh view, as for any evicted project.
+   */
+  evictCrashedCachedView(wc: Electron.WebContents, trigger: "memory-eviction" | "crash"): boolean {
+    const projectId = this.webContentsToProject.get(wc.id);
+    if (!projectId || projectId === this.activeProjectId) return false;
+    const entry = this.views.get(projectId);
+    if (entry?.state !== "cached" || entry.view.webContents.id !== wc.id) return false;
+    console.warn(
+      `[ProjectViewManager] Cached startup view gone (${trigger}); evicting instead of background reload (project: ${projectId})`
+    );
+    EvictionController.evictDeadView(this, projectId, wc, trigger);
+    return true;
   }
 
   /**

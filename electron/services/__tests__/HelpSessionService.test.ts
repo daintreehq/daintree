@@ -2740,6 +2740,115 @@ describe("HelpSessionService", () => {
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
+    it("keeps the crash-time panelWasOpen when the reloaded renderer reports closed mid-capture (#12954)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 96,
+        projectId: "proj-crash",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-crash")).toBe(true);
+      service.reportPanelOpen("proj-crash", true);
+
+      const revoke = service.revokeByWebContentsId(96);
+      // A crash-reload keeps the WebContents: the fresh renderer mounts with
+      // the panel closed and reports it while gracefulKill is still pending.
+      service.reportPanelOpen("proj-crash", false);
+      resolveKill("agent-resume-id-crash");
+      await revoke;
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-crash", 0)
+      );
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-crash",
+          panelWasOpen: true,
+        })
+      );
+    });
+
+    it("joins a second renderer-gone capture of the same view instead of graceful-killing twice (#12954)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 94,
+        projectId: "proj-twice",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-twice")).toBe(true);
+      service.reportPanelOpen("proj-twice", true);
+
+      // The renderer-gone hook captures at the crash; the eviction that follows
+      // on the next tick reaches the same session while gracefulKill is pending.
+      const first = service.revokeByWebContentsId(94);
+      service.reportPanelOpen("proj-twice", false);
+      const second = service.revokeByWebContentsId(94);
+      resolveKill("agent-resume-id-twice");
+      await Promise.all([first, second]);
+      await Promise.resolve();
+
+      expect(mockPtyGracefulKill).toHaveBeenCalledTimes(1);
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-twice", 0)
+      );
+      expect(setCalls).toHaveLength(2);
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-twice",
+          panelWasOpen: true,
+        })
+      );
+
+      // Settled: a third call finds nothing left to revoke.
+      await service.revokeByWebContentsId(94);
+      expect(mockPtyGracefulKill).toHaveBeenCalledTimes(1);
+    });
+
+    it("honours a deliberate close from a live renderer during a project-scoped capture (#10815)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 95,
+        projectId: "proj-sleep",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-sleep")).toBe(true);
+      service.reportPanelOpen("proj-sleep", true);
+
+      // Project sleep keeps the project view alive, so the user can still
+      // close the panel while the agent is flushing.
+      const revoke = service.revokeByProjectId("proj-sleep");
+      service.reportPanelOpen("proj-sleep", false);
+      resolveKill("agent-resume-id-sleep");
+      await revoke;
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-sleep", 0)
+      );
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-sleep",
+          panelWasOpen: false,
+        })
+      );
+    });
+
     it("reportPanelOpen(false) clears a prior open report so a later eviction does not auto-resume (#10815)", async () => {
       mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-789");
 

@@ -649,6 +649,13 @@ export class HelpSessionService {
   // mid-kill displacement can't let a stale resume ID shadow the new session.
   // In-memory only — no in-flight capture is meaningful across an app restart.
   private readonly pendingCapturesBySlotKey = new Map<string, string>();
+  // Capture-revokes still inside their gracefulKill await, by session id. One
+  // renderer death can reach `revokeSession` more than once — the renderer-gone
+  // hook, then the eviction or window-close that follows it (#12954) — and the
+  // record stays in `sessionsById` until the await settles, so a second call
+  // would pass the `revoked` guard and graceful-kill the same PTY again. Later
+  // capture calls join the first instead.
+  private readonly captureRevokesInFlight = new Map<string, Promise<void>>();
   // #11477: the entry most recently handed out by `takePendingHibernation`, per
   // project, so a taker whose launch aborts can put it back verbatim via
   // `restorePendingHibernation` — original `capturedAt` intact, `panelWasOpen`
@@ -1639,7 +1646,24 @@ export class HelpSessionService {
    * revokes (renderer IPC) leave the option off so "+ New session" /
    * explicit close discards the transcript as the user intended.
    */
-  async revokeSession(sessionId: string, opts?: { captureHibernation?: boolean }): Promise<void> {
+  revokeSession(
+    sessionId: string,
+    opts?: { captureHibernation?: boolean; rendererGone?: boolean }
+  ): Promise<void> {
+    if (!opts?.captureHibernation) return this.revokeSessionNow(sessionId, opts);
+    const inFlight = this.captureRevokesInFlight.get(sessionId);
+    if (inFlight) return inFlight;
+    const run = this.revokeSessionNow(sessionId, opts).finally(() => {
+      this.captureRevokesInFlight.delete(sessionId);
+    });
+    this.captureRevokesInFlight.set(sessionId, run);
+    return run;
+  }
+
+  private async revokeSessionNow(
+    sessionId: string,
+    opts?: { captureHibernation?: boolean; rendererGone?: boolean }
+  ): Promise<void> {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked) return;
 
@@ -1664,6 +1688,13 @@ export class HelpSessionService {
     // and the real resume id would be dropped for the empty-sentinel placeholder,
     // silently demoting the resume to latest-conversation.
     let ownsCapture = false;
+    // When the renderer that owned the panel is gone (crash, eviction), the
+    // open state is frozen at capture time: a crash-reloaded renderer mounts
+    // with the panel closed and reports that during the gracefulKill await
+    // (#12954), which would cost the user the reopen they were owed. A live
+    // renderer (project sleep/close) can close the panel deliberately while
+    // we wait, so that path keeps reading it afterwards (#10815).
+    let panelOpenAtCapture = false;
     if (opts?.captureHibernation && terminalId && this.ptyClient) {
       // #9639: write a placeholder resume entry SYNCHRONOUSLY (memory-first
       // via `set`) before the gracefulKill round-trip. The eviction path that
@@ -1677,14 +1708,14 @@ export class HelpSessionService {
       if (this.pendingHibernationStore) {
         this.pendingCapturesBySlotKey.set(slotKey, sessionId);
         ownsCapture = true;
-        const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
+        panelOpenAtCapture = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(slotKey, {
             agentId: record.agentId,
             agentSessionId: "",
             cwd: record.sessionPath,
             capturedAt: Date.now(),
-            panelWasOpen,
+            panelWasOpen: panelOpenAtCapture,
           })
           .catch((err) => {
             console.warn(
@@ -1766,7 +1797,9 @@ export class HelpSessionService {
       this.pendingCapturesBySlotKey.get(slotKey) === sessionId
     ) {
       if (capturedAgentSessionId) {
-        const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
+        const panelWasOpen = opts?.rendererGone
+          ? panelOpenAtCapture
+          : this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(slotKey, {
             agentId: record.agentId,
@@ -2060,9 +2093,12 @@ export class HelpSessionService {
     );
     // LRU eviction destroys the renderer for a project the user almost
     // certainly intends to return to — capture the agent's resume ID
-    // before killing so the next open resumes the conversation.
+    // before killing so the next open resumes the conversation. A crash
+    // lands here too (#12954), keeping the same id across its reload.
     await Promise.all(
-      targets.map((record) => this.revokeSession(record.sessionId, { captureHibernation: true }))
+      targets.map((record) =>
+        this.revokeSession(record.sessionId, { captureHibernation: true, rendererGone: true })
+      )
     );
   }
 
