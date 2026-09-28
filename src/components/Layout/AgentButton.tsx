@@ -1,11 +1,13 @@
 import {
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -411,6 +413,46 @@ export function AgentButton({
     void useAgentSettingsStore.getState().updateWorktreePreset(type, activeWorktreeId, presetId);
   };
 
+  // The agent-default row clears BOTH scopes: the worktree override and the
+  // stale agent-level pick that resolveEffectivePresetId would otherwise fall
+  // back to (issue #6358).
+  const clearDefaultPick = () => {
+    void useAgentSettingsStore.getState().updateAgent(type, { presetId: undefined });
+    persistWorktreePick(undefined);
+  };
+
+  // D on a highlighted row is the keyboard twin of a gutter click, mirroring the
+  // plugin tray's P-to-pin: Enter and Space stay on launch, the menu stays open.
+  // Modified presses pass through so app shortcuts still reach their handlers.
+  const setDefaultOnKey = (e: ReactKeyboardEvent, setDefault: () => void) => {
+    if (e.key !== "d" && e.key !== "D") return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDefault();
+  };
+
+  // Screen readers get the row's default state or the D instruction as part of
+  // its name. Sighted keyboard users get the same instruction in the trailing
+  // column, shown only on :focus-visible — pointer hover never matches, so it
+  // cannot suggest that clicking the label (which launches) sets the default.
+  // The column is always laid out so moving focus never resizes the menu.
+  const renderDefaultHint = (isDefault: boolean) => (
+    <>
+      <span className="sr-only">{isDefault ? "Current default" : "Press D to set as default"}</span>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "ml-auto flex shrink-0 items-center gap-1.5 self-center pl-4 text-text-secondary opacity-0",
+          !isDefault && "group-focus-visible/preset-row:opacity-100"
+        )}
+      >
+        Set as default
+        <KbdChord shortcut="D" density="compact" />
+      </span>
+    </>
+  );
+
   // Launch from a dropdown row's label zone. Unlike the primary button, the
   // row names an explicit preset, so we forward it directly rather than
   // deferring to the launcher's resolveEffectivePresetId path. Set
@@ -429,8 +471,8 @@ export function AgentButton({
   // preset and closes the menu. onSelect is preventDefault'd so Radix never
   // auto-dismisses — the label zone owns closing — and the zones live inside a
   // single menuitem (no nested interactive element) so the row stays
-  // ARIA-valid. Keyboard activation lands on the row itself, which launches.
-  // See issue #10720.
+  // ARIA-valid. Keyboard activation lands on the row itself, which launches;
+  // D sets the default instead (setDefaultOnKey). See issue #10720.
   const renderPresetRow = (preset: {
     id: string;
     name: string;
@@ -444,6 +486,7 @@ export function AgentButton({
         key={preset.id}
         className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
         onSelect={(e) => e.preventDefault()}
+        onKeyDown={(e) => setDefaultOnKey(e, () => persistWorktreePick(preset.id))}
         onClick={(e) => {
           // Element (not HTMLElement) so a click landing on the gutter's SVG
           // icon — an SVGElement — still resolves; closest() lives on Element.
@@ -456,14 +499,14 @@ export function AgentButton({
       >
         <span
           data-zone="gutter"
-          title={isDefault ? "Current default" : "Set as default"}
+          title={isDefault ? "Current default" : "Set as default (D)"}
           className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-raised"
         >
           {isDefault ? (
             <Check className="h-3.5 w-3.5" aria-hidden="true" />
           ) : (
             <Circle
-              className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40"
+              className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40 group-data-[highlighted]/preset-row:opacity-40"
               aria-hidden="true"
             />
           )}
@@ -476,6 +519,7 @@ export function AgentButton({
           </span>
           {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
         </span>
+        {renderDefaultHint(isDefault)}
       </DropdownMenuItem>
     );
   };
@@ -684,7 +728,7 @@ export function AgentButton({
                     data-toolbar-item={dataToolbarItem}
                     onPointerEnter={clearFocusRestoreSuppression}
                     className={cn(
-                      "toolbar-agent-button toolbar-agent-split-toggle text-text-secondary aria-expanded:text-text-primary rounded-l-none",
+                      "group/split-toggle toolbar-agent-button toolbar-agent-split-toggle text-text-secondary aria-expanded:text-text-primary rounded-l-none",
                       // 24px keeps the target at the WCAG 2.5.8 minimum; the
                       // glyph sits at its leading edge so it reads as part of
                       // the mark beside it rather than centred between agents.
@@ -693,7 +737,13 @@ export function AgentButton({
                     )}
                     aria-label={chevronTooltip}
                   >
-                    <ChevronDown className="h-3 w-3" />
+                    {/* Keyed off aria-expanded, not data-state: the tooltip
+                        trigger stamps its own data-state over the menu's. */}
+                    <ChevronDown
+                      data-animated-chevron
+                      className="h-3 w-3 transition-transform duration-150 ease-out group-aria-expanded/split-toggle:rotate-180"
+                      aria-hidden="true"
+                    />
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
@@ -717,18 +767,12 @@ export function AgentButton({
               <DropdownMenuItem
                 className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
                 onSelect={(e) => e.preventDefault()}
+                onKeyDown={(e) => setDefaultOnKey(e, clearDefaultPick)}
                 onClick={(e) => {
                   // Element (not HTMLElement) so a gutter SVG-icon click still
                   // resolves; closest() lives on Element.
                   if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
-                    // The agent-default gutter clears BOTH scopes: the
-                    // worktree override and the stale agent-level pick that
-                    // resolveEffectivePresetId would otherwise fall back to
-                    // (issue #6358).
-                    void useAgentSettingsStore.getState().updateAgent(type, {
-                      presetId: undefined,
-                    });
-                    persistWorktreePick(undefined);
+                    clearDefaultPick();
                     return;
                   }
                   launchWithPreset(null);
@@ -736,14 +780,14 @@ export function AgentButton({
               >
                 <span
                   data-zone="gutter"
-                  title={!savedPresetId ? "Current default" : "Set as default"}
+                  title={!savedPresetId ? "Current default" : "Set as default (D)"}
                   className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-raised"
                 >
                   {!savedPresetId ? (
                     <Check className="h-3.5 w-3.5" aria-hidden="true" />
                   ) : (
                     <Circle
-                      className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40"
+                      className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40 group-data-[highlighted]/preset-row:opacity-40"
                       aria-hidden="true"
                     />
                   )}
@@ -756,6 +800,7 @@ export function AgentButton({
                   </span>
                   Agent default
                 </span>
+                {renderDefaultHint(!savedPresetId)}
               </DropdownMenuItem>
               {ccrPresetGroup.length > 0 && (
                 <>
@@ -835,10 +880,7 @@ export function AgentButton({
                     <ContextMenuRadioItem
                       value=""
                       onSelect={() => {
-                        void useAgentSettingsStore.getState().updateAgent(type, {
-                          presetId: undefined,
-                        });
-                        persistWorktreePick(undefined);
+                        clearDefaultPick();
                         void actionService.dispatch(
                           "agent.launch",
                           { agentId: type, presetId: null },
