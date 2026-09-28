@@ -11,6 +11,7 @@ import {
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { logError } from "@/utils/logger";
 import {
   usePortalStore,
@@ -1854,7 +1855,7 @@ export function SearchResults({
   useEffect(() => {
     // A result under the pointer was just claimed by it; revealing it would
     // scroll a half-visible row out from under the pointer.
-    if (activeRef.current?.matches(":hover")) return;
+    if (isPointerClaimed(activeRef.current)) return;
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
 

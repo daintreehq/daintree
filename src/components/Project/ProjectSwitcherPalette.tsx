@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useEffect, useRef, useState, useCallback } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { JSX } from "react";
 import {
   Check,
@@ -2315,7 +2316,7 @@ function ProjectPaletteInner({
       );
       // A row under the pointer was just claimed by it; revealing it would
       // scroll a half-visible row out from under the pointer.
-      if (selectedItem && !selectedItem.matches(":hover")) {
+      if (selectedItem && !isPointerClaimed(selectedItem)) {
         selectedItem.scrollIntoView({ block: "nearest" });
       }
     }

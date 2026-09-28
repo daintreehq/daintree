@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useRef } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { CompletionKind } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -190,7 +191,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       const selected = listRef.current?.querySelector('[aria-selected="true"]');
       // A row under the pointer was just claimed by it; revealing it would
       // scroll a half-visible row out from under the pointer.
-      if (selected?.matches(":hover")) return;
+      if (isPointerClaimed(selected)) return;
       selected?.scrollIntoView?.({ block: "nearest" });
     }, [isOpen, shouldRender, selectedIndex, items]);
 

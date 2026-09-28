@@ -131,7 +131,7 @@ describe("SearchablePalette hover wiring", () => {
     Element.prototype.matches = function (this: Element, selector: string) {
       if (selector === ":hover") return this === hovered;
       return realMatches.call(this, selector);
-    };
+    } as typeof realMatches;
 
     // The row under the pointer takes the cursor, and stays where it is.
     hovered = getByTestId("row-c");
@@ -139,7 +139,9 @@ describe("SearchablePalette hover wiring", () => {
     expect(getByTestId("row-c").getAttribute("aria-selected")).toBe("true");
     expect(scrollIntoView).not.toHaveBeenCalled();
 
-    // The keys still bring the row they land on into view.
+    // The keys still bring the row they land on into view — even when it is
+    // the row beneath the resting pointer.
+    hovered = getByTestId("row-b");
     fireEvent.keyDown(getByRole("combobox"), { key: "ArrowUp" });
     expect(getByTestId("row-b").getAttribute("aria-selected")).toBe("true");
     expect(scrollIntoView).toHaveBeenCalled();

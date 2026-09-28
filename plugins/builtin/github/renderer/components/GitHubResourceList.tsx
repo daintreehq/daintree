@@ -7,6 +7,7 @@ import {
   useRef,
   type KeyboardEvent,
 } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ExternalLink, RefreshCw, WifiOff, Plus, Settings, ArrowUpDown, Clock } from "lucide-react";
 import { ListChecks } from "@/components/icons";
@@ -796,7 +797,10 @@ export function GitHubResourceList({
     if (activeIndex < 0) return;
     // A row under the pointer was just claimed by it; revealing it would scroll
     // a half-visible row out from under the pointer.
-    if (document.getElementById(activeItemId ?? "")?.matches(":hover")) return;
+    // Found by grid position, not resource id, so a refresh that swaps the
+    // resource in this slot doesn't re-run the reveal on its own.
+    const row = document.querySelector(`#github-${type}-list [aria-rowindex="${activeIndex + 1}"]`);
+    if (isPointerClaimed(row)) return;
     if (isLoadMoreActive) {
       document.getElementById(`github-${type}-load-more`)?.scrollIntoView({ block: "nearest" });
       return;
@@ -804,7 +808,7 @@ export function GitHubResourceList({
     if (activeIndex < data.length) {
       virtuosoRef.current?.scrollIntoView({ index: activeIndex, behavior: "auto" });
     }
-  }, [activeIndex, activeItemId, data.length, isLoadMoreActive, type]);
+  }, [activeIndex, data.length, isLoadMoreActive, type]);
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {

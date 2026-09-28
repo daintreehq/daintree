@@ -7,6 +7,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import {
   RefreshCw,
   AlertCircle,
@@ -649,7 +650,7 @@ export function LocalCommitsDropdown({
       const row = document.getElementById(activeDescendantId);
       // A row under the pointer was just claimed by it; revealing it would
       // scroll a half-visible row out from under the pointer.
-      if (row?.matches(":hover")) return;
+      if (isPointerClaimed(row)) return;
       row?.scrollIntoView({ block: "nearest" });
     }
   }, [activeDescendantId]);

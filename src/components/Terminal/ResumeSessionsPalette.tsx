@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
@@ -179,7 +180,7 @@ export function ResumeSessionsPalette() {
       const node = itemsRef.current.get(results[selectedIndex]!.id);
       // A row under the pointer was just claimed by it; revealing it would
       // scroll a half-visible row out from under the pointer.
-      if (node?.matches(":hover")) return;
+      if (isPointerClaimed(node)) return;
       node?.scrollIntoView({ block: "nearest" });
     }
   }, [selectedIndex, results, visibleResults]);

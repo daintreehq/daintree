@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useCallback } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import {
   AppPaletteDialog,
@@ -280,11 +281,10 @@ export function SearchablePalette<T>({
     const selectedItem = banded
       ? list.querySelector(`[id="${CSS.escape(selectedOptionId)}"]`)
       : list.children[selectedIndex];
-    // A row under the pointer is already where the user is looking — the
-    // pointer just claimed it — so revealing it would scroll a half-visible row
-    // out from under the pointer. The keys, opening and a re-ranked list land
-    // elsewhere and still reveal.
-    if (selectedItem instanceof HTMLElement && !selectedItem.matches(":hover")) {
+    // A row the pointer just claimed is already where the user is looking, so
+    // revealing it would scroll a half-visible row out from under the pointer.
+    // The keys always reveal, even onto a row beneath a resting pointer.
+    if (selectedItem instanceof HTMLElement && !isPointerClaimed(selectedItem)) {
       selectedItem.scrollIntoView({ block: "nearest", behavior: "instant" });
     }
   }, [selectedOptionId, selectedIndex, banded, results]);

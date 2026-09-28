@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
@@ -65,7 +66,7 @@ export function PanelPalette({
       const node = itemsRef.current.get(results[selectedIndex].id);
       // A row under the pointer was just claimed by it; revealing it would
       // scroll a half-visible row out from under the pointer.
-      if (node?.matches(":hover")) return;
+      if (isPointerClaimed(node)) return;
       node?.scrollIntoView({ block: "nearest" });
     }
   }, [selectedIndex, results]);
