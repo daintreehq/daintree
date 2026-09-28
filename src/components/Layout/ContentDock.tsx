@@ -3,10 +3,9 @@ import { useMemo, useRef, useCallback, useLayoutEffect, useSyncExternalStore } f
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndContext, useDroppable } from "@dnd-kit/core";
-import { ChevronLeft, ChevronRight, PanelBottom } from "lucide-react";
+import { PanelBottom } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import {
   isDockPanel,
@@ -29,6 +28,7 @@ import { WaitingContainer } from "./WaitingContainer";
 import { ErrorsContainer } from "./ErrorsContainer";
 import { BackgroundContainer } from "./BackgroundContainer";
 import { DockLaunchButton } from "./DockLaunchButton";
+import { DockScrollChevron } from "./DockScrollChevron";
 import { useLauncherData } from "./useLauncherData";
 import { DockLaunchMenuItems, type DockLaunchMenuComponents } from "./DockLaunchMenuItems";
 import {
@@ -209,8 +209,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeDockIndexRef = useRef(0);
   const prevFocusedDockItemRef = useRef<HTMLElement | null>(null);
-  const { canScrollLeft, canScrollRight, scrollLeft, scrollRight } =
-    useHorizontalScrollControls(scrollContainerRef);
+  const { canScrollLeft, canScrollRight, scrollLeft, scrollRight } = useHorizontalScrollControls(
+    scrollContainerRef,
+    { mapVerticalWheel: true }
+  );
 
   // Issue #8170 — roving tabindex over [data-dock-item] chips. The rail is an
   // ARIA toolbar with a single tab stop; Arrow/Home/End move focus across
@@ -452,30 +454,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           </div>
 
           <div className="relative flex-1 min-w-0">
-            {/* Left Scroll Chevron - Overlay */}
-            {canScrollLeft && (
-              <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4 contrast-more:bg-none contrast-more:bg-[var(--dock-bg)]">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={scrollLeft}
-                      tabIndex={-1}
-                      aria-hidden="true"
-                      className={cn(
-                        "pointer-events-auto p-1.5 text-text-secondary hover:text-text-primary",
-                        "rounded-[var(--radius-md)] transition-colors",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                      )}
-                      aria-label="Scroll left"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Scroll left</TooltipContent>
-                </Tooltip>
-              </div>
-            )}
+            <DockScrollChevron side="left" visible={canScrollLeft} onClick={scrollLeft} />
 
             {/* Scrollable Container */}
             <div
@@ -543,30 +522,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               </SortableContext>
             </div>
 
-            {/* Right Scroll Chevron - Overlay */}
-            {canScrollRight && (
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4 contrast-more:bg-none contrast-more:bg-[var(--dock-bg)]">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={scrollRight}
-                      tabIndex={-1}
-                      aria-hidden="true"
-                      className={cn(
-                        "pointer-events-auto p-1.5 text-text-secondary hover:text-text-primary",
-                        "rounded-[var(--radius-md)] transition-colors",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                      )}
-                      aria-label="Scroll right"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Scroll right</TooltipContent>
-                </Tooltip>
-              </div>
-            )}
+            <DockScrollChevron side="right" visible={canScrollRight} onClick={scrollRight} />
           </div>
 
           {/* The rail above belongs to the active worktree; this tray counts the

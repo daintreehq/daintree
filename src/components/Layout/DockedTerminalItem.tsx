@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
 import type { DraggableSyntheticListeners } from "@dnd-kit/core";
-import { CheckCircle2 } from "lucide-react";
-import { SpinnerCircle } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
@@ -24,6 +22,7 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { DockActivityCue } from "./DockActivityCue";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
 import { useDockPopoverResize } from "./useDockPopoverResize";
 import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
@@ -404,25 +403,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   </>
                 )}
 
-                {/* Plain-terminal running/finished cue — same icon slot as the
-                    agent state icon, but only when there is no agent state.
-                    aria-hidden: the running state rides the accessible name; the
-                    finished cue is transient and must not spam a live region. */}
                 {!displayAgentState && (plainWorking || showFinishedCue) && (
-                  <div
-                    className={cn(
-                      "ml-1.5 flex items-center shrink-0",
-                      plainWorking ? "text-text-secondary" : "text-status-success"
-                    )}
-                    data-dock-activity-state={plainWorking ? "working" : "finished"}
-                    aria-hidden="true"
-                  >
-                    {plainWorking ? (
-                      <SpinnerCircle className="w-3.5 h-3.5 animate-spin-slow motion-reduce:animate-none" />
-                    ) : (
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                    )}
-                  </div>
+                  <DockActivityCue state={plainWorking ? "working" : "finished"} />
                 )}
 
                 {/* State icon (compact spacing from title) */}
@@ -431,7 +413,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                     <TooltipTrigger asChild onPointerEnter={stateTip.onPointerEnter}>
                       <div
                         className={cn(
-                          "ml-1.5 flex items-center shrink-0",
+                          "ml-1.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
                           getEffectiveStateColor(displayAgentState)
                         )}
                       >

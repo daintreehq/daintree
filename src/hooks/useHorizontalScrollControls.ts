@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, type RefObject } from "react"
 import {
   getHorizontalScrollState,
   calculateScrollAmount,
+  getWheelHorizontalDelta,
   type HorizontalScrollState,
 } from "@/lib/horizontalScroll";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
@@ -11,8 +12,14 @@ export interface UseHorizontalScrollControlsReturn extends HorizontalScrollState
   scrollRight: () => void;
 }
 
+export interface UseHorizontalScrollControlsOptions {
+  /** Let a vertical-only mouse wheel scroll the rail sideways. */
+  mapVerticalWheel?: boolean;
+}
+
 export function useHorizontalScrollControls(
-  scrollRef: RefObject<HTMLElement | null>
+  scrollRef: RefObject<HTMLElement | null>,
+  { mapVerticalWheel = false }: UseHorizontalScrollControlsOptions = {}
 ): UseHorizontalScrollControlsReturn {
   const [state, setState] = useState<HorizontalScrollState>({
     isOverflowing: false,
@@ -76,6 +83,25 @@ export function useHorizontalScrollControls(
       el.removeEventListener("scroll", throttledUpdate);
     };
   }, [scrollRef, updateScrollState, throttledUpdate]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !mapVerticalWheel) return;
+
+    const onWheel = (event: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      const delta = getWheelHorizontalDelta(event, el.clientWidth);
+      if (delta === 0) return;
+      event.preventDefault();
+      // Instant, not smooth: each notch lands where it points, where a smooth
+      // scroll started mid-way through the last one would swallow the delta.
+      el.scrollBy({ left: delta, behavior: "instant" });
+    };
+
+    // Non-passive so preventDefault can hold the vertical notch on the rail.
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [scrollRef, mapVerticalWheel]);
 
   const scrollLeft = useCallback(() => {
     const el = scrollRef.current;
