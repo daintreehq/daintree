@@ -11,7 +11,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -26,7 +25,7 @@ import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useShortcutHintHover } from "@/hooks";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
 import { cn } from "@/lib/utils";
@@ -153,7 +152,6 @@ function PluginTrayRow({
   onSelect: (config: ToolbarButtonConfig) => void;
   onTogglePin: (config: ToolbarButtonConfig) => void;
 }) {
-  const displayCombo = useKeybindingDisplay(config.actionId);
   const Icon = resolvePluginIcon(config.iconId);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -170,14 +168,13 @@ function PluginTrayRow({
       onKeyDown={handleKeyDown}
       className="group h-7"
       data-testid={`plugin-tray-row-${config.id}`}
+      keybinding={config.actionId}
     >
       <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
         <Icon className="h-3.5 w-3.5 text-text-secondary" />
       </span>
 
       <span className="flex-1">{config.label}</span>
-
-      {displayCombo && <DropdownMenuShortcut>{displayCombo}</DropdownMenuShortcut>}
 
       <span className="sr-only">Press P to {promoted ? "unpin from" : "pin to"} toolbar</span>
 

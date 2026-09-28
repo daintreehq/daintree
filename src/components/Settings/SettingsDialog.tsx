@@ -26,6 +26,7 @@ import {
 } from "@/store";
 import { X, Search, ChevronRight, ChevronDown, Info } from "lucide-react";
 import { SearchField } from "@/components/ui/SearchField";
+import { KbdChord } from "@/components/ui/Kbd";
 import { ArrowLeftRight, TriangleAlert } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -1909,8 +1910,12 @@ export function SearchResults({
         </p>
         {/* Real instructions, not a placeholder — they take the secondary ramp. */}
         <p className="shrink-0 whitespace-nowrap text-3xs text-text-secondary">
-          <kbd className="settings-kbd px-1 py-0.5 rounded-sm border font-mono">↑↓</kbd> navigate{" "}
-          <kbd className="settings-kbd px-1 py-0.5 rounded-sm border font-mono">↵</kbd> open
+          {/* Up or Down — two keys, not a chord — so two chords side by side. */}
+          <span className="inline-flex items-center gap-0.5 align-middle">
+            <KbdChord shortcut="Up" density="compact" />
+            <KbdChord shortcut="Down" density="compact" />
+          </span>{" "}
+          navigate <KbdChord shortcut="Enter" density="compact" className="align-middle" /> open
         </p>
       </div>
       {filteringModified && (

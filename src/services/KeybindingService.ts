@@ -7,6 +7,7 @@ import type {
 import { combosFieldsEqual, normalizeKeyForBinding, parseCombo } from "./keybindingUtils";
 import { DEFAULT_KEYBINDINGS } from "./defaultKeybindings";
 import { isMac } from "@/lib/platform";
+import { formatChordText } from "@/lib/kbdShortcut";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 import { evaluate } from "@shared/utils/whenClause/evaluator";
@@ -668,20 +669,13 @@ class KeybindingService {
     return this.formatComboForDisplay(effectiveCombo);
   }
 
+  /**
+   * The combo as one line of text, in exactly the grammar `KbdChord` draws
+   * (`"⌘⇧P"` on macOS, `"Ctrl+Shift+P"` elsewhere), for surfaces that can only
+   * hold a string. Never feed the result to `KbdChord` — give it the combo.
+   */
   formatComboForDisplay(combo: string): string {
-    const mac = isMac();
-
-    let display = combo;
-    if (mac) {
-      display = display.replace(/Cmd\+/gi, "⌘+");
-      display = display.replace(/Ctrl\+/gi, "⌃+");
-      display = display.replace(/Shift\+/gi, "⇧+");
-      display = display.replace(/Alt\+/gi, "⌥+");
-    } else {
-      display = display.replace(/Cmd\+/gi, "Ctrl+");
-    }
-
-    return display;
+    return formatChordText(combo, isMac());
   }
 
   /**

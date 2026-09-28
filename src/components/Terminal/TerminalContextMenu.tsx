@@ -24,7 +24,8 @@ import {
   subscribeToPanelKindRegistry,
 } from "@shared/config/panelKindRegistry";
 import type { ActionId } from "@shared/types/actions";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { terminalClipboardCombos } from "@/services/terminalReservedKeys";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import {
   consultPanelCloseGuards,
@@ -140,12 +141,6 @@ const MOVE_TO_WORKTREE_SUBMENU_LIMIT = 10;
 
 /** A task turn after the close hook, which is where the menu primitive restores focus. */
 const AFTER_MENU_FOCUS_RESTORE_MS = 0;
-
-/** A menu item's shortcut: the action's live keybinding, or nothing. */
-function ContextMenuKeybinding({ actionId }: { actionId: ActionId }) {
-  const combo = useKeybindingDisplay(actionId);
-  return combo ? <ContextMenuShortcut>{combo}</ContextMenuShortcut> : null;
-}
 
 /** A pending hand-over consent (#12490): which terminal, to which pane. */
 interface HandOverRequest {
@@ -501,7 +496,7 @@ export function TerminalContextMenu({
   const currentLocation: PanelLocation = forceLocation ?? terminal?.location ?? "grid";
 
   const mac = isMac();
-  const modifierKey = mac ? "⌘" : "Ctrl";
+  const clipboardCombos = terminalClipboardCombos(mac);
 
   const handleAction = useCallback(
     (actionId: string) => {
@@ -1027,14 +1022,16 @@ export function TerminalContextMenu({
         {currentLocation === "grid" ? "Move to dock" : "Move to grid"}
       </ContextMenuItem>
       {currentLocation === "grid" && (
-        <ContextMenuItem onSelect={() => handleAction("toggle-maximize")}>
+        <ContextMenuItem
+          onSelect={() => handleAction("toggle-maximize")}
+          keybinding="terminal.maximize"
+        >
           {isMaximized ? (
             <Minimize2 className={ICON_CLASS} aria-hidden="true" />
           ) : (
             <Maximize2 className={ICON_CLASS} aria-hidden="true" />
           )}
           {isMaximized ? "Restore" : "Maximize"}
-          <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
         </ContextMenuItem>
       )}
     </>
@@ -1291,12 +1288,10 @@ export function TerminalContextMenu({
                     disabled={command.disabled}
                     destructive={command.destructive}
                     onSelect={() => handleAction(command.id)}
+                    keybinding={command.shortcutActionId}
                   >
                     <command.icon className={ICON_CLASS} aria-hidden="true" />
                     {command.label}
-                    {command.shortcutActionId && (
-                      <ContextMenuKeybinding actionId={command.shortcutActionId} />
-                    )}
                   </ContextMenuItem>
                 )
               )}
@@ -1340,15 +1335,22 @@ export function TerminalContextMenu({
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           {hasPty && (
             <>
-              <ContextMenuItem disabled={!hasSelection} onSelect={() => handleAction("copy")}>
+              <ContextMenuItem
+                disabled={!hasSelection}
+                onSelect={() => handleAction("copy")}
+                aria-keyshortcuts={comboToAriaKeyshortcuts(clipboardCombos.copy, mac)}
+              >
                 <Copy className={ICON_CLASS} aria-hidden="true" />
                 Copy
-                <ContextMenuShortcut>{modifierKey}C</ContextMenuShortcut>
+                <ContextMenuShortcut shortcut={clipboardCombos.copy} />
               </ContextMenuItem>
-              <ContextMenuItem onSelect={() => handleAction("paste")}>
+              <ContextMenuItem
+                onSelect={() => handleAction("paste")}
+                aria-keyshortcuts={comboToAriaKeyshortcuts(clipboardCombos.paste, mac)}
+              >
                 <Clipboard className={ICON_CLASS} aria-hidden="true" />
                 Paste
-                <ContextMenuShortcut>{mac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
+                <ContextMenuShortcut shortcut={clipboardCombos.paste} />
               </ContextMenuItem>
               <ContextMenuItem
                 disabled={!hasSelection}
@@ -1359,10 +1361,10 @@ export function TerminalContextMenu({
                     { source: sourceRef.current }
                   )
                 }
+                keybinding="terminal.sendToAgent"
               >
                 <Send className={ICON_CLASS} aria-hidden="true" />
                 Send to agent
-                <ContextMenuShortcut>{mac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
               </ContextMenuItem>
               {hoveredUrl && (
                 <>
@@ -1544,14 +1546,16 @@ export function TerminalContextMenu({
             </ContextMenuSub>
           )}
           {terminal.detectedAgentId && (
-            <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
+            <ContextMenuItem
+              onSelect={() => handleAction("toggle-watch")}
+              keybinding="terminal.watch"
+            >
               {isWatched ? (
                 <BellOff className={ICON_CLASS} aria-hidden="true" />
               ) : (
                 <Bell className={ICON_CLASS} aria-hidden="true" />
               )}
               {isWatched ? "Cancel watch" : "Watch terminal"}
-              <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
             </ContextMenuItem>
           )}
           {hasPty && (

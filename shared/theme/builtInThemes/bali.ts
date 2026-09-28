@@ -169,8 +169,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-skeleton-gradient": "linear-gradient(90deg, #D2DEB4 25%, #F0F3E4 50%, #D2DEB4 75%)",
     "dialog-header-bg": "#F8F9F5",
     "review-commit-input-bg": "#FAFCF6",
-    "settings-kbd-bg": "#EEF2E6",
-    "settings-kbd-border": "#CBD0C1",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",
     "settings-nav-active-shadow": "none",

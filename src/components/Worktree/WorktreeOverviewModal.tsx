@@ -28,7 +28,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { actionService } from "@/services/ActionService";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { describeActiveFacets } from "@/lib/worktreeFilterOptions";
 import {
   matchesFilters,
@@ -87,7 +87,7 @@ export function WorktreeOverviewModal({
   onSelectWorktree,
 }: WorktreeOverviewModalProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const overviewShortcut = useKeybindingDisplay("worktree.overview");
+  const overviewShortcut = useEffectiveCombo("worktree.overview");
 
   const {
     liveQuery,

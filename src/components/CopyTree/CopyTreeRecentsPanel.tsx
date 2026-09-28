@@ -12,6 +12,8 @@ import { useCopyTreeHistoryStore } from "@/store/copyTreeHistoryStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { formatBytes } from "@/lib/formatBytes";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 
 /**
@@ -100,7 +102,7 @@ export function formatRecentTrailing(record: CopyTreeHistoryRecord, now?: number
 }
 
 interface CopyTreeMenuContentProps {
-  /** The keybinding shown beside the pinned entry, as the tooltip shows it. */
+  /** The combo shown beside the pinned entry, as the tooltip shows it. */
   shortcut?: string | null;
   /** The old one-click behavior, now one row deeper. */
   onCopyFullContext: () => void;
@@ -187,9 +189,12 @@ function CopyTreeMenuItems({
 
   return (
     <>
-      <DropdownMenuItem onSelect={onCopyFullContext}>
+      <DropdownMenuItem
+        onSelect={onCopyFullContext}
+        aria-keyshortcuts={comboToAriaKeyshortcuts(shortcut, isMac())}
+      >
         Copy full context
-        {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
+        <DropdownMenuShortcut shortcut={shortcut} />
       </DropdownMenuItem>
 
       <DropdownMenuSeparator />

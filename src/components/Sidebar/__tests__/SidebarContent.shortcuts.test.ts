@@ -11,9 +11,9 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
   });
 
-  describe("useKeybindingDisplay hooks", () => {
+  describe("live binding hooks", () => {
     it("uses dynamic hook for worktree.overview", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.overview")');
+      expect(source).toContain('useEffectiveCombo("worktree.overview")');
     });
 
     it("does NOT consume fleet.armFocused for the Zap button (binding mismatch)", () => {
@@ -22,7 +22,7 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
       // pane* action (Cmd+J), not "open the picker". After Phase 3 the Zap
       // button opens FleetPickerPalette and the tooltip advertises no
       // shortcut. Enforce that the stale hook call doesn't creep back.
-      expect(source).not.toContain('useKeybindingDisplay("fleet.armFocused")');
+      expect(source).not.toMatch(/use(KeybindingDisplay|EffectiveCombo)\("fleet\.armFocused"\)/);
     });
 
     it("uses dynamic hook for worktree.refresh", () => {
@@ -30,7 +30,7 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
     });
 
     it("uses dynamic hook for worktree.createDialog.open", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.createDialog.open")');
+      expect(source).toContain('useEffectiveCombo("worktree.createDialog.open")');
     });
   });
 

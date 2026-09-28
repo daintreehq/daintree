@@ -25,7 +25,8 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/hooks/useKeybinding", () => ({
-  useKeybindingDisplay: () => "⌘P",
+  useEffectiveCombo: () => "Cmd+Alt+P",
+  useAriaKeyshortcuts: () => "Meta+Alt+P",
 }));
 
 const openDropdown = vi.fn();

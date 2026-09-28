@@ -77,7 +77,6 @@ import {
   useAriaKeyshortcuts,
   useBackgroundPanelStats,
   useEffectiveCombo,
-  useKeybindingDisplay,
   useTabOverflow,
 } from "@/hooks";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
@@ -88,7 +87,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PopoverAnchor } from "@/components/ui/popover";
@@ -154,12 +152,6 @@ const CONTROL_ICON = "[&_svg]:size-3.5";
  * that same hook, so work that moves focus elsewhere starts after it lands.
  */
 const AFTER_MENU_FOCUS_RESTORE_MS = 0;
-
-/** An overflow item's shortcut: the action's live keybinding, or nothing. */
-function OverflowMenuShortcut({ actionId }: { actionId: ActionId }) {
-  const combo = useKeybindingDisplay(actionId);
-  return combo ? <DropdownMenuShortcut>{combo}</DropdownMenuShortcut> : null;
-}
 
 export interface PanelHeaderProps {
   id: string;
@@ -1542,12 +1534,10 @@ function PanelHeaderComponent({
                         disabled={command.disabled}
                         destructive={command.destructive}
                         onSelect={() => handleGenericMenuCommand(command.id)}
+                        keybinding={command.shortcutActionId}
                       >
                         <command.icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                         {command.label}
-                        {command.shortcutActionId && (
-                          <OverflowMenuShortcut actionId={command.shortcutActionId} />
-                        )}
                       </DropdownMenuItem>
                     ))}
                     {groupIndex === genericMenuGroups.length - 2 && headerActions && (

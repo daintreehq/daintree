@@ -2506,3 +2506,29 @@ describe("when-clause context provider", () => {
     expect(service.resolveKeybinding(event).match?.actionId).toBe("test.whenGatedStatic");
   });
 });
+
+describe("formatComboForDisplay — one grammar with KbdChord", () => {
+  afterEach(() => setPlatform("MacIntel"));
+
+  it.each([
+    ["MacIntel", true],
+    ["Win32", false],
+  ])("prints every default binding the way the chips draw it (%s)", async (platform, mac) => {
+    setPlatform(platform);
+    const { formatChordText } = await import("@/lib/kbdShortcut");
+    const service = new KeybindingService();
+    for (const { combo } of DEFAULT_KEYBINDINGS) {
+      if (!combo) continue;
+      expect(service.formatComboForDisplay(combo)).toBe(formatChordText(combo, mac));
+    }
+  });
+
+  it("never joins macOS glyphs with a plus sign", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    for (const { combo } of DEFAULT_KEYBINDINGS) {
+      if (!combo) continue;
+      expect(service.formatComboForDisplay(combo)).not.toMatch(/[⌘⇧⌥⌃]\+/);
+    }
+  });
+});

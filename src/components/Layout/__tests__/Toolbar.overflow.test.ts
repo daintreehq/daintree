@@ -24,8 +24,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   });
 
   describe("imports", () => {
-    it("pulls in the dropdown primitives needed for shortcuts, labels, and groups", () => {
-      expect(source).toContain("DropdownMenuShortcut");
+    it("pulls in the dropdown primitives needed for labels and groups", () => {
       expect(source).toContain("DropdownMenuLabel");
       expect(source).toContain("DropdownMenuGroup");
     });
@@ -60,11 +59,9 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       );
     });
 
-    it("renders the dot through a dedicated component so the keybinding hook is at component scope", () => {
-      // A hook inside a .map() callback would violate the rules of hooks; the
-      // AgentOverflowItem component is the fix (mirrors DockLaunchButton).
+    it("renders the dot through a dedicated component that shows the agent's own binding", () => {
       expect(source).toContain("function AgentOverflowItem");
-      expect(source).toContain("useKeybindingDisplay(`agent.${id}`)");
+      expect(source).toContain("keybinding={`agent.${id}`}");
       expect(source).toContain("agentStateDotColor(attentionState)");
       // The pip is aria-hidden, so the row's accessible name carries its state.
       expect(source).toMatch(/sr-only[^\n]*STATE_LABELS\[attentionState\]/);
@@ -72,34 +69,38 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   });
 
   describe("keyboard shortcut hints", () => {
-    it("looks up shortcuts for the fixed-action overflow items", () => {
-      expect(source).toContain('useKeybindingDisplay("notifications.toggle")');
-      expect(source).toContain('useKeybindingDisplay("action.palette.open")');
-    });
-
-    it("maps each fixed-action item id to its shortcut", () => {
-      expect(source).toMatch(/"copy-tree":\s*copyTreeShortcut/);
-      expect(source).toMatch(/"notification-center":\s*notificationsShortcut/);
-      expect(source).toMatch(/"command-palette":\s*commandPaletteShortcut/);
-      expect(source).toMatch(/"dev-server":\s*devServerShortcut/);
-    });
-
-    it("covers the remaining shortcut-bearing buttons — settings, problems, terminal, browser", () => {
+    // The menu primitive draws each item's live binding from the action id it is
+    // handed, so what must hold here is the id → action mapping and its use.
+    const EXPECTED: Record<string, string> = {
+      "copy-tree": "worktree.copyTree",
+      "notification-center": "notifications.toggle",
+      "command-palette": "action.palette.open",
+      "dev-server": "devServer.start",
       // These all show a shortcut hint on their visible toolbar button, so the
       // overflow item must too (issue #9821).
-      expect(source).toContain('useKeybindingDisplay("app.settings")');
-      expect(source).toContain('useKeybindingDisplay("panel.toggleDiagnostics")');
-      expect(source).toContain('useKeybindingDisplay("agent.terminal")');
-      expect(source).toContain('useKeybindingDisplay("agent.browser")');
-      expect(source).toMatch(/settings:\s*settingsShortcut/);
-      expect(source).toMatch(/problems:\s*problemsShortcut/);
-      expect(source).toMatch(/terminal:\s*terminalShortcut/);
-      expect(source).toMatch(/browser:\s*browserShortcut/);
+      settings: "app.settings",
+      problems: "panel.toggleDiagnostics",
+      terminal: "agent.terminal",
+      browser: "agent.browser",
+      // #11495
+      "file-browser": "worktree.openFileBrowserPanel",
+    };
+
+    it("maps each shortcut-bearing item id to the action whose binding it shows", () => {
+      const block = /const OVERFLOW_KEYBINDING_BY_ID[^=]*=\s*\{([\s\S]*?)\n\};/.exec(source);
+      expect(block, "OVERFLOW_KEYBINDING_BY_ID not found").not.toBeNull();
+      for (const [id, actionId] of Object.entries(EXPECTED)) {
+        const key = /^[a-z]+$/.test(id) ? id : `"${id}"`;
+        expect(block![1]).toMatch(
+          new RegExp(`${key.replace(/[-]/g, "\\-")}:\\s*"${actionId.replace(/\./g, "\\.")}"`)
+        );
+      }
     });
 
-    it("wires the file browser's shortcut hint like the other launchers (#11495)", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowserPanel")');
-      expect(source).toMatch(/"file-browser":\s*fileBrowserShortcut/);
+    it("hands every overflow row its binding through the menu primitive", () => {
+      expect(source).toContain("keybindingById={OVERFLOW_KEYBINDING_BY_ID}");
+      expect(source).toMatch(/keybinding=\{keybindingById\[item\.id\]\}/);
+      expect(source).toMatch(/keybinding=\{keybindingById\[id\]\}/);
     });
   });
 

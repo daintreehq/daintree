@@ -33,12 +33,14 @@ export const KBD_COMPACT_CLASS =
 export const KBD_BARE_CLASS = "font-mono tabular-nums leading-none text-xs text-text-secondary";
 
 /**
- * The macOS modifier glyphs. JetBrains Mono's bundled subset has none of them,
- * so inside a mono chip they fall back glyph by glyph to whatever monospace
- * face has them, and ⇧ lands visibly smaller and thinner than ⌘ or the letter
- * beside it. The system UI face draws all four as a matched set.
+ * The key glyphs — the macOS modifiers, Return, Escape, Tab, Delete and Forward
+ * Delete, and the arrows every platform draws. JetBrains Mono's bundled subset
+ * has none of them, so inside a mono chip they fall back glyph by glyph to
+ * whatever monospace face has them: ⇧ lands smaller and thinner than ⌘, ⎋ and ⏎
+ * shrink to a speck, and an arrow draws at half the height of the letter beside
+ * it. The system UI face draws them as a matched set.
  */
-const MODIFIER_GLYPH = /^[⌘⇧⌥⌃]$/;
+const MODIFIER_GLYPH = /^[⌘⇧⌥⌃⏎⎋⇥⌫⌦↑↓←→]$/;
 
 export interface KbdProps {
   children: React.ReactNode;

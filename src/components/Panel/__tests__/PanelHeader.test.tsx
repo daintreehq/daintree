@@ -176,11 +176,13 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     destructive,
+    keybinding,
     ...rest
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
     destructive?: boolean;
+    keybinding?: string;
     [key: string]: unknown;
   }) => (
     <button
@@ -189,6 +191,11 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       onClick={() => onSelect?.(new Event("select"))}
     >
       {children}
+      {/* The real primitive draws the action's live binding; the mock draws
+          the combo the hook mock resolves for it. */}
+      {keybinding && mockKeybindingDisplays[keybinding] && (
+        <kbd>{mockKeybindingDisplays[keybinding]}</kbd>
+      )}
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
@@ -1187,7 +1194,7 @@ describe("PanelHeader", () => {
 
     it("shows the maximize keybinding on the maximize row alone", () => {
       registerPluginKind(PLUGIN_KIND);
-      mockKeybindingDisplays = { "terminal.maximize": "⌃⇧F" };
+      mockKeybindingDisplays = { "terminal.maximize": "Ctrl+Shift+F" };
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
       const hints = Array.from(
@@ -1202,7 +1209,7 @@ describe("PanelHeader", () => {
       })
         .flat()
         .find((command) => command.shortcutActionId === "terminal.maximize")!;
-      expect(hints).toEqual([[maximize.label, "⌃⇧F"]]);
+      expect(hints).toEqual([[maximize.label, "Ctrl+Shift+F"]]);
     });
 
     it.each([

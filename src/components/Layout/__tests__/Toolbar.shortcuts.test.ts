@@ -62,19 +62,17 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("uses dynamic hook for worktree.copyTree", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.copyTree")');
+      expect(source).toContain('useEffectiveCombo("worktree.copyTree")');
     });
 
     it("uses dynamic hook for app.settings", () => {
       expect(settingsSource).toContain('useEffectiveCombo("app.settings")');
     });
 
-    it("uses dynamic hook for devServer.start", () => {
-      expect(source).toContain('useKeybindingDisplay("devServer.start")');
-    });
-
-    it("uses dynamic hook for worktree.openFileBrowserPanel", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowserPanel")');
+    it("routes devServer.start and the file browser's binding to their overflow rows", () => {
+      // The overflow menu draws the live binding for the action id it holds.
+      expect(source).toMatch(/"dev-server":\s*"devServer\.start"/);
+      expect(source).toMatch(/"file-browser":\s*"worktree\.openFileBrowserPanel"/);
     });
   });
 
@@ -408,8 +406,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(buttonRegistryDeps()).toContain("sidebarShortcut");
     });
 
-    it("includes copyTreeShortcut in useMemo deps", () => {
-      expect(buttonRegistryDeps()).toContain("copyTreeShortcut");
+    it("includes copyTreeCombo in useMemo deps", () => {
+      expect(buttonRegistryDeps()).toContain("copyTreeCombo");
     });
 
     it("includes showCopyingSpinner in useMemo deps (issue #8179)", () => {

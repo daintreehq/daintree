@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
-import { Kbd, KbdChord } from "@/components/ui/Kbd";
+import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -21,18 +21,14 @@ export interface TipEntry {
   shortcutActionId?: ActionId;
   actionLabel?: string;
   requiredAgents?: BuiltInAgentId[];
-  /** The fallback message hardcodes a key combo — skip the tip when the binding is gone. */
+  /** The tip teaches a key — skip it when the binding is gone. */
   requiresShortcut?: boolean;
 }
 
 export const TIPS: TipEntry[] = [
   {
     id: "quick-switcher",
-    message: (
-      <>
-        Press <Kbd>⌘P</Kbd> to jump between open panels
-      </>
-    ),
+    message: <>Open the quick switcher to jump between open panels</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to jump between open panels
@@ -44,11 +40,7 @@ export const TIPS: TipEntry[] = [
   },
   {
     id: "new-terminal",
-    message: (
-      <>
-        Press <Kbd>⌘⌥T</Kbd> to open a new terminal in this worktree
-      </>
-    ),
+    message: <>Open a new terminal in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to open a new terminal in this worktree
@@ -61,10 +53,7 @@ export const TIPS: TipEntry[] = [
   {
     id: "panel-palette",
     message: (
-      <>
-        Press <Kbd>⌘N</Kbd> to open the panel palette — add terminals, file browsers, web browsers,
-        or dev previews
-      </>
+      <>Open the panel palette to add terminals, file browsers, web browsers, or dev previews</>
     ),
     messageWithShortcut: (shortcut) => (
       <>
@@ -78,11 +67,7 @@ export const TIPS: TipEntry[] = [
   },
   {
     id: "launch-claude",
-    message: (
-      <>
-        Press <Kbd>⌘⌥C</Kbd> to launch a Claude agent in this worktree
-      </>
-    ),
+    message: <>Launch a Claude agent in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to launch a Claude agent in this worktree
@@ -106,11 +91,7 @@ export const TIPS: TipEntry[] = [
   },
   {
     id: "launch-gemini",
-    message: (
-      <>
-        Press <Kbd>⌘⌥G</Kbd> to launch a Gemini agent in this worktree
-      </>
-    ),
+    message: <>Launch a Gemini agent in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to launch a Gemini agent in this worktree
@@ -124,11 +105,7 @@ export const TIPS: TipEntry[] = [
   },
   {
     id: "context-injection",
-    message: (
-      <>
-        Press <Kbd>⌘⇧I</Kbd> to inject the project file tree into the focused terminal
-      </>
-    ),
+    message: <>Inject the project file tree into the focused terminal</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to inject the project file tree into the focused
@@ -141,11 +118,7 @@ export const TIPS: TipEntry[] = [
   },
   {
     id: "action-palette",
-    message: (
-      <>
-        Press <Kbd>⌘⇧P</Kbd> to open the command palette and search all available commands
-      </>
-    ),
+    message: <>Open the command palette to search all available commands</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to open the command palette and search all available
@@ -158,11 +131,7 @@ export const TIPS: TipEntry[] = [
   },
   {
     id: "worktree-palette",
-    message: (
-      <>
-        Press <Kbd>⌘K</Kbd> then <Kbd>W</Kbd> to open the worktree palette and switch branches
-      </>
-    ),
+    message: <>Open the worktree palette to switch branches</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to open the worktree palette and switch branches
@@ -174,11 +143,7 @@ export const TIPS: TipEntry[] = [
   },
   {
     id: "worktree-overview",
-    message: (
-      <>
-        Press <Kbd>⌘⌥R</Kbd> to open the worktrees overview and manage all your branches
-      </>
-    ),
+    message: <>Open the worktrees overview to manage all your branches</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to open the worktrees overview and manage all your
@@ -192,11 +157,7 @@ export const TIPS: TipEntry[] = [
   },
   {
     id: "agent-switcher",
-    message: (
-      <>
-        Press <Kbd>⌘⇧A</Kbd> to quickly switch between available AI agents
-      </>
-    ),
+    message: <>Switch between available AI agents from the agent switcher</>,
     messageWithShortcut: (shortcut) => (
       <>
         Press <KbdChord shortcut={shortcut} /> to quickly switch between available AI agents

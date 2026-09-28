@@ -29,7 +29,7 @@ import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { agentStateDotColor, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { describeChord } from "@/lib/kbdShortcut";
+import { comboToAriaKeyshortcuts, describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
 import { notify } from "@/lib/notify";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
@@ -1529,8 +1529,9 @@ function DockLaunchOption({
   // is stated explicitly. The pin verb rides here because children of
   // `role="option"` are presentational, so the pin button's own label never
   // reaches a screen reader — the phrase states both what Alt+P does and,
-  // through the verb, whether the row is already pinned. `aria-keyshortcuts`
-  // stays alongside it as the machine-readable half. The warning is deliberately
+  // through the verb, whether the row is already pinned. The row's own launch
+  // binding is not spoken here: it rides `aria-keyshortcuts`, the way every menu
+  // row carries its keys, so the name stays the row's. The warning is deliberately
   // NOT folded in: `title` alongside an `aria-label` computes as the
   // description, so repeating it here would announce it twice.
   const optionLabel = [
@@ -1548,7 +1549,6 @@ function DockLaunchOption({
       : undefined,
     isRecent ? "Recent" : undefined,
     launchOutcome ? `Launches ${launchOutcome}` : undefined,
-    effectiveCombo ? `Shortcut ${describeChord(effectiveCombo, isMac())}` : undefined,
     agent?.isNew ? "New" : undefined,
     // Stated only where it applies, so the phrase never advertises a key that
     // would do nothing on this row.
@@ -1560,7 +1560,7 @@ function DockLaunchOption({
         ? "Press Left Arrow to close presets"
         : undefined,
     pinTarget
-      ? `Press Alt+P to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
+      ? `Press ${describeChord("Alt+P", isMac())} to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
       : undefined,
     shortcutAgentId ? "Press F2 to edit shortcut" : undefined,
   ]
@@ -1602,7 +1602,7 @@ function DockLaunchOption({
         // name — with an `aria-label` present it computes as the description, so
         // the warning is announced once and still shows as the mouse tooltip.
         aria-label={optionLabel}
-        aria-keyshortcuts={pinTarget ? "Alt+P" : undefined}
+        aria-keyshortcuts={comboToAriaKeyshortcuts(effectiveCombo, isMac())}
         aria-expanded={row.kind === "item" && rowHasPresets(row) ? isExpanded : undefined}
         title={title}
         // Keeps DOM focus on the search box when a row is clicked or hovered,
@@ -1785,10 +1785,14 @@ function DockLaunchOption({
                   // The state rides a data attribute because `aria-pressed` on a
                   // presentational element is ignored — and it was never what
                   // announced the pin anyway. The option's own `aria-label`
-                  // carries "Press Alt+P to pin/unpin to toolbar" and its
+                  // carries "Press Option P to pin/unpin to toolbar" and its
                   // `aria-keyshortcuts` carries the chord.
                   data-pinned={pinTarget.onToolbar}
-                  title={`${pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL} (Alt+P)`}
+                  title={labelWithShortcut(
+                    pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL,
+                    "Alt+P",
+                    isMac()
+                  )}
                   // preventDefault keeps focus on the search box. stopPropagation
                   // belongs on the click below and nowhere else: the row's own
                   // onClick is an ancestor of this one, so the pin must stop the

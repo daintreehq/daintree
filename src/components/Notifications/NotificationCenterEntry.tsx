@@ -871,21 +871,21 @@ function RowOptionsMenu({
                 without these a pointer user could only read or archive one
                 notification by learning `u` and `e`, or by doing it to all. */}
             {onToggleRead && (
-              <DropdownMenuItem onSelect={onToggleRead}>
+              <DropdownMenuItem onSelect={onToggleRead} aria-keyshortcuts="U">
                 {isRead ? (
                   <Mail data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 ) : (
                   <MailOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 )}
                 {isRead ? "Mark as unread" : "Mark as read"}
-                <DropdownMenuShortcut aria-hidden="true">U</DropdownMenuShortcut>
+                <DropdownMenuShortcut shortcut="U" />
               </DropdownMenuItem>
             )}
             {onArchive && (
-              <DropdownMenuItem onSelect={onArchive}>
+              <DropdownMenuItem onSelect={onArchive} aria-keyshortcuts="E">
                 <Archive data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Archive
-                <DropdownMenuShortcut aria-hidden="true">E</DropdownMenuShortcut>
+                <DropdownMenuShortcut shortcut="E" />
               </DropdownMenuItem>
             )}
             {supportsSnooze &&

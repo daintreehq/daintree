@@ -81,7 +81,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -99,7 +98,6 @@ import {
   useDohertyGate,
   useEffectiveCombo,
   useKeepMounted,
-  useKeybindingDisplay,
   useShortcutHintHover,
 } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
@@ -210,6 +208,21 @@ for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
   if (!meta) continue;
   overflowMenuMetaInit[id] = { label: meta.label, icon: meta.icon };
 }
+// The action behind each overflow item's shortcut: the same binding its
+// visible button shows.
+const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
+  "copy-tree": "worktree.copyTree",
+  "notification-center": "notifications.toggle",
+  "command-palette": "action.palette.open",
+  "resume-sessions": "terminal.resumeSessions",
+  "dev-server": "devServer.start",
+  settings: "app.settings",
+  problems: "panel.toggleDiagnostics",
+  terminal: "agent.terminal",
+  browser: "agent.browser",
+  "file-browser": "worktree.openFileBrowserPanel",
+};
+
 export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenuMeta>> =
   overflowMenuMetaInit;
 
@@ -246,9 +259,9 @@ interface OverflowMenuProps {
   // Per-item availability for the inlined launcher panel rows, mirroring the
   // gates the launcher applies to its own rows.
   panelTrayDisabled: Partial<Record<string, boolean>>;
-  // Shortcut display strings keyed by toolbar button id, so each overflow item
-  // shows the same hint its visible button does (issue #9821).
-  shortcutById: Partial<Record<string, string | null>>;
+  // Action ids keyed by toolbar button id, so each overflow item shows the
+  // same live binding its visible button does (issue #9821).
+  keybindingById: Partial<Record<string, string>>;
 }
 
 // Overflow `…` menu. A component (not just a render helper) so the trigger can
@@ -273,7 +286,7 @@ function OverflowMenu({
   pluginTrayGroups,
   launcherAgentIds,
   panelTrayDisabled,
-  shortcutById,
+  keybindingById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   // Read here rather than threaded through props: the overflow copy-tree item
@@ -515,12 +528,10 @@ function OverflowMenu({
                     key={`launcher-${item.id}`}
                     disabled={panelTrayDisabled[item.id]}
                     onClick={() => overflowActions[item.id]?.()}
+                    keybinding={keybindingById[item.id]}
                   >
                     <Icon className="mr-2 h-3.5 w-3.5" />
                     <span className="flex-1">{item.label}</span>
-                    {shortcutById[item.id] && (
-                      <DropdownMenuShortcut>{shortcutById[item.id]}</DropdownMenuShortcut>
-                    )}
                   </DropdownMenuItem>
                 );
               }),
@@ -542,7 +553,6 @@ function OverflowMenu({
             ];
           }
           const Icon = meta.icon;
-          const shortcut = shortcutById[id];
           // Mirror the visible copy-tree button, which is aria-disabled both
           // when no worktree is active ("Open a worktree first" tooltip) and
           // while a copy is in flight — without this the overflow item would
@@ -550,13 +560,17 @@ function OverflowMenu({
           // guards on the same two conditions.
           const disabled = id === "copy-tree" && (!hasActiveWorktree || isCopyingTree);
           return [
-            <DropdownMenuItem key={id} disabled={disabled} onClick={() => overflowActions[id]?.()}>
+            <DropdownMenuItem
+              key={id}
+              disabled={disabled}
+              onClick={() => overflowActions[id]?.()}
+              keybinding={keybindingById[id]}
+            >
               <Icon className="mr-2 h-3.5 w-3.5" />
               <span className="flex-1">
                 {meta.label}
                 {countSuffix(id)}
               </span>
-              {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
             </DropdownMenuItem>,
           ];
         })}
@@ -565,11 +579,8 @@ function OverflowMenu({
   );
 }
 
-// Overflow menu item for a built-in agent. A standalone component (hoisted, so
-// OverflowMenu above can reference it) so the per-agent keybinding lookup
-// (`useKeybindingDisplay`) runs at component scope rather than inside a `.map()`
-// callback (rules of hooks). Restores the two signals the bare overflow item
-// dropped: the colored agent-state dot and the keyboard shortcut hint.
+// Overflow menu item for a built-in agent. Restores the two signals the bare
+// overflow item dropped: the colored agent-state dot and the keyboard shortcut.
 function AgentOverflowItem({
   id,
   label,
@@ -583,10 +594,9 @@ function AgentOverflowItem({
   attentionState: AttentionAgentState | null;
   onSelect: () => void;
 }) {
-  const shortcut = useKeybindingDisplay(`agent.${id}`);
   const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
   return (
-    <DropdownMenuItem onClick={onSelect}>
+    <DropdownMenuItem onClick={onSelect} keybinding={`agent.${id}`}>
       <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
         <Icon className="h-3.5 w-3.5" />
         {dotColor && (
@@ -607,7 +617,6 @@ function AgentOverflowItem({
           <span className="sr-only">{` — ${STATE_LABELS[attentionState]}`}</span>
         )}
       </span>
-      {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
     </DropdownMenuItem>
   );
 }
@@ -782,16 +791,6 @@ export function Toolbar({
 
   const { handleCopyTree, handleCopyTreeWithOptions } = useWorktreeActions();
   const sidebarShortcut = useEffectiveCombo("nav.toggleSidebar");
-  const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
-  const devServerShortcut = useKeybindingDisplay("devServer.start");
-  const notificationsShortcut = useKeybindingDisplay("notifications.toggle");
-  const commandPaletteShortcut = useKeybindingDisplay("action.palette.open");
-  const resumeSessionsShortcut = useKeybindingDisplay("terminal.resumeSessions");
-  const settingsShortcut = useKeybindingDisplay("app.settings");
-  const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
-  const terminalShortcut = useKeybindingDisplay("agent.terminal");
-  const browserShortcut = useKeybindingDisplay("agent.browser");
-  const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowserPanel");
   const copyTreeCombo = useEffectiveCombo("worktree.copyTree");
   const devServerCombo = useEffectiveCombo("devServer.start");
   const fileBrowserCombo = useEffectiveCombo("worktree.openFileBrowserPanel");
@@ -1475,7 +1474,7 @@ export function Toolbar({
                   </TooltipContent>
                 </Tooltip>
                 <CopyTreeMenuContent
-                  shortcut={copyTreeShortcut}
+                  shortcut={copyTreeCombo}
                   onCopyFullContext={handleCopyTreeFullContext}
                   onRunRecent={handleCopyTreeRunRecent}
                   onOpenContextSettings={handleOpenContextSettings}
@@ -1610,7 +1609,6 @@ export function Toolbar({
       sidebarShortcut,
       sidebarAriaShortcut,
       sidebarHintHover,
-      copyTreeShortcut,
       copyTreeCombo,
       copyTreeAriaShortcut,
       currentProject,
@@ -2132,19 +2130,6 @@ export function Toolbar({
     [agentAvailability]
   );
 
-  const overflowShortcutById: Partial<Record<string, string | null>> = {
-    "copy-tree": copyTreeShortcut,
-    "notification-center": notificationsShortcut,
-    "command-palette": commandPaletteShortcut,
-    "resume-sessions": resumeSessionsShortcut,
-    "dev-server": devServerShortcut,
-    settings: settingsShortcut,
-    problems: problemsShortcut,
-    terminal: terminalShortcut,
-    browser: browserShortcut,
-    "file-browser": fileBrowserShortcut,
-  };
-
   const renderOverflowMenu = (
     overflowIds: AnyToolbarButtonId[],
     side: "left" | "right",
@@ -2167,7 +2152,7 @@ export function Toolbar({
       pluginTrayGroups={pluginTrayGroups}
       launcherAgentIds={launcherAgentIds}
       panelTrayDisabled={panelTrayDisabled}
-      shortcutById={overflowShortcutById}
+      keybindingById={OVERFLOW_KEYBINDING_BY_ID}
     />
   );
 

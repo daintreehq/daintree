@@ -50,19 +50,6 @@ export function formatShortcutForTooltip(shortcut: string): string {
 }
 
 /**
- * Create a tooltip string with an OS-appropriate keyboard shortcut appended.
- *
- * @example
- * createTooltipWithShortcut("Show Sidebar", "Cmd+B")
- * // macOS:  "Show Sidebar (Cmd+B)"
- * // Windows: "Show Sidebar (Ctrl+B)"
- */
-export function createTooltipWithShortcut(label: string, shortcut: string): string {
-  const formatted = formatShortcutForTooltip(shortcut);
-  return formatted ? `${label} (${formatted})` : label;
-}
-
-/**
  * Platform-correct label for the "open this path in the OS file manager"
  * command. One helper so the dropdown, the right-click menu and their tests
  * can't drift onto three different names for the same action.

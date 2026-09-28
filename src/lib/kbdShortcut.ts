@@ -404,3 +404,26 @@ export function describeChord(shortcut: string, isMac: boolean): string {
     .map((tokens) => tokens.map((token) => spokenToken(token, isMac)).join(" "))
     .join(", then ");
 }
+
+/**
+ * The chord as one line of text, in exactly the grammar `KbdChord` draws:
+ * `"Cmd+Shift+P"` → `"⌘⇧P"` on macOS, `"Ctrl+Shift+P"` elsewhere; steps join
+ * with `", "`. For the places that can only hold a string — a native `title`,
+ * a toast body — so the text form never drifts into a fourth format such as
+ * `"⌘+⇧+P"` or `"Option+P"`. Not for accessible names: use `describeChord`.
+ */
+export function formatChordText(shortcut: string, isMac: boolean): string {
+  return parseChord(shortcut, isMac)
+    .map((tokens) => tokens.join(isMac ? "" : "+"))
+    .join(", ");
+}
+
+/** `"Pin (⌥P)"` — a label with its chord, for string-only surfaces. */
+export function labelWithShortcut(
+  label: string,
+  shortcut: string | null | undefined,
+  isMac: boolean
+): string {
+  const text = shortcut ? formatChordText(shortcut, isMac) : "";
+  return text ? `${label} (${text})` : label;
+}

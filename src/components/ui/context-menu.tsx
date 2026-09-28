@@ -1,6 +1,6 @@
 import * as React from "react";
 import type * as ContextMenuPrimitiveType from "@radix-ui/react-context-menu";
-import { Slot } from "@radix-ui/react-slot";
+import { Slot, Slottable } from "@radix-ui/react-slot";
 import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
@@ -15,7 +15,8 @@ import {
   useOverlayFocusRestoreValue,
 } from "./overlay-focus-restore";
 import { actionService } from "@/services/ActionService";
-import { useAriaKeyshortcuts } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
+import { KbdChord } from "./Kbd";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 type ContextMenuRootProps = React.ComponentProps<typeof ContextMenuPrimitiveType.Root>;
@@ -346,14 +347,41 @@ const ContextMenuContent = React.forwardRef<
 );
 ContextMenuContent.displayName = "ContextMenuContent";
 
+interface ContextMenuShortcutProps {
+  /** The canonical combo (`"Cmd+Shift+P"`), never a pre-formatted display string. */
+  shortcut: string | null | undefined;
+  className?: string;
+}
+
+/* The trailing key column, drawn by `KbdChord` like every other shortcut in the
+ * app, bare because every row of a menu can carry one. `aria-hidden`: the glyph
+ * run is not part of the item's name (WCAG 2.5.3) — the item carries the keys
+ * as `aria-keyshortcuts` instead. */
+const ContextMenuShortcut = ({ shortcut, className }: ContextMenuShortcutProps) => {
+  if (!shortcut || !shortcut.trim()) return null;
+  return (
+    <span aria-hidden="true" className={cn("ml-auto shrink-0 pl-4", className)}>
+      <KbdChord shortcut={shortcut} density="bare" />
+    </span>
+  );
+};
+ContextMenuShortcut.displayName = "ContextMenuShortcut";
+
 type ContextMenuItemProps = React.ComponentPropsWithoutRef<typeof ContextMenuPrimitiveType.Item> & {
   inset?: boolean;
   destructive?: boolean;
+  /**
+   * The action whose live binding this row shows. Draws it in the trailing key
+   * column and sets `aria-keyshortcuts` from the same combo, so the visible
+   * keys and the announced ones cannot drift apart. Draws nothing when the
+   * action is unbound.
+   */
+  keybinding?: string;
 };
 
-const ContextMenuItem = React.forwardRef<
+const ContextMenuItemBase = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.Item>,
-  ContextMenuItemProps
+  Omit<ContextMenuItemProps, "keybinding">
 >(({ className, inset, destructive, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
@@ -373,6 +401,37 @@ const ContextMenuItem = React.forwardRef<
     />
   );
 });
+ContextMenuItemBase.displayName = "ContextMenuItemBase";
+
+/* A row that shows an action's binding. Its own component so only rows that
+ * carry one subscribe to keybinding changes. */
+const ContextMenuKeyboundItem = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitiveType.Item>,
+  Omit<ContextMenuItemProps, "keybinding"> & { keybinding: string }
+>(({ keybinding, children, ...props }, ref) => {
+  const combo = useEffectiveCombo(keybinding);
+  const ariaKeyshortcuts = useAriaKeyshortcuts(keybinding);
+  return (
+    <ContextMenuItemBase ref={ref} aria-keyshortcuts={ariaKeyshortcuts} {...props}>
+      {/* Slottable: with `asChild` the child stays the slotted element and the
+          key column is appended inside it, not beside it. */}
+      <Slottable>{children}</Slottable>
+      <ContextMenuShortcut shortcut={combo} />
+    </ContextMenuItemBase>
+  );
+});
+ContextMenuKeyboundItem.displayName = "ContextMenuKeyboundItem";
+
+const ContextMenuItem = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitiveType.Item>,
+  ContextMenuItemProps
+>(({ keybinding, ...props }, ref) =>
+  keybinding ? (
+    <ContextMenuKeyboundItem ref={ref} keybinding={keybinding} {...props} />
+  ) : (
+    <ContextMenuItemBase ref={ref} {...props} />
+  )
+);
 ContextMenuItem.displayName = "ContextMenuItem";
 
 type ContextMenuActionItemProps = ContextMenuItemProps & {
@@ -455,16 +514,6 @@ const ContextMenuLabel = React.forwardRef<
   );
 });
 ContextMenuLabel.displayName = "ContextMenuLabel";
-
-const ContextMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
-  return (
-    <span
-      className={cn("ml-auto pl-2 text-2xs font-mono text-text-secondary", className)}
-      {...props}
-    />
-  );
-};
-ContextMenuShortcut.displayName = "ContextMenuShortcut";
 
 /* Trailing muted slot for item METADATA — a count, a state, a reason an item is
  * disabled. Deliberately not `ContextMenuShortcut`: a count is not a keybinding,

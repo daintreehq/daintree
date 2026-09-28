@@ -11,6 +11,8 @@ import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { shortcutHintStore, type ShortcutHintRect } from "@/store/shortcutHintStore";
 import { actionService } from "@/services/ActionService";
 import { KbdChord } from "./Kbd";
+import { TOOLTIP_CARD_PADDING } from "./tooltip";
+import { SHORTCUT_ROW_GAP } from "@/lib/tooltipShortcut";
 
 const AUTO_DISMISS_MS = 2500;
 const OFFSET_X = 12;
@@ -187,7 +189,10 @@ export function ShortcutHint() {
           data-shortcut-hint-surface
           className={cn(
             "fixed z-[var(--z-toast)] pointer-events-none",
-            "flex items-center gap-3 whitespace-nowrap px-2.5 py-1.5",
+            // A hint is a label + keys card like a tooltip, so it is drawn as one.
+            "flex items-center whitespace-nowrap",
+            SHORTCUT_ROW_GAP,
+            TOOLTIP_CARD_PADDING,
             "max-w-[calc(100vw-16px)]",
             "rounded-[var(--radius-md)] surface-overlay shadow-overlay",
             "text-xs text-text-primary",
@@ -200,7 +205,7 @@ export function ShortcutHint() {
           aria-hidden="true"
         >
           {title && <span className="min-w-0 truncate">{title}</span>}
-          <KbdChord shortcut={hint.combo} foreground="primary" className="shrink-0" />
+          <KbdChord shortcut={hint.combo} className="shrink-0" />
         </div>,
         document.body
       )}

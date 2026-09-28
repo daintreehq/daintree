@@ -23,6 +23,7 @@ import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { KbdChord } from "@/components/ui/Kbd";
 import { isMac } from "@/lib/platform";
+import { describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
 
 interface QuickRunProps {
   projectId: string;
@@ -74,7 +75,7 @@ const SECTION_LABELS: Record<SuggestionSection, string> = {
 };
 const SECTION_ORDER: readonly SuggestionSection[] = ["saved", "script", "history"];
 
-const PIN_KEY_LABEL = isMac() ? "⌥P" : "Alt+P";
+const PIN_COMBO = "Alt+P";
 const SUMMARY_ID = "quick-run-summary";
 
 /** Commands are set in the mono face, which draws them without ligatures. */
@@ -98,7 +99,7 @@ function PinHint({
           <span className="mr-1">Edit</span>
         </>
       )}
-      <KbdChord shortcut="Alt+P" density="compact" />
+      <KbdChord shortcut={PIN_COMBO} density="compact" />
       {saved ? "Unpin" : "Pin"}
     </span>
   );
@@ -706,7 +707,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           // presentational. The keyboard route is Alt+P, named in the footer.
           <span
             aria-hidden="true"
-            title={`${item.type === "saved" ? "Unpin" : "Pin"} (${PIN_KEY_LABEL})`}
+            title={labelWithShortcut(item.type === "saved" ? "Unpin" : "Pin", PIN_COMBO, isMac())}
             onClick={(e) => {
               e.stopPropagation();
               togglePin(item);
@@ -1048,7 +1049,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     </div>
                     {highlighted && (
                       <span className="sr-only">
-                        {`${canComplete ? "Tab to edit, " : ""}${PIN_KEY_LABEL} to ${highlighted.type === "saved" ? "unpin" : "pin"}`}
+                        {`${canComplete ? "Tab to edit, " : ""}${describeChord(PIN_COMBO, isMac())} to ${highlighted.type === "saved" ? "unpin" : "pin"}`}
                       </span>
                     )}
                   </div>
