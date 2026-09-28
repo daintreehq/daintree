@@ -30,7 +30,6 @@ import { cn } from "@/lib/utils";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
@@ -343,7 +342,8 @@ export function DevPreviewPane({
     previousIsEvictedRef.current = isEvicted;
   }, [isEvicted, hasBeenVisible]);
 
-  const showRecoverySpinner = useDohertyGate(isRecoveringFromEviction);
+  // PaneLoadingState gates itself; a second gate here would double the delay.
+  const showRecoverySpinner = isRecoveringFromEviction;
 
   useEffect(() => {
     const webview = webviewElement;

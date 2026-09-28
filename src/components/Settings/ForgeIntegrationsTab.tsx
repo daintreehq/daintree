@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type {
   ForgeProviderEntry,
   ForgeProviderResolutionVia,
@@ -415,7 +416,12 @@ function ProjectRoutingPanel({
   }
 
   if (loading) {
-    return shell(<SettingsEmptyRow>Loading remotes…</SettingsEmptyRow>);
+    return shell(
+      <Skeleton label="Loading remotes" className="space-y-3 px-4 py-3">
+        <SkeletonBone immediate className="h-5 w-2/3" />
+        <SkeletonBone immediate className="h-5 w-1/2" />
+      </Skeleton>
+    );
   }
 
   if (error) {
