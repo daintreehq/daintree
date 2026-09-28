@@ -18,6 +18,8 @@ import { QuickStateArmButton } from "@/components/Worktree/QuickStateArmButton";
 import { PilotFilterBar } from "@/components/Pilot/PilotFilterBar";
 import { ThemeBrowser } from "@/components/ThemeBrowser/ThemeBrowser";
 import { ProjectPulseCard } from "@/components/Pulse/ProjectPulseCard";
+import { ViewportControls } from "@/components/Browser/ViewportControls";
+import { GitHubResourceListSkeleton } from "../../../../plugins/builtin/github/renderer/components/GitHubDropdownSkeletons";
 import { usePulseStore } from "@/store";
 import { emptyBandCounts } from "@/lib/fleetAttention";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
@@ -180,6 +182,7 @@ function Gallery() {
   const bands = { ...emptyBandCounts(), working: 3 };
   const [scope, setScope] = useState<"global" | "project">("project");
   const [density, setDensity] = useState<"compact" | "comfortable" | "spacious">("comfortable");
+  const [dpr, setDpr] = useState<1 | 2 | 3>(2);
 
   return (
     <div
@@ -353,6 +356,35 @@ function Gallery() {
 
       <Specimen id="pulse" title="Project pulse card — range" surface="" width={560}>
         <ProjectPulseCard worktreeId={WORKTREE_ID} />
+      </Specimen>
+
+      <Specimen
+        id="viewport-dpr"
+        title="Browser device bar — pixel ratio"
+        surface="border border-border-default bg-surface-panel"
+        width={520}
+      >
+        <ViewportControls
+          preset="iphone"
+          rotated={false}
+          dpr={dpr}
+          fit={false}
+          onPresetChange={() => {}}
+          onRotateToggle={() => {}}
+          onDprChange={setDpr}
+          onFitToggle={() => {}}
+        />
+      </Specimen>
+
+      <Specimen
+        id="github-filter"
+        title="GitHub list — state filter (loading skeleton, mirrors the live control)"
+        surface="border border-border-default bg-surface-panel-elevated"
+        width={380}
+      >
+        <div className="h-[150px] overflow-hidden">
+          <GitHubResourceListSkeleton type="pr" count={1} immediate />
+        </div>
       </Specimen>
 
       <Specimen id="theme-browser" title="Theme browser — appearance mode" surface="" width={420}>

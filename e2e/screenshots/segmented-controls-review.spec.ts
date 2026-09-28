@@ -48,6 +48,8 @@ const SPECIMENS = [
   "quick-state",
   "pilot",
   "pulse",
+  "viewport-dpr",
+  "github-filter",
   "theme-browser",
 ] as const;
 
