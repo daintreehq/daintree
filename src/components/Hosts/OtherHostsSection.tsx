@@ -1,7 +1,7 @@
 import type { HostId, HostPlatform } from "@shared/types/remoteHosts";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { cn } from "@/lib/utils";
-import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { PlatformGlyph } from "./PlatformGlyph";
 import { clientPlatform } from "./hostModel";
 import { useOtherHostTargets, type HostProjectRef } from "./hostProjects";
@@ -94,7 +94,7 @@ export function OtherHostsSection({
     >
       <h3
         id="project-switcher-other-hosts"
-        className="px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary"
+        className={cn("px-2.5 py-1.5", PALETTE_SECTION_LABEL_CLASS)}
       >
         Other hosts
       </h3>

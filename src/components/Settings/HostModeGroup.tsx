@@ -148,10 +148,10 @@ export default function HostModeGroup() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={host.checkingKeychain}
+                    loading={host.checkingKeychain}
                     onClick={() => void host.runKeychainPreflight()}
                   >
-                    {host.checkingKeychain ? "Checking…" : "Check"}
+                    Check
                   </Button>
                 }
               />
