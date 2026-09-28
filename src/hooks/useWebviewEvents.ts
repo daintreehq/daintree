@@ -4,9 +4,6 @@ import { pushBrowserHistory } from "@/components/Browser/historyUtils";
 import type { LoadError } from "@/components/Browser/browserUtils";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 
-// Threshold after which a load is reported as "Taking longer than usual…"
-// Independent of the hard timeout (loadTimeoutMs) which actually aborts.
-const SLOW_LOAD_THRESHOLD_MS = 5000;
 // Coalesce favicon-updated bursts to avoid thrashing the URL-history store.
 const FAVICON_DEBOUNCE_MS = 200;
 
@@ -24,7 +21,6 @@ export type UseWebviewEventsOptions = {
   webviewElement: Electron.WebviewTag | null;
   isInitialRestoredLoadRef: React.MutableRefObject<boolean>;
   lastSetUrlRef: React.MutableRefObject<string>;
-  slowLoadTimeoutRef: React.MutableRefObject<NodeJS.Timeout | null>;
   loadTimeoutRef: React.MutableRefObject<NodeJS.Timeout | null>;
   evictingRef: React.RefObject<boolean>;
   projectId: string | undefined;
@@ -33,7 +29,6 @@ export type UseWebviewEventsOptions = {
   setIsWebviewReady: (v: boolean) => void;
   setIsLoading: (v: boolean) => void;
   setLoadError: (v: LoadError | null) => void;
-  setIsSlowLoad: (v: boolean) => void;
   /**
    * Navigation events only ever *clear* the blocked-navigation notice — the
    * notice itself is created by the onNavigationBlocked listener. Typing the
@@ -61,7 +56,6 @@ export function useWebviewEvents({
   webviewElement,
   isInitialRestoredLoadRef,
   lastSetUrlRef,
-  slowLoadTimeoutRef,
   loadTimeoutRef,
   evictingRef,
   projectId,
@@ -70,7 +64,6 @@ export function useWebviewEvents({
   setIsWebviewReady,
   setIsLoading,
   setLoadError,
-  setIsSlowLoad,
   setBlockedNav,
   setHistory,
   onRenderProcessGone,
@@ -93,10 +86,6 @@ export function useWebviewEvents({
     }
 
     const clearAllTimers = () => {
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -112,29 +101,15 @@ export function useWebviewEvents({
     const handleDidStartLoading = () => {
       setIsLoading(true);
       setLoadError(null);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
-      slowLoadTimeoutRef.current = setTimeout(() => {
-        try {
-          if (webview.isLoading()) {
-            setIsSlowLoad(true);
-          }
-        } catch {
-          // Webview detached before timeout fired
-        }
-      }, SLOW_LOAD_THRESHOLD_MS);
       const timeoutMs = getLoadTimeoutMs();
       loadTimeoutRef.current = setTimeout(() => {
         loadTimeoutRef.current = null;
         try {
           if (webview.isLoading()) {
             webview.stop();
-            setIsSlowLoad(false);
             setIsLoading(false);
             setLoadError({
               kind: "timeout",
@@ -149,11 +124,6 @@ export function useWebviewEvents({
 
     const handleDidStopLoading = () => {
       setIsLoading(false);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -166,11 +136,6 @@ export function useWebviewEvents({
       // navigation must not disarm the active main-frame load timers.
       if (event.errorCode === ERR_ABORTED) return;
       if (!event.isMainFrame) return;
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -341,11 +306,6 @@ export function useWebviewEvents({
       if (details.reason === "clean-exit") return;
       if (evictingRef.current) return;
       setIsLoading(false);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -377,10 +337,6 @@ export function useWebviewEvents({
         clearTimeout(faviconDebounceTimer);
         faviconDebounceTimer = null;
       }
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -391,12 +347,10 @@ export function useWebviewEvents({
     evictingRef,
     isInitialRestoredLoadRef,
     lastSetUrlRef,
-    slowLoadTimeoutRef,
     loadTimeoutRef,
     setIsWebviewReady,
     setIsLoading,
     setLoadError,
-    setIsSlowLoad,
     setBlockedNav,
     setHistory,
   ]);

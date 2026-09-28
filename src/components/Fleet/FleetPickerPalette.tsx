@@ -3,6 +3,7 @@ import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { FleetPickerContent, FleetPickerFooterHint } from "@/components/Fleet/FleetPickerContent";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
@@ -328,16 +329,13 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
             // Another picker (likely the ribbon `+ Add panes…`) holds the
             // single-active session. Surface a soft empty state and let the
             // user dismiss via Cancel/Esc.
-            <div
-              className="flex flex-col items-center justify-center gap-1 px-6 py-12 text-center"
-              data-testid="fleet-picker-cold-start-blocked"
-            >
-              <div className="text-sm leading-[inherit] font-medium text-text-primary">
-                Another fleet picker is open
-              </div>
-              <div className="text-xs leading-[inherit] text-text-secondary">
-                Close it and try again.
-              </div>
+            <div data-testid="fleet-picker-cold-start-blocked">
+              <EmptyState
+                variant="zero-data"
+                scale="popover"
+                title="Close the other fleet picker to arm from here"
+                className="min-h-[120px]"
+              />
             </div>
           )}
         </div>

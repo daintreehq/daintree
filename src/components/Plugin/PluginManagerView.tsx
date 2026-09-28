@@ -1084,12 +1084,14 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           ) : (
             // No plugins at all — a roomy centered prompt rather than an empty
             // catalog shell; the master column owns the install CTAs.
-            <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-              <Package className="w-8 h-8 text-text-placeholder" aria-hidden="true" />
-              <p className="text-base font-medium text-text-primary">No plugin selected</p>
-              <p className="text-sm text-text-secondary max-w-sm">
-                Install a plugin to view its details and settings here.
-              </p>
+            <div className="h-full flex items-center justify-center">
+              <EmptyState
+                variant="zero-data"
+                scale="canvas"
+                icon={<Package />}
+                title="No plugin selected"
+                description="Install a plugin to view its details and settings here."
+              />
             </div>
           )}
         </ScrollShadow>

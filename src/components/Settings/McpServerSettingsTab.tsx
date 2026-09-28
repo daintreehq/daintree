@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Eye, EyeOff, ChevronRight } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
@@ -18,8 +19,6 @@ import { useSettingsTabValidation } from "@/components/Settings/SettingsValidati
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { ErrorRetryRow, InlineErrorRow } from "@/components/Settings/auditLogParts";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
-import { useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -74,9 +73,6 @@ export function McpServerSettingsTab() {
   const [runtimeSnapshot, setRuntimeSnapshot] =
     useState<McpRuntimeSnapshot>(INITIAL_RUNTIME_SNAPSHOT);
   const [loading, setLoading] = useState(true);
-  // Gate the "Loading…" copy past the Doherty threshold so fast IPC resolutions
-  // don't flash a loading state for sub-400ms work.
-  const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   // One state, not two booleans: the plain and scoped copies share a single
   // reset timer, so independent flags let the second copy cancel the first's
   // reset and strand its "Copied!" indefinitely.
@@ -627,9 +623,9 @@ export function McpServerSettingsTab() {
   const maxRecordsUnchanged = maxRecordsInput === auditMaxRecords.toString();
 
   const statusRow = !status.enabled ? null : loading ? (
-    showInlineLoading ? (
-      <SettingsRow label={<span className="text-text-secondary">Loading…</span>} />
-    ) : null
+    <Skeleton label="Loading server status" className="px-4 py-3">
+      <SkeletonBone className="h-5 w-1/2" />
+    </Skeleton>
   ) : runtimeSnapshot.state === "starting" ? (
     <SettingsRow
       label={

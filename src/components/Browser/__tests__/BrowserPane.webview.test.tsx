@@ -3,6 +3,8 @@ import { act, render } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserPaneProps } from "../BrowserPane";
 import { BrowserPane } from "../BrowserPane";
+import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
@@ -511,8 +513,8 @@ describe("BrowserPane webview lifecycle regression", () => {
     const status = getByRole("status");
     // Never busy: on a live region that would hold back its own message.
     expect(status.closest('[aria-busy="true"]')).toBeNull();
-    expect(status.getAttribute("aria-label")).toBe("Loading…");
-    expect(status.textContent).toContain("Loading…");
+    expect(status.getAttribute("aria-label")).toBe("Loading page");
+    expect(status.textContent).toContain("Loading page");
   });
 
   it("announces the slow-load escalation via a polite live region (#9964)", () => {
@@ -530,15 +532,17 @@ describe("BrowserPane webview lifecycle regression", () => {
       vi.advanceTimersByTime(401);
     });
 
-    const liveRegion = container.querySelector('[aria-live="polite"]');
+    const liveRegion = container.querySelector('[aria-live="polite"][aria-atomic="true"]');
     expect(liveRegion).not.toBeNull();
     expect(liveRegion?.textContent).toBe("");
 
+    // The same escalation ladder as every other pane load (SkeletonHint).
     act(() => {
-      vi.advanceTimersByTime(5000);
+      vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS);
     });
 
-    expect(liveRegion?.textContent).toContain("taking longer than usual");
+    expect(liveRegion?.textContent).toContain("Loading page");
+    expect(liveRegion?.textContent).toContain("Cancel option available");
   });
 
   it("removes the loading status region after did-stop-loading (#9964)", () => {
@@ -1009,7 +1013,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
         // Still pending: the notice must not be torn down before we know the outcome.
         expect(container.textContent).toContain("oauth.provider.com");
-        expect(findButton(container, "Opening…")?.hasAttribute("disabled")).toBe(true);
+        expect(findButton(container, "Opening…")?.getAttribute("aria-disabled")).toBe("true");
 
         await act(async () => {
           resolveOpen({ ok: true, result: undefined });
@@ -1497,7 +1501,7 @@ describe("BrowserPane webview lifecycle regression", () => {
   });
 
   describe("slow-load and timeout escalation", () => {
-    it("shows slow-load message and Cancel after 5s of loading", () => {
+    it("shows the slow-load hint and Cancel once the load outlasts the first hint threshold", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
 
@@ -1506,15 +1510,24 @@ describe("BrowserPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-start-loading");
       });
 
-      // Before 5s, only spinner (no slow-load text)
-      expect(container.textContent).not.toContain("Taking longer than usual");
+      // The overlay mounts past the Doherty gate; its hint ladder starts then.
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      act(() => {
+        vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS - 1);
+      });
+      const cancel = () =>
+        Array.from(container.querySelectorAll("button")).find((b) =>
+          b.textContent?.includes("Cancel")
+        );
+      expect(cancel()).toBeUndefined();
 
       act(() => {
-        vi.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(1);
       });
 
-      expect(container.textContent).toContain("Taking longer than usual");
-      expect(container.textContent).toContain("Cancel");
+      expect(cancel()).toBeDefined();
     });
 
     it("Cancel stops the webview and shows cancelled error", () => {
@@ -1527,7 +1540,10 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       act(() => {
-        vi.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      act(() => {
+        vi.advanceTimersByTime(SKELETON_HINT_FIRST_THRESHOLD_MS);
       });
 
       const cancelButton = Array.from(container.querySelectorAll("button")).find((b) =>

@@ -202,10 +202,12 @@ describe("DevPreviewEmptyStates — interaction contract", () => {
     }
   });
 
-  it("announces the state's title through a status region, not its actions", () => {
+  it("announces the state's title through a live region, not its actions", () => {
     for (const state of everyState) {
       const { unmount } = render(<DevPreviewEmptyStates {...baseProps(state)} />);
-      const status = screen.getByRole("status");
+      // A failure is an alert; every other state a polite status.
+      const status =
+        state.status === "error" ? screen.getByRole("alert") : screen.getByRole("status");
       expect((status.textContent ?? "").trim().length).toBeGreaterThan(0);
       expect(within(status).queryAllByRole("button")).toHaveLength(0);
       unmount();

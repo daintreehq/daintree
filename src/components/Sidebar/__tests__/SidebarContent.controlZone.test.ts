@@ -107,17 +107,13 @@ describe("Worktrees sidebar control zone — issue #11991", () => {
     expect(sidebar).toMatch(/group-focus-within\/header:visible/);
   });
 
-  it("honours reduced motion on the reconnecting spinner", async () => {
+  it("draws the reconnecting spinner with the shared Spinner, which owns reduced motion", async () => {
     const badge = await fs.readFile(
       path.resolve(__dirname, "../WorktreesReconnectingBadge.tsx"),
       "utf-8"
     );
-    const spinners = [...badge.matchAll(/className="[^"]*\banimate-spin\b[^"]*"/g)].map(
-      (m) => m[0]
-    );
-    expect(spinners.length).toBeGreaterThan(0);
-    for (const cls of spinners) {
-      expect(cls).toContain("motion-reduce:animate-none");
-    }
+    expect(badge).toMatch(/<Spinner\b/);
+    // A hand-wrapped spin is what drifted from reduced motion before.
+    expect(badge).not.toMatch(/\banimate-spin\b/);
   });
 });

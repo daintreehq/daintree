@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, CircleSlash, Loader2, TriangleAlert, X } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
+import { Check, CircleSlash, TriangleAlert, X } from "lucide-react";
 import { Activity } from "@/components/icons";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -262,11 +263,7 @@ function ActivityGlyph({
   inFlight: boolean;
 }) {
   if (inFlight) {
-    return (
-      <span aria-hidden className="inline-flex shrink-0 animate-spin">
-        <Loader2 className="w-3 h-3" />
-      </span>
-    );
+    return <Spinner size="xs" />;
   }
   if (activity.isError) {
     return <X aria-hidden className="w-3 h-3 shrink-0" />;

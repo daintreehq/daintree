@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { Globe, Loader2, CircleAlert } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
+import { Globe, CircleAlert } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
@@ -83,9 +84,7 @@ export function DevServerIndicator({ session }: DevServerIndicatorProps) {
             aria-label={label}
             className="inline-flex items-center text-text-muted shrink-0"
           >
-            <span className="inline-flex shrink-0 animate-spin">
-              <Loader2 className="w-3 h-3" aria-hidden="true" />
-            </span>
+            <Spinner size="xs" />
           </span>
         </TooltipTrigger>
         <TooltipContent side="top">{label}</TooltipContent>

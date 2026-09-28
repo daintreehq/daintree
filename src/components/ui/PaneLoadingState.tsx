@@ -3,7 +3,7 @@ import { SkeletonHint } from "@/components/ui/Skeleton";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 
-interface DevPreviewLoadingStateProps {
+interface PaneLoadingStateProps {
   variant: "full" | "overlay";
   isLoading: boolean;
   phaseLabel: string;
@@ -95,13 +95,13 @@ function OverlaySkeleton({
   );
 }
 
-export function DevPreviewLoadingState({
+export function PaneLoadingState({
   variant,
   isLoading,
   phaseLabel,
   onCancel,
   className,
-}: DevPreviewLoadingStateProps) {
+}: PaneLoadingStateProps) {
   if (variant === "overlay") {
     return <OverlaySkeleton phaseLabel={phaseLabel} isLoading={isLoading} onCancel={onCancel} />;
   }

@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
-import { useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -19,7 +18,6 @@ import { logError } from "@/utils/logger";
 export function PluginsTab() {
   const [count, setCount] = useState<number | null>(null);
   const [countFailed, setCountFailed] = useState(false);
-  const showInlineLoading = useDeferredLoading(count === null, UI_DOHERTY_THRESHOLD);
   // Opt-in background update check (#10893). `null` until the main-process
   // electron-store value loads; renders OFF while loading so it never implies
   // the feature is on before we know.
@@ -143,9 +141,13 @@ export function PluginsTab() {
           <SettingsRow
             label="Plugin manager"
             description={
-              <span className="block min-h-[1rem]">
-                {summary ?? (showInlineLoading ? "Loading…" : "")}
-              </span>
+              <div className="min-h-[1rem]">
+                {summary ?? (
+                  <Skeleton label="Loading installed plugins" className="py-0.5">
+                    <SkeletonBone className="h-3 w-40" />
+                  </Skeleton>
+                )}
+              </div>
             }
             control={
               <Button variant="outline" size="sm" onClick={openManager}>

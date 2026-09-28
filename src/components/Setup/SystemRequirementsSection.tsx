@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ChevronDown, CircleCheck, Loader2, RotateCw, CircleX } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
+import { AlertTriangle, ChevronDown, CircleCheck, RotateCw, CircleX } from "lucide-react";
 import { m, useReducedMotion } from "framer-motion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
@@ -92,8 +93,8 @@ export function SystemRequirementsSection({
 
       {isChecking && (
         <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
-          <Loader2 className="w-3 h-3 animate-spin" />
-          Checking...
+          <Spinner size="xs" />
+          Checking…
         </span>
       )}
 

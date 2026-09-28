@@ -241,10 +241,12 @@ export function TerminalBackendOverlay({ recovering }: { recovering: boolean }) 
       role={recovering ? "status" : undefined}
       aria-live={recovering ? "polite" : undefined}
     >
+      {/* On its own surface: the scrim's tone flips with the theme, so no text
+          colour reads on it in both polarities. */}
       {recovering && (
-        <div className="flex flex-col items-center gap-3">
-          <Spinner size="2xl" className="text-status-warning" />
-          <span className="text-text-inverse font-medium">Reconnecting...</span>
+        <div className="flex flex-col items-center gap-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-panel-elevated px-6 py-4 font-sans">
+          <Spinner size="xl" className="text-text-secondary" />
+          <p className="text-sm text-text-secondary">Reconnecting…</p>
         </div>
       )}
     </div>
@@ -262,7 +264,7 @@ export function TerminalStartupPlaceholder({
   const label = agentName ? `Starting ${agentName}…` : "Starting terminal…";
   // Doherty gate: typical PTY spawns resolve well under the 400ms threshold,
   // so the common case is no spinner at all — only slow or queued spawns
-  // surface one. Mirrors DevPreviewLoadingState.
+  // surface one. Mirrors PaneLoadingState.
   const showSpinner = useDohertyGate(true);
 
   return (
@@ -278,7 +280,7 @@ export function TerminalStartupPlaceholder({
             caption is aria-hidden — the status node above announces it. */}
         {showSpinner && (
           <>
-            <Spinner size="xl" className="text-daintree-text/45" />
+            <Spinner size="xl" className="text-text-secondary" />
             <p aria-hidden="true" className="text-sm text-text-secondary break-words">
               {label}
             </p>

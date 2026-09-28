@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Spinner } from "@/components/ui/Spinner";
 import {
   AlertTriangle,
   ChevronDown,
@@ -6,7 +7,6 @@ import {
   CircleCheck,
   CircleX,
   ExternalLink,
-  Loader2,
 } from "lucide-react";
 import { systemClient } from "@/clients";
 import { Button } from "@/components/ui/button";
@@ -114,7 +114,7 @@ export function StatusIcon({
   loading: boolean;
 }) {
   if (loading) {
-    return <Loader2 className="w-4 h-4 text-text-secondary animate-spin shrink-0" />;
+    return <Spinner className="text-text-secondary" />;
   }
   if (check?.available && check.meetsMinVersion) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;

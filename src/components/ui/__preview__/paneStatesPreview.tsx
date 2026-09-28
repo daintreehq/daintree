@@ -297,12 +297,9 @@ function Harness() {
           />
         </Pane>
       </Row>
-      <Row shot="loading" title="Loading — browser | browser slow | dev preview | terminal startup">
+      <Row shot="loading" title="Loading — browser | dev preview | terminal startup">
         <Pane label="Browser" width={330}>
-          <BrowserLoadingOverlay isSlowLoad={false} onCancel={noop} />
-        </Pane>
-        <Pane label="Browser slow" width={330}>
-          <BrowserLoadingOverlay isSlowLoad onCancel={noop} />
+          <BrowserLoadingOverlay isLoading onCancel={noop} />
         </Pane>
         <Pane label="Dev preview" width={330}>
           <DevOverlays isLoading />
@@ -311,7 +308,10 @@ function Harness() {
           <TerminalStartupPlaceholder agentId="claude" />
         </Pane>
       </Row>
-      <Row shot="empty" title="No URL / not configured — browser | dev preview">
+      <Row
+        shot="empty"
+        title="No URL / not configured / failed — browser | dev preview | plugin view"
+      >
         <Pane label="Browser">
           <BrowserNoUrlState onNavigate={noop} />
         </Pane>
@@ -335,6 +335,7 @@ function Harness() {
         </Pane>
         <Pane label="Browser blocked nav" height={120}>
           <BrowserBlockedNavNotice
+            url="https://docs.stripe.com/payments/checkout"
             hostname="docs.stripe.com"
             canOpenExternal
             opening={false}

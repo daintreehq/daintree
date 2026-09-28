@@ -1,4 +1,4 @@
-import { RefreshCw } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 
@@ -18,9 +18,7 @@ export function WorktreesReconnectingBadge({ escalatedSince }: { escalatedSince:
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
             <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs">
-              <span className="inline-flex shrink-0 animate-spin motion-reduce:animate-none">
-                <RefreshCw className="w-3 h-3" aria-hidden="true" />
-              </span>
+              <Spinner size="xs" />
               <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
             </span>
           </TooltipTrigger>
@@ -30,9 +28,7 @@ export function WorktreesReconnectingBadge({ escalatedSince }: { escalatedSince:
         </Tooltip>
       ) : (
         <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-text-secondary text-xs">
-          <span className="inline-flex shrink-0 animate-spin motion-reduce:animate-none">
-            <RefreshCw className="w-3 h-3" aria-hidden="true" />
-          </span>
+          <Spinner size="xs" />
           <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
         </span>
       )}

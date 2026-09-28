@@ -233,8 +233,6 @@ export function BrowserPane({
   }, [isWebviewReady]);
 
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [isSlowLoad, setIsSlowLoad] = useState(false);
-  const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const screenshotInFlightRef = useRef(false);
 
   const hasBeenVisible = useHasBeenVisible(id, location);
@@ -399,7 +397,6 @@ export function BrowserPane({
     webviewElement,
     isInitialRestoredLoadRef,
     lastSetUrlRef,
-    slowLoadTimeoutRef,
     loadTimeoutRef,
     evictingRef,
     projectId,
@@ -408,7 +405,6 @@ export function BrowserPane({
     setIsWebviewReady,
     setIsLoading,
     setLoadError,
-    setIsSlowLoad,
     setBlockedNav,
     setHistory,
     onRenderProcessGone: handleRenderProcessGone,
@@ -556,7 +552,6 @@ export function BrowserPane({
     setBlockedNav(null);
     setIsLoading(true);
     setLoadError(null);
-    setIsSlowLoad(false);
     setCrashState("none");
     setCrashDetails(null);
     crashTimestampsRef.current = [];
@@ -571,7 +566,6 @@ export function BrowserPane({
     crashReloadRef.current = () => {
       setIsLoading(true);
       setLoadError(null);
-      setIsSlowLoad(false);
       webviewRef.current?.reload();
     };
   }, []);
@@ -645,15 +639,10 @@ export function BrowserPane({
   }, [isEvicted]);
 
   const handleCancelLoad = useCallback(() => {
-    if (slowLoadTimeoutRef.current) {
-      clearTimeout(slowLoadTimeoutRef.current);
-      slowLoadTimeoutRef.current = null;
-    }
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
     }
-    setIsSlowLoad(false);
     setIsLoading(false);
     const webview = webviewRef.current;
     if (webview) {
@@ -668,7 +657,6 @@ export function BrowserPane({
 
   const handleRetryFromError = useCallback(() => {
     setLoadError(null);
-    setIsSlowLoad(false);
     setIsLoading(true);
     if (currentUrl) {
       // Swallow ERR_ABORTED-class rejections — see commitNavigation comment.
@@ -742,9 +730,6 @@ export function BrowserPane({
     return () => {
       if (blockedNavTimerRef.current) {
         clearTimeout(blockedNavTimerRef.current);
-      }
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
       }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -1022,6 +1007,7 @@ export function BrowserPane({
                 />
               ) : (
                 <BrowserBlockedNavNotice
+                  url={blockedNav.url}
                   hostname={extractHostname(blockedNav.url)}
                   canOpenExternal={blockedNav.canOpenExternal}
                   opening={blockedNav.phase === "opening"}
@@ -1033,8 +1019,8 @@ export function BrowserPane({
               ))}
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
-              {showLoadingOverlay && (
-                <BrowserLoadingOverlay isSlowLoad={isSlowLoad} onCancel={handleCancelLoad} />
+              {isLoading && (
+                <BrowserLoadingOverlay isLoading={isLoading} onCancel={handleCancelLoad} />
               )}
               {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview

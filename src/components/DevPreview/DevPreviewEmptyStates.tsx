@@ -10,7 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { PanePlaceholder, PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
-import { DevPreviewLoadingState } from "./DevPreviewLoadingState";
+import { PaneLoadingState } from "@/components/ui/PaneLoadingState";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import type { DevServerError } from "@shared/utils/devServerErrors";
 import type { RunCommand } from "@shared/types";
@@ -69,41 +69,6 @@ const ERROR_TITLES: Record<DevServerError["type"], string> = {
   "process-crash": "Dev server error",
   unknown: "Dev server error",
 };
-
-/**
- * The pane-filling frame every state shares. Scrolls rather than clips in a
- * short pane, and keeps the title and description in one polite status region
- * so a change of state is announced without the actions being read out again.
- */
-function PaneState({
-  icon,
-  title,
-  description,
-  children,
-}: {
-  icon?: ReactNode;
-  title: string;
-  description?: ReactNode;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="absolute inset-0 overflow-y-auto bg-surface-canvas">
-      <div className="flex min-h-full flex-col items-center justify-center gap-5 p-6">
-        <div role="status" aria-live="polite" className="w-full">
-          <EmptyState
-            variant="zero-data"
-            scale="canvas"
-            icon={icon}
-            title={title}
-            description={description}
-            className="p-0"
-          />
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
 
 /** A command exactly as it will run, with an optional quieter label before it. */
 // Wraps rather than truncates: the point of showing the command is that all of
@@ -209,7 +174,7 @@ export function DevPreviewEmptyStates({
 
   if (isRestarting || status === "starting" || status === "installing" || isProxyUrlPending) {
     return (
-      <DevPreviewLoadingState
+      <PaneLoadingState
         variant="full"
         isLoading={true}
         phaseLabel={
@@ -232,11 +197,12 @@ export function DevPreviewEmptyStates({
       error.type === "compile-error";
     return (
       <PaneState
+        live="alert"
         icon={<AlertTriangle className="text-status-warning" />}
         title={ERROR_TITLES[error.type]}
         description={error.message}
       >
-        <div className="flex flex-wrap items-center justify-center gap-2">
+        <PaneStateActions>
           <Button onClick={handleRetry} variant="subtle" size="sm">
             <RotateCw />
             {error.type === "missing-dependencies" ? "Retry install" : "Retry"}
@@ -251,10 +217,10 @@ export function DevPreviewEmptyStates({
           ) : currentUrl ? (
             <Button onClick={handleOpenExternal} variant="ghost" size="sm">
               <ExternalLink />
-              Open in browser
+              Open in external browser
             </Button>
           ) : null}
-        </div>
+        </PaneStateActions>
       </PaneState>
     );
   }
@@ -445,22 +411,12 @@ export function DevPreviewEmptyStates({
   }
 
   if (!hasBeenVisible) {
-    return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary">
-        <p className="text-xs text-text-secondary">
-          Preview will load when this panel is first viewed
-        </p>
-      </div>
-    );
+    return <PanePlaceholder>Preview will load when this panel is first viewed</PanePlaceholder>;
   }
 
   if (isEvicted) {
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
-        <p className="text-xs text-text-secondary">
-          Preview paused to save memory — will reload when opened
-        </p>
-      </div>
+      <PanePlaceholder>Preview paused to save memory — will reload when opened</PanePlaceholder>
     );
   }
 
