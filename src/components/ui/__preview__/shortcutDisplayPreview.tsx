@@ -89,7 +89,7 @@ function MenuFixture() {
             Overflow
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-64" data-preview-surface>
+        <DropdownMenuContent align="start" data-preview-surface>
           <DropdownMenuItem keybinding="agent.claude">
             <Sparkles className={ICON} />
             <span className="flex-1">Claude</span>
