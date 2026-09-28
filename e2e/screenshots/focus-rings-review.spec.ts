@@ -227,6 +227,12 @@ const TARGETS: Target[] = [
     locate: (_p, shot) => shot.getByRole("radio", { name: "Light" }),
   },
   {
+    id: "quick-run-toggle",
+    fixture: "controls",
+    source: ["src/components/Project/QuickRun.tsx", 'data-quick-run-toggle=""'],
+    locate: (_p, shot) => shot.getByRole("button", { name: "Run command" }),
+  },
+  {
     id: "scroll-pill",
     fixture: "controls",
     source: ["src/components/ui/ScrollPill.tsx", "^<button"],

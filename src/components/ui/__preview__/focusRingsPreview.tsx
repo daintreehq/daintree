@@ -18,6 +18,7 @@ import {
   listCommitsFrom,
   listPushCommitsFrom,
 } from "@/components/Layout/__preview__/localCommitsFixtures";
+import { QuickRunToggle } from "@/components/Project/QuickRun";
 import "@/index.css";
 
 /**
@@ -640,6 +641,11 @@ const loadControls: Loader = async () => {
         </Shot>
         <Shot id="segmented" surface="panel">
           <Segmented />
+        </Shot>
+        <Shot id="quick-run-toggle" surface="panel">
+          <div className="flex h-7 w-72 items-stretch overflow-hidden border-t border-border-default">
+            <QuickRunToggle expanded={false} onToggle={() => {}} />
+          </div>
         </Shot>
         <Shot id="scroll-pill">
           <div className="relative flex h-16 w-72 items-end justify-center">
