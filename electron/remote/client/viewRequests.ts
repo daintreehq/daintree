@@ -30,6 +30,10 @@ const McpDispatchPayloadSchema = z.object({
   sessionOrigin: z.enum(["help", "assistant-pane", "external"]),
   offerSessionApproval: z.boolean().optional(),
   approvalOnly: z.boolean().optional(),
+  // Which approval dialog an `approvalOnly` request raises. It picks the
+  // dialog's shape (a protected close lists the panels to tick), never whether
+  // one is shown, so it is taken as-is.
+  approvalReason: z.enum(["above-tier", "protected-close"]).optional(),
 });
 
 export function isHostDispatchableAction(actionId: string): boolean {
@@ -89,7 +93,12 @@ async function dispatchAction(
     false,
     undefined,
     "external",
-    request.approvalOnly ? { approvalOnly: true } : undefined,
+    request.approvalOnly
+      ? {
+          approvalOnly: true,
+          ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
+        }
+      : undefined,
     describeHost(hostId)
   );
   // Only what the host reads back: this machine's view identity stays here,

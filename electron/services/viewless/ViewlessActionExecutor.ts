@@ -18,6 +18,8 @@ import {
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { NotifyReplyLinesSchema } from "../../../shared/types/terminalNotify.js";
+import { WaitForReplySchema, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
 import {
   mergeTerminalLaunchEnv,
   spawnSourceForMcpOrigin,
@@ -128,10 +130,17 @@ const TerminalNewArgsSchema = z
   })
   .optional();
 
+// The renderer action's argument shape. Main consumes `notify` and the reply
+// wait before dispatch, but a malformed one is forwarded for the action to
+// refuse, so it is checked here too rather than stripped and ignored.
 const TerminalSendCommandArgsSchema = z.object({
   terminalId: z.string().min(1).max(512),
   command: z.string().min(1),
   handback: z.boolean().optional(),
+  notify: z.boolean().optional(),
+  replyLines: NotifyReplyLinesSchema,
+  waitForReply: WaitForReplySchema,
+  waitSeconds: WaitSecondsSchema,
 });
 
 const WorktreeCreateArgsSchema = z.object({

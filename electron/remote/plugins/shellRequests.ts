@@ -7,6 +7,7 @@ import { PluginUIPromptDispatcher } from "../../services/plugin/PluginUIPromptDi
 import {
   PluginActionsGetPayloadSchema,
   PluginActionsListPayloadSchema,
+  PluginAgentsListPayloadSchema,
   PluginClipboardPayloadSchema,
   PluginConsentPayloadSchema,
   PluginDispatchPayloadSchema,
@@ -374,8 +375,16 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     return actions.sendActionsGetToWebContents(wc, parsed.data.actionId);
   };
 
+  /** The agent panes of the view that drives the plugin's project, never another view's. */
+  const listAgents = async (request: ViewReverseRequest): Promise<unknown> => {
+    const parsed = PluginAgentsListPayloadSchema.safeParse(request.payload);
+    if (!parsed.success) throw malformed("agents list");
+    return actions.sendAgentsListToWebContents(scopeView(request, parsed.data.pluginId));
+  };
+
   const disposers = [
     registerReverseRequestMethod(PluginFrontendMethod.DISPATCH, dispatchAction),
+    registerReverseRequestMethod(PluginFrontendMethod.AGENTS_LIST, listAgents),
     registerReverseRequestMethod(PluginFrontendMethod.ACTIONS_LIST, listActions),
     registerReverseRequestMethod(PluginFrontendMethod.ACTIONS_GET, getAction),
     registerReverseRequestMethod(PluginFrontendMethod.PROMPT, showPrompt),

@@ -5,6 +5,11 @@ import {
 } from "../../../shared/types/pluginCapabilityConsent.js";
 import { BUILT_IN_PLUGIN_CAPABILITIES } from "../../../shared/types/plugin.js";
 import type { PluginQuickPickItem } from "../../../shared/types/plugin.js";
+import {
+  AGENT_CONTEXT_MAX_TEXT_LENGTH,
+  AGENT_CONTEXT_MAX_TITLE_LENGTH,
+} from "../../../shared/utils/agentContextDrag.js";
+import { SEND_TO_AGENT_MAX_ID_LENGTH, SEND_TO_AGENT_REFUSAL_REASONS } from "./sendToAgentLimits.js";
 import type {
   PluginUiPromptParams,
   PluginUiPromptResultValue,
@@ -33,6 +38,8 @@ export const PluginFrontendMethod = {
   ACTIONS_LIST: "plugin.actions-list",
   /** `host.actions.get()`: one catalog entry; answers `{ entry }`. */
   ACTIONS_GET: "plugin.actions-get",
+  /** `host.agents.list()`: the driving view's agent panes; answers `{ agents }`. */
+  AGENTS_LIST: "plugin.agents-list",
 } as const;
 
 /** A remote clipboard image must fit one link frame with room to spare. */
@@ -103,6 +110,29 @@ const PromptParamsSchema = z.discriminatedUnion("kind", [
       destructive: z.boolean().optional(),
     }),
   }),
+  z.object({
+    kind: z.literal("sendToAgent"),
+    request: z.object({
+      text: z.string().max(AGENT_CONTEXT_MAX_TEXT_LENGTH),
+      title: z.string().max(AGENT_CONTEXT_MAX_TITLE_LENGTH).optional(),
+      sourceLabel: z.string().min(1).max(256),
+      terminalId: z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH).optional(),
+      worktreeId: z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH).optional(),
+    }),
+  }),
+]);
+
+const SendToAgentAnswerSchema = z.union([
+  z.object({
+    status: z.literal("drafted"),
+    terminalId: z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH),
+  }),
+  z.object({ status: z.literal("cancelled") }),
+  z.object({
+    status: z.literal("refused"),
+    reason: z.enum(SEND_TO_AGENT_REFUSAL_REASONS),
+    worktreeId: z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH).optional(),
+  }),
 ]);
 
 export const PluginPromptPayloadSchema = z.object({
@@ -158,6 +188,8 @@ export const PluginDispatchPayloadSchema = z.object({
 export const PluginActionsListPayloadSchema = z.object({ pluginId });
 
 export const PluginActionsGetPayloadSchema = z.object({ pluginId, actionId });
+
+export const PluginAgentsListPayloadSchema = z.object({ pluginId });
 
 /**
  * A driving view's answer to a plugin dispatch, checked before the plugin
@@ -223,6 +255,10 @@ export function coercePromptAnswer(
         return picked;
       }
       return pick(answer);
+    }
+    case "sendToAgent": {
+      const parsed = SendToAgentAnswerSchema.safeParse(answer);
+      return parsed.success ? parsed.data : { status: "cancelled" };
     }
   }
 }

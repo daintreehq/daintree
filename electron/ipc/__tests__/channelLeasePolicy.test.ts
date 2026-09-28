@@ -44,6 +44,7 @@ describe("channel lease policy", () => {
       "project:set-tab-groups",
       "project:set-draft-inputs",
       "app:set-state",
+      "plugin-agent-mcp:set-plugin-access",
     ]) {
       expect(getChannelLeasePolicy(channel), channel).toBe("driver");
     }

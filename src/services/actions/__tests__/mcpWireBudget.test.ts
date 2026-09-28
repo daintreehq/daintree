@@ -704,7 +704,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 114_300 → 114_600 for #13202, measured at 114_598 B: `notify` and
   // `replyLines` say a notice now carries the handback summary in place of the
   // screen, and that setting `replyLines` brings the screen back.
-  const MAX_COHORT_PAYLOAD_BYTES = 114_600;
+  // 114_600 → 116_300 for #11158's `host.switch` and `project.openOnHost` on
+  // full, measured at 115_487 B: their trimmed descriptions and the `hostId`,
+  // `newWindow`, `projectId` and `worktree` arguments. In-app only, so the
+  // external ceiling above does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 116_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

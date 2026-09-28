@@ -118,6 +118,46 @@ describe("view reverse requests", () => {
     expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ approvalOnly: true });
   });
 
+  it("carries an approval-only request's reason, so a protected close lists its panels", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });
+    await ask("mcp:dispatch-action", {
+      actionId: "terminal.new",
+      args: {},
+      confirmed: false,
+      sessionOrigin: "external",
+      approvalOnly: true,
+      approvalReason: "protected-close",
+    });
+    await ask("mcp:dispatch-action", {
+      actionId: "terminal.new",
+      args: {},
+      confirmed: false,
+      sessionOrigin: "external",
+      approvalReason: "protected-close",
+    });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+      approvalOnly: true,
+      approvalReason: "protected-close",
+    });
+    // A reason without approval-only changes nothing about the dispatch.
+    expect(m.dispatchActionForHost.mock.calls[1]?.[6]).toBeUndefined();
+  });
+
+  it("refuses an approval reason this Shell does not know", async () => {
+    installViewReverseRequests();
+    await expect(
+      ask("mcp:dispatch-action", {
+        actionId: "terminal.new",
+        args: {},
+        confirmed: false,
+        sessionOrigin: "external",
+        approvalOnly: true,
+        approvalReason: "skip-everything",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
   it.each([
     "terminal.paste",
     "terminal.copy",
