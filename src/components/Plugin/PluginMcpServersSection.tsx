@@ -4,7 +4,8 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
-import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, RefreshCw } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -342,11 +343,14 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                     aria-expanded={isOpen}
                     className="flex items-center gap-1.5 w-full px-3 py-2 text-2xs text-text-secondary hover:text-text-primary transition-[color] duration-150"
                   >
-                    {isOpen ? (
-                      <ChevronDown className="w-3.5 h-3.5 shrink-0" />
-                    ) : (
-                      <ChevronRight className="w-3.5 h-3.5 shrink-0" />
-                    )}
+                    <ChevronRight
+                      data-animated-chevron
+                      className={cn(
+                        "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
+                        isOpen && "rotate-90"
+                      )}
+                      aria-hidden="true"
+                    />
                     <span>{isOpen ? "Hide output" : "View output"}</span>
                   </button>
                   {isOpen && (

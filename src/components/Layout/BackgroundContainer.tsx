@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Moon, Layers, ChevronDown, ChevronRight, RotateCcw, OctagonX, Bell } from "lucide-react";
+import { Moon, Layers, ChevronRight, RotateCcw, OctagonX, Bell } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -607,11 +607,14 @@ function BackgroundGroupItem({
           aria-expanded={isExpanded}
           aria-controls={`bg-group-${groupRestoreId}`}
         >
-          {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-text-secondary" />
-          ) : (
-            <ChevronRight className="w-3 h-3 text-text-secondary" />
-          )}
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "w-3 h-3 text-text-secondary transition-transform duration-150 ease-out",
+              isExpanded && "rotate-90"
+            )}
+            aria-hidden="true"
+          />
         </Button>
 
         <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">

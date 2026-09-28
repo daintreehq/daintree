@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Coffee, TriangleAlert } from "lucide-react";
+import { ChevronRight, Coffee, TriangleAlert } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
@@ -246,11 +247,14 @@ function ProjectBreakdown({
           aria-controls="resource-project-rows"
           className="-mx-1 px-1 min-h-6 h-auto text-2xs justify-start"
         >
-          {showAll ? (
-            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-          ) : (
-            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-          )}
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+              showAll && "rotate-90"
+            )}
+            aria-hidden="true"
+          />
           {/* Stable, as toggle labels are: the chevron and aria-expanded carry
               the state. No count, because the list can hold an unassigned-
               terminals row that the footer's "N projects active" never counts. */}
@@ -341,11 +345,14 @@ function DiagnosticsSection({
         aria-controls="resource-diagnostics"
         className="-mx-1 px-1 min-h-6 h-auto text-2xs justify-start"
       >
-        {expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-        )}
+        <ChevronRight
+          data-animated-chevron
+          className={cn(
+            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+            expanded && "rotate-90"
+          )}
+          aria-hidden="true"
+        />
         Diagnostics
       </Button>
       {expanded && (

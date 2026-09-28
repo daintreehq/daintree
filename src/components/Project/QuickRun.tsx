@@ -3,7 +3,6 @@ import {
   CornerDownLeft,
   LayoutGrid,
   PanelBottom,
-  ChevronUp,
   ChevronDown,
   GitBranch,
   Pin,
@@ -213,11 +212,14 @@ export function QuickRunToggle({ expanded, onToggle }: QuickRunToggleProps) {
       <span>
         Run<span className="@max-[280px]/footer:hidden"> command</span>
       </span>
-      {expanded ? (
-        <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-      ) : (
-        <ChevronUp className="h-3 w-3 shrink-0" aria-hidden="true" />
-      )}
+      <ChevronDown
+        data-animated-chevron
+        className={cn(
+          "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+          !expanded && "rotate-180"
+        )}
+        aria-hidden="true"
+      />
     </button>
   );
 }

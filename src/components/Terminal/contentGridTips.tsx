@@ -246,9 +246,8 @@ export function RotatingTip() {
       // landing on CSS's `all` default — an every-property transition nobody
       // asked for — while the keyframe animation it was meant to time ignored
       // it entirely. Exactly the trap `.lessons/11180.md` documents for the
-      // sections above. The marker class is what lets Daintree's own
-      // reduce-animations toggle reach this fade; `motion-safe:` only covers
-      // the OS preference.
+      // sections above. The marker class snaps it to rest with the sections
+      // around it under reduced motion, so the stagger stays one piece.
       <div className="launcher-section-enter flex flex-col items-center gap-2 motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
         <p className="text-xs text-text-secondary text-center">
           Tip: <LiveTipMessage tip={tip} />

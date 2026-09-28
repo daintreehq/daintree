@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useState, useRef } from "react";
-import { Filter, ChevronDown } from "lucide-react";
+import { Filter, ChevronRight } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -118,12 +118,13 @@ function FilterSection({
                 Clear
               </span>
             )}
-            <ChevronDown
+            <ChevronRight
               data-animated-chevron
               className={cn(
                 "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
-                isOpen ? "transform rotate-180" : ""
+                isOpen && "rotate-90"
               )}
+              aria-hidden="true"
             />
           </button>
         </TruncatedTooltip>

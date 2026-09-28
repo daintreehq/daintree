@@ -1,13 +1,7 @@
 import { useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
-import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  CircleCheck,
-  CircleX,
-  ExternalLink,
-} from "lucide-react";
+import { AlertTriangle, ChevronRight, CircleCheck, CircleX, ExternalLink } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { systemClient } from "@/clients";
 import { Button } from "@/components/ui/button";
 import type { PrerequisiteCheckResult, PrerequisiteSpec } from "@shared/types";
@@ -66,11 +60,14 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
                 aria-controls={`install-panel-${spec.tool}`}
                 className="shrink-0 text-2xs"
               >
-                {showSteps ? (
-                  <ChevronDown aria-hidden="true" />
-                ) : (
-                  <ChevronRight aria-hidden="true" />
-                )}
+                <ChevronRight
+                  data-animated-chevron
+                  className={cn(
+                    "transition-transform duration-150 ease-out",
+                    showSteps && "rotate-90"
+                  )}
+                  aria-hidden="true"
+                />
                 How to install
               </Button>
             )}
