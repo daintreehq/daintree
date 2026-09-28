@@ -92,7 +92,7 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     id: "host.switch",
     title: "Switch host…",
     description:
-      'Switch this window to another machine running Daintree. With no args, opens the host menu. With hostId (from the host list, or "local"), switches directly to the project this machine last had open there, or shows that host\'s project list when there is none; newWindow opens it in a new window instead. Fails when the host is not in the list.',
+      'Move this window to another Daintree host. No args opens the host menu; hostId ("local" or from the list) opens its last project here, else its project list.',
     category: "workspace",
     kind: "command",
     // Moves the window the person is looking at to another machine: an agent
@@ -169,7 +169,7 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     id: "project.openOnHost",
     title: "Open project on host…",
     description:
-      "Open this window's project on another host through git: the host's own copy is found by the repository's remote URLs (never by name), or cloned there as the host; then a worktree is offered for the current branch, or the given worktree is created. Opens a dialog; every push, clone and worktree is confirmed there.",
+      "Open this project on another host via git: finds the host's copy by remote URL or clones it, then offers a worktree. Opens a dialog that confirms every step.",
     category: "project",
     kind: "command",
     danger: "safe",

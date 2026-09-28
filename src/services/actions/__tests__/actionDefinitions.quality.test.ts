@@ -477,7 +477,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // have fit at any wording above the 120 B floor. What the prose has to carry
   // is that the user trims and saves the export, so a caller asked for logs to
   // share reaches for it instead of archiving the raw log folder.
-  const MAX_COHORT_TOTAL_BYTES = 18_850;
+  // 18_850 → 19_200 for #11158's `host.switch` and `project.openOnHost` on
+  // full, measured at 19_163 B. Only 3 B were spare, and two descriptions at
+  // the 120 B floor would still be 237 B over; each is trimmed to about 155 B.
+  // What the prose has to carry is where a switch with no project lands and
+  // that the host move is confirmed in a dialog. Registered only where Remote
+  // Hosts is, and off the external surface, so the external total does not move.
+  const MAX_COHORT_TOTAL_BYTES = 19_200;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

@@ -477,8 +477,13 @@ export class PluginRendererDispatcher {
    * destroyed; rejects only when `projectId` is bound and that project has no
    * live view.
    */
-  sendAgentsListToRenderer(projectId?: PluginTargetProjectId): Promise<PluginAgentPane[]> {
+  sendAgentsListToRenderer(
+    projectId?: PluginTargetProjectId,
+    pluginId?: string
+  ): Promise<PluginAgentPane[]> {
     return this.requestFromRenderer<PluginAgentPane[]>({
+      pluginId,
+      remote: { method: PluginFrontendMethod.AGENTS_LIST, payload: { pluginId } },
       requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
       responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
       buildRequest: (requestId) => ({ requestId }),
@@ -587,6 +592,21 @@ export class PluginRendererDispatcher {
         return { entries: Array.isArray(entries) ? (entries as PluginActionManifestEntry[]) : [] };
       },
       fallback: { entries: [] },
+    });
+  }
+
+  /** The Shell's half of a host plugin's `host.agents.list()`, for one scoped view. */
+  sendAgentsListToWebContents(
+    webContents: Electron.WebContents
+  ): Promise<{ agents: PluginAgentPane[] }> {
+    return this.requestFromWebContents(webContents, {
+      requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+      buildRequest: (requestId) => ({ requestId }),
+      extract: (payload) => ({
+        agents: projectAgentPanes((payload as { agents?: unknown }).agents),
+      }),
+      fallback: { agents: [] },
     });
   }
 

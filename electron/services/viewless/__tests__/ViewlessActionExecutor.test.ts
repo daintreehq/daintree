@@ -379,6 +379,43 @@ describe("viewless actions", () => {
       expect(trashed?.ok).toBe(false);
       expect(invoke).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ["notify", "true"],
+      ["replyLines", -1],
+      ["waitForReply", "yes"],
+      ["waitSeconds", 0],
+    ])("refuses a malformed %s rather than submitting without it", async (key, value) => {
+      const { deps, invoke } = makeDeps({ getPtyReader: () => pty });
+
+      const result = await executeViewlessAction(
+        request("terminal.sendCommand", { terminalId: "t-1", command: "ls", [key]: value }),
+        deps
+      );
+
+      expect(result?.ok).toBe(false);
+      expect(result && !result.ok ? result.error.code : null).toBe("VALIDATION_ERROR");
+      expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("accepts well-formed completion options", async () => {
+      const { deps, invoke } = makeDeps({ getPtyReader: () => pty });
+
+      const result = await executeViewlessAction(
+        request("terminal.sendCommand", {
+          terminalId: "t-1",
+          command: "ls",
+          notify: true,
+          replyLines: 10,
+          waitForReply: true,
+          waitSeconds: 60,
+        }),
+        deps
+      );
+
+      expect(result?.ok).toBe(true);
+      expect(invoke).toHaveBeenCalled();
+    });
   });
 
   describe("worktree.create", () => {

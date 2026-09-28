@@ -89,6 +89,7 @@ import {
 } from "../../../shared/utils/pluginAgentSnapshot.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type { PluginSendToAgentRequest } from "../../../shared/types/pluginUiPrompt.js";
+import { SEND_TO_AGENT_MAX_ID_LENGTH, SEND_TO_AGENT_REFUSAL_REASONS } from "./sendToAgentLimits.js";
 import {
   AGENT_CONTEXT_MAX_TEXT_LENGTH,
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
@@ -248,29 +249,7 @@ function validateQuickPickItems(
   });
 }
 
-/** Longest id `host.sendToAgent` accepts for a terminal or worktree. */
-const SEND_TO_AGENT_MAX_ID_LENGTH = 512;
-
-// A record keyed by the union so a reason added to the type without an entry
-// here fails typecheck rather than being read back as a dismissal.
-const SEND_TO_AGENT_REFUSAL_REASONS = new Set(
-  Object.keys({
-    "unknown-terminal": true,
-    "not-agent": true,
-    exited: true,
-    "input-bar-off": true,
-    "backend-unavailable": true,
-    "input-locked": true,
-    restarting: true,
-    "input-busy": true,
-    "not-in-grid": true,
-    "fleet-armed": true,
-    "project-unavailable": true,
-    "launch-failed": true,
-    "prompt-open": true,
-    busy: true,
-  } satisfies Record<PluginSendToAgentRefusalReason, true>)
-);
+const SEND_TO_AGENT_REFUSAL_REASON_SET = new Set<string>(SEND_TO_AGENT_REFUSAL_REASONS);
 
 function validateOptionalId(pluginId: string, name: string, value: unknown): string | undefined {
   if (value === undefined) return undefined;
@@ -339,7 +318,7 @@ function toSendToAgentResult(value: unknown): PluginSendToAgentResult {
     if (
       result.status === "refused" &&
       typeof result.reason === "string" &&
-      SEND_TO_AGENT_REFUSAL_REASONS.has(result.reason as PluginSendToAgentRefusalReason)
+      SEND_TO_AGENT_REFUSAL_REASON_SET.has(result.reason as PluginSendToAgentRefusalReason)
     ) {
       return {
         status: "refused",
@@ -1177,7 +1156,7 @@ export function createHost(
           );
         }
         try {
-          const agents = await deps.dispatcher.sendAgentsListToRenderer(boundProjectId);
+          const agents = await deps.dispatcher.sendAgentsListToRenderer(boundProjectId, pluginId);
           return isBound() ? agents : [];
         } catch (err) {
           if (isProjectViewUnavailable(err)) return [];

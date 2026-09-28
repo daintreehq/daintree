@@ -164,6 +164,77 @@ describe("Shell answers for a host's plugins", () => {
     });
   });
 
+  it("drafts a host plugin's targeted send-to-agent in the driving view", async () => {
+    const wc = makeView();
+    const request = {
+      text: "Card body",
+      sourceLabel: "Deploy",
+      terminalId: "t-1",
+    };
+    const answer = ask(
+      PluginFrontendMethod.PROMPT,
+      promptPayload({ params: { kind: "sendToAgent", request } })
+    );
+    await Promise.resolve();
+    const [channel, sent] = wc.send.mock.calls[0]!;
+    expect(channel).toBe(CHANNELS.PLUGIN_UI_PROMPT_REQUEST);
+    expect(sent.params).toEqual({ kind: "sendToAgent", request });
+    // A targeted send opens no dialog, so it carries the renderer's deadline.
+    expect(typeof sent.expiresAt).toBe("number");
+    electronMock.emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: WC_ID } },
+      { promptId: sent.promptId, result: { status: "drafted", terminalId: "t-1" } }
+    );
+    await expect(answer).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+  });
+
+  it("refuses a send-to-agent whose text is over the drag payload's cap", async () => {
+    makeView();
+    await expect(
+      ask(
+        PluginFrontendMethod.PROMPT,
+        promptPayload({
+          params: {
+            kind: "sendToAgent",
+            request: { text: "x".repeat(40_000), sourceLabel: "Deploy" },
+          },
+        })
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("lists the driving view's agent panes, dropping malformed entries", async () => {
+    const wc = makeView();
+    const pane = {
+      terminalId: "t-1",
+      title: "Claude: fix auth",
+      agentId: "claude",
+      worktree: null,
+      isFocused: true,
+      canDraft: true,
+    };
+    const answer = ask(PluginFrontendMethod.AGENTS_LIST, { pluginId: "acme.deploy" });
+    await Promise.resolve();
+    const [channel, sent] = wc.send.mock.calls[0]!;
+    expect(channel).toBe(CHANNELS.PLUGIN_AGENTS_LIST_REQUEST);
+    electronMock.emit(
+      CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+      { sender: { id: WC_ID } },
+      { requestId: sent.requestId, agents: [pane, { terminalId: 7 }] }
+    );
+    const result = (await answer) as { agents: unknown[] };
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0]).toMatchObject({ terminalId: "t-1", agentId: "claude" });
+  });
+
+  it("refuses an agents list for a view bound to another host", async () => {
+    makeView(`other-host:${PROJECT}`);
+    await expect(
+      ask(PluginFrontendMethod.AGENTS_LIST, { pluginId: "acme.deploy" })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
   it("refuses a view bound to another host, and a project plugin of another project", async () => {
     makeView(`other-host:${PROJECT}`);
     await expect(ask(PluginFrontendMethod.PROMPT, promptPayload())).rejects.toMatchObject({

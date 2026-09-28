@@ -347,3 +347,82 @@ describe("projectAgentPanes", () => {
     expect(projectAgentPanes(Array.from({ length: 1_000 }, () => pane))).toHaveLength(256);
   });
 });
+
+describe("host.agents.list for a project driven from another machine", () => {
+  const PANE = {
+    terminalId: "t-1",
+    title: "Claude: fix auth",
+    agentId: "claude",
+    worktree: null,
+    isFocused: true,
+    canDraft: true,
+  };
+
+  async function withRoute(
+    frontend: import("../pluginFrontendRouting.js").PluginFrontend,
+    body: () => Promise<void>
+  ) {
+    const routing = await import("../pluginFrontendRouting.js");
+    routing._resetPluginFrontendRoutingForTesting();
+    routing.setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+    try {
+      await body();
+    } finally {
+      routing._resetPluginFrontendRoutingForTesting();
+    }
+  }
+
+  function endpointAnswering(answer: () => Promise<unknown>) {
+    return {
+      endpointId: "s1:ep",
+      clientId: "client-mbp",
+      projectId: "A",
+      kind: "remote-view" as const,
+      handle: -3,
+      send: vi.fn(),
+      request: vi.fn(answer),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  it("asks the driving endpoint, scoped to the plugin, and keeps only well-formed panes", async () => {
+    const endpoint = endpointAnswering(async () => ({ agents: [PANE, { terminalId: 7 }] }));
+    await withRoute({ kind: "remote", endpoint }, async () => {
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+      await expect(d.sendAgentsListToRenderer("A", "acme.deploy")).resolves.toEqual([PANE]);
+      expect(endpoint.request).toHaveBeenCalledWith(
+        "plugin.agents-list",
+        { pluginId: "acme.deploy" },
+        expect.objectContaining({ timeoutMs: expect.any(Number) })
+      );
+      d.dispose();
+    });
+  });
+
+  it("reads a malformed answer or a failed request as no panes", async () => {
+    for (const answer of [
+      async () => "nonsense",
+      async () => ({ agents: "nope" }),
+      async () => {
+        throw new Error("HOST_DISCONNECTED");
+      },
+    ]) {
+      const endpoint = endpointAnswering(answer);
+      await withRoute({ kind: "remote", endpoint }, async () => {
+        const d = new PluginRendererDispatcher({ isDisposed: () => false });
+        await expect(d.sendAgentsListToRenderer("A", "acme.deploy")).resolves.toEqual([]);
+        d.dispose();
+      });
+    }
+  });
+
+  it("reports no panes with nobody attached, without asking any view", async () => {
+    await withRoute({ kind: "none", reason: "vacant" }, async () => {
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+      await expect(d.sendAgentsListToRenderer("A", "acme.deploy")).resolves.toEqual([]);
+      expect(registryMock.getWebContentsForProject).not.toHaveBeenCalled();
+      d.dispose();
+    });
+  });
+});

@@ -52,6 +52,15 @@ function capFor(opensDialog: boolean): number {
 }
 
 /**
+ * A send-to-agent settles in the view it was delivered to. That view may
+ * already have drafted, or started the agent the user picked, so moving it to
+ * a new driver or re-asking there could draft the same text twice.
+ */
+function settlesWhereShown(params: PluginUiPromptParams): boolean {
+  return params.kind === "sendToAgent";
+}
+
+/**
  * What a request that opens no dialog resolves to when the renderer never
  * answers. Because the renderer only acts before the deadline and answers in
  * the same task it acts in, and main waits a grace period past the deadline
@@ -99,6 +108,21 @@ export const IMMEDIATE_PROMPT_TIMEOUT_MS = 10_000;
  * happened.
  */
 export const IMMEDIATE_PROMPT_ACK_GRACE_MS = 5_000;
+
+/**
+ * How long a host waits for a Shell's answer to a request that opens no
+ * dialog: the Shell's own deadline and grace, plus room for the link.
+ */
+export const REMOTE_IMMEDIATE_PROMPT_TIMEOUT_MS =
+  IMMEDIATE_PROMPT_TIMEOUT_MS + IMMEDIATE_PROMPT_ACK_GRACE_MS + 5_000;
+
+/**
+ * How long a host waits, after its caller aborts, for a Shell to answer a
+ * send-to-agent picker. A picker the user accepted answers once the agent it
+ * started is up, which can take a while; one they did not answers "cancelled"
+ * at once. This only bounds a Shell that is alive but never answers.
+ */
+export const REMOTE_ABORTED_PICKER_WAIT_MS = 120_000;
 
 /**
  * An imperative UI prompt awaiting its renderer response. Unlike the dispatch
@@ -586,11 +610,14 @@ export class PluginUIPromptDispatcher {
     prompt.signal?.addEventListener("abort", onAbort, { once: true });
     const delivery: PromptDelivery = { kind: "local" };
     let moved = false;
-    const untrack = this.trackShown(randomUUID(), {
-      prompt,
-      delivery,
-      moveTo: (frontend) => move(frontend),
-    });
+    const pinned = settlesWhereShown(prompt.params);
+    const untrack = pinned
+      ? () => {}
+      : this.trackShown(randomUUID(), {
+          prompt,
+          delivery,
+          moveTo: (frontend) => move(frontend),
+        });
     const settle = () => {
       untrack();
       prompt.signal?.removeEventListener("abort", onAbort);
@@ -606,7 +633,7 @@ export class PluginUIPromptDispatcher {
     this.showInWebContents(target, prompt.pluginId, prompt.params, local.signal).then(
       (value) => {
         if (moved) return;
-        const elsewhere = this.answerIsCurrent(prompt, delivery, value);
+        const elsewhere = pinned ? null : this.answerIsCurrent(prompt, delivery, value);
         if (elsewhere) {
           move(elsewhere);
           return;
@@ -630,15 +657,20 @@ export class PluginUIPromptDispatcher {
     const promptId = randomUUID();
     const { pluginId, signal, cancelValue } = prompt;
     const delivery: PromptDelivery = { kind: "remote", endpoint, leaseId };
-    const untrack = this.trackShown(promptId, {
-      prompt,
-      delivery,
-      moveTo: (frontend) => {
-        if (!release()) return;
-        this.sendRemoteCancel(endpoint, pluginId, promptId);
-        this.deliverElsewhere(frontend, prompt);
-      },
-    });
+    const pinned = settlesWhereShown(prompt.params);
+    const opensDialog = promptOpensDialog(prompt.params);
+    const untrack = pinned
+      ? () => {}
+      : this.trackShown(promptId, {
+          prompt,
+          delivery,
+          moveTo: (frontend) => {
+            if (!release()) return;
+            this.sendRemoteCancel(endpoint, pluginId, promptId);
+            this.deliverElsewhere(frontend, prompt);
+          },
+        });
+    let abortAckTimer: ReturnType<typeof setTimeout> | undefined;
     /** Claims the prompt for exactly one terminal path. */
     const release = (): boolean => {
       const pending = this.pending.get(promptId);
@@ -648,21 +680,46 @@ export class PluginUIPromptDispatcher {
       return true;
     };
     const onAbort = () => {
-      if (!release()) return;
+      if (!this.pending.has(promptId)) return;
+      if (!pinned) {
+        release();
+        this.sendRemoteCancel(endpoint, pluginId, promptId);
+        prompt.resolve(cancelValue);
+        return;
+      }
+      // A send-to-agent answers its own abort, as it does locally: a targeted
+      // send has already drafted or will refuse on its deadline, and a picker
+      // the user accepted resolves with what the launch did. The host cannot
+      // see that acceptance, so it waits as long as a launch may take; only a
+      // Shell that never answers at all is settled here.
+      if (!opensDialog || abortAckTimer !== undefined) return;
       this.sendRemoteCancel(endpoint, pluginId, promptId);
-      prompt.resolve(cancelValue);
+      abortAckTimer = setTimeout(() => {
+        if (!release()) return;
+        prompt.resolve(cancelValue);
+      }, REMOTE_ABORTED_PICKER_WAIT_MS);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
+    // A request that opens no dialog has no person in the loop, so a Shell
+    // that holds it past its own deadline is stuck and the slot comes back.
+    const deadline = opensDialog
+      ? undefined
+      : setTimeout(() => {
+          if (!release()) return;
+          prompt.resolve(timeoutValueFor(prompt.params));
+        }, REMOTE_IMMEDIATE_PROMPT_TIMEOUT_MS);
     this.pending.set(promptId, {
       resolve: prompt.resolve,
       webContentsId: null,
       endpoint,
       pluginId,
       cancelValue,
-      opensDialog: promptOpensDialog(prompt.params),
+      opensDialog,
       answersAbort: false,
       cleanup: () => {
         signal?.removeEventListener("abort", onAbort);
+        if (abortAckTimer !== undefined) clearTimeout(abortAckTimer);
+        if (deadline !== undefined) clearTimeout(deadline);
         untrack();
       },
     });
@@ -685,7 +742,7 @@ export class PluginUIPromptDispatcher {
         (answer) => {
           if (!this.pending.has(promptId)) return;
           const value = coercePromptAnswer(prompt.params, answer);
-          const elsewhere = this.answerIsCurrent(prompt, delivery, value);
+          const elsewhere = pinned ? null : this.answerIsCurrent(prompt, delivery, value);
           if (!release()) return;
           if (elsewhere) {
             // Answered by a driver that no longer holds the project: ask the one that does.
@@ -702,6 +759,12 @@ export class PluginUIPromptDispatcher {
             endpoint.isClosed() || (typeof code === "string" && FRONTEND_GONE_CODES.has(code));
           if (!gone) {
             prompt.reject(error instanceof Error ? error : new Error(String(error)));
+            return;
+          }
+          if (pinned) {
+            // The Shell went away holding it, and may have drafted first:
+            // report what a local view that vanished reports, never re-ask.
+            prompt.resolve(opensDialog ? cancelValue : timeoutValueFor(prompt.params));
             return;
           }
           if (this.deps.isDisposed() || signal?.aborted) {

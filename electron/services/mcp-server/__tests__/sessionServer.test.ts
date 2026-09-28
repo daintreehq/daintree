@@ -3049,7 +3049,7 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     const restore = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
     try {
       const deps = fakeDeps({
-        sessionStore: fakeSessionStore("action"),
+        sessionStore: fakeSessionStore("full"),
         getCachedManifest: vi.fn(() => null),
         requestManifest: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
         dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
@@ -3065,6 +3065,8 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.code).toBe(NO_FRONTEND_ATTACHED_CODE);
       expect(parsed.retriable).toBe(true);
+      // Past the tier gate: the refusal is the dispatch's, not a tier's.
+      expect(deps.dispatchAction).toHaveBeenCalledWith("recipe.run", {}, false);
     } finally {
       restore();
     }
@@ -11487,12 +11489,12 @@ describe("no frontend attached to a bound workspace", () => {
   it("answers NO_FRONTEND_ATTACHED, retriably, for an action only a frontend can run", async () => {
     const dispatchAction = vi
       .fn()
-      .mockRejectedValue(new NoFrontendAttachedError(WORKSPACE, "terminal.moveToDock"));
+      .mockRejectedValue(new NoFrontendAttachedError(WORKSPACE, "terminal.rename"));
     const server = createSessionServer(SESSION, headlessDeps("core", { dispatchAction }));
     await server.connect(makeMockTransport());
 
     const result = await callTool(server, {
-      name: "terminal.moveToDock",
+      name: "terminal.rename",
       arguments: { terminalId: "t-1" },
     });
 
@@ -11511,13 +11513,13 @@ describe("no frontend attached to a bound workspace", () => {
       SESSION,
       headlessDeps("core", {
         dispatchAction,
-        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.moveToDock")]),
+        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.rename")]),
       })
     );
     await server.connect(makeMockTransport());
 
     const result = await callTool(server, {
-      name: "terminal.moveToDock",
+      name: "terminal.rename",
       arguments: { terminalId: "t-1" },
     });
 

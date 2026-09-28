@@ -16,7 +16,11 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   isCachedViewWebContents: registryMock.isCachedViewWebContents,
 }));
 
-import { PluginUIPromptDispatcher } from "../PluginUIPromptDispatcher.js";
+import {
+  PluginUIPromptDispatcher,
+  REMOTE_ABORTED_PICKER_WAIT_MS,
+  REMOTE_IMMEDIATE_PROMPT_TIMEOUT_MS,
+} from "../PluginUIPromptDispatcher.js";
 import {
   _resetPluginFrontendRoutingForTesting,
   getPluginInvokeOrigin,
@@ -38,6 +42,15 @@ const PICK: PluginUiPromptParams = {
     { id: "b", label: "Beta" },
   ],
   options: {},
+};
+
+const PICKER: PluginUiPromptParams = {
+  kind: "sendToAgent",
+  request: { text: "Card body", sourceLabel: "Deploy" },
+};
+const TARGETED: PluginUiPromptParams = {
+  kind: "sendToAgent",
+  request: { text: "Card body", sourceLabel: "Deploy", terminalId: "t-1" },
 };
 
 interface Deferred {
@@ -219,6 +232,153 @@ describe("PluginUIPromptDispatcher with a remote driver", () => {
     expect(requests[1]).toMatchObject({
       method: PluginFrontendMethod.PROMPT_CANCEL,
       payload: { pluginId: "acme.deploy" },
+    });
+  });
+
+  describe("send-to-agent", () => {
+    it("returns a targeted draft the driving Shell made", async () => {
+      const { endpoint, requests } = makeEndpoint();
+      frontend = { kind: "remote", endpoint };
+      const answer = dispatcher.requestPrompt("acme.deploy", TARGETED, PROJECT);
+      await flush();
+      expect(requests[0]!.payload).toMatchObject({ params: TARGETED });
+      requests[0]!.deferred.resolve({ status: "drafted", terminalId: "t-1" });
+      await expect(answer).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+    });
+
+    it("reads a malformed Shell answer as cancelled", async () => {
+      const { endpoint, requests } = makeEndpoint();
+      frontend = { kind: "remote", endpoint };
+      const answer = dispatcher.requestPrompt("acme.deploy", PICKER, PROJECT);
+      await flush();
+      requests[0]!.deferred.resolve({ status: "drafted" });
+      await expect(answer).resolves.toEqual({ status: "cancelled" });
+    });
+
+    it("refuses a second picker as prompt-open, and keeps targeted sends on their own cap", async () => {
+      const { endpoint, requests } = makeEndpoint();
+      frontend = { kind: "remote", endpoint };
+      void dispatcher.requestPrompt("acme.deploy", PICKER, PROJECT);
+      await expect(dispatcher.requestPrompt("acme.deploy", PICKER, PROJECT)).resolves.toEqual({
+        status: "refused",
+        reason: "prompt-open",
+      });
+      for (let i = 0; i < 8; i++) void dispatcher.requestPrompt("acme.deploy", TARGETED, PROJECT);
+      await expect(dispatcher.requestPrompt("acme.deploy", TARGETED, PROJECT)).resolves.toEqual({
+        status: "refused",
+        reason: "busy",
+      });
+      await flush();
+      // One picker and eight targeted sends reached the Shell; the refusals did not.
+      expect(requests.filter((r) => r.method === PluginFrontendMethod.PROMPT)).toHaveLength(9);
+    });
+
+    it("keeps waiting on a picker's answer after an abort, so an accepted launch is reported", async () => {
+      const { endpoint, requests } = makeEndpoint();
+      frontend = { kind: "remote", endpoint };
+      const controller = new AbortController();
+      const answer = dispatcher.requestPrompt("acme.deploy", PICKER, PROJECT, controller.signal);
+      await flush();
+      controller.abort();
+      await flush();
+      expect(requests[1]).toMatchObject({ method: PluginFrontendMethod.PROMPT_CANCEL });
+      let settled = false;
+      void answer.then(() => (settled = true));
+      await flush();
+      expect(settled).toBe(false);
+      // The user had already picked "new agent here"; the Shell reports the launch.
+      requests[0]!.deferred.resolve({ status: "drafted", terminalId: "t-new" });
+      await expect(answer).resolves.toEqual({ status: "drafted", terminalId: "t-new" });
+    });
+
+    it("still reports a launch the Shell finishes well after the abort", async () => {
+      vi.useFakeTimers();
+      try {
+        const { endpoint, requests } = makeEndpoint();
+        frontend = { kind: "remote", endpoint };
+        const controller = new AbortController();
+        const answer = dispatcher.requestPrompt("acme.deploy", PICKER, PROJECT, controller.signal);
+        await vi.advanceTimersByTimeAsync(0);
+        controller.abort();
+        // An agent that took half a minute to come up after the user picked it.
+        await vi.advanceTimersByTimeAsync(30_000);
+        requests[0]!.deferred.resolve({ status: "drafted", terminalId: "t-new" });
+        await expect(answer).resolves.toEqual({ status: "drafted", terminalId: "t-new" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reports an aborted targeted send whose Shell then vanished as undelivered, not cancelled", async () => {
+      const { endpoint, requests, close } = makeEndpoint();
+      frontend = { kind: "remote", endpoint };
+      const controller = new AbortController();
+      const answer = dispatcher.requestPrompt("acme.deploy", TARGETED, PROJECT, controller.signal);
+      await flush();
+      controller.abort();
+      close();
+      requests[0]!.deferred.reject(new AppError({ code: "HOST_DISCONNECTED", message: "gone" }));
+      await expect(answer).resolves.toEqual({ status: "refused", reason: "project-unavailable" });
+    });
+
+    it("settles an aborted picker as cancelled when the Shell never answers", async () => {
+      vi.useFakeTimers();
+      try {
+        const { endpoint } = makeEndpoint();
+        frontend = { kind: "remote", endpoint };
+        const controller = new AbortController();
+        const answer = dispatcher.requestPrompt("acme.deploy", PICKER, PROJECT, controller.signal);
+        await vi.advanceTimersByTimeAsync(0);
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(REMOTE_ABORTED_PICKER_WAIT_MS);
+        await expect(answer).resolves.toEqual({ status: "cancelled" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("gives a targeted send's slot back when the Shell holds it past the deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const { endpoint } = makeEndpoint();
+        frontend = { kind: "remote", endpoint };
+        const answer = dispatcher.requestPrompt("acme.deploy", TARGETED, PROJECT);
+        await vi.advanceTimersByTimeAsync(REMOTE_IMMEDIATE_PROMPT_TIMEOUT_MS);
+        await expect(answer).resolves.toEqual({
+          status: "refused",
+          reason: "project-unavailable",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays with the Shell it was sent to when another driver takes over", async () => {
+      const a = makeEndpoint("a");
+      const b = makeEndpoint("b");
+      frontend = { kind: "remote", endpoint: a.endpoint, leaseId: 1 };
+      const answer = dispatcher.requestPrompt("acme.deploy", TARGETED, PROJECT);
+      await flush();
+      frontend = { kind: "remote", endpoint: b.endpoint, leaseId: 2 };
+      changeListener?.();
+      await flush();
+      expect(b.requests).toHaveLength(0);
+      a.requests[0]!.deferred.resolve({ status: "drafted", terminalId: "t-1" });
+      await expect(answer).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+      expect(b.requests).toHaveLength(0);
+    });
+
+    it("never re-sends a targeted draft when its Shell disconnects mid-flight", async () => {
+      const a = makeEndpoint("a");
+      const b = makeEndpoint("b");
+      frontend = { kind: "remote", endpoint: a.endpoint };
+      const answer = dispatcher.requestPrompt("acme.deploy", TARGETED, PROJECT);
+      await flush();
+      a.close();
+      frontend = { kind: "remote", endpoint: b.endpoint };
+      a.requests[0]!.deferred.reject(new AppError({ code: "HOST_DISCONNECTED", message: "gone" }));
+      await expect(answer).resolves.toEqual({ status: "refused", reason: "project-unavailable" });
+      expect(b.requests).toHaveLength(0);
     });
   });
 
