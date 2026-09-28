@@ -384,7 +384,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
               e.stopPropagation();
               onDismiss(terminal.id, e.currentTarget, e.detail === 0);
             }}
-            aria-label="Dismiss"
+            aria-label="Dismiss task"
           />
         )}
         <Button

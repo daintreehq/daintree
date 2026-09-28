@@ -197,7 +197,7 @@ describe("RunningTaskList overflow", () => {
     openOverflow();
 
     const row = within(overflowList()).getByText("cmd-2").closest("[data-task-row]")!;
-    fireEvent.click(within(row as HTMLElement).getByLabelText("Dismiss"));
+    fireEvent.click(within(row as HTMLElement).getByLabelText("Dismiss task"));
     expect(screen.queryByText("cmd-2")).toBeNull();
     expect(screen.getByTestId("running-task-overflow").textContent).toContain("2");
   });
@@ -235,7 +235,7 @@ describe("RunningTaskList overflow", () => {
         vi.advanceTimersByTime(60_000);
       });
       const row = screen.getByText("cmd-0").closest<HTMLElement>("[data-task-row]")!;
-      fireEvent.click(within(row).getByLabelText("Dismiss"));
+      fireEvent.click(within(row).getByLabelText("Dismiss task"));
       expect(screen.queryByText("cmd-0")).toBeNull();
     } finally {
       vi.useRealTimers();
@@ -248,7 +248,7 @@ describe("RunningTaskList overflow", () => {
     seedTasks(2, { runtimeStatus: "exited", exitCode: 1 });
     const first = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
-    fireEvent.click(within(row).getByLabelText("Dismiss"));
+    fireEvent.click(within(row).getByLabelText("Dismiss task"));
     first.unmount();
 
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
@@ -260,7 +260,7 @@ describe("RunningTaskList overflow", () => {
     seedTasks(2, { runtimeStatus: "exited", exitCode: 1 });
     const { rerender } = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
-    fireEvent.click(within(row).getByLabelText("Dismiss"));
+    fireEvent.click(within(row).getByLabelText("Dismiss task"));
 
     rerender(<RunningTaskList worktreeId="wt-other" />);
     rerender(<RunningTaskList worktreeId={WORKTREE_ID} />);
@@ -272,7 +272,7 @@ describe("RunningTaskList overflow", () => {
     const fallback = vi.fn();
     render(<RunningTaskList worktreeId={WORKTREE_ID} onFocusFallback={fallback} />);
     const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
-    const dismiss = within(row).getByLabelText("Dismiss");
+    const dismiss = within(row).getByLabelText("Dismiss task");
     dismiss.focus();
     fireEvent.click(dismiss, { detail: 0 });
 
@@ -285,7 +285,7 @@ describe("RunningTaskList overflow", () => {
     seedTasks(1, { runtimeStatus: "exited", exitCode: 1 });
     const fallback = vi.fn();
     render(<RunningTaskList worktreeId={WORKTREE_ID} onFocusFallback={fallback} />);
-    const dismiss = screen.getByLabelText("Dismiss");
+    const dismiss = screen.getByLabelText("Dismiss task");
     dismiss.focus();
     fireEvent.click(dismiss, { detail: 0 });
     expect(fallback).toHaveBeenCalledTimes(1);

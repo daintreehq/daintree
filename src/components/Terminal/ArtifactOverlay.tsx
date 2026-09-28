@@ -353,7 +353,7 @@ function OutcomeLine({
       />
       <div className="min-w-0 flex-1 text-text-primary">{children}</div>
       {onDismiss && (
-        <DismissButton onClick={onDismiss} aria-label="Dismiss" className="-my-1 -mr-1" />
+        <DismissButton onClick={onDismiss} aria-label="Dismiss error" className="-my-1 -mr-1" />
       )}
     </div>
   );
@@ -1112,7 +1112,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       {bulkStatus.persistent && (
                         <DismissButton
                           onClick={() => setBulkStatus(null)}
-                          aria-label="Dismiss"
+                          aria-label="Dismiss status"
                           className="-my-1"
                         />
                       )}
