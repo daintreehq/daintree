@@ -343,17 +343,21 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // dropdown/context-menu's focus restoration steals focus from the input
   // immediately after we grab it, the input fires `onBlur`, and editing ends
   // before the user sees it. 200ms covers Tier 2-fast palette/menu exit.
-  // Only while the name is still untouched: a fast F2-then-type would otherwise
-  // have its first characters re-selected and eaten by the next keystroke.
+  // Only until the user takes over: a key or a click in the field cancels it, or
+  // a fast F2-then-type would have its first characters (or its caret move)
+  // re-selected and eaten by the next keystroke.
   useEffect(() => {
     const input = titleInputRef.current;
     if (titleEditing.isEditingTitle && input) {
-      const openedWith = input.value;
-      const timer = setTimeout(() => {
-        const current = titleInputRef.current;
-        if (current && current.value === openedWith) current.select();
-      }, 200);
-      return () => clearTimeout(timer);
+      const timer = setTimeout(() => titleInputRef.current?.select(), 200);
+      const cancel = () => clearTimeout(timer);
+      input.addEventListener("keydown", cancel);
+      input.addEventListener("pointerdown", cancel);
+      return () => {
+        cancel();
+        input.removeEventListener("keydown", cancel);
+        input.removeEventListener("pointerdown", cancel);
+      };
     }
     return undefined;
   }, [titleEditing.isEditingTitle]);

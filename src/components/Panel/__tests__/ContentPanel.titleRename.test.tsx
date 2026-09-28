@@ -123,12 +123,31 @@ describe("ContentPanel title rename", () => {
       fireEvent.keyDown(titleButton(), { key: "F2" });
       const field = titleField();
       field.focus();
+      fireEvent.keyDown(field, { key: "A" });
       fireEvent.change(field, { target: { value: "API" } });
       field.setSelectionRange(3, 3);
       act(() => {
         vi.advanceTimersByTime(500);
       });
       expect([field.selectionStart, field.selectionEnd]).toEqual([3, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not undo a caret move made in the moment after the field opens", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      renderPanel();
+      fireEvent.keyDown(titleButton(), { key: "F2" });
+      const field = titleField();
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+      fireEvent.keyDown(field, { key: "ArrowRight" });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(field.selectionStart).toBe(field.value.length);
     } finally {
       vi.useRealTimers();
     }
