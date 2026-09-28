@@ -598,7 +598,7 @@ export function GitHubListItem({
               forge's own trail. Local state comes early on purpose — it changes
               what activating the row does, so it must not be the thing that
               falls off the clipped end. */}
-          <div className="flex items-center gap-1.5 mt-1 text-xs text-text-secondary flex-nowrap overflow-hidden">
+          <div className="flex items-center gap-1.5 mt-1 text-xs text-text-secondary flex-nowrap overflow-x-clip">
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -613,6 +613,9 @@ export function GitHubListItem({
                     void handleCopyNumber();
                   }}
                   className={cn(
+                    // A 24px-tall hit area without growing the 16px metadata
+                    // line, whose height the fixed row depends on.
+                    "relative after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']",
                     "shrink-0 inline-flex items-center tabular-nums rounded-lg cursor-pointer",
                     "hover:text-text-primary transition-colors duration-150 ease-out",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
@@ -693,7 +696,12 @@ export function GitHubListItem({
               <span className="shrink-0" aria-hidden="true">
                 &middot;
               </span>
-              <span className="truncate">{item.author?.login ?? "unknown"}</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="truncate">{item.author?.login ?? "unknown"}</span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{item.author?.login ?? "unknown"}</TooltipContent>
+              </Tooltip>
             </span>
 
             <span className="shrink-0" aria-hidden="true">

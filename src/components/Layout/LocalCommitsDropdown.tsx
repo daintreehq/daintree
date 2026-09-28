@@ -414,6 +414,8 @@ function LocalCommitRow({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={handleCopyHash}
                   className={cn(
+                    // 24px tall to the pointer without growing the metadata line.
+                    "relative after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']",
                     "ml-auto shrink-0 flex items-center gap-1 px-1 font-mono text-xs text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]",
                     isCopied && "text-text-primary"
                   )}
@@ -1050,9 +1052,11 @@ export function LocalCommitsDropdown({
                 className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
               >
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span className="text-xs truncate">
+                {/* Wraps rather than clipping the cause, like the forge lists'
+                    saved-results banners. */}
+                <p className="min-w-0 flex-1 text-xs">
                   Couldn&apos;t refresh commits &middot; {error}
-                </span>
+                </p>
                 <Button
                   variant="outline"
                   size="xs"

@@ -194,7 +194,7 @@ test("Forge dropdowns — every state of the three lists", async ({ page }) => {
 
     await kbd.press("ControlOrMeta+a");
     await kbd.type("zebra");
-    await settled(panel, /No matches/);
+    await settled(panel, /match “zebra”/);
     await shot(panel, "06-issues-search-empty");
 
     panel = await openList(page, "issues", { theme, list: "rich" });
@@ -280,7 +280,7 @@ test("Forge dropdowns — every state of the three lists", async ({ page }) => {
     panel = await openList(page, "issues", { theme, list: "rich" });
     await settled(panel, FIRST_ISSUE);
     await panel.getByRole("button", { name: /^Sort issues/ }).click();
-    await expect(page.getByRole("radiogroup", { name: "Sort order" })).toBeVisible();
+    await expect(page.getByRole("menu")).toBeVisible();
     await page.waitForTimeout(300);
     {
       const shell = page.locator("[data-preview-shell]");

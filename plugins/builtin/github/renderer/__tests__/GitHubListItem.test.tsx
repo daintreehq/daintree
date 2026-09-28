@@ -199,7 +199,8 @@ describe("GitHubListItem", () => {
 
   it("renders author and time in metadata row", () => {
     render(<GitHubListItem item={baseIssue} type="issue" />);
-    expect(screen.getByText("testuser")).toBeTruthy();
+    // Once as the row text, once as its tooltip (rendered inline by the mock).
+    expect(screen.getAllByText("testuser").length).toBeGreaterThan(0);
     expect(screen.getByText("time:1001")).toBeTruthy();
   });
 

@@ -12,7 +12,8 @@ import { FORGE_DROPDOWN_PANEL_SIZE } from "@/components/Layout/forgeStatsDropdow
  * now sets its own height from this constant, so the two cannot drift.
  */
 export const RESOURCE_ITEM_HEIGHT_PX = 64;
-export const COMMIT_ITEM_HEIGHT_PX = 64;
+/** A collapsed commit row in the host's list (`LocalCommitsDropdown`), which this stands in for. */
+export const COMMIT_ITEM_HEIGHT_PX = 58;
 export const MAX_SKELETON_ITEMS = 6;
 
 /**
@@ -205,7 +206,7 @@ export function GitHubResourceListSkeleton({
       </div>
 
       {/* Footer — matches GitHubResourceList */}
-      <div className="px-2 py-1.5 border-t border-[var(--border-divider)] flex items-center justify-between shrink-0">
+      <div className="px-2 h-10 border-t border-[var(--border-divider)] flex items-center justify-between shrink-0">
         <div className="flex items-center gap-1.5 px-3 h-7 text-xs text-text-secondary">
           <ExternalLink className="h-3.5 w-3.5" />
           View on GitHub
@@ -320,10 +321,26 @@ export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
   const showImmediate = useSkeletonGate(Boolean(immediate));
   const pulseClass = showImmediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
 
+  // The whole panel, not just rows: the list's code loads behind this on a
+  // first open, and a bare stack of rows made the panel change height and move
+  // its rows the moment the real header and footer arrived.
   return (
-    <div role="status" aria-live="polite" aria-label="Loading commits">
+    <div
+      className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}
+      role="status"
+      aria-live="polite"
+      aria-label="Loading commits"
+    >
       <span className="sr-only">Loading commits</span>
-      <div aria-hidden="true">
+      <div className="p-3 border-b border-[var(--border-divider)] shrink-0" aria-hidden="true">
+        <div className="search-field h-8 text-sm cursor-default" data-size="compact">
+          <Search className="search-field-icon" aria-hidden="true" />
+          <span className="flex-1 min-w-0 truncate text-text-secondary select-none">
+            Search commits…
+          </span>
+        </div>
+      </div>
+      <div aria-hidden="true" className="flex-1 min-h-0 overflow-hidden">
         {Array.from({ length: renderCount }).map((_, i) => (
           <div
             key={i}
@@ -360,6 +377,15 @@ export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
             </div>
           </div>
         ))}
+      </div>
+      <div
+        aria-hidden="true"
+        className="px-3 h-10 border-t border-[var(--border-divider)] flex items-center justify-end shrink-0"
+      >
+        <div className="flex items-center gap-1.5 px-3 h-7 text-xs text-text-secondary">
+          <ExternalLink className="h-3.5 w-3.5" />
+          View on GitHub
+        </div>
       </div>
     </div>
   );
