@@ -136,6 +136,7 @@ export function NewWorktreeDialog({
   // A failed branch list is a load state, not a field the user got wrong: it
   // holds until the list loads, whatever else is edited.
   const [branchLoadError, setBranchLoadError] = useState<string | null>(null);
+  const [branchLoadAttempt, setBranchLoadAttempt] = useState(0);
   const [baseBranch, setBaseBranch] = useState("");
   const [prBranchResolved, setPrBranchResolved] = useState<boolean | null>(null);
   const [branchMode, setBranchMode] = useState<BranchMode>("new");
@@ -562,6 +563,7 @@ export function NewWorktreeDialog({
     rootPath,
     initialIssue,
     initialPR,
+    branchLoadAttempt,
     setFromRemote,
     setValidationError,
     clearErrors,
@@ -630,6 +632,28 @@ export function NewWorktreeDialog({
 
   // --- Validation hook ---
   const { validate } = useWorktreeFormValidation();
+
+  // Under whichever picker the list feeds, in either mode. It stands in for the
+  // base field's own "select a base branch" — the list is what failed, not the
+  // pick — and takes that error's id so the field's description still resolves.
+  const branchLoadNotice = branchLoadError ? (
+    <InlineError
+      role="alert"
+      id={errors.errorField === "base-branch" ? "validation-error" : undefined}
+      action={
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => setBranchLoadAttempt((n) => n + 1)}
+          className="-my-1 shrink-0"
+        >
+          Retry
+        </Button>
+      }
+    >
+      {branchLoadError}
+    </InlineError>
+  ) : null;
 
   // Null rather than an empty element: `FormRow` skips its hint row on a falsy
   // hint. A submit that fails validation says so once, under the field it is
@@ -1224,10 +1248,7 @@ export function NewWorktreeDialog({
                       htmlFor="base-branch"
                       hint={
                         <div className="flex flex-col gap-2">
-                          {branchLoadError && (
-                            <InlineError role="alert">{branchLoadError}</InlineError>
-                          )}
-                          {fieldError("base-branch")}
+                          {branchLoadNotice ?? fieldError("base-branch")}
                           <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
                             <Checkbox
                               id="from-remote"
@@ -1251,7 +1272,7 @@ export function NewWorktreeDialog({
                   )}
 
                   {isExistingMode ? (
-                    <FormRow label="Branch" htmlFor="existing-branch">
+                    <FormRow label="Branch" htmlFor="existing-branch" hint={branchLoadNotice}>
                       <ExistingBranchPicker
                         selectedBranch={selectedExistingBranch}
                         controller={existingBranchPicker}

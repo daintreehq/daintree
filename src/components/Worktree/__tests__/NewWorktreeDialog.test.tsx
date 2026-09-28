@@ -1067,7 +1067,10 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     const alerts = screen.getAllByRole("alert");
     const validationAlert = alerts.find((el) => el.id === "validation-error");
     expect(validationAlert).toBeDefined();
-    expect(validationAlert?.textContent).toContain("Please select a base branch");
+    // The list failed, not the pick: the load failure stands in for "select a
+    // base branch" and carries the id the combobox is described by.
+    expect(validationAlert?.textContent).toContain("Failed to load branches");
+    expect(validationAlert?.textContent).not.toContain("Please select a base branch");
 
     expect(baseBranchButton?.getAttribute("aria-invalid")).toBe("true");
     expect(baseBranchButton?.getAttribute("aria-describedby")).toBe("validation-error");
@@ -1090,6 +1093,14 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
 
     expect(failure()).not.toBeNull();
     expect(screen.getByTestId("branch-name-input").getAttribute("aria-invalid")).toBeNull();
+
+    // And retrying reloads the list rather than only dismissing the message.
+    mockListBranches.mockClear();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    await advanceTimersGradually(500);
+    expect(mockListBranches).toHaveBeenCalled();
   });
 
   it("clears aria-invalid when the user types in the failing field", async () => {
