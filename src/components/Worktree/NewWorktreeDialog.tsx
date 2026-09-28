@@ -1217,7 +1217,7 @@ export function NewWorktreeDialog({
                       label="Base"
                       htmlFor="base-branch"
                       hint={
-                        <>
+                        <div className="flex flex-col gap-2">
                           {fieldError("base-branch")}
                           <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
                             <Checkbox
@@ -1230,7 +1230,7 @@ export function NewWorktreeDialog({
                             />
                             Create from remote branch
                           </label>
-                        </>
+                        </div>
                       }
                     >
                       <BaseBranchCombobox

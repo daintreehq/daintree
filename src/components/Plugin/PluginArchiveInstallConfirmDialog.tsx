@@ -159,7 +159,7 @@ export function PluginArchiveInstallConfirmDialog() {
         <ArchivePermissions capabilities={current.manifest.capabilities} />
         <ArchiveRecipes recipes={current.manifest.recipes} />
         {error !== null && (
-          <Callout severity="error" size="compact" role="alert">
+          <Callout severity="error" role="alert">
             <p>{error}</p>
           </Callout>
         )}
@@ -294,12 +294,12 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
       ) : (
         <>
           {worst === "danger" && (
-            <Callout severity="danger" size="compact">
+            <Callout severity="danger">
               <p>Can run arbitrary commands on your machine</p>
             </Callout>
           )}
           {worst === "warning" && (
-            <Callout severity="warning" size="compact">
+            <Callout severity="warning">
               <p>Requests sensitive permissions — review before installing</p>
             </Callout>
           )}

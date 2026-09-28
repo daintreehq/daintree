@@ -49,10 +49,18 @@ const ICON_TONE: Record<CalloutSeverity, string> = {
   danger: "text-status-danger",
 };
 
-// Centred on the first line: 16px on a 16px `text-xs` line, 14px on `text-2xs`.
+// Centred on the first line: 16px on a `text-xs` body line or, nudged down, on a
+// `text-sm` title; 14px on the compact `text-2xs` body or `text-xs` title.
 const ICON_SIZE = {
   default: "w-4 h-4",
   compact: "w-3.5 h-3.5 mt-px",
+} as const;
+
+// One step above the body, the way `InlineStatusBanner` titles its band, so a
+// banner and a callout in the same dialog read as one family.
+const TITLE_SIZE = {
+  default: "text-sm",
+  compact: "text-xs",
 } as const;
 
 export interface CalloutProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
@@ -81,14 +89,24 @@ export function Callout({
       data-callout={severity}
       className={cn(calloutVariants({ severity, size }), className)}
     >
-      <Icon className={cn(ICON_SIZE[size], "shrink-0", ICON_TONE[severity])} aria-hidden="true" />
+      <Icon
+        className={cn(
+          ICON_SIZE[size],
+          title && size === "default" && "mt-0.5",
+          "shrink-0",
+          ICON_TONE[severity]
+        )}
+        aria-hidden="true"
+      />
       <div
         className={cn(
           "min-w-0 flex-1 break-words",
           title ? "text-text-secondary" : "text-text-primary"
         )}
       >
-        {title && <p className="mb-0.5 font-medium text-text-primary">{title}</p>}
+        {title && (
+          <p className={cn("mb-0.5 font-medium text-text-primary", TITLE_SIZE[size])}>{title}</p>
+        )}
         {children}
       </div>
       {action && <div className="shrink-0 self-center">{action}</div>}

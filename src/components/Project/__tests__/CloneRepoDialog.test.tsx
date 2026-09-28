@@ -528,9 +528,12 @@ describe("CloneRepoDialog", () => {
     expect(urlInput.getAttribute("aria-invalid")).toBe("true");
     const describedBy = urlInput.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
+    // Under the field it is about, like the name's error; the footer only says
+    // what is still in the way.
     const description = document.getElementById(describedBy!);
-    expect(description).not.toBeNull();
-    expect(hint.contains(description)).toBe(true);
+    expect(description?.textContent).toBe("Check the repository URL");
+    expect(hint.contains(description)).toBe(false);
+    expect(description?.getAttribute("role")).toBeNull();
   });
 
   it.each([
@@ -549,7 +552,12 @@ describe("CloneRepoDialog", () => {
     expect(screen.getByRole("button", { name: "Clone" }).getAttribute("aria-disabled")).toBe(
       "true"
     );
-    expect(screen.getByTestId("footer-hint").textContent).toBe(guidance);
+    const urlInput = screen.getByLabelText(/^url$/i);
+    const describedBy = urlInput.getAttribute("aria-describedby");
+    expect(document.getElementById(describedBy!)?.textContent).toBe(guidance);
+    expect(screen.getByTestId("footer-hint").textContent).toBe(
+      "Fix the repository URL to continue"
+    );
   });
 
   it.each(["https://github.com/team/repo.git", "git@github.com:team/repo.git", "team/repo"])(

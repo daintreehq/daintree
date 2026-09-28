@@ -28,9 +28,9 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
   if (state === "ready") {
     return (
       <div className="flex items-start gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/10 text-xs">
-        <Check className="w-4 h-4 text-status-success shrink-0" aria-hidden="true" />
+        <Check className="w-4 h-4 mt-0.5 text-status-success shrink-0" aria-hidden="true" />
         <div>
-          <p className="mb-0.5 font-medium text-text-primary">CLI is now available</p>
+          <p className="mb-0.5 text-sm font-medium text-text-primary">CLI is now available</p>
           <p className="text-text-secondary">
             The agent binary was detected. Re-check to continue the launch.
           </p>
@@ -46,9 +46,9 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
   if (state === "unauthenticated") {
     return (
       <div className="flex items-start gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle text-xs">
-        <KeyRound className="w-4 h-4 text-text-secondary shrink-0" aria-hidden="true" />
+        <KeyRound className="w-4 h-4 mt-0.5 text-text-secondary shrink-0" aria-hidden="true" />
         <div>
-          <p className="mb-0.5 font-medium text-text-primary">Sign-in not detected</p>
+          <p className="mb-0.5 text-sm font-medium text-text-primary">Sign-in not detected</p>
           <p className="text-text-secondary">
             The CLI is available but no signed-in session was found. Re-check to continue — the CLI
             prompts for sign-in on its first run.

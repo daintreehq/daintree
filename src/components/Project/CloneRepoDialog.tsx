@@ -538,23 +538,22 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   // What pressing Clone will do, said once — or, until it can, the first thing
   // still in the way. Blockers are checked before the summary so a path from an
   // earlier valid state never stands in for why Clone went dark.
-  const outcomeHint =
-    urlProblem !== null ? (
-      <span id={urlProblemId} className="truncate">
-        {urlProblem}
-      </span>
-    ) : parentPath.trim() === "" ? (
-      <span className="truncate">Choose a location to continue</span>
-    ) : folderNameError !== null ? (
-      <span className="truncate">Fix the folder name to continue</span>
-    ) : destinationPath === null ? (
-      <span className="truncate">Name the folder to continue</span>
-    ) : (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0">Clones into</span>
-        <PathCaption path={destinationPath} className="min-w-0 text-text-primary" />
-      </span>
-    );
+  const outcomeHint = urlIsInvalid ? (
+    <span className="truncate">Fix the repository URL to continue</span>
+  ) : urlProblem !== null ? (
+    <span className="truncate">{urlProblem}</span>
+  ) : parentPath.trim() === "" ? (
+    <span className="truncate">Choose a location to continue</span>
+  ) : folderNameError !== null ? (
+    <span className="truncate">Fix the folder name to continue</span>
+  ) : destinationPath === null ? (
+    <span className="truncate">Name the folder to continue</span>
+  ) : (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0">Clones into</span>
+      <PathCaption path={destinationPath} className="min-w-0 text-text-primary" />
+    </span>
+  );
 
   const summary =
     destinationPath !== null ? (
@@ -770,26 +769,31 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   label="URL"
                   htmlFor="clone-repo-url"
                   hint={
-                    <div className="flex min-w-0 items-center gap-1.5 text-xs">
-                      <Checkbox
-                        id="clone-shallow"
-                        checked={shallowClone}
-                        onCheckedChange={(checked) => setShallowClone(checked === true)}
-                        disabled={isCloning}
-                        aria-describedby={shallowHintId}
-                      />
-                      <label
-                        htmlFor="clone-shallow"
-                        className="ml-0.5 cursor-pointer text-text-secondary hover:text-text-primary"
-                      >
-                        Shallow clone
-                      </label>
-                      <span aria-hidden="true" className="text-text-secondary">
-                        ·
-                      </span>
-                      <span id={shallowHintId} className="truncate text-text-secondary">
-                        Latest commit only, limits history
-                      </span>
+                    <div className="flex flex-col gap-2">
+                      {urlIsInvalid && urlProblem !== null && (
+                        <InlineError id={urlProblemId}>{urlProblem}</InlineError>
+                      )}
+                      <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                        <Checkbox
+                          id="clone-shallow"
+                          checked={shallowClone}
+                          onCheckedChange={(checked) => setShallowClone(checked === true)}
+                          disabled={isCloning}
+                          aria-describedby={shallowHintId}
+                        />
+                        <label
+                          htmlFor="clone-shallow"
+                          className="ml-0.5 cursor-pointer text-text-secondary hover:text-text-primary"
+                        >
+                          Shallow clone
+                        </label>
+                        <span aria-hidden="true" className="text-text-secondary">
+                          ·
+                        </span>
+                        <span id={shallowHintId} className="truncate text-text-secondary">
+                          Latest commit only, limits history
+                        </span>
+                      </div>
                     </div>
                   }
                 >

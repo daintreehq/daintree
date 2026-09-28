@@ -1124,7 +1124,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             the master column no longer renders while the dialog owns it — so
             without this the failure would be invisible in both places. */}
         {pm.error && (
-          <Callout severity="error" size="compact" className="mt-3" role="alert">
+          <Callout severity="error" className="mt-3" role="alert">
             <p>{pm.error}</p>
           </Callout>
         )}
@@ -1209,7 +1209,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           </AppDialog.Description>
           {/* The security note is the reason to hesitate, so it stops sharing a
               paragraph — and a weight — with the mechanics of the field above. */}
-          <Callout severity="warning" size="compact">
+          <Callout severity="warning">
             <p>
               Plugins run with full Node.js privileges — no sandbox, no signature check, and no
               capability prompt before install. Only install from sources you trust.
@@ -1219,7 +1219,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               slot was the master column behind the scrim — so the user sat in an
               open dialog with the explanation hidden underneath it. */}
           {pm.error && (
-            <Callout severity="error" size="compact" role="alert">
+            <Callout severity="error" role="alert">
               <p>{pm.error}</p>
             </Callout>
           )}
