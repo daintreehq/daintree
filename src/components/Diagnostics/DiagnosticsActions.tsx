@@ -1,13 +1,11 @@
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { useLogsStore, useErrorStore } from "@/store";
 import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ClearLogsConfirmDialog } from "./ClearLogsConfirmDialog";
-import { PRESSED_TOGGLE } from "./toggleStyles";
 
 export function ProblemsActions() {
   const hasActiveErrors = useErrorStore((state) => state.errors.some((e) => !e.dismissed));
@@ -65,8 +63,7 @@ export function LogsActions() {
               variant="subtle"
               size="xs"
               onClick={() => setAutoScroll(!autoScroll)}
-              aria-pressed={autoScroll}
-              className={cn(autoScroll && PRESSED_TOGGLE)}
+              pressed={autoScroll}
             >
               Auto-scroll
             </Button>
@@ -119,8 +116,7 @@ export function TelemetryActions() {
               size="xs"
               onClick={handleToggle}
               disabled={!stateKnown}
-              aria-pressed={stateKnown ? active : undefined}
-              className={cn(stateKnown && active && PRESSED_TOGGLE)}
+              pressed={stateKnown ? active : undefined}
             >
               Telemetry preview
             </Button>

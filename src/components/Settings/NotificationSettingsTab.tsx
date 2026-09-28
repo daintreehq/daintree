@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -657,29 +657,21 @@ function WeekdayRow({
             const active = isActive(value);
             const locked = active && activeCount === 1;
             return (
-              <button
+              <Button
                 key={value}
-                type="button"
+                variant="subtle"
+                size="sm"
                 disabled={disabled}
                 aria-disabled={locked || undefined}
                 aria-label={name}
+                pressed={active}
                 onClick={() => {
                   if (!locked) toggle(value);
                 }}
-                className={cn(
-                  "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-                  "disabled:cursor-not-allowed disabled:opacity-50",
-                  // The selected outline is a text-ramp token so it clears 3:1 against the
-                  // card on every theme; the border ramp's strongest step does not.
-                  active
-                    ? "border-text-secondary bg-overlay-medium text-text-primary"
-                    : "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
-                )}
-                aria-pressed={active}
+                className="aria-disabled:cursor-not-allowed"
               >
                 {label}
-              </button>
+              </Button>
             );
           })}
         </div>

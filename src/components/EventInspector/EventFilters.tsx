@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
-import { PRESSED_TOGGLE } from "@/components/Diagnostics/toggleStyles";
+import { FilterChip } from "@/components/ui/FilterChip";
 import { Check, ListFilter } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { EventRecord, EventFilterOptions, EventCategory } from "@/store/eventStore";
@@ -193,22 +193,18 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
           const count = categoryCounts.get(category) || 0;
           const config = EVENT_CATEGORY_STYLES[category];
           return (
-            <Button
+            <FilterChip
               key={category}
-              variant="subtle"
-              size="xs"
+              selected={isActive}
+              count={count}
               onClick={() => toggleCategoryFilter(category)}
-              data-filter-chip="true"
-              className={cn("gap-1.5", isActive && PRESSED_TOGGLE)}
-              aria-pressed={isActive}
             >
               <span
                 aria-hidden="true"
                 className={cn("h-1.5 w-1.5 rounded-full", CATEGORY_DOT[category])}
               />
-              <span>{config.label}</span>
-              <span className="tabular-nums text-text-secondary">{count}</span>
-            </Button>
+              {config.label}
+            </FilterChip>
           );
         })}
       </div>
@@ -218,7 +214,10 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
           <Button
             variant="subtle"
             size="xs"
-            className={cn(moreFilterCount > 0 && PRESSED_TOGGLE)}
+            // Opens a popover, so it is not a toggle and never looks pressed.
+            // Primary ink and the count say more filters are narrowing the
+            // list, as on the other filter triggers.
+            className={cn(moreFilterCount > 0 && "text-text-primary")}
             aria-label={
               moreFilterCount > 0 ? `More filters, ${moreFilterCount} active` : "More filters"
             }

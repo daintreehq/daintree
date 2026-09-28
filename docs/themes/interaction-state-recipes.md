@@ -219,6 +219,23 @@ The sliding thumb of `SegmentedRadioGroup` sits on an inset track, where `border
 
 ---
 
+### Pressed Toggle and Filter Chip
+
+**Role:** A button that switches a mode or setting on and off, and a pill that narrows a list by one value. The same "on" state on two shapes.
+
+```tsx
+<Button variant="outline" size="sm" pressed={groupByTurn}>Group by turn</Button>
+<FilterChip selected={isActive} count={count}>Info</FilterChip>
+```
+
+**Usage:** "On" is a `text-secondary` edge over `filter-selected-bg-strong` with primary ink, on both. The edge is what carries it: it clears WCAG 1.4.11's 3:1 in both polarities, where a fill step alone measured about 1.1:1 against the panel and the old toggles read the same pressed or not. `Button`'s `pressed` prop sets `aria-pressed` and draws the edge as a ring, so it costs no layout on any variant; `aria-pressed:` utilities are emitted after `hover:` and `active:`, so hovering a pressed toggle never takes the edge away. `FilterChip` (`src/components/ui/FilterChip.tsx`) is the worktree popover's pill: a real border in every state, `font-medium` when selected (the one axis hover does not touch), and an unavailable tier for a zero count that stays clickable. Forced colours strips fills and rings, so `data-toggle` and `data-filter-chip` take a 2px `ButtonText` border there. Increased contrast needs nothing extra, since every state already has an edge. No accent on either.
+
+**Chip or toggle.** A control that narrows a list to rows matching its value, and sits in a set of such values, is a chip: worktree facets, inbox filters, plugin categories, event context values, and the Diagnostics log levels and event categories. A control that changes how something behaves or is shown is a toggle: group by turn, ignore last hour, actual size, code only, auto-scroll, telemetry preview, the default and summary pins, the watch bell. The log levels and event categories sat in the Diagnostics dock beside the auto-scroll toggle and were drawn as toggles, but they do the worktree chips' job, so they are chips. A button that opens a filter popover (Sources, Filters) is neither and never looks pressed; the count in its label says filters are narrowing the list.
+
+A toggle keeps one name, and a glyph shows the state rather than the action: the watch bell is `Bell` at rest and `BellDot` while watching, never a slashed bell. Chrome icon toggles use the toolbar armed chip instead (`src/styles/components/toolbar.css`). Show/hide reveal buttons and media transport keep their glyph-only idiom.
+
+---
+
 ### Switch-Row ON State
 
 **Role:** Settings row containing a toggle switch. The row styling stays neutral regardless of switch state; accent is confined to the switch widget's track.

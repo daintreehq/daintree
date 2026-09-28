@@ -89,9 +89,15 @@ vi.mock("@/components/Worktree/LiveTimeAgo", () => ({
 vi.mock("@/components/ui/button", () => ({
   Button: ({
     children,
+    pressed,
     ...props
-  }: { children: React.ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
+  }: {
+    children: React.ReactNode;
+    pressed?: boolean;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button aria-pressed={pressed} {...props}>
+      {children}
+    </button>
   ),
 }));
 
@@ -364,19 +370,19 @@ describe("BackgroundContainer", () => {
       expect(watchPanelMock).not.toHaveBeenCalled();
     });
 
-    it("uses a state-matched aria-label so screen readers announce the toggle target", () => {
+    it("keeps one name and carries the watch state on aria-pressed", () => {
       mockTerminals = [makeTerminal({ id: "t1", agentState: "working" })];
       mockWatchedPanels = new Set();
       const { unmount } = render(<BackgroundContainer />);
-      expect(screen.getByTestId("bg-watch-button").getAttribute("aria-label")).toBe(
-        "Watch for completion"
-      );
+      const idle = screen.getByTestId("bg-watch-button");
+      const idleName = idle.getAttribute("aria-label");
+      expect(idle.getAttribute("aria-pressed")).toBe("false");
       unmount();
       mockWatchedPanels = new Set(["t1"]);
       render(<BackgroundContainer />);
-      expect(screen.getByTestId("bg-watch-button").getAttribute("aria-label")).toBe(
-        "Stop watching"
-      );
+      const watching = screen.getByTestId("bg-watch-button");
+      expect(watching.getAttribute("aria-pressed")).toBe("true");
+      expect(watching.getAttribute("aria-label")).toBe(idleName);
     });
   });
 

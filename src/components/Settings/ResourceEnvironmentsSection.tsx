@@ -117,14 +117,13 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-pressed={isSelected}
+                pressed={isSelected}
                 aria-label={label}
                 title={label}
                 onClick={() => {
                   onChange(name);
                   setIsOpen(false);
                 }}
-                className={cn(isSelected && "bg-overlay-active text-text-primary")}
               >
                 <IconComp />
               </Button>

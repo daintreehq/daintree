@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Check, Clock, Copy, Download, RefreshCw } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
@@ -213,9 +212,8 @@ export function ForgeAuditLogViewer({
             <Button
               variant="outline"
               size="sm"
-              aria-pressed={ignoreLastHour}
+              pressed={ignoreLastHour}
               onClick={() => setIgnoreLastHour((v) => !v)}
-              className={cn(ignoreLastHour && "bg-overlay-selected text-text-primary")}
             >
               <Clock aria-hidden="true" />
               Ignore last hour

@@ -67,6 +67,7 @@ import {
 } from "@/components/ui/paneToolbarStyles";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CountBadge } from "@/components/ui/badge";
+import { FilterChip } from "@/components/ui/FilterChip";
 
 // Three, not five. Even as compact previews, five pinned rows took three
 // quarters of a laptop-height list, so the first screen held one row of what
@@ -1251,35 +1252,36 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           // surfaces line up with surfaces.
           <div className="flex flex-wrap items-center gap-1.5 pl-4 pr-2 pb-2">
             <FilterChip
-              label="All"
               selected={filter === "all"}
-              onSelect={() => {
+              onClick={() => {
                 setFilter("all");
                 setFrozenUnreadIds(null);
               }}
-            />
+            >
+              All
+            </FilterChip>
+            <FilterChip selected={filter === "unread"} onClick={() => setFilter("unread")}>
+              Unread
+            </FilterChip>
             <FilterChip
-              label="Unread"
-              selected={filter === "unread"}
-              onSelect={() => setFilter("unread")}
-            />
-            <FilterChip
-              label="Archived"
               selected={filter === "archived"}
-              onSelect={() => {
+              onClick={() => {
                 setFilter("archived");
                 setFrozenUnreadIds(null);
               }}
-            />
+            >
+              Archived
+            </FilterChip>
             {hasSnoozedThreads && (
               <FilterChip
-                label="Snoozed"
                 selected={filter === "snoozed"}
-                onSelect={() => {
+                onClick={() => {
                   setFilter("snoozed");
                   setFrozenUnreadIds(null);
                 }}
-              />
+              >
+                Snoozed
+              </FilterChip>
             )}
           </div>
         )}
@@ -1539,48 +1541,6 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         }}
       />
     </div>
-  );
-}
-
-/**
- * One filter segment. Four copies of the same twelve-class string is three
- * chances to let them drift, and the forced-colors handle below has to be on
- * every one of them or the mode it exists for is the mode it misses.
- *
- * No accent in either state, deliberately: membership in a segmented control is
- * exactly the "multi-element, non-load-bearing" case the accent rule excludes,
- * and the accent here is spent on focus.
- */
-function FilterChip({
-  label,
-  selected,
-  onSelect,
-}: {
-  label: string;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      // Handle for the `forced-colors: active` block in index.css, shared with
-      // the worktree filter popover's chips. There the UA
-      // flattens `bg-filter-selected-bg-strong` to Canvas and paints every chip
-      // as the same outlined pill, so which filter you are looking at becomes
-      // unreadable — the same failure the destructive-button rule in that block
-      // already solves, and solved the same way: a heavier border.
-      data-filter-chip="true"
-      onClick={onSelect}
-      className={cn(
-        "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
-        selected
-          ? "bg-filter-selected-bg-strong text-text-primary font-medium"
-          : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]"
-      )}
-    >
-      {label}
-    </button>
   );
 }
 

@@ -631,9 +631,8 @@ export function McpAuditLogViewer({
               <Button
                 variant="outline"
                 size="sm"
-                aria-pressed={groupByTurn}
+                pressed={groupByTurn}
                 onClick={() => setGroupByTurn((v) => !v)}
-                className={cn(groupByTurn && "bg-overlay-selected text-text-primary")}
               >
                 <Layers aria-hidden="true" />
                 Group by turn

@@ -1,14 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import {
-  Moon,
-  Layers,
-  ChevronDown,
-  ChevronRight,
-  RotateCcw,
-  OctagonX,
-  Bell,
-  BellOff,
-} from "lucide-react";
+import { Moon, Layers, ChevronDown, ChevronRight, RotateCcw, OctagonX, Bell } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -16,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
+import { BellDot } from "@/components/icons";
 import { usePanelStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { closeAndAnnounce } from "@/lib/accessibility";
@@ -516,17 +508,17 @@ function BackgroundSingleItem({
                 e.stopPropagation();
                 onWatchToggle(terminal);
               }}
-              aria-label={isWatched ? "Stop watching" : "Watch for completion"}
-              aria-pressed={isWatched}
+              // A toggle's name stays put; `pressed` announces the state. The
+              // glyph shows the state too: BellDot is the pane header's
+              // "watching" mark, where a slashed bell read as muted.
+              aria-label="Watch for completion"
+              pressed={isWatched}
               data-testid="bg-watch-button"
-              className={cn(isWatched && "text-status-info")}
             >
-              {isWatched ? <BellOff aria-hidden="true" /> : <Bell aria-hidden="true" />}
+              {isWatched ? <BellDot aria-hidden="true" /> : <Bell aria-hidden="true" />}
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {isWatched ? "Stop watching" : "Watch for completion"}
-          </TooltipContent>
+          <TooltipContent side="bottom">Watch for completion</TooltipContent>
         </Tooltip>
 
         {!compact && (

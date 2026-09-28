@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { FilterChip } from "@/components/ui/FilterChip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
@@ -179,59 +180,6 @@ function FilterSection({
   );
 }
 
-interface FilterChipProps {
-  label: string;
-  isActive: boolean;
-  onClick: () => void;
-  count?: number;
-}
-
-/**
- * Three tiers, and they have to be told apart at a glance while the pointer is
- * somewhere in the grid:
- *
- *   unavailable — matches nothing right now. Shows its `(0)` and dims, so the
- *     values that would narrow the list are the ones that stand out.
- *   available   — a subtle fill gives the pill a body; the border alone is far
- *     below a perceptible step on every dark theme.
- *   selected    — the app's filter-chip treatment: the strong fill, `font-medium`,
- *     and the shared `data-filter-chip` hook that gives it a heavier border under
- *     `forced-colors: active` and an inset outline under `prefers-contrast: more`.
- *
- * `font-medium` is the part that carries selection, and it is not decoration:
- * hovering an available chip already raises its fill and takes its text to
- * `text-text-primary`, so fill and tone alone left hover and selected rendering
- * identically — you could not see what was selected while the pointer was in the
- * grid. Weight is the one axis hover does not touch.
- *
- * Zero-count chips stay clickable rather than `disabled`. Their `(0)` is what
- * answers "will this do anything", and disabling would take them out of the tab
- * order — so a keyboard user would silently skip values that reappear the moment
- * another facet changes. Matches `LogFilters`, which keeps zero-count rows enabled.
- */
-function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
-  const isUnavailable = count === 0 && !isActive;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={isActive}
-      data-filter-chip="true"
-      className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-2xs transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
-        isActive
-          ? "border-text-secondary bg-filter-selected-bg-strong font-medium text-text-primary"
-          : isUnavailable
-            ? "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
-            : "border-text-secondary bg-overlay-soft text-text-secondary hover:bg-overlay-medium hover:text-text-primary"
-      )}
-    >
-      {count === undefined ? label : `${label} (${count})`}
-    </button>
-  );
-}
-
 interface ChipOption<T extends string> {
   value: T;
   label: string;
@@ -315,11 +263,12 @@ function ChipGrid<T extends string>({
       {visible.map((option) => (
         <FilterChip
           key={option.value}
-          label={option.label}
-          isActive={isActive(option.value)}
+          selected={isActive(option.value)}
           onClick={() => onToggle(option.value)}
           count={counts?.[option.value]}
-        />
+        >
+          {option.label}
+        </FilterChip>
       ))}
       {hiddenCount > 0 && (
         <Button

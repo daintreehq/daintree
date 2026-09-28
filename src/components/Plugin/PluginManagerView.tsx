@@ -56,6 +56,7 @@ import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugi
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge, CountBadge } from "@/components/ui/badge";
+import { FilterChip } from "@/components/ui/FilterChip";
 
 const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
@@ -811,29 +812,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               {PLUGIN_FILTER_CHIPS.map(({ token, label }) => {
                 const active = queryTokens.includes(token.toLowerCase());
                 return (
-                  <button
+                  <FilterChip
                     key={token}
-                    type="button"
-                    aria-pressed={active}
+                    selected={active}
                     onClick={() => toggleFilterToken(token)}
-                    className={cn(
-                      // The ring's colour is component-owned: with no
-                      // `focus-visible` outline declared, the chips fell back to
-                      // Chromium's default blue.
-                      "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-                      // Pressed is the segmented control's selected treatment: a
-                      // text-secondary border clears 3:1 against the fill, where
-                      // a fill step alone read as barely different from rest.
-                      // Forced colours repaint every border alike, so the
-                      // pressed one takes the system highlight there.
-                      active
-                        ? "bg-overlay-medium border-text-secondary text-text-primary forced-colors:border-[Highlight]"
-                        : "bg-overlay-subtle border-border-default/50 text-text-secondary hover:text-text-primary hover:border-border-default"
-                    )}
                   >
                     {label}
-                  </button>
+                  </FilterChip>
                 );
               })}
             </div>
