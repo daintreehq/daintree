@@ -87,13 +87,15 @@ const buttonVariants = cva(
  * the filter chips' selected fill, with primary ink. It is the filter chip's
  * selected treatment on a button's shape, so "on" reads the same on a chip and
  * on a toggle. A fill step alone, the old per-site treatment, was barely
- * different from rest on the dark themes. Keyed on `aria-pressed` so the state
+ * different from rest on the dark themes. A pressed button is set, not raised,
+ * so the outline variant's drop shadow and top highlight go, which also keeps
+ * every variant's "on" identical. Keyed on `aria-pressed` so the state
  * the screen reader hears is the state that is drawn; the variants use rings,
  * not borders, so the edge costs no layout. Forced colours strips both the fill
  * and the ring — `data-toggle` is the hook `index.css` redraws it from.
  */
 const PRESSED_CLASS =
-  "aria-pressed:bg-filter-selected-bg-strong aria-pressed:text-text-primary aria-pressed:ring-1 aria-pressed:ring-text-secondary";
+  "aria-pressed:bg-filter-selected-bg-strong aria-pressed:text-text-primary aria-pressed:ring-1 aria-pressed:ring-text-secondary aria-pressed:shadow-none aria-pressed:inset-shadow-none";
 
 type ButtonSize = NonNullable<VariantProps<typeof buttonVariants>["size"]>;
 

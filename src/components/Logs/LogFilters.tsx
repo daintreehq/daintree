@@ -142,8 +142,10 @@ export function LogFilters({
             <Button
               variant="subtle"
               size="xs"
-              // Opens a menu, so it is not a toggle and never looks pressed: the
-              // count in the label is what says sources are narrowing the list.
+              // Opens a menu, so it is not a toggle and never looks pressed.
+              // Primary ink and the count say sources are narrowing the list,
+              // as on the other filter triggers.
+              className={cn(activeSourceCount > 0 && "text-text-primary")}
             >
               Sources{activeSourceCount > 0 ? ` (${activeSourceCount})` : ""}
               <ChevronDown />

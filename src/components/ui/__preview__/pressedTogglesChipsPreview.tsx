@@ -270,6 +270,21 @@ function ReEntryPin({ isPinned }: { isPinned: boolean }) {
   );
 }
 
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** Notification settings — quiet-hours active days. */
+function Weekdays({ active }: { active: number[] }) {
+  return (
+    <div role="group" aria-label="Active days" className="flex flex-wrap gap-2">
+      {WEEKDAYS.map((label, i) => (
+        <Button key={label} variant="subtle" size="sm" pressed={active.includes(i)}>
+          {label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 function Gallery() {
   const [logFilters, setLogFilters] = useState<LogFilterOptions>({
     levels: ["info", "error"],
@@ -298,6 +313,9 @@ function Gallery() {
         <Frame caption="Recipes tab — default pin off, on">
           <RecipePin name="Install and dev server" isDefault={false} />
           <RecipePin name="Claude + tests" isDefault={true} />
+        </Frame>
+        <Frame caption="Notification settings — quiet-hours active days">
+          <Weekdays active={[0, 1, 2, 3, 4]} />
         </Frame>
         <Frame caption="Re-entry summary — pin off, on" surface="bg-surface-canvas">
           <ReEntryPin isPinned={false} />

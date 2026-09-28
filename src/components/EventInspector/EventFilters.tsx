@@ -214,8 +214,10 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
           <Button
             variant="subtle"
             size="xs"
-            // Opens a popover, so it is not a toggle and never looks pressed:
-            // the count is what says more filters are narrowing the list.
+            // Opens a popover, so it is not a toggle and never looks pressed.
+            // Primary ink and the count say more filters are narrowing the
+            // list, as on the other filter triggers.
+            className={cn(moreFilterCount > 0 && "text-text-primary")}
             aria-label={
               moreFilterCount > 0 ? `More filters, ${moreFilterCount} active` : "More filters"
             }
