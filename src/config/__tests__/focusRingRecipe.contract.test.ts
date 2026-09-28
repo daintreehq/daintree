@@ -141,22 +141,10 @@ const ALLOWLIST: AllowlistEntry[] = [
     reason: "Diagnostics dock tabs — converted with the Dev Preview / Diagnostics pass",
   },
   {
-    file: "src/components/Layout/DockedTabGroup.tsx",
-    rule: "offset",
-    lines: 2,
-    reason: "dock tab strip offsets — converted with the document tab strip pass",
-  },
-  {
     file: "src/components/HelpPanel/HelpSessionTabs.tsx",
     rule: "offset",
     lines: 2,
     reason: "assistant session tabs — converted with the document tab strip pass",
-  },
-  {
-    file: "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
-    rule: "mechanism",
-    lines: 1,
-    reason: "the Review Hub close button — converted with the close/dismiss button pass",
   },
 ];
 
