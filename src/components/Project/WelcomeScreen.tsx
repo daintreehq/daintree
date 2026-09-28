@@ -6,7 +6,6 @@ import {
   Newspaper,
   ExternalLink,
   GitBranch,
-  X,
   Plug,
   Pin,
   Sparkles,
@@ -14,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { KbdChord } from "@/components/ui/Kbd";
 import { AppWindow, BrandMark, DaintreeIcon } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
@@ -523,15 +523,12 @@ function AgentSetupBannerCard() {
   return (
     <div className="w-full" data-testid="agent-setup-banner">
       <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
-        <button
-          type="button"
+        <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss agent setup banner"
           data-testid="agent-setup-banner-dismiss"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary transition-colors hover:bg-overlay-emphasis hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          className="absolute top-2 right-2"
+        />
         <div className="flex items-start gap-3 pr-6">
           <Sparkles
             className="h-4 w-4 text-text-secondary mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
@@ -628,14 +625,11 @@ function AgentWelcomeCard() {
   return (
     <div className="w-full">
       <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
-        <button
-          type="button"
+        <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss welcome card"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary transition-colors hover:bg-overlay-emphasis hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          className="absolute top-2 right-2"
+        />
         <div className="flex items-start gap-3 pr-6">
           <Plug
             className="h-4 w-4 text-text-secondary mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
@@ -732,19 +726,12 @@ function InlineChecklist({
         <span className="text-3xs text-text-secondary font-mono tabular-nums @min-[1920px]/welcome:text-xs">
           {progressDone}/{progressTotal}
         </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={onDismiss}
-              aria-label="Hide getting started"
-              className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-xs)] text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            >
-              <X className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Hide — reopen from Help → Getting Started</TooltipContent>
-        </Tooltip>
+        <DismissButton
+          onClick={onDismiss}
+          aria-label="Hide getting started"
+          tooltip="Hide — reopen from Help → Getting Started"
+          className="ml-auto"
+        />
       </div>
 
       <div

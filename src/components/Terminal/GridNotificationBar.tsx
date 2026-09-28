@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { restoreFocusTo } from "@/lib/accessibility";
 import {
   BANNER_ENTER_DURATION,
@@ -370,9 +370,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                 {action.label}
               </Button>
             ))}
-            <Button
-              variant="ghost"
-              size="icon-sm"
+            <DismissButton
               onClick={() => removeNotification(presented.id)}
               aria-label="Dismiss"
               className={cn(
@@ -380,9 +378,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                 buttonPointerClass
               )}
               {...interactionGuard}
-            >
-              <X aria-hidden="true" />
-            </Button>
+            />
           </div>
         )}
       </div>

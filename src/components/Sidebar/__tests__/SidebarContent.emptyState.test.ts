@@ -399,22 +399,12 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     expect(branch).toMatch(/<h2[^>]*>\s*Worktrees\s*<\/h2>/);
     // The loading header must be the same height as the loaded one, or the bar
     // changes size when worktrees finish loading and the list jumps (#10318).
-    // Compare the two branches against each other, and read whichever utility
-    // is setting the height, so switching between a fixed height and vertical
-    // padding does not force an edit here.
-    function headerBox(chunk: string): { h: string | null; py: string | null } {
-      const cls = chunk.match(/className=(?:"|\{cn\(\s*")([^"]*\bitems-center\b[^"]*)"/)?.[1] ?? "";
-      return {
-        h: cls.match(/\bh-\d+\b/)?.[0] ?? null,
-        py: cls.match(/\bpy-[\d.]+\b/)?.[0] ?? null,
-      };
-    }
-    const loading = headerBox(branch);
+    // Both draw the shared sidebar header row, whose height is fixed in one
+    // place, so neither can size itself differently from the other.
+    expect(branch).toMatch(/cn\(\s*SIDEBAR_HEADER_ROW\b/);
     const groupIdx = source.indexOf("group/header");
-    const loaded = headerBox(source.slice(source.lastIndexOf("<div", groupIdx)));
-    expect(loading.h ?? loading.py).not.toBeNull();
-    expect(loaded.h ?? loaded.py).not.toBeNull();
-    expect(loading).toEqual(loaded);
+    const loadedRow = source.slice(source.lastIndexOf("<div", groupIdx), groupIdx);
+    expect(loadedRow).toMatch(/cn\(\s*SIDEBAR_HEADER_ROW\b/);
   });
 
   it("uses SkeletonBone with shimmer and no immediate prop (400ms Doherty gate) — #8804", () => {

@@ -12,6 +12,8 @@ import path from "path";
  */
 const SIDEBAR_CONTENT = path.resolve(__dirname, "../SidebarContent.tsx");
 const SEARCH_BAR = path.resolve(__dirname, "../../Worktree/WorktreeSidebarSearchBar.tsx");
+const WORKSPACE_SIDEBAR = path.resolve(__dirname, "../WorkspaceRootSidebar.tsx");
+const SIDEBAR_HEADER = path.resolve(__dirname, "../sidebarHeader.ts");
 /** Unique to the rail's own element — the bare class name also appears in prose. */
 const RAIL_MARKER = 'variant === "sidebar" && "worktree-filter-bar"';
 
@@ -30,7 +32,7 @@ function rowClasses(chunk: string, marker: string): string {
   expect(from).toBeGreaterThan(-1);
   // Window past the marker: the class string it identifies continues beyond it.
   const slice = stripped.slice(from, from + 600);
-  return slice.match(/className=(?:"|\{cn\(\s*")([^"]*)"/)?.[1] ?? "";
+  return slice.match(/className=(?:"|\{cn\([^"]*")([^"]*)"/)?.[1] ?? "";
 }
 
 function inset(classes: string): string | null {
@@ -40,10 +42,15 @@ function inset(classes: string): string | null {
 describe("Worktrees sidebar control zone — issue #11991", () => {
   let sidebar: string;
   let searchBar: string;
+  let workspaceSidebar: string;
+  let headerRow: string;
 
   beforeAll(async () => {
     sidebar = await fs.readFile(SIDEBAR_CONTENT, "utf-8");
     searchBar = await fs.readFile(SEARCH_BAR, "utf-8");
+    workspaceSidebar = await fs.readFile(WORKSPACE_SIDEBAR, "utf-8");
+    const shared = await fs.readFile(SIDEBAR_HEADER, "utf-8");
+    headerRow = shared.match(/SIDEBAR_HEADER_ROW = "([^"]*)"/)?.[1] ?? "";
   });
 
   it("carries exactly one horizontal rule, at the bottom of the whole zone", () => {
@@ -63,26 +70,33 @@ describe("Worktrees sidebar control zone — issue #11991", () => {
     // Three competing left margins in 90px of height — the title at one inset,
     // the field container at another — is what made the zone read as two
     // separately framed bands rather than one control zone.
-    const headerInset = inset(rowClasses(sidebar, "group/header"));
+    expect(sidebar).toMatch(/cn\(\s*SIDEBAR_HEADER_ROW,\s*"group\/header/);
+    const headerInset = inset(headerRow);
     const railInset = inset(rowClasses(searchBar, RAIL_MARKER));
     expect(headerInset).not.toBeNull();
     expect(railInset).not.toBeNull();
     expect(headerInset).toBe(railInset);
   });
 
-  it("gives every header branch the same row height so the zone never resizes", () => {
-    // Loading, empty and loaded all render the same landmark row; if their
-    // heights diverge the sidebar's contents jump as a project resolves.
-    const heights = [
-      ...sidebar.matchAll(/className=(?:"|\{cn\(\s*")([^"]*\bitems-center\b[^"]*)"/g),
-    ]
-      .map((m) => m[1] ?? "")
-      .filter((cls) => cls.includes("border-divider") || cls.includes("group/header"))
-      .map((cls) => cls.match(/\bh-\d+\b/)?.[0] ?? cls.match(/\bpy-[\d.]+\b/)?.[0] ?? null);
+  it("gives every header branch, in every workspace kind, one fixed row height", () => {
+    // Loading, empty and loaded all render the same landmark row, and so does
+    // the non-git workspace sidebar; if their heights diverge the sidebar's
+    // contents jump as a project resolves or the workspace kind changes. One
+    // shared row with a fixed height — not padding around whatever sits in it —
+    // is what holds them together.
+    expect(headerRow).toMatch(/(?:^|\s)h-\d+(?:\s|$)/);
+    expect(headerRow).not.toMatch(/\bpy-/);
 
-    expect(heights.length).toBeGreaterThanOrEqual(3);
-    expect(new Set(heights).size).toBe(1);
-    expect(heights[0]).not.toBeNull();
+    const worktreeBranches = sidebar.match(/cn\(\s*SIDEBAR_HEADER_ROW\b/g) ?? [];
+    expect(worktreeBranches.length).toBeGreaterThanOrEqual(3);
+    expect(workspaceSidebar).toMatch(/cn\(\s*SIDEBAR_HEADER_ROW\b/);
+
+    // No branch sizes itself around the shared row.
+    for (const source of [sidebar, workspaceSidebar]) {
+      for (const m of source.matchAll(/cn\(\s*SIDEBAR_HEADER_ROW,\s*"([^"]*)"/g)) {
+        expect(m[1]).not.toMatch(/(?:^|\s)(?:h|py|min-h)-/);
+      }
+    }
   });
 
   it("reveals the secondary header actions on keyboard focus, not hover alone", () => {

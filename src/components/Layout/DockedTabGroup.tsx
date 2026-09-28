@@ -77,6 +77,7 @@ import {
 } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
@@ -858,18 +859,19 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     )}
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <button
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={(e) => {
                             e.stopPropagation();
                             handleAddTab();
                           }}
                           onPointerDown={(e) => e.stopPropagation()}
-                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                          className="shrink-0 [&_svg]:size-3.5"
                           aria-label="Duplicate panel as new tab"
-                          type="button"
                         >
-                          <CopyPlus className="w-3 h-3" aria-hidden="true" />
-                        </button>
+                          <CopyPlus aria-hidden="true" />
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
                     </Tooltip>
@@ -879,10 +881,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <DropdownMenuTrigger asChild>
-                            <button
-                              type="button"
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
                               onPointerDown={(e) => e.stopPropagation()}
-                              className="relative shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                              className="shrink-0 [&_svg]:size-3.5"
                               aria-label={
                                 activeTabIsHidden
                                   ? `Show ${hiddenPanels.length} hidden tabs, including active`
@@ -891,14 +894,14 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               aria-haspopup="menu"
                               data-testid="dock-tabs-overflow"
                             >
-                              <ChevronDown className="w-3 h-3" aria-hidden="true" />
+                              <ChevronDown aria-hidden="true" />
                               {activeTabIsHidden && (
                                 <span
                                   className="status-mark absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-text/70"
                                   aria-hidden="true"
                                 />
                               )}
-                            </button>
+                            </Button>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>
                         <TooltipContent side="bottom">Show hidden tabs</TooltipContent>

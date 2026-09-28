@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { CirclePlay, X } from "lucide-react";
+import { CirclePlay } from "lucide-react";
 import type { TourOnboardingState } from "@shared/types";
 import { DAINTREE_TOUR_ID, tourProgressFor } from "@shared/utils/tourIds";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { getOnboardingState } from "@/clients/onboardingClient";
 import { cn } from "@/lib/utils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -121,14 +122,11 @@ export function TourInviteCard({ className }: { className?: string }) {
   return (
     <div className={cn("w-full", className)} data-testid="tour-invite-card">
       <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5">
-        <button
-          type="button"
+        <DismissButton
           onClick={dismiss}
           aria-label="Dismiss tour invitation"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary transition-colors hover:bg-overlay-emphasis hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          className="absolute top-2 right-2"
+        />
         <div className="flex items-start gap-3 pr-6">
           <CirclePlay className="mt-0.5 h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
           <div className="min-w-0 flex-1 text-left">

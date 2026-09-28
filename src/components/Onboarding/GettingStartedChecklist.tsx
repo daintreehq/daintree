@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronUp, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { useReducedMotion } from "framer-motion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
@@ -224,27 +225,12 @@ export function GettingStartedChecklist({
             </TooltipTrigger>
             <TooltipContent side="bottom">{collapsed ? "Expand" : "Collapse"}</TooltipContent>
           </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onDismiss}
-                aria-label="Dismiss checklist"
-                className={cn(
-                  "rounded-[var(--radius-xs)]",
-                  "h-6 w-6 flex items-center justify-center shrink-0",
-                  "text-text-secondary transition-colors",
-                  "hover:text-text-primary hover:bg-overlay-medium",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                )}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Dismiss — reopen from Help → Getting Started
-            </TooltipContent>
-          </Tooltip>
+          <DismissButton
+            onClick={onDismiss}
+            aria-label="Dismiss checklist"
+            tooltip="Dismiss — reopen from Help → Getting Started"
+            tooltipClassName="z-[var(--z-toast-overlay)]"
+          />
         </div>
 
         {/* Collapsible body */}

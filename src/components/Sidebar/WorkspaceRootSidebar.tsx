@@ -1,7 +1,9 @@
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useProjectStore } from "@/store/projectStore";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { WorkspaceRootRow } from "./WorkspaceRootRow";
+import { SIDEBAR_HEADER_ROW } from "./sidebarHeader";
 
 /**
  * The sidebar for a workspace that has no git worktrees — a scratch, or a
@@ -29,7 +31,7 @@ export function WorkspaceRootSidebar({
 }) {
   return (
     <div className="flex flex-col h-full">
-      <div className="flex h-8 items-center px-3 border-b border-divider shrink-0">
+      <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
         {/* Not "Worktrees": this workspace has none, and naming the slot after
             a concept it can't hold is what made the header wrong for two of the
             three workspace kinds. */}

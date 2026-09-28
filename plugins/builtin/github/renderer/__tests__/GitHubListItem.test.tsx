@@ -245,8 +245,8 @@ describe("GitHubListItem", () => {
       fireEvent.click(copyButton);
     });
 
-    // Check icon should be visible (status-success class)
-    const checkIcon = copyButton.querySelector(".text-status-success");
+    // Check icon should be visible (a neutral check replaces the # sigil)
+    const checkIcon = copyButton.querySelector("svg.lucide-check");
     expect(checkIcon).not.toBeNull();
 
     act(() => {
@@ -254,7 +254,7 @@ describe("GitHubListItem", () => {
     });
 
     // Check icon should be gone
-    const checkIconAfter = copyButton.querySelector(".text-status-success");
+    const checkIconAfter = copyButton.querySelector("svg.lucide-check");
     expect(checkIconAfter).toBeNull();
   });
 
@@ -274,14 +274,14 @@ describe("GitHubListItem", () => {
       fireEvent.click(copyButton);
     });
 
-    const checkIcon = copyButton.querySelector(".text-status-success");
+    const checkIcon = copyButton.querySelector("svg.lucide-check");
     expect(checkIcon).not.toBeNull();
 
     rerender(<Harness mode="hidden" />);
     rerender(<Harness mode="visible" />);
 
     const copyButtonAfter = screen.getByLabelText("Copy number 42");
-    const checkIconAfter = copyButtonAfter.querySelector(".text-status-success");
+    const checkIconAfter = copyButtonAfter.querySelector("svg.lucide-check");
     expect(checkIconAfter).toBeNull();
   });
 
@@ -642,7 +642,7 @@ describe("GitHubListItem", () => {
     });
 
     // After copy: Check icon replaces #
-    const checkIcon = copyButton.querySelector(".text-status-success");
+    const checkIcon = copyButton.querySelector("svg.lucide-check");
     expect(checkIcon).not.toBeNull();
     // The # yields to the check during the copied state, and the digits stay
     // put so the row does not reflow.

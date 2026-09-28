@@ -389,29 +389,16 @@
   background: color-mix(in oklab, var(--color-border-default) 80%, var(--color-text-primary));
 }
 
-/* Per-hunk copy: ghost button that surfaces on header hover (or keyboard
-   focus), copying the hunk's new-side text without +/- prefixes. */
+/* Per-hunk copy: the shared CopyButton, surfaced on header hover (or keyboard
+   focus, or while it confirms). Its box, colours and hover are the button's. */
 .diff-viewer .diff-hunk-header-copy {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-muted, var(--color-text-primary));
   opacity: 0;
-  transition-property: color, background-color, opacity;
-  transition-duration: 150ms;
-  transition-timing-function: ease-out;
 }
 
 .diff-viewer .diff-decoration-content:hover .diff-hunk-header-copy,
 .diff-viewer .diff-hunk-header-copy:focus-visible,
 .diff-viewer .diff-hunk-header-copy[data-copied] {
   opacity: 1;
-}
-
-.diff-viewer .diff-hunk-header-copy:hover {
-  color: var(--color-text-primary);
-  background: var(--color-border-default);
 }
 
 /* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog

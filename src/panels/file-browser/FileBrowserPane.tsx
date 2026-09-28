@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
+  Check,
   CornerLeftUp,
   FolderRoot,
   FolderTree,
@@ -1244,10 +1245,15 @@ export function FileBrowserPane({
                       className={cn(
                         "min-w-0 flex-1 cursor-pointer truncate text-left text-2xs transition-colors duration-150 ease-out",
                         showRootPathCopied
-                          ? "text-status-success"
+                          ? "text-text-primary"
                           : "text-text-secondary hover:text-text-primary"
                       )}
                     >
+                      {/* The same neutral check every other copy swaps in: the
+                          label stays put, so the glyph is what says it worked. */}
+                      {showRootPathCopied && (
+                        <Check aria-hidden="true" className="me-1 inline size-3 align-[-1px]" />
+                      )}
                       {rootPath}
                     </button>
                   </TooltipTrigger>
@@ -1258,7 +1264,7 @@ export function FileBrowserPane({
                   <TooltipContent side="bottom" className="break-words">
                     {rootHoverPath}
                     {showRootPathCopied && (
-                      <span aria-hidden="true" className="block text-status-success">
+                      <span aria-hidden="true" className="block">
                         Copied!
                       </span>
                     )}

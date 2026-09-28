@@ -8,10 +8,10 @@ import { LiveTimeAgo } from "./LiveTimeAgo";
 import { CommitAuthorAvatar } from "./WorktreeCard/CommitAuthorAvatar";
 import { CommitInfoTooltip } from "./WorktreeCard/CommitInfoTooltip";
 import { cn } from "../../lib/utils";
-import { GitCommit, Copy, Check, FolderTree, FileDiff, Sparkles } from "lucide-react";
+import { GitCommit, FolderTree, FileDiff, Sparkles } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
 import { actionService } from "@/services/ActionService";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 
@@ -95,7 +95,6 @@ export function WorktreeDetails({
   const railClass = cn(NARRATIVE_RAIL, isSidebar && NARRATIVE_RAIL_SIDEBAR_NUDGE);
   const displayPath = formatPath(worktree.path, homeDir);
   const rawLastCommitMsg = worktree.worktreeChanges?.lastCommitMessage;
-  const { copied: pathCopied, copy: copyPath } = useCopyWithFeedback();
   const fileChangeListRef = useRef<FileChangeListHandle>(null);
 
   const lastCommitAuthor = worktree.worktreeChanges?.lastCommitAuthor ?? null;
@@ -144,11 +143,6 @@ export function WorktreeDetails({
     e.stopPropagation();
     e.preventDefault();
     void actionService.dispatch("system.openExternal", { url }, { source: "user" });
-  };
-
-  const handleCopyPath = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    void copyPath(worktree.path);
   };
 
   const hasDetailsContent =
@@ -346,25 +340,13 @@ export function WorktreeDetails({
             <TooltipContent side="bottom">{`Browse files: ${worktree.path}`}</TooltipContent>
           </Tooltip>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={handleCopyPath}
-                className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                aria-label="Copy path to clipboard"
-              >
-                {pathCopied ? (
-                  <Check key="check" className="w-3 h-3 text-status-success animate-badge-bump" />
-                ) : (
-                  <Copy key="copy" className="w-3 h-3" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {pathCopied ? "Copied!" : "Copy full path"}
-            </TooltipContent>
-          </Tooltip>
+          <CopyButton
+            text={worktree.path}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Copy path to clipboard"
+            tooltip="Copy full path"
+            tooltipSide="bottom"
+          />
         </div>
 
         {showLastActive && (

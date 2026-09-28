@@ -43,11 +43,9 @@ import "react-diff-view/style/index.css";
 // Our overrides — must come after the library stylesheet it overrides.
 import "./DiffViewer.css";
 import {
-  Check,
   ChevronRight,
   ChevronsDown,
   ChevronsUp,
-  Copy,
   ExternalLink,
   FileDiff as FileDiffIcon,
   FileQuestion,
@@ -64,6 +62,7 @@ import { actionService } from "@/services/ActionService";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DIFF_SOFT_COLLAPSE_BYTES,
@@ -670,7 +669,6 @@ const EXPAND_STEP = 50;
 const EXPAND_ALL_MAX = 60;
 const INITIAL_VISIBLE_HUNKS = 30;
 const SHOW_MORE_HUNKS_STEP = 60;
-const COPY_FEEDBACK_MS = 2000;
 
 interface HunkHeaderProps {
   hunk: HunkData;
@@ -681,40 +679,20 @@ interface HunkHeaderProps {
 }
 
 function HunkCopyButton({ hunk }: { hunk: HunkData }) {
-  const [copied, setCopied] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
-
-  const handleCopy = async () => {
-    // New-side text (what the code looks like after the change); a pure
-    // deletion falls back to the removed lines so the button never copies "".
+  // New-side text (what the code looks like after the change); a pure
+  // deletion falls back to the removed lines so the button never copies "".
+  const copyText = () => {
     const newSide = hunk.changes.filter((c) => c.type !== "delete").map((c) => c.content);
-    const lines = newSide.length ? newSide : hunk.changes.map((c) => c.content);
-    try {
-      await navigator.clipboard.writeText(lines.join("\n"));
-      setCopied(true);
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      timeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-    } catch {
-      // Silently fail
-    }
+    return (newSide.length ? newSide : hunk.changes.map((c) => c.content)).join("\n");
   };
 
   return (
-    <button
-      type="button"
-      className="diff-hunk-header-copy"
-      data-copied={copied || undefined}
-      onClick={() => void handleCopy()}
-      aria-label={copied ? "Copied!" : "Copy hunk"}
-      title={copied ? "Copied!" : "Copy hunk (new side)"}
-    >
-      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-    </button>
+    <CopyButton
+      text={copyText}
+      className="diff-hunk-header-copy -my-1"
+      aria-label="Copy hunk"
+      tooltip="Copy hunk (new side)"
+    />
   );
 }
 
@@ -1328,26 +1306,6 @@ function FileDiff({
 
   const firstHunkLine = file.hunks?.[0]?.newStart;
 
-  const [fileCopied, setFileCopied] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-    };
-  }, []);
-
-  const handleCopyFileDiff = useCallback(async () => {
-    if (!rawText) return;
-    try {
-      await navigator.clipboard.writeText(rawText);
-      setFileCopied(true);
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setFileCopied(false), COPY_FEEDBACK_MS);
-    } catch {
-      // Silently fail
-    }
-  }, [rawText]);
-
   const handleOpenInEditor = () => {
     if (!absolutePath) return;
     void actionService.dispatch(
@@ -1568,22 +1526,17 @@ function FileDiff({
                     size="icon-xs"
                     onClick={() => setNoteDraft({ kind: "file" })}
                     aria-label="Add file note"
+                    // The copy beside it is a CopyButton; one glyph size per row.
+                    className="shrink-0 [&_svg]:size-3.5"
                   >
-                    <MessageSquarePlus />
+                    <MessageSquarePlus aria-hidden="true" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Add file note</TooltipContent>
               </Tooltip>
             )}
             {rawText && (
-              <button
-                onClick={() => void handleCopyFileDiff()}
-                title={fileCopied ? "Copied!" : "Copy file diff"}
-                aria-label={fileCopied ? "Copied!" : "Copy file diff"}
-                className="shrink-0 flex items-center px-1.5 py-0.5 rounded hover:bg-tint/5 hover:text-text-primary transition-colors"
-              >
-                {fileCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-              </button>
+              <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
             )}
             {absolutePath && (
               <Tooltip>

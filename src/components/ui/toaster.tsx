@@ -14,7 +14,6 @@ import {
   Info,
   type LucideIcon,
   MoreHorizontal,
-  X,
   XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -36,6 +35,7 @@ import {
 } from "@/components/Notifications/notificationCount";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -705,15 +705,11 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
             );
           })()}
 
-        <Button
-          variant="ghost"
-          size="icon-xs"
+        <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss notification"
-          className="[&_svg]:size-3.5"
-        >
-          <X aria-hidden="true" />
-        </Button>
+          tooltipClassName="z-[var(--z-toast-overlay)]"
+        />
       </div>
     </div>
   );

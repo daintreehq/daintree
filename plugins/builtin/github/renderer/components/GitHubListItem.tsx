@@ -31,6 +31,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   RAIL_SLOT,
   RESOURCE_ITEM_HEIGHT_PX,
@@ -169,6 +170,7 @@ export function GitHubListItem({
     }
     try {
       await navigator.clipboard.writeText(`#${item.number}`);
+      useAnnouncerStore.getState().announce("Copied", "polite");
       setCopied(true);
       copyTimeoutRef.current = window.setTimeout(
         () => setCopied(false),
@@ -602,14 +604,14 @@ export function GitHubListItem({
                     "shrink-0 inline-flex items-center tabular-nums rounded cursor-pointer",
                     "hover:text-text-primary transition-colors duration-150 ease-out",
                     "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
-                    copied && "text-status-success"
+                    copied && "text-text-primary"
                   )}
                   aria-label={`Copy number ${item.number}`}
                 >
                   {/* No gap between the sigil and the digits — the old
                       `gap-0.5` rendered every row as "# 11958". */}
                   {copied ? (
-                    <Check className="w-3 h-3 me-0.5 text-status-success" aria-hidden="true" />
+                    <Check className="w-3 h-3 me-0.5" aria-hidden="true" />
                   ) : (
                     <span aria-hidden="true">#</span>
                   )}

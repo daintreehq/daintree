@@ -35,7 +35,6 @@ import type { VirtuosoHandle } from "react-virtuoso";
 
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
-  X,
   RefreshCw,
   CircleCheck,
   ArrowUpFromLine,
@@ -92,6 +91,7 @@ import {
 // think-time; useKeepMounted gates the first mount so nothing is fetched (or
 // rendered) until a diff is actually opened.
 import { Button } from "@/components/ui/button";
+import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
@@ -1957,18 +1957,11 @@ export function ReviewHubContent({
             {/* Same reason as the title: AppDialog.Header supplies the close
                 control at this location. */}
             {!isDialog && (
-              <button
+              <SurfaceHeaderCloseButton
                 onClick={onClose}
-                className={cn(
-                  "p-1.5 rounded transition-colors",
-                  "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
-                )}
                 aria-label="Close"
                 data-testid="review-hub-close"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              />
             )}
           </div>
         </div>

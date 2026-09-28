@@ -9,12 +9,12 @@ import {
   ChevronDown,
   ChevronLeft,
   RefreshCw,
-  X,
 } from "lucide-react";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
+import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -713,16 +713,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
+          <SurfaceHeaderCloseButton
             ref={closeButtonRef}
-            variant="ghost"
-            size="icon-sm"
             onClick={close}
             aria-label="Close plugin manager"
             className="app-no-drag"
-          >
-            <X />
-          </Button>
+          />
           {isWindows() && (
             <div
               aria-hidden="true"

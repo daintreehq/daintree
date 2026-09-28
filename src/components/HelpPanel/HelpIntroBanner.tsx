@@ -1,6 +1,5 @@
-import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { KbdChord } from "@/components/ui/Kbd";
 
 interface HelpIntroBannerProps {
@@ -19,15 +18,7 @@ export function HelpIntroBanner({ onDismiss }: HelpIntroBannerProps) {
         Tip: Press <KbdChord shortcut="Shift+Enter" density="compact" /> to add a newline without
         sending.
       </span>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={onDismiss}
-        aria-label="Dismiss"
-        className="-my-1"
-      >
-        <X aria-hidden="true" />
-      </Button>
+      <DismissButton onClick={onDismiss} aria-label="Dismiss" className="-my-1" />
     </div>
   );
 }

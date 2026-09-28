@@ -8,6 +8,16 @@ import {
   LIVE_REGION_SWAP_DELAY,
 } from "@/lib/animationUtils";
 import { GridNotificationBar } from "../GridNotificationBar";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. The trigger renders its child
+// as-is; the content is dropped so tooltip text can't collide with queries.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 vi.stubGlobal("requestAnimationFrame", ((cb: FrameRequestCallback): number => {
   const timeoutId = setTimeout(() => cb(0), 0);

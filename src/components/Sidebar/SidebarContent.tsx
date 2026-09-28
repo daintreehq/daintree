@@ -47,6 +47,8 @@ import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { Button } from "@/components/ui/button";
+import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndMonitor } from "@dnd-kit/core";
@@ -1695,7 +1697,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   if (isLoading && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
+        <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
           <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
             Worktrees
           </h2>
@@ -1730,7 +1732,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <>
         <div className="flex flex-col h-full">
-          <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
+          <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
             <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
               Worktrees
             </h2>
@@ -1819,15 +1821,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           with no rail the header IS the bottom of the zone and keeps it.
           Stacking a header rule on a rail rule put two hairlines in the first
           90px of the sidebar and neither was carrying hierarchy (#11991). */}
-      {/* py-3, not a fixed h-8. The zone read as cramped against the window
-          chrome above it, and an even 12px rhythm — above the title, title to
-          field, field to list — is what a control zone needs before the eye
-          will treat it as one band rather than two stacked strips. The loading
-          and error branches above carry the same box, or the sidebar jumps as
-          a project resolves. */}
+      {/* SIDEBAR_HEADER_ROW, not a bare h-8. The zone read as cramped against
+          the window chrome above it, and an even 12px rhythm — above the title,
+          title to field, field to list — is what a control zone needs before
+          the eye will treat it as one band rather than two stacked strips. The
+          loading and error branches above, and the non-git workspace sidebar,
+          carry the same row, or the sidebar jumps as a project resolves or the
+          workspace kind changes. */}
       <div
         className={cn(
-          "group/header @container/header flex items-center justify-between gap-1 px-3 py-3 bg-transparent shrink-0",
+          SIDEBAR_HEADER_ROW,
+          "group/header @container/header justify-between gap-1 bg-transparent",
           !hasNonMainWorktrees && "border-b border-divider"
         )}
       >
@@ -1866,63 +1870,89 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             </span>
           )}
         </div>
-        {/* gap-0.5, not gap-1: the four buttons already carry p-1, so a 4px gap
-            on top of that spent ~12px the 200px minimum width does not have —
-            the cluster crowded the "Worktrees" landmark it sits beside. */}
+        {/* gap-0.5, not gap-1: the four 24px buttons already carry their own
+            inset, so a 4px gap on top spent width the 200px minimum does not
+            have — the cluster crowded the "Worktrees" landmark it sits beside. */}
         <div className="flex shrink-0 items-center gap-0.5">
           <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 motion-reduce:transition-none flex items-center gap-0.5">
-            <button
-              type="button"
-              onClick={onOpenOverview}
-              className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              aria-label="Open worktrees overview"
-              aria-keyshortcuts={overviewAriaShortcut}
-              title={formatButtonTitle("Open worktrees overview", overviewShortcut)}
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={openFleetPicker}
-              className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              aria-label="Select terminals to arm"
-              title="Select terminals to arm"
-            >
-              <Zap className="w-3.5 h-3.5" />
-            </button>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={onOpenOverview}
+                  className={SIDEBAR_HEADER_ACTION}
+                  aria-label="Open worktrees overview"
+                  aria-keyshortcuts={overviewAriaShortcut}
+                >
+                  <LayoutGrid aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipContent("Open worktrees overview", overviewShortcut)}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={openFleetPicker}
+                  className={SIDEBAR_HEADER_ACTION}
+                  aria-label="Select terminals to arm"
+                >
+                  <Zap aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Select terminals to arm</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* aria-disabled, not disabled: a disabled button drops keyboard
+                    focus mid-refresh. The handler already ignores a press while
+                    a refresh is in flight. */}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={handleRefreshAll}
                   aria-disabled={isRefreshing || undefined}
-                  className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/40"
+                  className={cn(
+                    SIDEBAR_HEADER_ACTION,
+                    "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary"
+                  )}
                   aria-label="Refresh sidebar"
                   aria-keyshortcuts={refreshAriaShortcut}
                 >
-                  <SpinningIcon icon={RefreshCw} active={isRefreshing} className="w-3.5 h-3.5" />
-                </button>
+                  <SpinningIcon icon={RefreshCw} active={isRefreshing} aria-hidden="true" />
+                </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 {createTooltipContent("Refresh sidebar", refreshShortcut)}
               </TooltipContent>
             </Tooltip>
           </div>
-          <button
-            type="button"
-            onClick={() =>
-              actionService.dispatch("worktree.createDialog.open", undefined, {
-                source: "user",
-              })
-            }
-            onPointerEnter={() => void preloadNewWorktreeDialog()}
-            className="p-1 text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-            aria-label="Create new worktree"
-            aria-keyshortcuts={createWorktreeAriaShortcut}
-            title={formatButtonTitle("Create new worktree", createWorktreeShortcut)}
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() =>
+                  actionService.dispatch("worktree.createDialog.open", undefined, {
+                    source: "user",
+                  })
+                }
+                onPointerEnter={() => void preloadNewWorktreeDialog()}
+                className={SIDEBAR_HEADER_ACTION}
+                aria-label="Create new worktree"
+                aria-keyshortcuts={createWorktreeAriaShortcut}
+              >
+                <Plus aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent("Create new worktree", createWorktreeShortcut)}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
