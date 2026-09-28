@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   RefreshCw,
 } from "lucide-react";
+import { Callout } from "@/components/ui/Callout";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
@@ -884,10 +885,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 itself — otherwise the message renders twice, once of them
                 underneath the scrim. */}
             {pm.error && !errorOwnedByDialog && (
-              <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-                <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                <p className="text-2xs text-status-danger">{pm.error}</p>
-              </div>
+              <Callout severity="error" size="compact">
+                <p>{pm.error}</p>
+              </Callout>
             )}
           </div>
 
@@ -1124,16 +1124,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             the master column no longer renders while the dialog owns it — so
             without this the failure would be invisible in both places. */}
         {pm.error && (
-          <div
-            className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
-            role="alert"
-          >
-            <AlertCircle
-              className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
-              aria-hidden="true"
-            />
-            <p className="text-2xs text-status-danger break-words">{pm.error}</p>
-          </div>
+          <Callout severity="error" size="compact" className="mt-3" role="alert">
+            <p>{pm.error}</p>
+          </Callout>
         )}
       </ConfirmDialog>
 
@@ -1216,30 +1209,19 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           </AppDialog.Description>
           {/* The security note is the reason to hesitate, so it stops sharing a
               paragraph — and a weight — with the mechanics of the field above. */}
-          <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-            <AlertTriangle
-              className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5"
-              aria-hidden="true"
-            />
-            <p className="text-2xs text-status-warning">
+          <Callout severity="warning" size="compact">
+            <p>
               Plugins run with full Node.js privileges — no sandbox, no signature check, and no
               capability prompt before install. Only install from sources you trust.
             </p>
-          </div>
+          </Callout>
           {/* A correctable failure keeps this dialog open, but the only error
               slot was the master column behind the scrim — so the user sat in an
               open dialog with the explanation hidden underneath it. */}
           {pm.error && (
-            <div
-              className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
-              role="alert"
-            >
-              <AlertCircle
-                className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
-                aria-hidden="true"
-              />
-              <p className="text-2xs text-status-danger break-words">{pm.error}</p>
-            </div>
+            <Callout severity="error" size="compact" role="alert">
+              <p>{pm.error}</p>
+            </Callout>
           )}
           <Input
             type="url"

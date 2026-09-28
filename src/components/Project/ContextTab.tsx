@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Callout } from "@/components/ui/Callout";
 import { AlertTriangle, Play, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -413,10 +414,9 @@ export function ContextTab({
               className="px-4 py-3"
             >
               {testConfigResult.error ? (
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 text-status-error mt-0.5 shrink-0" />
-                  <p className="text-sm text-status-error">{testConfigResult.error}</p>
-                </div>
+                <Callout severity="error">
+                  <p>{testConfigResult.error}</p>
+                </Callout>
               ) : (
                 <div className="space-y-3">
                   {testConfigResult.noFilesMatched ? (

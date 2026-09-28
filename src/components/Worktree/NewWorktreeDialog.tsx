@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
+import { Callout } from "@/components/ui/Callout";
+import { InlineError } from "@/components/ui/field";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
-import { FolderGit2, AlertCircle, GitBranch } from "lucide-react";
+import { FolderGit2, GitBranch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -40,7 +42,7 @@ import {
   resolveEligibleDefaultRecipeId,
   CLONE_LAYOUT_ID,
 } from "./hooks/useRecipePicker";
-import { useWorktreeFormErrors } from "./hooks/useWorktreeFormErrors";
+import { useWorktreeFormErrors, type ErrorField } from "./hooks/useWorktreeFormErrors";
 import { useWorktreeFormValidation } from "./hooks/useWorktreeFormValidation";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { recipeTerminalsStartAgent, spawnPanelsFromRecipe } from "./panelSpawning";
@@ -538,7 +540,7 @@ export function NewWorktreeDialog({
           logError("Failed to refresh branches", err);
           return;
         }
-        setValidationError(`Failed to load branches: ${err.message}`, null);
+        setValidationError(`Failed to load branches: ${err.message}`, "base-branch");
         setBranches([]);
         setBaseBranch("");
         setFromRemote(false);
@@ -624,6 +626,16 @@ export function NewWorktreeDialog({
 
   // --- Validation hook ---
   const { validate } = useWorktreeFormValidation();
+
+  // Null rather than an empty element: `FormRow` skips its hint row on a falsy
+  // hint. A submit that fails validation says so once, under the field it is
+  // about, which is what the field's `aria-describedby` points at.
+  const fieldError = (field: ErrorField) =>
+    errors.validationError && errors.errorField === field ? (
+      <InlineError id="validation-error" role="alert">
+        {errors.validationError}
+      </InlineError>
+    ) : null;
 
   // --- Create handler ---
   const handleCreate = () => {
@@ -1006,7 +1018,7 @@ export function NewWorktreeDialog({
     } catch (err: unknown) {
       logError("Failed to open directory picker", err);
       const message = formatErrorMessage(err, "Failed to open directory picker");
-      setValidationError(`Failed to open directory picker: ${message}`, null);
+      setValidationError(`Failed to open directory picker: ${message}`, "worktree-path");
     }
   }, [setWorktreePath, pathTouchedRef, markTouched, clearErrors, setValidationError]);
 
@@ -1205,17 +1217,20 @@ export function NewWorktreeDialog({
                       label="Base"
                       htmlFor="base-branch"
                       hint={
-                        <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
-                          <Checkbox
-                            id="from-remote"
-                            checked={fromRemote}
-                            onCheckedChange={(checked) => {
-                              baseBranchTouchedRef.current = true;
-                              setFromRemote(checked === true);
-                            }}
-                          />
-                          Create from remote branch
-                        </label>
+                        <>
+                          {fieldError("base-branch")}
+                          <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
+                            <Checkbox
+                              id="from-remote"
+                              checked={fromRemote}
+                              onCheckedChange={(checked) => {
+                                baseBranchTouchedRef.current = true;
+                                setFromRemote(checked === true);
+                              }}
+                            />
+                            Create from remote branch
+                          </label>
+                        </>
                       }
                     >
                       <BaseBranchCombobox
@@ -1234,7 +1249,7 @@ export function NewWorktreeDialog({
                       />
                     </FormRow>
                   ) : (
-                    <FormRow label="Name" htmlFor="new-branch">
+                    <FormRow label="Name" htmlFor="new-branch" hint={fieldError("new-branch")}>
                       <NewBranchInput
                         value={branchInput}
                         onChange={handleBranchInputChange}
@@ -1258,7 +1273,7 @@ export function NewWorktreeDialog({
                 </FormSection>
 
                 <FormSection title="Destination">
-                  <FormRow label="Path" htmlFor="worktree-path">
+                  <FormRow label="Path" htmlFor="worktree-path" hint={fieldError("worktree-path")}>
                     <WorktreePathPicker
                       value={worktreePath}
                       onChange={handleWorktreePathChange}
@@ -1361,27 +1376,21 @@ export function NewWorktreeDialog({
               </FormGrid>
 
               {initialPR && prBranchResolved === false && (
-                <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)]">
-                  <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
-                  <p className="text-sm text-status-warning">
-                    Could not fetch branch{" "}
-                    <span className="font-mono">{initialPR.headRef ?? "unknown"}</span> from the
-                    remote. The worktree will be created from the fallback branch instead. You can
-                    try running <span className="font-mono">git fetch origin</span> manually and
-                    reopening this dialog.
+                <Callout severity="error" title="Couldn't fetch the pull request's branch">
+                  <p>
+                    <span className="font-mono">{initialPR.headRef ?? "unknown"}</span> didn&apos;t
+                    come down from the remote. Run{" "}
+                    <span className="font-mono">git fetch origin</span>, then reopen this dialog.
                   </p>
-                </div>
+                </Callout>
               )}
 
-              {errors.validationError && (
-                <div
-                  id="validation-error"
-                  role="alert"
-                  className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]"
-                >
-                  <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
-                  <p className="text-sm text-status-error">{errors.validationError}</p>
-                </div>
+              {/* An error about one field sits under that field; this is for the
+                  rest — a branch list or folder picker that failed. */}
+              {errors.validationError && errors.errorField === null && (
+                <Callout severity="error" id="validation-error" role="alert">
+                  <p>{errors.validationError}</p>
+                </Callout>
               )}
             </>
           )}

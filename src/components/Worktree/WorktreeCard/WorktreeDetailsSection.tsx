@@ -11,6 +11,7 @@ import { WorktreeDetails } from "../WorktreeDetails";
 import { WorktreeActivityChip } from "./WorktreeActivityChip";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
+import { Callout } from "@/components/ui/Callout";
 import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import {
   Activity,
@@ -738,7 +739,8 @@ export function WorktreeDeleteErrorBanner({
   // under the button that was pressed.
   const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   return (
-    <div
+    <Callout
+      severity="error"
       ref={focusHandoffRef}
       role="alert"
       aria-live="assertive"
@@ -750,12 +752,11 @@ export function WorktreeDeleteErrorBanner({
       // step than a positioned `z-0` sibling regardless of DOM order, so without
       // this the overlay covered the banner and swallowed every click on Retry
       // and Dismiss (#12087). Joins the tier the content column already uses.
-      className="relative z-10 mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+      className="relative z-10 mt-2"
     >
-      <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex flex-col gap-0.5">
-          <span className="font-medium text-status-error">Couldn't delete worktree</span>
+          <span className="font-medium text-text-primary">Couldn't delete worktree</span>
           {/* Git stderr is multi-line and the lines after the first are the
               ones that say how to recover, so the breaks have to survive. The
               height cap keeps an unbounded message from pushing Retry and
@@ -791,7 +792,7 @@ export function WorktreeDeleteErrorBanner({
           )}
         </div>
       </div>
-    </div>
+    </Callout>
   );
 }
 
@@ -833,7 +834,8 @@ export function WorktreeIssueErrorBanner({
   // from under the button that was pressed.
   const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   return (
-    <div
+    <Callout
+      severity="error"
       ref={focusHandoffRef}
       role="alert"
       aria-live="assertive"
@@ -845,12 +847,11 @@ export function WorktreeIssueErrorBanner({
       // step than a positioned `z-0` sibling regardless of DOM order, so without
       // this the overlay covered the banner and swallowed every click on Retry
       // and Dismiss (#12087). Joins the tier the content column already uses.
-      className="relative z-10 mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+      className="relative z-10 mt-2"
     >
-      <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex flex-col gap-0.5">
-          <span className="font-medium text-status-error">{title}</span>
+          <span className="font-medium text-text-primary">{title}</span>
           <span className="break-words text-text-secondary">{message}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -877,6 +878,6 @@ export function WorktreeIssueErrorBanner({
           )}
         </div>
       </div>
-    </div>
+    </Callout>
   );
 }

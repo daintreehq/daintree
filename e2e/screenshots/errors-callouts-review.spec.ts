@@ -349,7 +349,7 @@ const STATES: State[] = [
     capture: async (page, theme) => {
       await load(page, `${PAGE}?theme=${theme}&state=new-worktree-pr`, 1000, 1000);
       const c = await card(page);
-      await mustShow(c, /Could not fetch branch/);
+      await mustShow(c, /Could not fetch branch|Couldn't fetch the pull request/);
       return c;
     },
   },

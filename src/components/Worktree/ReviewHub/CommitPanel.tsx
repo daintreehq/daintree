@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useId } from "react";
+import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import type { GitPushDestination } from "@shared/types/git";
 import { cn } from "@/lib/utils";
@@ -689,13 +690,12 @@ export function CommitPanel({
       >
         <div className="flex flex-col gap-2">
           {pushDestination === null && (
-            <div
-              className="rounded-[var(--radius-sm)] border border-status-error/30 bg-status-error/10 px-2 py-1.5 text-2xs text-status-error"
-              data-testid="commit-panel-push-no-destination"
-            >
-              No push destination is configured for this branch. Set an upstream, or configure a
-              push remote, before pushing.
-            </div>
+            <Callout severity="warning" data-testid="commit-panel-push-no-destination">
+              <p>
+                No push destination is configured for this branch. Set an upstream, or configure a
+                push remote, before pushing.
+              </p>
+            </Callout>
           )}
           <div>
             <RefChip

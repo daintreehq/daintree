@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
+import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { cn } from "@/lib/utils";
@@ -830,9 +831,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   htmlFor="clone-folder-name"
                   hint={
                     folderNameError && (
-                      <p id={folderNameErrorId} className="text-xs text-status-error">
-                        {folderNameError}
-                      </p>
+                      <InlineError id={folderNameErrorId}>{folderNameError}</InlineError>
                     )
                   }
                 >

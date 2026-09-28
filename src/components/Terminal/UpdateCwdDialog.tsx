@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useId, useRef } from "react";
+import { InlineError } from "@/components/ui/field";
 import type { KeyboardEvent } from "react";
-import { CircleAlert, FolderPen } from "lucide-react";
+import { FolderPen } from "lucide-react";
 import { basename, dirname, normalize } from "@shared/utils/path";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -277,12 +278,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
                 <div className="space-y-1.5">
                   {/* No live role: aria-invalid plus the described-by link
                       announce it when focus lands back on the field. */}
-                  {fieldError && (
-                    <p id={errorId} className="flex items-start gap-1 text-xs text-status-error">
-                      <CircleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                      {fieldError}
-                    </p>
-                  )}
+                  {fieldError && <InlineError id={errorId}>{fieldError}</InlineError>}
                   {shownSuggestions.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-xs text-text-secondary">Use</span>

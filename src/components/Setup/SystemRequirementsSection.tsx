@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
+import { Callout } from "@/components/ui/Callout";
 import { AlertTriangle, ChevronDown, CircleCheck, RotateCw, CircleX } from "lucide-react";
 import { m, useReducedMotion } from "framer-motion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -157,9 +158,9 @@ export function SystemRequirementsSection({
       >
         <div className="px-3 pb-3 space-y-3">
           {error && (
-            <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
-              <p className="text-xs text-status-error">Could not run health check: {error}</p>
-            </div>
+            <Callout severity="error" role="alert">
+              <p>Could not run health check: {error}</p>
+            </Callout>
           )}
 
           {visibleSpecs.length > 0 && (
@@ -191,16 +192,42 @@ export function SystemRequirementsSection({
           )}
 
           {shownFatal && (
-            <div
+            <Callout
+              severity="error"
               role="alert"
               aria-live="assertive"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5"
+              // The control that finishes it sits beside the line that says what
+              // to do, rather than below the fold of the expanded steps.
+              action={
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => {
+                    if (!isChecking) void runCheck();
+                  }}
+                  onFocus={() => {
+                    checkAgainFocusedRef.current = true;
+                  }}
+                  onBlur={() => {
+                    checkAgainFocusedRef.current = false;
+                  }}
+                  // Busy, not unavailable: the rotating glyph says so, and the
+                  // button keeps keyboard focus rather than dropping it to <body>.
+                  aria-busy={isChecking || undefined}
+                  aria-disabled={isChecking || undefined}
+                  className="shrink-0"
+                >
+                  <SpinningIcon
+                    icon={RotateCw}
+                    active={isChecking}
+                    className="w-3 h-3"
+                    aria-hidden
+                  />
+                  Check again
+                </Button>
+              }
             >
-              {/* Neutral text: status-coloured text misses 4.5:1 on most themes,
-                  and the tile's own mark already carries the red. This line says
-                  what to do, and the control that finishes it sits beside it
-                  rather than below the fold of the expanded steps. */}
-              <div className="flex-1 min-w-0 space-y-1.5">
+              <div className="space-y-1.5">
                 {missingFatalTools.map((spec) => (
                   <p key={spec.tool} className="text-xs text-text-primary">
                     Install {spec.label} using the steps above, then check again.
@@ -217,28 +244,7 @@ export function SystemRequirementsSection({
                   );
                 })}
               </div>
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => {
-                  if (!isChecking) void runCheck();
-                }}
-                onFocus={() => {
-                  checkAgainFocusedRef.current = true;
-                }}
-                onBlur={() => {
-                  checkAgainFocusedRef.current = false;
-                }}
-                // Busy, not unavailable: the rotating glyph says so, and the
-                // button keeps keyboard focus rather than dropping it to <body>.
-                aria-busy={isChecking || undefined}
-                aria-disabled={isChecking || undefined}
-                className="shrink-0"
-              >
-                <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
-                Check again
-              </Button>
-            </div>
+            </Callout>
           )}
 
           {!shownFatal && (

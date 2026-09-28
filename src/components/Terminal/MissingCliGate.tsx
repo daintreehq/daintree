@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Terminal, Check, ExternalLink, KeyRound, RefreshCw } from "lucide-react";
+import { Callout } from "@/components/ui/Callout";
+import { Terminal, Check, ExternalLink, KeyRound, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { CopyableCommand } from "@/components/Setup/CopyableCommand";
@@ -26,11 +27,11 @@ function getOsLabel(): string {
 function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail: AgentCliDetail }) {
   if (state === "ready") {
     return (
-      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5">
-        <Check className="w-5 h-5 text-status-success shrink-0 mt-px" />
+      <div className="flex items-start gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/10 text-xs">
+        <Check className="w-4 h-4 text-status-success shrink-0" aria-hidden="true" />
         <div>
-          <p className="text-sm font-medium">CLI is now available</p>
-          <p className="text-xs text-text-secondary mt-1">
+          <p className="mb-0.5 font-medium text-text-primary">CLI is now available</p>
+          <p className="text-text-secondary">
             The agent binary was detected. Re-check to continue the launch.
           </p>
         </div>
@@ -44,11 +45,11 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
   // sends the user hunting through endpoint security for a sign-in prompt.
   if (state === "unauthenticated") {
     return (
-      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle">
-        <KeyRound className="w-5 h-5 text-daintree-text/60 shrink-0 mt-px" />
+      <div className="flex items-start gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle text-xs">
+        <KeyRound className="w-4 h-4 text-text-secondary shrink-0" aria-hidden="true" />
         <div>
-          <p className="text-sm font-medium">Sign-in not detected</p>
-          <p className="text-xs text-text-secondary mt-1">
+          <p className="mb-0.5 font-medium text-text-primary">Sign-in not detected</p>
+          <p className="text-text-secondary">
             The CLI is available but no signed-in session was found. Re-check to continue — the CLI
             prompts for sign-in on its first run.
           </p>
@@ -59,56 +60,37 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
 
   if (state === "missing") {
     return (
-      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/5">
-        <AlertTriangle className="w-5 h-5 text-status-warning shrink-0 mt-px" />
-        <div>
-          <p className="text-sm font-medium">CLI binary not found</p>
-          <p className="text-xs text-text-secondary mt-1">
-            {detail.message ?? "The agent executable was not detected on your system."}
-          </p>
-          {detail.resolvedPath && (
-            <p className="text-xs text-text-secondary mt-1 font-mono select-text">
-              Last known path: {detail.resolvedPath}
-            </p>
-          )}
-        </div>
-      </div>
+      <Callout severity="warning" title="CLI binary not found">
+        <p>{detail.message ?? "The agent executable was not detected on your system."}</p>
+        {detail.resolvedPath && (
+          <p className="mt-1 font-mono select-text">Last known path: {detail.resolvedPath}</p>
+        )}
+      </Callout>
     );
   }
 
   if (state === "installed") {
     const isWsl = detail.via === "wsl";
     return (
-      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/5">
-        <AlertTriangle className="w-5 h-5 text-status-warning shrink-0 mt-px" />
-        <div>
-          <p className="text-sm font-medium">
-            {isWsl ? "Detected in WSL" : "CLI installed but not directly launchable"}
-          </p>
-          <p className="text-xs text-text-secondary mt-1">
-            {isWsl
-              ? `Found in WSL (${detail.wslDistro ?? "unknown distro"}) — only host binaries can be launched directly. Install a native binary or use "Run anyway" if you have a wrapper.`
-              : (detail.message ?? "The binary is installed but can't be launched directly.")}
-          </p>
-        </div>
-      </div>
+      <Callout
+        severity="warning"
+        title={isWsl ? "Detected in WSL" : "CLI installed but not directly launchable"}
+      >
+        <p>
+          {isWsl
+            ? `Found in WSL (${detail.wslDistro ?? "unknown distro"}) — only host binaries can be launched directly. Install a native binary or use "Run anyway" if you have a wrapper.`
+            : (detail.message ?? "The binary is installed but can't be launched directly.")}
+        </p>
+      </Callout>
     );
   }
 
   // blocked
   return (
-    <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
-      <AlertTriangle className="w-5 h-5 text-status-error shrink-0 mt-px" />
-      <div>
-        <p className="text-sm font-medium">Blocked by security software</p>
-        <p className="text-xs text-text-secondary mt-1">
-          {detail.message ?? "The binary exists but execution was denied."}
-        </p>
-        <p className="text-xs text-text-secondary mt-1">
-          Check your endpoint security settings or add an allowlist entry.
-        </p>
-      </div>
-    </div>
+    <Callout severity="error" title="Blocked by security software">
+      <p>{detail.message ?? "The binary exists but execution was denied."}</p>
+      <p className="mt-1">Check your endpoint security settings or add an allowlist entry.</p>
+    </Callout>
   );
 }
 
@@ -274,6 +256,7 @@ export function MissingCliGate({
         {refreshFailed && (
           <InlineStatusBanner
             severity="error"
+            inset
             title="Couldn't re-check the CLI"
             description="The availability probe didn't finish. Try again, or run the agent anyway if you know the binary works."
           />

@@ -345,29 +345,53 @@ function FieldDescription({ className, ...props }: FieldDescriptionProps) {
   );
 }
 
-export type FieldErrorProps = Omit<React.HTMLAttributes<HTMLParagraphElement>, "id">;
+export interface InlineErrorProps extends React.HTMLAttributes<HTMLParagraphElement> {
+  /** A trailing control on the error's own line — a Retry for a load that failed. */
+  action?: React.ReactNode;
+}
 
 /**
- * No `role="alert"`: settings validation renders on every keystroke, and a live
- * region would interrupt the user mid-word. The control's `aria-invalid` plus
- * the described-by association is what announces it, on focus.
+ * The words of an error, under or beside whatever it is about: a field that
+ * failed validation, a row whose save failed. `FieldError` is this, wired to its
+ * field; use this directly where there is no `Field` to wire to.
+ *
+ * No `role="alert"` by default: validation renders on every keystroke, and a live
+ * region would interrupt the user mid-word. The control's `aria-invalid` plus the
+ * described-by association is what announces it, on focus. Pass `role="alert"`
+ * only for the outcome of something the user did once — a submit or a save.
  *
  * The glyph carries the severity and the words stay neutral: severity-coloured
  * text has no contrast floor across the themes.
  */
-function FieldError({ className, children, ...props }: FieldErrorProps) {
-  const { errorId } = useFieldContext("FieldError");
+function InlineError({ className, children, action, ...props }: InlineErrorProps) {
   return (
     <p
-      className={cn("flex items-start gap-1.5 text-xs text-text-primary", className)}
+      className={cn("flex items-start gap-1.5 text-xs text-text-primary select-text", className)}
+      data-slot="inline-error"
       {...props}
-      id={assertAllocated("FieldError", errorId)}
-      data-slot="field-error"
     >
       <CircleAlert className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
-      <span className="min-w-0">{children}</span>
+      <span className="min-w-0 flex-1">{children}</span>
+      {action}
     </p>
   );
 }
 
-export { Field, FieldLabel, FieldDescription, FieldError, fieldVariants, fieldLabelVariants };
+export type FieldErrorProps = Omit<InlineErrorProps, "id" | "action">;
+
+function FieldError(props: FieldErrorProps) {
+  const { errorId } = useFieldContext("FieldError");
+  return (
+    <InlineError {...props} id={assertAllocated("FieldError", errorId)} data-slot="field-error" />
+  );
+}
+
+export {
+  Field,
+  FieldLabel,
+  FieldDescription,
+  FieldError,
+  InlineError,
+  fieldVariants,
+  fieldLabelVariants,
+};

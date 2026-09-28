@@ -5,7 +5,11 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsActions, SettingsGroup } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsActions,
+  SettingsGroup,
+  SettingsInlineError,
+} from "@/components/Settings/SettingsGroup";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -217,9 +221,9 @@ export function ImageViewerTab() {
                   className="font-mono"
                 />
                 {commandError && (
-                  <p id={`${commandFieldId}-error`} className="text-xs text-status-error">
+                  <SettingsInlineError id={`${commandFieldId}-error`}>
                     {commandError}
-                  </p>
+                  </SettingsInlineError>
                 )}
                 <p
                   id={`${commandFieldId}-help`}

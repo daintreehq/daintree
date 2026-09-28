@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
   ChevronDown,
@@ -310,7 +311,7 @@ export function CrashRecoveryDialog({
               </div>
 
               {suspectCount > 0 && (
-                <div data-testid="suspect-warning" className="rounded-lg overflow-hidden">
+                <div data-testid="suspect-warning">
                   <InlineStatusBanner
                     severity="warning"
                     icon={AlertTriangle}
@@ -407,7 +408,7 @@ export function CrashRecoveryDialog({
           )}
 
           {recoveryError && (
-            <div className="rounded-lg overflow-hidden" data-testid="recovery-error">
+            <div data-testid="recovery-error">
               <InlineStatusBanner
                 severity="error"
                 title="Recovery failed"
@@ -476,7 +477,7 @@ export function CrashRecoveryDialog({
                 {crash.entry.errorMessage && (
                   <div className="mt-2">
                     <div className="text-xs text-text-secondary mb-1">Error</div>
-                    <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
+                    <pre className="text-xs text-text-primary bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
                       {crash.entry.errorMessage}
                     </pre>
                   </div>
@@ -573,12 +574,9 @@ export function CrashRecoveryDialog({
                       </p>
                     )}
                     {reportError && (
-                      <p
-                        className="text-xs text-status-danger bg-status-danger/10 rounded px-2 py-1.5"
-                        data-testid="report-error"
-                      >
+                      <InlineError role="alert" data-testid="report-error">
                         {reportError}
-                      </p>
+                      </InlineError>
                     )}
                     <div className="flex gap-2">
                       <Button

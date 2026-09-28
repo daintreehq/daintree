@@ -21,6 +21,7 @@ import {
   SettingsDependents,
   SettingsEmptyRow,
   SettingsGroup,
+  SettingsInlineError,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
@@ -430,9 +431,9 @@ export function AutomationTab({
                   className="font-mono"
                 />
                 {hasPathPatternError && (
-                  <p id={pathPatternErrorId} className="text-xs text-status-error">
+                  <SettingsInlineError id={pathPatternErrorId}>
                     {pathPatternValidation?.error}
-                  </p>
+                  </SettingsInlineError>
                 )}
                 {pathPatternPreview !== null && (
                   <p className="text-xs text-text-secondary">

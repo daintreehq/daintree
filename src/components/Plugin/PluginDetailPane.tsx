@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Callout } from "@/components/ui/Callout";
 import { AlertCircle, AlertTriangle, ArrowUpCircle, RefreshCw, Trash2 } from "lucide-react";
 import {
   getPluginCategoryMeta,
@@ -98,12 +99,9 @@ function PluginCapabilityList({
         your machine.
       </p>
       {plugin.pluginDanger === "confirm" && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-          <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-warning break-words">
-            Requests sensitive permissions — review before enabling
-          </p>
-        </div>
+        <Callout severity="warning" size="compact">
+          <p>Requests sensitive permissions — review before enabling</p>
+        </Callout>
       )}
       <ul className="space-y-1.5">
         {granted.map((capability) => (
@@ -463,11 +461,11 @@ export function PluginDetailPane({
             {devStatus?.watcher === "degraded" && (
               // Hot reload being dead looks exactly like "my rebuild changed
               // nothing", so it has to say so somewhere the author will look.
-              <div
-                className="flex items-start gap-1 text-2xs text-status-warning mt-1"
-                role="status"
-              >
-                <AlertTriangle className="w-3 h-3 mt-px shrink-0" aria-hidden="true" />
+              <div className="flex items-start gap-1 text-2xs text-text-primary mt-1" role="status">
+                <AlertTriangle
+                  className="w-3 h-3 mt-px shrink-0 text-status-warning"
+                  aria-hidden="true"
+                />
                 <span>
                   Hot reload stopped watching this plugin. Restart <code>daintree-plugin dev</code>{" "}
                   to resume.
@@ -571,51 +569,40 @@ export function PluginDetailPane({
           switched to Permissions or Settings. These are the reason the user
           came here; they outrank the tab they happen to be on. */}
       {plugin.blocklisted === true && (
-        <div className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle
-            className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
-            aria-hidden="true"
-          />
-          <p className="text-2xs text-status-danger break-words">
+        <Callout severity="error" size="compact" className="mt-3">
+          <p>
             Blocked from loading: {plugin.blocklistReason ?? "flagged by the Daintree blocklist"}
           </p>
-        </div>
+        </Callout>
       )}
 
       {plugin.loadError && (
-        <div
-          className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
+        <Callout
+          severity="error"
+          size="compact"
           role="status"
+          className="mt-3"
+          title="This plugin is switched on but didn't start"
+          action={
+            onRetry &&
+            plugin.disabled !== true && (
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={onRetry}
+                loading={toggling}
+                className="shrink-0 ml-auto"
+              >
+                Retry
+              </Button>
+            )
+          }
         >
-          <AlertCircle
-            className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
-            aria-hidden="true"
-          />
-          <div className="min-w-0">
-            <p className="text-2xs font-medium text-status-danger">
-              This plugin is switched on but didn't start
-            </p>
-            <p className="text-2xs text-status-danger break-words mt-0.5 select-text">
-              {plugin.loadError.message}
-            </p>
-            {/* Where to go from the diagnosis. Retry reloads the plugin from
+          <p className="select-text">{plugin.loadError.message}</p>
+          {/* Where to go from the diagnosis. Retry reloads the plugin from
                 disk; an error that comes back unchanged is the plugin's own. */}
-            <p className="text-2xs text-text-secondary mt-1.5">
-              If it fails the same way again, update or reinstall it.
-            </p>
-          </div>
-          {onRetry && plugin.disabled !== true && (
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={onRetry}
-              loading={toggling}
-              className="shrink-0 ml-auto"
-            >
-              Retry
-            </Button>
-          )}
-        </div>
+          <p className="mt-1.5">If it fails the same way again, update or reinstall it.</p>
+        </Callout>
       )}
 
       {updateAvailable && (

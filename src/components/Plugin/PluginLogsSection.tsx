@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, RefreshCw } from "lucide-react";
+import { Callout } from "@/components/ui/Callout";
+import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -132,10 +133,9 @@ export function PluginLogsSection({ lines, loading, error, refresh }: PluginLogs
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-danger break-words">{error}</p>
-        </div>
+        <Callout severity="error" size="compact">
+          <p>{error}</p>
+        </Callout>
       )}
 
       {!error && lines === null && !loading && (

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { InlineError } from "@/components/ui/field";
 import type { LifecycleCommandReview } from "@shared/types/worktree";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
@@ -106,9 +107,7 @@ export function LifecycleCommandApprovalDialog({
     >
       <div className="min-h-[5.5rem] space-y-3">
         {loadError !== null ? (
-          <p role="alert" className="text-xs text-status-error">
-            {loadError}
-          </p>
+          <InlineError role="alert">{loadError}</InlineError>
         ) : review === undefined ? (
           showSpinner ? (
             <div className="flex items-center gap-2 text-xs text-text-secondary">
@@ -137,11 +136,7 @@ export function LifecycleCommandApprovalDialog({
             </section>
           ))
         )}
-        {approveError !== null && (
-          <p role="alert" className="text-xs text-status-error">
-            {approveError}
-          </p>
-        )}
+        {approveError !== null && <InlineError role="alert">{approveError}</InlineError>}
       </div>
     </ConfirmDialog>
   );
