@@ -16,10 +16,12 @@ import { BUILT_IN_APP_SCHEMES, blendOverBackground, contrastRatio, parseRgba } f
  */
 const INPUT_BOUNDARY_MIN_CONTRAST = 3;
 
+const OPTED_IN = ["daintree", "bondi"] as const;
+
 describe("border-input", () => {
-  it("clears 3:1 on daintree against both surfaces a field edge touches", () => {
-    const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree");
-    expect(scheme, "daintree scheme").toBeDefined();
+  it.each(OPTED_IN)("clears 3:1 on %s against both surfaces a field edge touches", (id) => {
+    const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id);
+    expect(scheme, `${id} scheme`).toBeDefined();
     if (!scheme) return;
 
     const ink = scheme.tokens["border-input"];
@@ -38,13 +40,13 @@ describe("border-input", () => {
       );
       expect(
         ratio,
-        `daintree border-input (${ink}) is ${ratio.toFixed(2)}:1 on ${surface} (${scheme.tokens[surface]}); WCAG 1.4.11 wants ${INPUT_BOUNDARY_MIN_CONTRAST}:1`
+        `${id} border-input (${ink}) is ${ratio.toFixed(2)}:1 on ${surface} (${scheme.tokens[surface]}); WCAG 1.4.11 wants ${INPUT_BOUNDARY_MIN_CONTRAST}:1`
       ).toBeGreaterThanOrEqual(INPUT_BOUNDARY_MIN_CONTRAST);
     }
   });
 
   it("is exactly border-strong on every theme that does not opt in", () => {
-    const optedIn = new Set(["daintree"]);
+    const optedIn = new Set<string>(OPTED_IN);
     const others = BUILT_IN_APP_SCHEMES.filter((s) => !optedIn.has(s.id));
     expect(others.length).toBeGreaterThan(0);
     for (const scheme of others) {
