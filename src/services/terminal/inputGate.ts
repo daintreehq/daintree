@@ -15,6 +15,8 @@ export type TerminalInputBlock =
       projectId?: string;
       /** This view is on the host's own screen, where taking over reads as taking back. */
       hostLocal?: boolean;
+      /** A window on the host's own screen drives, and `driverName` is the host's. */
+      driverIsHostScreen?: boolean;
     }
   | { kind: "lease-unknown"; hostName: string };
 
@@ -42,7 +44,10 @@ function sameBlock(a: TerminalInputBlock | null, b: TerminalInputBlock | null): 
   if (a.kind === "disconnected" && b.kind === "disconnected") return a.hostName === b.hostName;
   if (a.kind === "driven-elsewhere" && b.kind === "driven-elsewhere") {
     return (
-      a.driverName === b.driverName && a.projectId === b.projectId && a.hostLocal === b.hostLocal
+      a.driverName === b.driverName &&
+      a.projectId === b.projectId &&
+      a.hostLocal === b.hostLocal &&
+      a.driverIsHostScreen === b.driverIsHostScreen
     );
   }
   if (a.kind === "lease-unknown" && b.kind === "lease-unknown") return a.hostName === b.hostName;
@@ -125,7 +130,10 @@ export function getTerminalInputBlockMessage(block: TerminalInputBlock): string 
     case "disconnected":
       return `Read-only until ${block.hostName} reconnects`;
     case "driven-elsewhere":
-      return `Read-only while ${block.driverName} is driving this project`;
+      // Worded as the banner words it, so the pane and the banner name one driver.
+      return block.driverIsHostScreen
+        ? `Read-only while ${block.driverName} is driven from its own screen`
+        : `Read-only while ${block.driverName} is driving this project`;
     case "lease-unknown":
       return `Read-only until ${block.hostName} confirms who is driving this project`;
   }

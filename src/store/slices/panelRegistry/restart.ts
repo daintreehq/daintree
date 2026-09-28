@@ -155,6 +155,23 @@ function updateTerminal(
 }
 
 /**
+ * A restart whose new PTY is up. "exited" survives deriveRuntimeStatus, so it
+ * is dropped here, once the spawn has succeeded: a respawn that failed stays
+ * reading as dead.
+ */
+function respawned(
+  t: PanelRegistrySlice["panelsById"][string]
+): PanelRegistrySlice["panelsById"][string] {
+  if (!isPtyPanel(t)) return t;
+  if (t.runtimeStatus !== "exited") return { ...t, isRestarting: false };
+  return {
+    ...t,
+    isRestarting: false,
+    runtimeStatus: deriveRuntimeStatus(t.isVisible, t.flowStatus, undefined),
+  };
+}
+
+/**
  * Keep a pane's conversation findable when its directory changes under it
  * (#12434). Only for agents that resume across directories — the others can't
  * reopen a conversation anywhere but where it began, so there is nothing to
@@ -911,7 +928,7 @@ export const createRestartActions = (
       terminalInstanceService.setInputLocked(id, false);
 
       unmarkTerminalRestarting(id);
-      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+      set((state) => updateTerminal(state, id, respawned));
     } catch (error) {
       // Decoding an encoded AppError from main strips its wire prefix in place,
       // so the phase checks below read the plain message and the person reads
@@ -1503,7 +1520,7 @@ export const createRestartActions = (
       }
 
       unmarkTerminalRestarting(id);
-      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+      set((state) => updateTerminal(state, id, respawned));
       return { success: true };
     } catch (error) {
       const appError = isClientAppError(error) ? error : null;

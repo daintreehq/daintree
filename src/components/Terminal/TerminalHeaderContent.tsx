@@ -293,7 +293,7 @@ export function TerminalHeaderContent({
           live regions across a multi-pane fleet (#9204). */}
       {isExited && (
         <span className="text-xs font-mono text-status-error" role="status" aria-live="off">
-          [exit {exitCode}]
+          {exitCode === null ? "[exited]" : `[exit ${exitCode}]`}
         </span>
       )}
 

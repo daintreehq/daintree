@@ -1,7 +1,8 @@
 // eager-import-allow: reads forge config via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../../utils/openExternal.js";
-import { checkRateLimit, typedHandle } from "../utils.js";
+import { checkRateLimit, typedHandle, typedHandleWithContext } from "../utils.js";
+import type { IpcContext } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { getRegisteredForgeProviders } from "../../services/forgeProviderRegistry.js";
 import {
@@ -278,7 +279,22 @@ export const forgeReviewNamespace = defineIpcNamespace({
   },
 });
 
-async function handleForgeOpenPR(payload: { cwd: string; prNumber: number }): Promise<void> {
+/**
+ * A forge page opens in the browser of whoever clicked. A window on another
+ * machine gets the URL back instead, and its Shell opens it there (the split in
+ * electron/remote/hybrid/splits.ts): a browser on this machine's screen helps
+ * nobody at that window, and a windowless Host has no screen at all.
+ */
+async function openForCaller(ctx: IpcContext, url: string): Promise<string | undefined> {
+  if (ctx.endpoint.kind === "remote-view") return url;
+  await openExternalUrl(url);
+  return undefined;
+}
+
+async function handleForgeOpenPR(
+  ctx: IpcContext,
+  payload: { cwd: string; prNumber: number }
+): Promise<string | undefined> {
   checkRateLimit(CHANNELS.FORGE_OPEN_PR, 20, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
@@ -296,7 +312,7 @@ async function handleForgeOpenPR(payload: { cwd: string; prNumber: number }): Pr
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
   const url = impl.buildPRUrl(repoRef, payload.prNumber);
-  await openExternalUrl(url);
+  return openForCaller(ctx, url);
 }
 
 // Issue write operations (#10653). Defined as a defineIpcNamespace block so the
@@ -528,7 +544,7 @@ export const forgeIssueWriteNamespace = defineIpcNamespace({
 export const forgeOpenPRNamespace = defineIpcNamespace({
   name: "forgeOpenPR",
   ops: {
-    openPR: op(CHANNELS.FORGE_OPEN_PR, handleForgeOpenPR),
+    openPR: op(CHANNELS.FORGE_OPEN_PR, handleForgeOpenPR, { withContext: true }),
   },
 });
 
@@ -544,7 +560,10 @@ function repoUrlFor({ impl, repoRef }: Awaited<ReturnType<typeof resolveForCwd>>
   return typeof url === "string" && canOpenExternalUrl(url) ? url : null;
 }
 
-async function handleForgeOpenRepo(payload: { cwd: string }): Promise<void> {
+async function handleForgeOpenRepo(
+  ctx: IpcContext,
+  payload: { cwd: string }
+): Promise<string | undefined> {
   checkRateLimit(CHANNELS.FORGE_OPEN_REPO, 20, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
@@ -552,7 +571,7 @@ async function handleForgeOpenRepo(payload: { cwd: string }): Promise<void> {
   if (!url) {
     throw new Error("This project's forge provider doesn't link to a repository page");
   }
-  await openExternalUrl(url);
+  return openForCaller(ctx, url);
 }
 
 async function handleForgeGetRepoUrl(payload: { cwd: string }): Promise<string | null> {
@@ -565,7 +584,7 @@ async function handleForgeGetRepoUrl(payload: { cwd: string }): Promise<string |
 export const forgeRepoLinkNamespace = defineIpcNamespace({
   name: "forgeRepoLink",
   ops: {
-    openRepo: op(CHANNELS.FORGE_OPEN_REPO, handleForgeOpenRepo),
+    openRepo: op(CHANNELS.FORGE_OPEN_REPO, handleForgeOpenRepo, { withContext: true }),
     getRepoUrl: op(CHANNELS.FORGE_GET_REPO_URL, handleForgeGetRepoUrl),
   },
 });
@@ -825,42 +844,51 @@ export function registerForgeHandlers(): () => void {
   const cleanups: Array<() => void> = [];
 
   cleanups.push(
-    typedHandle(CHANNELS.FORGE_OPEN_ISSUES, async (cwd: string, query?: string, state?: string) => {
-      checkRateLimit(CHANNELS.FORGE_OPEN_ISSUES, 20, 10_000);
-      const { namespaceId, repoRef } = await resolveForCwd(cwd);
-      const impl = getImplForNamespace(namespaceId);
-      const url = impl.buildIssuesUrl(repoRef, { query, state });
-      await openExternalUrl(url);
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.FORGE_OPEN_PRS, async (cwd: string, query?: string, state?: string) => {
-      checkRateLimit(CHANNELS.FORGE_OPEN_PRS, 20, 10_000);
-      const { namespaceId, repoRef } = await resolveForCwd(cwd);
-      const impl = getImplForNamespace(namespaceId);
-      const url = impl.buildPRsUrl(repoRef, { query, state });
-      await openExternalUrl(url);
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.FORGE_OPEN_COMMITS, async (cwd: string, branch?: string) => {
-      checkRateLimit(CHANNELS.FORGE_OPEN_COMMITS, 20, 10_000);
-      if (branch !== undefined && (typeof branch !== "string" || !branch.trim())) {
-        throw new Error("Invalid branch name");
+    typedHandleWithContext(
+      CHANNELS.FORGE_OPEN_ISSUES,
+      async (ctx, cwd: string, query?: string, state?: string) => {
+        checkRateLimit(CHANNELS.FORGE_OPEN_ISSUES, 20, 10_000);
+        const { namespaceId, repoRef } = await resolveForCwd(cwd);
+        const impl = getImplForNamespace(namespaceId);
+        const url = impl.buildIssuesUrl(repoRef, { query, state });
+        return openForCaller(ctx, url);
       }
-      const { namespaceId, repoRef } = await resolveForCwd(cwd);
-      const impl = getImplForNamespace(namespaceId);
-      const url = impl.buildCommitsUrl(repoRef, branch);
-      await openExternalUrl(url);
-    })
+    )
   );
 
   cleanups.push(
-    typedHandle(
+    typedHandleWithContext(
+      CHANNELS.FORGE_OPEN_PRS,
+      async (ctx, cwd: string, query?: string, state?: string) => {
+        checkRateLimit(CHANNELS.FORGE_OPEN_PRS, 20, 10_000);
+        const { namespaceId, repoRef } = await resolveForCwd(cwd);
+        const impl = getImplForNamespace(namespaceId);
+        const url = impl.buildPRsUrl(repoRef, { query, state });
+        return openForCaller(ctx, url);
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandleWithContext(
+      CHANNELS.FORGE_OPEN_COMMITS,
+      async (ctx, cwd: string, branch?: string) => {
+        checkRateLimit(CHANNELS.FORGE_OPEN_COMMITS, 20, 10_000);
+        if (branch !== undefined && (typeof branch !== "string" || !branch.trim())) {
+          throw new Error("Invalid branch name");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(cwd);
+        const impl = getImplForNamespace(namespaceId);
+        const url = impl.buildCommitsUrl(repoRef, branch);
+        return openForCaller(ctx, url);
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandleWithContext(
       CHANNELS.FORGE_OPEN_ISSUE,
-      async (payload: { cwd: string; issueNumber: number }) => {
+      async (ctx, payload: { cwd: string; issueNumber: number }) => {
         checkRateLimit(CHANNELS.FORGE_OPEN_ISSUE, 20, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
@@ -878,7 +906,7 @@ export function registerForgeHandlers(): () => void {
         const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
         const impl = getImplForNamespace(namespaceId);
         const url = impl.buildIssueUrl(repoRef, payload.issueNumber);
-        await openExternalUrl(url);
+        return openForCaller(ctx, url);
       }
     )
   );

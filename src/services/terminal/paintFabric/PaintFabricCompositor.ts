@@ -1105,7 +1105,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.planes().forEach((plane) => plane.restoreScrollbackAllForeground());
   }
 
-  addExitListener(id: string, cb: (exitCode: number) => void): () => void {
+  reportLost(id: string, note: string): void {
+    this.plane(id).reportLost(id, note);
+  }
+
+  addExitListener(id: string, cb: (exitCode: number | null) => void): () => void {
     return this.trackSubscription(id, "exit", (plane) => plane.addExitListener(id, cb));
   }
 

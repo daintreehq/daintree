@@ -8,6 +8,9 @@ const ipcMainMock = vi.hoisted(() => ({
 
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 
+/** The caller every context-taking handler sees; a test flips it to a remote window. */
+const callerMock = vi.hoisted(() => ({ endpoint: { kind: "local-view" as string } }));
+
 const openExternalUrlMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 // A fake forge provider — deliberately NOT GitHub. Proves the guards sit in
@@ -82,7 +85,12 @@ vi.mock("../../utils.js", () => ({
     return () => ipcMainMock.removeHandler(channel);
   },
   typedHandleValidated: vi.fn(),
-  typedHandleWithContext: vi.fn(),
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(callerMock, ...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
   typedHandleWithContextValidated: vi.fn(),
 }));
 
@@ -259,6 +267,26 @@ describe("forge handlers — rate limiting", () => {
 
       expect(fakeImpl.buildRepoUrl).toHaveBeenCalledWith(repoRef);
       expect(openExternalUrlMock).toHaveBeenCalledWith("https://fake.test/acme/widgets");
+    });
+
+    it("answers a window on another machine with the page, and opens nothing here", async () => {
+      callerMock.endpoint.kind = "remote-view";
+      try {
+        await expect(
+          getInvokeHandler(CHANNELS.FORGE_OPEN_REPO)({}, { cwd: "/tmp/project" })
+        ).resolves.toBe("https://fake.test/acme/widgets");
+        fakeImpl.buildPRUrl.mockReturnValueOnce("https://fake.test/acme/widgets/pull/7");
+        await expect(
+          getInvokeHandler(CHANNELS.FORGE_OPEN_PR)({}, { cwd: "/tmp/project", prNumber: 7 })
+        ).resolves.toBe("https://fake.test/acme/widgets/pull/7");
+        fakeImpl.buildIssuesUrl.mockReturnValueOnce("https://fake.test/acme/widgets/issues");
+        await expect(
+          getInvokeHandler(CHANNELS.FORGE_OPEN_ISSUES)({}, "/tmp/project")
+        ).resolves.toBe("https://fake.test/acme/widgets/issues");
+        expect(openExternalUrlMock).not.toHaveBeenCalled();
+      } finally {
+        callerMock.endpoint.kind = "local-view";
+      }
     });
 
     it("rejects without opening anything when the provider has no repository page", async () => {

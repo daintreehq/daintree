@@ -89,7 +89,7 @@ export interface ManagedTerminal {
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;
-  exitSubscribers: Set<(exitCode: number) => void>;
+  exitSubscribers: Set<(exitCode: number | null) => void>;
   parserHandler?: { dispose: () => void };
   getRefreshTier: RefreshTierProvider;
   keyHandlerInstalled: boolean;

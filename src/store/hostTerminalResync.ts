@@ -134,12 +134,22 @@ async function observeVanishedTerminals(
       isPtyPanel(panel) &&
       !panel.isRestarting &&
       !panel.spawnError &&
+      // Held for restore recovery: it has no PTY on purpose, and is waiting on the user.
+      panel.restoreRecovery === undefined &&
       panel.exitCode === undefined &&
       panel.runtimeStatus !== "exited" &&
       panel.runtimeStatus !== "error"
     );
   });
   if (live.length === 0) return;
+  // The incarnation each answer is about: a restart landing while the probe is
+  // out is a new PTY, and an answer about the old one says nothing about it.
+  const probed = new Map(
+    live.map((id) => {
+      const panel = getState().panelsById[id];
+      return [id, panel && isPtyPanel(panel) ? (panel.restartKey ?? 0) : 0];
+    })
+  );
   // A spawn still in flight when the list was read isn't on it yet; ask about
   // each one directly before calling it gone, and change nothing if unsure.
   let confirmed: Record<string, { exists: boolean; conflict?: boolean }>;
@@ -150,16 +160,24 @@ async function observeVanishedTerminals(
     return;
   }
   if (!options.isCurrent()) return;
+  const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+  if (!options.isCurrent()) return;
   const state = getState();
   for (const id of live) {
     const answer = confirmed[id];
     if (!answer || answer.exists || answer.conflict) continue;
     const panel = state.panelsById[id];
     if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
+    if ((panel.restartKey ?? 0) !== probed.get(id)) continue;
+    // A real exit reported while the probe was out already says it all, code included.
+    if (panel.exitCode !== undefined || panel.runtimeStatus === "exited") continue;
     if (panel.location === "trash") {
       state.removePanel(id, { backendAlreadyClosed: true });
     } else {
+      // No exit code: none was seen. Left undefined, a restart relaunches an
+      // agent as the agent rather than demoting it to a shell.
       state.setRuntimeStatus(id, "exited");
+      terminalInstanceService.reportLost(id, "The host no longer has this terminal");
     }
   }
 }

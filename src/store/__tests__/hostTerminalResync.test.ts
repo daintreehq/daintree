@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { store, setAgentState } = vi.hoisted(() => {
+const { store, setAgentState, reportLost } = vi.hoisted(() => {
   const store = {
     panelsById: {} as Record<string, Record<string, unknown>>,
     panelIds: [] as string[],
@@ -11,7 +11,7 @@ const { store, setAgentState } = vi.hoisted(() => {
     setRuntimeStatus: vi.fn(),
     removePanel: vi.fn(),
   };
-  return { store, setAgentState: vi.fn() };
+  return { store, setAgentState: vi.fn(), reportLost: vi.fn() };
 });
 
 vi.mock("@/utils/logger", () => ({
@@ -22,7 +22,7 @@ vi.mock("@/utils/logger", () => ({
 }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => store } }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { setAgentState },
+  terminalInstanceService: { setAgentState, reportLost },
 }));
 vi.mock("@/utils/stateHydration/statePatcher", () => ({
   buildArgsForOrphanedTerminal: (info: { id: string; cwd: string; kind?: string }) => ({
@@ -99,6 +99,7 @@ describe("resyncHostTerminals", () => {
     panel("t-spawning");
     panel("t-trashed", { location: "trash" });
     panel("t-exited", { runtimeStatus: "exited" });
+    panel("t-held", { restoreRecovery: { reason: "manual" } });
     getForProject.mockResolvedValue([]);
     reconnectBulk.mockResolvedValue({
       "t-gone": { exists: false },
@@ -111,7 +112,31 @@ describe("resyncHostTerminals", () => {
     expect(reconnectBulk).toHaveBeenCalledWith(["t-gone", "t-spawning", "t-trashed"]);
     expect(store.setRuntimeStatus).toHaveBeenCalledTimes(1);
     expect(store.setRuntimeStatus).toHaveBeenCalledWith("t-gone", "exited");
+    // The pane itself has to show it: the store status alone never reaches it.
+    expect(reportLost).toHaveBeenCalledTimes(1);
+    expect(reportLost).toHaveBeenCalledWith("t-gone", expect.any(String));
     expect(store.removePanel).toHaveBeenCalledWith("t-trashed", { backendAlreadyClosed: true });
+  });
+
+  it("ignores an answer about a terminal that restarted or exited while it was being asked", async () => {
+    panel("t-restarted", { restartKey: 0 });
+    panel("t-exited-meanwhile");
+    getForProject.mockResolvedValue([]);
+    reconnectBulk.mockImplementation(async () => {
+      // Both land while the probe is out: a respawn, and the real exit event.
+      store.panelsById["t-restarted"] = { ...store.panelsById["t-restarted"], restartKey: 1 };
+      store.panelsById["t-exited-meanwhile"] = {
+        ...store.panelsById["t-exited-meanwhile"],
+        exitCode: 3,
+        runtimeStatus: "exited",
+      };
+      return { "t-restarted": { exists: false }, "t-exited-meanwhile": { exists: false } };
+    });
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(store.setRuntimeStatus).not.toHaveBeenCalled();
+    expect(reportLost).not.toHaveBeenCalled();
   });
 
   it("changes nothing about vanished terminals when the host can't confirm", async () => {
@@ -122,6 +147,7 @@ describe("resyncHostTerminals", () => {
     await resyncHostTerminals("proj-1", current);
 
     expect(store.setRuntimeStatus).not.toHaveBeenCalled();
+    expect(reportLost).not.toHaveBeenCalled();
     expect(store.removePanel).not.toHaveBeenCalled();
   });
 

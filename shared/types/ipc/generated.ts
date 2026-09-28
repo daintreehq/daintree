@@ -675,11 +675,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: string | undefined;
   };
   "forge:open-repo": {
     args: [payload: { cwd: string }];
-    result: void;
+    result: string | undefined;
   };
   "forge:preview-credential-import": {
     args: [providerId: string];

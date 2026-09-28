@@ -1131,6 +1131,68 @@ describe("restartTerminal stale flow state cleared (#9899)", () => {
     expect(after?.runtimeStatus).not.toBe("paused-backpressure");
   });
 
+  it("brings an exited terminal back to running once it respawns", async () => {
+    const exited = {
+      ...agentPanelBase,
+      agentState: "exited" as const,
+      isVisible: true,
+      exitCode: 1,
+      runtimeStatus: "exited" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [exited.id]: exited },
+      panelIds: [exited.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.exitCode).toBeUndefined();
+    expect(after?.runtimeStatus).toBe("running");
+  });
+
+  it("keeps a terminal whose respawn failed reading as exited", async () => {
+    const exited = {
+      ...agentPanelBase,
+      agentState: "exited" as const,
+      isVisible: true,
+      exitCode: 1,
+      runtimeStatus: "exited" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [exited.id]: exited },
+      panelIds: [exited.id],
+    });
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed: ENOENT"));
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.restartError).toBeDefined();
+    expect(after?.runtimeStatus).toBe("exited");
+  });
+
+  it("relaunches an agent its host lost as the agent, not a demoted shell", async () => {
+    // What hostTerminalResync leaves behind: exited, but no exit code was seen.
+    const lost = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      isVisible: true,
+      runtimeStatus: "exited" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [lost.id]: lost },
+      panelIds: [lost.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls.at(-1)![0];
+    expect(payload.launchAgentId).toBe("claude");
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.runtimeStatus).toBe("running");
+  });
+
   // Restarting is itself an acknowledgement of the lost session (#9802), and
   // dismissal now consumes the same flag (#11589) — so this clear is the other
   // half of that contract and must keep working.

@@ -51,7 +51,7 @@ export interface XtermAdapterProps {
   agentState?: AgentState;
   isInputLocked?: boolean;
   onReady?: () => void;
-  onExit?: (exitCode: number) => void;
+  onExit?: (exitCode: number | null) => void;
   onInput?: (data: string) => void;
   /**
    * Selects the panel that owns this terminal after a file drop writes to it.

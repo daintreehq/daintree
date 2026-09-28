@@ -39,21 +39,23 @@ import type {
   IssueNotFoundPayload,
 } from "@shared/types/ipc/forge";
 
+// The open calls answer with a URL only to a window on another machine, whose
+// Shell opens it itself; a renderer never has anything to do with one.
 export const forgeClient = {
   openIssues: (cwd: string, query?: string, state?: string): Promise<void> => {
-    return window.electron.forge.openIssues(cwd, query, state);
+    return window.electron.forge.openIssues(cwd, query, state).then(() => undefined);
   },
 
   openPRs: (cwd: string, query?: string, state?: string): Promise<void> => {
-    return window.electron.forge.openPRs(cwd, query, state);
+    return window.electron.forge.openPRs(cwd, query, state).then(() => undefined);
   },
 
   openCommits: (cwd: string, branch?: string): Promise<void> => {
-    return window.electron.forge.openCommits(cwd, branch);
+    return window.electron.forge.openCommits(cwd, branch).then(() => undefined);
   },
 
   openIssue: (cwd: string, issueNumber: number): Promise<void> => {
-    return window.electron.forge.openIssue({ cwd, issueNumber });
+    return window.electron.forge.openIssue({ cwd, issueNumber }).then(() => undefined);
   },
 
   getIssueUrl: (cwd: string, issueNumber: number): Promise<string> => {
@@ -61,7 +63,7 @@ export const forgeClient = {
   },
 
   openRepo: (cwd: string): Promise<void> => {
-    return window.electron.forge.openRepo({ cwd });
+    return window.electron.forge.openRepo({ cwd }).then(() => undefined);
   },
 
   getRepoUrl: (cwd: string): Promise<string | null> => {
@@ -244,7 +246,7 @@ export const forgeClient = {
   },
 
   openPR: (cwd: string, prNumber: number): Promise<void> => {
-    return window.electron.forge.openPR({ cwd, prNumber });
+    return window.electron.forge.openPR({ cwd, prNumber }).then(() => undefined);
   },
 
   createPR: (

@@ -1286,7 +1286,7 @@ class TerminalInstanceService {
     hostElement.style.position = "relative";
 
     const listeners: Array<() => void> = [];
-    const exitSubscribers = new Set<(exitCode: number) => void>();
+    const exitSubscribers = new Set<(exitCode: number | null) => void>();
     const agentStateSubscribers = new Set<AgentStateCallback>();
 
     // Wire the host→renderer tier reconciliation on first terminal creation.
@@ -3567,7 +3567,20 @@ class TerminalInstanceService {
     return () => this.instanceDestroyedSubscribers.delete(cb);
   }
 
-  addExitListener(id: string, cb: (exitCode: number) => void): () => void {
+  /**
+   * A terminal whose PTY went away without an exit event reaching this view —
+   * the host that ran it restarted, and no longer lists it. The pane reads as
+   * exited, with no exit code, because none was seen.
+   */
+  reportLost(id: string, note: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    this.clearPtyGeometryEcho(managed);
+    writeLocal(managed, `\r\n\x1b[90m[${note}]\x1b[0m\r\n`);
+    managed.exitSubscribers.forEach((cb) => cb(null));
+  }
+
+  addExitListener(id: string, cb: (exitCode: number | null) => void): () => void {
     const managed = this.instances.get(id);
     if (!managed) return () => {};
     managed.exitSubscribers.add(cb);

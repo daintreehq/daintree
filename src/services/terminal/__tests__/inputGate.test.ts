@@ -120,3 +120,18 @@ describe("terminal input gate", () => {
     expect(unblocked).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("input gate wording", () => {
+  it("names the host's own screen as the banner does, not the host as a driver", () => {
+    expect(
+      gate.getTerminalInputBlockMessage({
+        kind: "driven-elsewhere",
+        driverName: "studio-01",
+        driverIsHostScreen: true,
+      })
+    ).toBe("Read-only while studio-01 is driven from its own screen");
+    expect(
+      gate.getTerminalInputBlockMessage({ kind: "driven-elsewhere", driverName: "greg-mbp" })
+    ).toBe("Read-only while greg-mbp is driving this project");
+  });
+});

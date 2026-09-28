@@ -1652,20 +1652,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     resolveProvider(projectId: string, remoteUrl?: string): Promise<ResolvedForgeProvider>;
     /** Open the issues list page for the resolved forge provider. */
-    openIssues(cwd: string, query?: string, state?: string): Promise<void>;
+    openIssues(cwd: string, query?: string, state?: string): Promise<string | undefined>;
     /** Open the pull requests list page for the resolved forge provider. */
-    openPRs(cwd: string, query?: string, state?: string): Promise<void>;
+    openPRs(cwd: string, query?: string, state?: string): Promise<string | undefined>;
     /** Open the commits page for the resolved forge provider. */
-    openCommits(cwd: string, branch?: string): Promise<void>;
+    openCommits(cwd: string, branch?: string): Promise<string | undefined>;
     /** Open a single issue in the system browser via the resolved forge provider. */
-    openIssue(payload: { cwd: string; issueNumber: number }): Promise<void>;
+    openIssue(payload: { cwd: string; issueNumber: number }): Promise<string | undefined>;
     /** Resolve the canonical URL for a single issue via the resolved forge provider. */
     getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
     /**
      * Open the repository's home page via the resolved forge provider. Rejects
      * when the provider doesn't implement the optional `buildRepoUrl`.
      */
-    openRepo(payload: { cwd: string }): Promise<void>;
+    openRepo(payload: { cwd: string }): Promise<string | undefined>;
     /**
      * Resolve the repository's home page URL via the resolved forge provider,
      * or `null` when the provider doesn't implement the optional `buildRepoUrl`.
@@ -1951,7 +1951,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Detailed per-bucket rate-limit snapshot for diagnostics UI; `null` when not inspectable. */
     getRateLimitDetails(payload: { cwd: string }): Promise<RateLimitDetails | null>;
     /** Open a single PR in the system browser via the resolved forge provider. */
-    openPR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    openPR(payload: { cwd: string; prNumber: number }): Promise<string | undefined>;
     /** Open a new pull request from `head` into `base` via the resolved forge provider. */
     createPR(payload: {
       cwd: string;
