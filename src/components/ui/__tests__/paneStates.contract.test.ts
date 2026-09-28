@@ -22,10 +22,7 @@ const SRC = path.join(REPO_ROOT, "src");
 /** `Spinner` is the primitive that wraps the glyph. */
 const LOADER_PRIMITIVE = "src/components/ui/Spinner.tsx";
 
-const LOADER_SURVIVORS: Record<string, string> = {
-  // The install button's busy glyph belongs to the button-states family.
-  "src/components/Setup/AgentCliStep.tsx": "install button busy state (button states family)",
-};
+const LOADER_SURVIVORS: Record<string, string> = {};
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
