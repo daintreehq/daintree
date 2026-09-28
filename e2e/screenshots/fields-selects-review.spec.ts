@@ -273,6 +273,30 @@ async function captureWorktreeDialog(page: Page, theme: string): Promise<void> {
   }
 }
 
+/** Voice input's provider fields only render while dictation is on. */
+async function captureVoiceFields(page: Page, theme: string): Promise<void> {
+  await openSettingsAt(page, "voice");
+  const toggle = page.locator(`${panel("voice")} [role="switch"]`).first();
+  await toggle.waitFor({ state: "visible", timeout: 10_000 });
+  if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await settle(page, 700);
+  const keySelector = 'input[autocomplete="new-password"]';
+  const key = page.locator(`${panel("voice")} ${keySelector}`).first();
+  await key.waitFor({ state: "visible", timeout: 10_000 });
+  await key.scrollIntoViewIfNeeded();
+  const group = page
+    .locator(`${panel("voice")} .settings-card`)
+    .filter({ has: page.locator(keySelector) })
+    .first();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await shot(page, `voice-key-rest--${theme}.png`, group, 12);
+  await keyboardFocus(page, key);
+  await shot(page, `voice-key-focus--${theme}.png`, group, 12);
+  await toggle.click();
+  await settle(page, 300);
+}
+
 const MANAGER = '[data-testid="plugin-manager-view"]';
 
 async function capturePluginManager(page: Page, theme: string): Promise<void> {
@@ -347,6 +371,7 @@ test.describe("fields and selects review", () => {
           await step(`${theme} page ${p.tab}`, () => capturePage(page, p.tab, p.slices, theme));
         await step(`${theme} rail pair`, () => captureRailPair(page, theme));
         await step(`${theme} audit filters`, () => captureAuditFilters(page, theme));
+        await step(`${theme} voice fields`, () => captureVoiceFields(page, theme));
         await closeSettings(page);
         await step(`${theme} worktree dialog`, () => captureWorktreeDialog(page, theme));
         await step(`${theme} plugin manager`, () => capturePluginManager(page, theme));
