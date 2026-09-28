@@ -7,6 +7,8 @@ import { BrandSurface } from "@/components/icons";
 import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortSha } from "@/utils/textParsing";
+import { Toaster } from "@/components/ui/toaster";
+import { copyPathWithFeedback } from "@/lib/copyPathFeedback";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "../ToolbarProjectPill";
 import "@/index.css";
 
@@ -24,10 +26,15 @@ import "@/index.css";
  *
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
+ *   ?copy=ok|fail             instead of the sheet, the toast the pill menu's
+ *                             "Copy path" raises, driven through the real helper
+ *                             with a clipboard that succeeds or rejects
  */
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
+const copyResult = params.get("copy");
+const COPY_PATH = "/Users/dev/Projects/clients/helios/helios-analytics-dashboard-platform";
 
 interface Fixture {
   slug: string;
@@ -76,6 +83,7 @@ const FIXTURES: Fixture[] = [
   { slug: "scratch", scratch: { name: "Scratch 3" } },
   { slug: "none" },
   { slug: "hover", project: { name: "Daintree", emoji: "🌴" }, branch: "develop" },
+  { slug: "pressed", project: { name: "Daintree", emoji: "🌴" }, branch: "develop" },
   { slug: "open", project: { name: "Daintree", emoji: "🌴" }, branch: "develop", open: true },
   { slug: "focus", project: { name: "Daintree", emoji: "🌴" }, branch: "develop" },
   {
@@ -176,7 +184,22 @@ function App() {
     setReady(true);
   }, [scheme]);
 
+  useEffect(() => {
+    if (!ready || copyResult === null) return;
+    copyPathWithFeedback(async () => copyResult === "ok", COPY_PATH);
+  }, [ready]);
+
   if (!ready) return null;
+
+  if (copyResult !== null) {
+    return (
+      <TooltipProvider>
+        <div data-preview-shell="" className="h-[320px] w-[640px]">
+          <Toaster />
+        </div>
+      </TooltipProvider>
+    );
+  }
 
   return (
     <TooltipProvider>
