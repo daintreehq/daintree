@@ -88,20 +88,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Recorded decision of a named review on the pull request",
     },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'copied && "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Copy confirmation on the row; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "me-0.5",
-      expectedOccurrences: 1,
-      rationale: "Copy confirmation glyph; resets when the copy flash times out",
-    },
   ],
   "plugins/builtin/github/renderer/utils/prCIStatus.ts": [
     {
@@ -193,14 +179,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Finished cue on a docked terminal; the cue decays rather than standing",
-    },
-  ],
-  "src/components/Layout/LocalCommitsDropdown.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-hash confirmation glyph; resets when the copy flash times out",
     },
   ],
   "src/components/Notifications/NotificationCenterEntry.tsx": [
@@ -652,22 +630,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Per-file diff insertion count",
     },
   ],
-  "src/panels/file-browser/FileBrowserPane.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'showRootPathCopied ? "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Copy-root-path confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "Copied!",
-      expectedOccurrences: 1,
-      rationale: "Copy-root-path confirmation in the tooltip; resets with the flash",
-    },
-  ],
 } as const satisfies StatusSuccessInventory;
 
 /**
@@ -675,5 +637,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 78;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 82;
+export const EXPECTED_STATUS_SUCCESS_SITES = 73;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 77;

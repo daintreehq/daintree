@@ -419,9 +419,7 @@ function LocalCommitRow({
                   )}
                   aria-label={`Copy hash ${commit.shortHash}`}
                 >
-                  {isCopied ? (
-                    <Check aria-hidden="true" className="size-3 text-status-success" />
-                  ) : null}
+                  {isCopied ? <Check aria-hidden="true" className="size-3" /> : null}
                   <span>{commit.shortHash}</span>
                 </button>
               </TooltipTrigger>

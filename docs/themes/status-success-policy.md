@@ -38,7 +38,7 @@ Git additions, insertion counts, ahead arrows and patch lines are domain notatio
 
 A timed confirmation is the archetype: the thing the user just did is marked, and a timer puts it back. Green is allowed there because the moment ends.
 
-The clipboard flash is the exception that stays neutral. Every copy button is the shared `CopyButton` (or, in a pane toolbar, the toolbar's own button with the same feedback): the glyph swaps from `Copy` to a neutral `Check`, the polite live region says "Copied", the accessible name never changes, and `UI_ACTION_SUCCESS_DWELL_MS` puts it back. The glyph swap is the channel. Green on some copy buttons and not others was an inconsistency, not a signal, so a copy tick never takes `status-success`.
+The clipboard flash is the exception that stays neutral. An icon-only copy button is the shared `CopyButton` (a pane toolbar keeps its own button with the same feedback, and a copyable label keeps its text): the glyph swaps from `Copy` to a neutral `Check`, the polite live region says "Copied", the accessible name never changes, and `UI_ACTION_SUCCESS_DWELL_MS` puts it back. The glyph swap is the channel. Green on some copy buttons and not others was an inconsistency, not a signal, so a copy tick does not take `status-success`. The dev-preview console's two copy ticks are the remaining exception, left to that console's own pass.
 
 A confirmation qualifies when something other than the user's attention takes it away: a timer, the dialog closing, the next keystroke. "The user will navigate away eventually" is not that.
 
