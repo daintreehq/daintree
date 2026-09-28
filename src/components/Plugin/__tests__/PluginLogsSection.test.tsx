@@ -167,7 +167,7 @@ describe("PluginLogsSection", () => {
     expect(screen.queryByText(/isn't running/)).toBeNull();
   });
 
-  it("calls refresh and disables the control while a read is in flight", async () => {
+  it("calls refresh and blocks a second read while one is in flight", async () => {
     const refresh = vi.fn();
     const { PluginLogsSection } = await load();
     const { rerender } = render(
@@ -177,6 +177,12 @@ describe("PluginLogsSection", () => {
     expect(refresh).toHaveBeenCalledOnce();
 
     rerender(<PluginLogsSection lines={[]} loading={true} error={null} refresh={refresh} />);
-    expect(screen.getByRole("button", { name: /refresh/i }).hasAttribute("disabled")).toBe(true);
+    // Busy, not natively disabled: the button keeps keyboard focus, and its
+    // own guard refuses the second read.
+    const button = screen.getByRole("button", { name: /refresh/i });
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(button);
+    expect(refresh).toHaveBeenCalledOnce();
   });
 });

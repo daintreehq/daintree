@@ -116,10 +116,15 @@ export function PluginLogsSection({ lines, loading, error, refresh }: PluginLogs
         </p>
         <Button
           variant="ghost"
-          size="sm"
-          onClick={refresh}
-          disabled={loading}
-          className="shrink-0 text-2xs"
+          size="xs"
+          onClick={() => {
+            if (!loading) refresh();
+          }}
+          // Busy, not unavailable: the rotating glyph says so, at full
+          // strength, and the button keeps keyboard focus.
+          aria-busy={loading || undefined}
+          aria-disabled={loading || undefined}
+          className="shrink-0"
         >
           <SpinningIcon icon={RefreshCw} active={loading} />
           Refresh
