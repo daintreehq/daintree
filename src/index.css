@@ -1631,8 +1631,9 @@ body,
  * growing, 120ms ease-in closing. Suppressed during an active drag, under
  * reduced motion (the OS setting and the app's reduce-animations flag) and in
  * performance mode.
- * The dock's own open and close stay instant: they resize the whole panel grid,
- * and animating that would reflow every terminal in it frame by frame. */
+ * The dock's own open and close take their height at once: they resize the
+ * whole panel grid, and animating that would reflow every terminal in it frame
+ * by frame. Its contents fade in instead (below). */
 .diagnostics-dock,
 .console-drawer-region {
   transition: height 200ms ease-out;
@@ -1646,16 +1647,25 @@ body,
   transition: none;
 }
 
+/* Opening the dock claims its height at once (the grid reflow above), so what
+ * arrives on the panel tier is its contents: a 200ms fade in, like the output
+ * drawer's 200ms open. */
+.diagnostics-dock {
+  animation: overlay-fade-in 200ms ease-out;
+}
+
 @variant reduce-motion {
   .diagnostics-dock,
   .console-drawer-region {
     transition: none;
+    animation: none;
   }
 }
 
 body[data-performance-mode="true"] .diagnostics-dock,
 body[data-performance-mode="true"] .console-drawer-region {
   transition: none;
+  animation: none;
 }
 
 /* Terminal Selection State.

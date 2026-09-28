@@ -336,7 +336,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
         />
       </div>
 
-      <div className="flex h-8 shrink-0 items-stretch justify-between border-b border-overlay bg-daintree-sidebar/50 px-2">
+      <div className="flex h-8 shrink-0 items-stretch justify-between border-b border-overlay bg-surface-sidebar/50 px-2">
         <UnderlineTabs
           tabs={tabs}
           activeId={activeTab}

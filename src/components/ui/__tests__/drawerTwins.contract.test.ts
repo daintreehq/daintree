@@ -59,7 +59,11 @@ describe("drawer twins", () => {
   it("move their height on one rule that reduced motion switches off", () => {
     const css = read("src/index.css");
     const block = css.slice(css.indexOf("@variant reduce-motion {\n  .diagnostics-dock"));
-    expect(block.slice(0, 200)).toMatch(/\.console-drawer-region/);
+    const reduced = block.slice(0, block.indexOf("}\n}"));
+    expect(reduced).toMatch(/\.console-drawer-region/);
+    // Height moves on a transition, the dock's contents on an animation; both stop.
+    expect(reduced).toMatch(/transition:\s*none/);
+    expect(reduced).toMatch(/animation:\s*none/);
     expect(read("src/components/DevPreview/ConsoleDrawer.tsx")).toMatch(/console-drawer-region/);
     expect(read("src/components/Diagnostics/DiagnosticsDock.tsx")).toMatch(/diagnostics-dock/);
   });
