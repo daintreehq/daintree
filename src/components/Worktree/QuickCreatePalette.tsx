@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
@@ -26,10 +26,12 @@ function RecipeListItem({
   item,
   isSelected,
   onClick,
+  onHover,
 }: {
   item: QuickCreateItem;
   isSelected: boolean;
   onClick: () => void;
+  onHover: () => void;
 }) {
   // The palette lists recipes from every worktree, so two same-named
   // worktree-scoped recipes need their worktree names to tell them apart.
@@ -45,6 +47,7 @@ function RecipeListItem({
         tabIndex={-1}
         onPointerDown={(e) => e.preventDefault()}
         id={`quick-create-option-${item.id}`}
+        onPointerMove={isSelected ? undefined : onHover}
         onClick={onClick}
         className={cn(
           // Was a hand-rolled copy of the shared row and drifted out of step
@@ -72,15 +75,15 @@ function RecipeListItem({
       tabIndex={-1}
       onPointerDown={(e) => e.preventDefault()}
       id={`quick-create-option-${recipe.id}`}
+      onPointerMove={isSelected ? undefined : onHover}
       onClick={onClick}
       className={cn(
         PALETTE_ROW_CLASS,
         // No resting fill. A backplate on every row made three recipes read as
         // three stacked cards, so the selected one had to out-shout two
         // neighbours instead of being the only lit row. No hover fill either:
-        // these rows deliberately don't move the cursor (see the palette's
-        // `onHoverIndex`), so a hover fill here would be a second lit row beside
-        // the one Enter acts on.
+        // the pointer moves the cursor, so a hover fill would be a second lit
+        // row beside the one Enter acts on.
         "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5"
       )}
       aria-selected={isSelected}
@@ -136,8 +139,17 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
     void actionService.dispatch("recipe.manager.open", undefined, { source: "user" });
   }, [closeQuickCreate, palette]);
 
-  const showAssignToggle =
-    palette.selectedRecipe && getAutoAssign(palette.selectedRecipe) === "prompt";
+  // The assign-to-me toggle under the list belongs to the last recipe the
+  // cursor was on, not to whatever the cursor is on now: reaching it with the
+  // pointer crosses the Customize row, and a toggle that vanished mid-trip
+  // could never be clicked. Adjusted during render, so it never lags a frame.
+  const [footerRecipe, setFooterRecipe] = useState(palette.selectedRecipe);
+  if (!palette.isOpen && footerRecipe !== null) {
+    setFooterRecipe(null);
+  } else if (palette.isOpen && palette.selectedRecipe && palette.selectedRecipe !== footerRecipe) {
+    setFooterRecipe(palette.selectedRecipe);
+  }
+  const showAssignToggle = footerRecipe && getAutoAssign(footerRecipe) === "prompt";
 
   return (
     <SearchablePalette<QuickCreateItem>
@@ -153,11 +165,11 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       onConfirm={palette.confirmSelection}
       onClose={handleClose}
       getItemId={(item) => item.id}
-      // Home and End only. Rows don't report hover: the assign-to-me toggle
-      // below the list follows the selected recipe, and reaching it crosses
-      // the Customize row, which would select that and hide the toggle.
+      // Pointer and keys move one cursor, as in every palette. The assign
+      // toggle below stays pinned to the last recipe (`footerRecipe`), so
+      // crossing the Customize row on the way to it doesn't hide it.
       onHoverIndex={palette.setSelectedIndex}
-      renderItem={(item, _index, isSelected) => (
+      renderItem={(item, index, isSelected, onHover) => (
         <RecipeListItem
           key={item.id}
           item={item}
@@ -165,6 +177,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
           onClick={() => {
             palette.confirmItem(item);
           }}
+          onHover={() => onHover(index)}
         />
       )}
       label="Quick create worktree"
