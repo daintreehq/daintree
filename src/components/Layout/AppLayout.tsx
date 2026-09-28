@@ -23,6 +23,7 @@ import {
   useDockStore,
   useFocusStore,
   useHelpPanelStore,
+  usePortalStore,
   usePreferencesStore,
   useUIStore,
   type PanelState,
@@ -519,7 +520,10 @@ export function AppLayout({
       // ("the snapshot only owns the deltas it caused"). If the assistant was
       // never gesture-hidden (e.g. a sidebar-only gesture), an explicit toolbar
       // open during focus mode must survive the exit rather than be snapped shut.
-      const restoreAssistant = snapshot.hidAssistant;
+      // Likewise web chat opened during focus mode wins over the restore — the
+      // two are exclusive, and reopening the assistant would close it. Read
+      // live: the render's layout.portalOpen can lag a same-turn open.
+      const restoreAssistant = snapshot.hidAssistant && !usePortalStore.getState().isOpen;
       const assistantWasOpen = snapshot.assistantWasOpen;
       layout.toggleFocusMode({
         sidebarWidth,
@@ -859,8 +863,8 @@ export function AppLayout({
     //   total occupied right-edge viewport space. Used by fixed body-portaled
     //   elements (toaster, popovers, ReEntrySummary, GettingStartedChecklist,
     //   ThemeBrowser overlay) that would otherwise be hidden behind whichever
-    //   is wider. Portal overlays the Assistant when both are open, so the
-    //   rightmost obstruction is max, not sum (issue #6629).
+    //   is wider. Portal and Assistant are mutually exclusive, but take the
+    //   max rather than the sum so an overlap can never double-count (#6629).
     const obstructionOffset = Math.max(portalOffset, effectiveAssistantWidth);
     const rootStyle = document.documentElement.style;
     rootStyle.setProperty("--portal-right-offset", `${portalOffset}px`);

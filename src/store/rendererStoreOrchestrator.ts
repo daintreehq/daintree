@@ -18,6 +18,8 @@ import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
+import { useHelpPanelStore } from "./helpPanelStore";
+import { usePortalStore } from "./portalStore";
 import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import {
   setPanelStoreAccessor,
@@ -596,7 +598,30 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
-  // 7. Flush the MRU debounce before the view is torn down. The 150ms debounce
+  // 7. The Daintree Assistant and the web chat Portal share the right edge, so
+  //    only one is open at a time: opening either closes the other. Keyed on the
+  //    closed→open transition so every entry point (toolbar, keybinding, action,
+  //    MCP) is covered without either store importing its partner.
+  disposables.add(
+    toDisposable(
+      useHelpPanelStore.subscribe((state, prev) => {
+        if (state.isOpen && !prev.isOpen && usePortalStore.getState().isOpen) {
+          usePortalStore.getState().setOpen(false);
+        }
+      })
+    )
+  );
+  disposables.add(
+    toDisposable(
+      usePortalStore.subscribe((state, prev) => {
+        if (state.isOpen && !prev.isOpen && useHelpPanelStore.getState().isOpen) {
+          useHelpPanelStore.getState().setOpen(false);
+        }
+      })
+    )
+  );
+
+  // 8. Flush the MRU debounce before the view is torn down. The 150ms debounce
   //    above strands the latest MRU write if the user switches projects, closes
   //    the window, or quits within the debounce window. `visibilitychange`
   //    fires on WebContentsView detach while the renderer is still alive and
