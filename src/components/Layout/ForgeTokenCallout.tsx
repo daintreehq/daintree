@@ -172,7 +172,9 @@ function useAnchorPosition(
     };
   }, [anchorRef, open]);
 
-  return open ? position : null;
+  // The last measurement outlives `open`, so a dismissed callout can fade out
+  // where it stood. Re-arming measures again before paint.
+  return position;
 }
 
 /**

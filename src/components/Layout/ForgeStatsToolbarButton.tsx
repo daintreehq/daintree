@@ -1015,7 +1015,7 @@ export const ForgeStatsToolbarButton = memo(
 
     return (
       <div
-        className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border transition-[width] duration-150 ease-out"
+        className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border transition-[width] duration-150 ease-out motion-reduce:transition-none"
         style={{ width: statsContainerWidth }}
       >
         {forgeMode ? (
