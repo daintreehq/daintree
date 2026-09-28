@@ -34,7 +34,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalScratchpad } from "../TerminalScratchpad";
-import { isScratchpadElement } from "@/lib/terminalScratchpad";
+import {
+  SCRATCHPAD_COUNT_THRESHOLD,
+  SCRATCHPAD_MAX_CHARS,
+  isScratchpadElement,
+} from "@/lib/terminalScratchpad";
 
 function seed(scratchpad: ScratchpadState | undefined): void {
   panelState.panelsById = {
@@ -162,5 +166,84 @@ describe("TerminalScratchpad", () => {
     const [widened, narrowed] = actions.setScratchpadWidth.mock.calls.map((call) => call[1]);
     expect(widened).toBeGreaterThan(300);
     expect(narrowed).toBeLessThan(300);
+  });
+
+  it("names the editor from its title bar and describes it from the status bar", () => {
+    seed({ content: "", collapsed: false });
+    const { getByTestId } = renderPad();
+    const editor = getByTestId("terminal-scratchpad-editor");
+    if (!(editor instanceof HTMLTextAreaElement)) throw new Error("editor is not a textarea");
+
+    // A placeholder is not a name: the label must be a real element tied to the editor.
+    const label = editor.labels?.[0];
+    expect(label?.textContent?.trim()).toBeTruthy();
+    expect(label?.textContent).not.toBe(editor.placeholder);
+
+    const describedBy = editor.getAttribute("aria-describedby");
+    const description = describedBy ? document.getElementById(describedBy) : null;
+    expect(description?.textContent?.trim()).toBeTruthy();
+    expect(getByTestId("terminal-scratchpad-status").contains(description)).toBe(true);
+  });
+
+  it("draws the editor as the column's body, not a boxed field with its own ring", () => {
+    seed({ content: "notes", collapsed: false });
+    const { getByTestId } = renderPad();
+    const classes = getByTestId("terminal-scratchpad-editor").className.split(/\s+/);
+
+    expect(classes.some((c) => /^rounded/.test(c))).toBe(false);
+    expect(classes.some((c) => /^focus(-visible)?:outline-(?!hidden)/.test(c))).toBe(false);
+    expect(classes.some((c) => /^border(-|$)/.test(c) && c !== "border-0")).toBe(false);
+  });
+
+  it("counts characters only once the notes near the limit", () => {
+    seed({ content: "x".repeat(SCRATCHPAD_COUNT_THRESHOLD - 1), collapsed: false });
+    const below = renderPad();
+    expect(below.queryByTestId("terminal-scratchpad-count")).toBeNull();
+    below.unmount();
+
+    seed({ content: "x".repeat(SCRATCHPAD_COUNT_THRESHOLD), collapsed: false });
+    const { getByTestId } = renderPad();
+    const count = getByTestId("terminal-scratchpad-count").textContent ?? "";
+    expect(count).toContain(SCRATCHPAD_COUNT_THRESHOLD.toLocaleString());
+    expect(count).toContain(SCRATCHPAD_MAX_CHARS.toLocaleString());
+  });
+  it("announces the width on screen and the range a drag can reach under the half-pane cap", () => {
+    type Notify = (entries: Array<{ contentRect: { width: number } }>) => void;
+    let notify: Notify = () => {};
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: Notify) {
+          notify = cb;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    try {
+      seed({ content: "", collapsed: false, width: 400 });
+      const { getByTestId } = render(
+        <TooltipProvider>
+          <div>
+            <TerminalScratchpad terminalId="term-1" />
+          </div>
+        </TooltipProvider>
+      );
+      const paneWidth = 500;
+      act(() => notify([{ contentRect: { width: paneWidth } }]));
+
+      const grip = getByTestId("terminal-scratchpad-resize");
+      const now = Number(grip.getAttribute("aria-valuenow"));
+      const max = Number(grip.getAttribute("aria-valuemax"));
+      const min = Number(grip.getAttribute("aria-valuemin"));
+      expect(max).toBeLessThanOrEqual(paneWidth / 2);
+      expect(now).toBeLessThanOrEqual(max);
+      expect(min).toBeLessThanOrEqual(max);
+      expect(grip.getAttribute("aria-valuetext")).toContain(String(now));
+      // The separator resizes the whole column, not just the editor inside it.
+      expect(grip.getAttribute("aria-controls")).toBe(getByTestId("terminal-scratchpad").id);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
