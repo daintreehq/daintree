@@ -180,6 +180,14 @@ export function setupViewHandlers(
 
     if (win.isDestroyed()) return;
 
+    // Before any early return or recovery branch (#12954): the assistant
+    // pinned to this renderer is capture-revoked on every death, not only
+    // through the active-view crash hook or the deferred cached eviction —
+    // the eviction reloads instead when the project is reactivated first, an
+    // outgoing view behind a paint gate is neither active nor cached, and the
+    // crash-loop branch never reaches the eviction at all.
+    host.notifyViewRendererGone(wc);
+
     const crashEntry = projectId ? host.views.get(projectId) : null;
 
     // If the view is still loading, loadView's one-shot handler will handle

@@ -196,7 +196,12 @@ vi.mock("../../utils/openExternal.js", () => ({
 }));
 
 vi.mock("../../services/CrashRecoveryService.js", () => ({
-  getCrashRecoveryService: vi.fn(() => ({ recordCrash: vi.fn(), recordRendererGone: vi.fn() })),
+  getCrashRecoveryService: vi.fn(() => ({
+    recordCrash: vi.fn(),
+    recordRendererGone: vi.fn(),
+    getLastBackupTimestamp: vi.fn(() => null),
+    getBackupPanelCount: vi.fn(() => null),
+  })),
 }));
 
 vi.mock("../../ipc/errorHandlers.js", () => ({
@@ -1586,4 +1591,157 @@ describe("ProjectViewManager — startup view crash hook (#12954)", () => {
       assertLifecycleInvariants(manager as never, win as never);
     }
   );
+
+  describe("assistant capture on renderer death, whatever the recovery branch", () => {
+    function attachStartupHandler(setup: ManagerSetup): void {
+      attachAppViewRendererGoneHandler({
+        win: setup.win as never,
+        appWebContents: setup.initialWc as never,
+        getProjectViewManager: () => setup.manager,
+        getRecoveryUrl: () => "app://daintree/recovery.html",
+      });
+    }
+
+    // Mirrors the main.ts wiring: the renderer-gone hook and the eviction hook
+    // both capture-revoke the assistant pinned to a webContents id, and the
+    // active-view crash hook no longer does. Either one reaching the dead id
+    // is a capture.
+    function captureLedger(setup: ManagerSetup) {
+      const rendererGone = vi.fn();
+      setup.manager.onViewRendererGone = rendererGone;
+      setup.onViewEvicted.mockClear();
+      return {
+        rendererGone,
+        capturedIds: () => [
+          ...rendererGone.mock.calls.map(([wc]) => (wc as { id: number }).id),
+          ...setup.onViewEvicted.mock.calls.map(([id]) => id as number),
+        ],
+      };
+    }
+
+    it("captures a crashed cached startup view reactivated before its deferred eviction runs", async () => {
+      const setup = createManager();
+      const { manager, win, initialWc } = setup;
+      await coldSwitch(setup, "proj-b", "/b");
+      attachStartupHandler(setup);
+      const { rendererGone, capturedIds } = captureLedger(setup);
+
+      initialWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      // Switch back before the eviction tick: evictDeadView finds the view
+      // active again and reloads it instead, so the eviction hook never runs.
+      const back = manager.switchTo("proj-a", "/a");
+      await flushMicrotasks();
+      manager.signalWarmViewPainted(initialWc.id);
+      await back;
+      await flushImmediates();
+
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      expect(setup.onViewEvicted).not.toHaveBeenCalled();
+      expect(initialWc.reload).toHaveBeenCalledTimes(1);
+      expect(rendererGone).toHaveBeenCalledTimes(1);
+      expect(capturedIds()).toEqual([initialWc.id]);
+      assertLifecycleInvariants(manager as never, win as never);
+    });
+
+    it("captures the outgoing startup view when it crashes behind the incoming view's paint gate", async () => {
+      const setup = createManager();
+      const { manager, initialWc } = setup;
+      attachStartupHandler(setup);
+      const onViewCrashed = vi.fn();
+      manager.onViewCrashed = onViewCrashed;
+      const { capturedIds } = captureLedger(setup);
+
+      const bWc = createMockWebContents();
+      wcQueue.push(bWc);
+      const switchPromise = manager.switchTo("proj-b", "/b");
+      await flushMicrotasks();
+      // Mid-gate: B is already the active project while A is still attached
+      // and still marked active — neither the active-view hook nor the cached
+      // eviction claims it.
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(manager.getAllViews().find((entry) => entry.projectId === "proj-a")?.state).toBe(
+        "active"
+      );
+
+      initialWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+
+      expect(onViewCrashed).not.toHaveBeenCalled();
+      expect(capturedIds()).toEqual([initialWc.id]);
+
+      manager.signalViewPainted(bWc.id);
+      await switchPromise;
+      await flushImmediates();
+
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(setup.onViewEvicted).not.toHaveBeenCalled();
+      expect(capturedIds()).toEqual([initialWc.id]);
+    });
+
+    it("captures a cached startup view whose crash trips the crash-loop recovery page", async () => {
+      const setup = createManager();
+      const { initialWc } = setup;
+      attachStartupHandler(setup);
+
+      initialWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      initialWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      await flushImmediates();
+      expect(initialWc.reload).toHaveBeenCalledTimes(2);
+
+      await coldSwitch(setup, "proj-b", "/b");
+      const { capturedIds } = captureLedger(setup);
+
+      // Third crash inside the window: the crash-loop branch loads the
+      // recovery page before the cached-eviction branch is ever reached.
+      initialWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      await flushImmediates();
+
+      expect(initialWc.loadURL).toHaveBeenCalledWith("app://daintree/recovery.html");
+      expect(setup.onViewEvicted).not.toHaveBeenCalled();
+      expect(capturedIds()).toEqual([initialWc.id]);
+    });
+
+    it("captures a crashed cached project view reactivated before its deferred eviction runs", async () => {
+      const setup = createManager();
+      const { manager, win, initialWc } = setup;
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+      await warmSwitch(setup, "proj-a", initialWc);
+      const { rendererGone, capturedIds } = captureLedger(setup);
+
+      bWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      const back = manager.switchTo("proj-b", "/b");
+      await flushMicrotasks();
+      manager.signalWarmViewPainted(bWc.id);
+      await back;
+      await flushImmediates();
+
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(setup.onViewEvicted).not.toHaveBeenCalled();
+      expect(bWc.reload).toHaveBeenCalledTimes(1);
+      expect(rendererGone).toHaveBeenCalledTimes(1);
+      expect(capturedIds()).toEqual([bWc.id]);
+      assertLifecycleInvariants(manager as never, win as never);
+    });
+
+    it("captures a cached project view whose crash trips the crash-loop recovery page", async () => {
+      const setup = createManager();
+      const { manager, initialWc } = setup;
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      bWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      bWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      await flushImmediates();
+      expect(bWc.reload).toHaveBeenCalledTimes(2);
+
+      await warmSwitch(setup, "proj-a", initialWc);
+      const { capturedIds } = captureLedger(setup);
+
+      bWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      await flushImmediates();
+
+      expect(bWc.loadURL).toHaveBeenLastCalledWith(expect.stringContaining("recovery.html"));
+      expect(setup.onViewEvicted).not.toHaveBeenCalled();
+      expect(capturedIds()).toEqual([bWc.id]);
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+    });
+  });
 });

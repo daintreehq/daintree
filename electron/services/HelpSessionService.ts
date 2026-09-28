@@ -649,6 +649,13 @@ export class HelpSessionService {
   // mid-kill displacement can't let a stale resume ID shadow the new session.
   // In-memory only — no in-flight capture is meaningful across an app restart.
   private readonly pendingCapturesBySlotKey = new Map<string, string>();
+  // Capture-revokes still inside their gracefulKill await, by session id. One
+  // renderer death can reach `revokeSession` more than once — the renderer-gone
+  // hook, then the eviction or window-close that follows it (#12954) — and the
+  // record stays in `sessionsById` until the await settles, so a second call
+  // would pass the `revoked` guard and graceful-kill the same PTY again. Later
+  // capture calls join the first instead.
+  private readonly captureRevokesInFlight = new Map<string, Promise<void>>();
   // #11477: the entry most recently handed out by `takePendingHibernation`, per
   // project, so a taker whose launch aborts can put it back verbatim via
   // `restorePendingHibernation` — original `capturedAt` intact, `panelWasOpen`
@@ -1639,7 +1646,21 @@ export class HelpSessionService {
    * revokes (renderer IPC) leave the option off so "+ New session" /
    * explicit close discards the transcript as the user intended.
    */
-  async revokeSession(
+  revokeSession(
+    sessionId: string,
+    opts?: { captureHibernation?: boolean; rendererGone?: boolean }
+  ): Promise<void> {
+    if (!opts?.captureHibernation) return this.revokeSessionNow(sessionId, opts);
+    const inFlight = this.captureRevokesInFlight.get(sessionId);
+    if (inFlight) return inFlight;
+    const run = this.revokeSessionNow(sessionId, opts).finally(() => {
+      this.captureRevokesInFlight.delete(sessionId);
+    });
+    this.captureRevokesInFlight.set(sessionId, run);
+    return run;
+  }
+
+  private async revokeSessionNow(
     sessionId: string,
     opts?: { captureHibernation?: boolean; rendererGone?: boolean }
   ): Promise<void> {

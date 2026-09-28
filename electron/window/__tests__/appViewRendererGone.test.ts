@@ -32,6 +32,7 @@ function createHarness(
     pvm?: Pick<
       ProjectViewManager,
       | "getProjectIdForWebContents"
+      | "notifyViewRendererGone"
       | "notifyActiveViewCrashed"
       | "evictCrashedCachedView"
       | "getLowMemoryFreeThresholdMb"
@@ -70,8 +71,12 @@ function createHarness(
  */
 function createClaimingManager(opts: { claimed: boolean; active: boolean; cached?: boolean }) {
   const onViewCrashed = vi.fn();
+  const onViewRendererGone = vi.fn();
   const pvm = {
     getProjectIdForWebContents: (id: number) => (opts.claimed && id === 2 ? "proj-a" : null),
+    notifyViewRendererGone: vi.fn((wc: Electron.WebContents) => {
+      if (opts.claimed) onViewRendererGone(wc);
+    }),
     notifyActiveViewCrashed: vi.fn((wc: Electron.WebContents) => {
       if (!opts.claimed || !opts.active) return false;
       onViewCrashed(wc);
@@ -83,7 +88,7 @@ function createClaimingManager(opts: { claimed: boolean; active: boolean; cached
     ),
     getLowMemoryFreeThresholdMb: (): number | null => null,
   };
-  return { pvm, onViewCrashed };
+  return { pvm, onViewCrashed, onViewRendererGone };
 }
 
 describe("app-view render-process-gone (#12954)", () => {
@@ -146,14 +151,64 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(appWebContents.loadURL).toHaveBeenCalledWith("app://daintree/recovery.html?crashed-1");
   });
 
+  it.each([
+    { name: "active reload", active: true, cached: false, crashes: 1, memMb: null },
+    {
+      name: "outgoing view behind a paint gate",
+      active: false,
+      cached: false,
+      crashes: 1,
+      memMb: null,
+    },
+    { name: "cached eviction", active: false, cached: true, crashes: 1, memMb: null },
+    { name: "crash loop while cached", active: false, cached: true, crashes: 3, memMb: null },
+    { name: "probable OOM recreate", active: false, cached: true, crashes: 1, memMb: 100 },
+  ])(
+    "fires the renderer-gone hook on every crash before recovery: $name",
+    async ({ active, cached, crashes, memMb }) => {
+      availableMemory.mb = memMb;
+      const { pvm, onViewRendererGone } = createClaimingManager({ claimed: true, active, cached });
+      pvm.getLowMemoryFreeThresholdMb = () => 500;
+      const onRecreateWindow = vi.fn(() => Promise.resolve());
+      const { appWebContents, win, crash } = createHarness({ pvm, onRecreateWindow });
+
+      for (let i = 0; i < crashes; i++) crash("crashed");
+
+      expect(onViewRendererGone).toHaveBeenCalledTimes(crashes);
+      expect(onViewRendererGone).toHaveBeenCalledWith(appWebContents);
+      expect(appWebContents.reload).not.toHaveBeenCalled();
+      expect(appWebContents.loadURL).not.toHaveBeenCalled();
+      expect(win.destroy).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+    }
+  );
+
+  it("fires the renderer-gone hook on a cached memory eviction", () => {
+    const { pvm, onViewRendererGone } = createClaimingManager({
+      claimed: true,
+      active: false,
+      cached: true,
+    });
+    const { appWebContents, crash } = createHarness({ pvm });
+
+    crash("memory-eviction", 0);
+
+    expect(onViewRendererGone).toHaveBeenCalledTimes(1);
+    expect(onViewRendererGone).toHaveBeenCalledWith(appWebContents);
+  });
+
   it("does not fire the hook for an unbound window's picker", () => {
-    const { pvm, onViewCrashed } = createClaimingManager({ claimed: false, active: true });
+    const { pvm, onViewCrashed, onViewRendererGone } = createClaimingManager({
+      claimed: false,
+      active: true,
+    });
     const { appWebContents, crash } = createHarness({ pvm });
 
     crash("crashed");
     vi.runAllTimers();
 
     expect(onViewCrashed).not.toHaveBeenCalled();
+    expect(onViewRendererGone).not.toHaveBeenCalled();
     expect(appWebContents.reload).toHaveBeenCalledTimes(1);
   });
 

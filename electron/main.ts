@@ -554,7 +554,7 @@ if (!gotTheLock) {
           console.error("[main] closePortsForView failed during cache:", err);
         }
       },
-      onViewCrashed: (wc) => {
+      onViewCrashed: () => {
         // Tear down the per-window PTY MessagePort on renderer crash so the
         // pty-host's PortQueueManager can drop stale queue accounting before
         // reload re-issues a fresh port. Without this, a stale port keeps the
@@ -565,16 +565,21 @@ if (!gotTheLock) {
         } catch (err) {
           console.warn("[main] disconnectMessagePort failed during crash:", err);
         }
-        // Capture-revoke help sessions pinned to the crashed WebContents
-        // (#9151, #12954). A crash-reload keeps the same WebContents id, but
-        // the renderer that owned the assistant lane is gone and has no way
-        // back to the live PTY — left running, the next panel open would
-        // displace it with a hard kill and lose the conversation. Capturing
-        // here writes the pending-hibernation entry the reloaded renderer
-        // resumes from. (View recreation after OOM gets a new id instead;
-        // either way the old pin is finished.) Called directly, not through
-        // a dynamic import, so the capture placeholder is written before this
-        // hook returns and the reload is scheduled.
+      },
+      onViewRendererGone: (wc) => {
+        // Capture-revoke help sessions pinned to the dead renderer (#9151,
+        // #12954), on every non-clean death of any project view — active,
+        // cached, or outgoing mid-switch — before the recovery branch is
+        // chosen. A crash-reload keeps the same WebContents id, but the
+        // renderer that owned the assistant lane is gone and has no way back
+        // to the live PTY — left running, the next panel open would displace
+        // it with a hard kill and lose the conversation. Capturing here writes
+        // the pending-hibernation entry the reloaded renderer resumes from.
+        // (View recreation after OOM gets a new id instead; either way the old
+        // pin is finished.) Called directly, not through a dynamic import, so
+        // the capture placeholder is written before this hook returns and the
+        // reload is scheduled. A later eviction of the same view finds the
+        // sessions already revoked or joins the in-flight capture.
         helpSessionService.revokeByWebContentsId(wc.id).catch((err) => {
           console.warn("[main] revokeByWebContentsId failed during crash:", err);
         });

@@ -2774,6 +2774,47 @@ describe("HelpSessionService", () => {
       );
     });
 
+    it("joins a second renderer-gone capture of the same view instead of graceful-killing twice (#12954)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 94,
+        projectId: "proj-twice",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-twice")).toBe(true);
+      service.reportPanelOpen("proj-twice", true);
+
+      // The renderer-gone hook captures at the crash; the eviction that follows
+      // on the next tick reaches the same session while gracefulKill is pending.
+      const first = service.revokeByWebContentsId(94);
+      service.reportPanelOpen("proj-twice", false);
+      const second = service.revokeByWebContentsId(94);
+      resolveKill("agent-resume-id-twice");
+      await Promise.all([first, second]);
+      await Promise.resolve();
+
+      expect(mockPtyGracefulKill).toHaveBeenCalledTimes(1);
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-twice", 0)
+      );
+      expect(setCalls).toHaveLength(2);
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-twice",
+          panelWasOpen: true,
+        })
+      );
+
+      // Settled: a third call finds nothing left to revoke.
+      await service.revokeByWebContentsId(94);
+      expect(mockPtyGracefulKill).toHaveBeenCalledTimes(1);
+    });
+
     it("honours a deliberate close from a live renderer during a project-scoped capture (#10815)", async () => {
       let resolveKill!: (id: string | null) => void;
       mockPtyGracefulKill.mockImplementationOnce(

@@ -71,13 +71,20 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
 
     if (win.isDestroyed()) return;
 
+    // The assistant pinned to this renderer is capture-revoked here, whatever
+    // the view's state and whichever branch recovers it below (#12954): the
+    // deferred cached eviction reloads instead if the project is reactivated
+    // first, an outgoing view behind a paint gate is neither active nor
+    // cached, and the crash-loop branch never reaches the eviction at all.
+    // Captured now, the reopened panel resumes the conversation instead of
+    // displacing a live orphan. Same hook ProjectViewHandlers fires.
+    pvm?.notifyViewRendererGone(appWebContents);
+
     // Once registerInitialView has claimed this webContents as the active
     // project view, it gets the same crash hook as every other project view
     // (#12954): the PTY port is torn down before the reload re-issues one
-    // (#6244), and the assistant is capture-revoked so the reopened panel
-    // resumes the conversation instead of displacing a live orphan. Fired
-    // synchronously, ahead of every recovery branch, exactly as
-    // ProjectViewHandlers does.
+    // (#6244). Fired synchronously, ahead of every recovery branch, exactly
+    // as ProjectViewHandlers does.
     pvm?.notifyActiveViewCrashed(appWebContents);
 
     // OS-pressure memory eviction: reload without counting toward crash-loop
@@ -174,9 +181,8 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
         });
       }
     } else if (pvm?.evictCrashedCachedView(appWebContents, "crash")) {
-      // Cached behind another project: evicted, not reloaded, so the assistant
-      // pinned to it is capture-revoked through the eviction hook exactly as
-      // for any other cached view (#12954). Nothing on screen, so no toast.
+      // Cached behind another project: evicted, not reloaded, exactly as for
+      // any other cached view (#12954). Nothing on screen, so no toast.
     } else {
       console.log("[MAIN] Renderer crash, auto-reloading");
       notifyError(
