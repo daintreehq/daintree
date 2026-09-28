@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { PanelRightClose } from "lucide-react";
-import { NotebookPen } from "@/components/icons";
+import { Info, NotebookPen } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -293,11 +293,14 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       />
 
       <div
-        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-border-default px-3 text-2xs text-text-secondary"
+        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-border-default px-3 text-3xs text-text-secondary"
         data-testid="terminal-scratchpad-status"
       >
-        <span id={hintId} className="truncate">
-          Deleted with this terminal
+        <span className="flex min-w-0 items-center gap-1">
+          <Info aria-hidden="true" className="size-3 shrink-0" />
+          <span id={hintId} className="truncate">
+            Temporary with this terminal
+          </span>
         </span>
         {nearLimit && (
           <span className="shrink-0 tabular-nums" data-testid="terminal-scratchpad-count">
