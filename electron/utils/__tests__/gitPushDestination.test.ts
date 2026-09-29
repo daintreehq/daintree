@@ -6,6 +6,8 @@ import path from "node:path";
 import { simpleGit } from "simple-git";
 import {
   resolveGitPushDestination,
+  resolveGitPushAndUpstream,
+  resolveGitUpstream,
   formatGitPushDestination,
   describeUnresolvedPushDestination,
   describeUnresolvedUpstream,
@@ -695,5 +697,105 @@ describe("resolveGitPushDestination — guards git cannot be made to produce", (
     );
 
     expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
+  });
+});
+
+describe("resolveGitPushAndUpstream — parity with the separate resolvers", () => {
+  const fixtures: Array<[string, () => string]> = [
+    [
+      "triangular: pushRemote differs from the upstream remote",
+      () => {
+        const repo = makeRepo();
+        git(repo, ["remote", "add", "origin", makeBare()]);
+        git(repo, ["remote", "add", "fork", makeBare()]);
+        git(repo, ["config", "branch.topic.remote", "origin"]);
+        git(repo, ["config", "branch.topic.merge", "refs/heads/release/topic"]);
+        git(repo, ["config", "branch.topic.pushRemote", "fork"]);
+        git(repo, ["config", "push.default", "current"]);
+        return repo;
+      },
+    ],
+    [
+      "worktree-style upstream name mismatch on the only remote",
+      () => {
+        const repo = makeRepo();
+        git(repo, ["remote", "add", "origin", makeBare()]);
+        git(repo, ["config", "branch.topic.remote", "origin"]);
+        git(repo, ["config", "branch.topic.merge", "refs/heads/develop"]);
+        return repo;
+      },
+    ],
+    [
+      "same-name upstream",
+      () => {
+        const repo = makeRepo();
+        git(repo, ["remote", "add", "origin", makeBare()]);
+        git(repo, ["config", "branch.topic.remote", "origin"]);
+        git(repo, ["config", "branch.topic.merge", "refs/heads/topic"]);
+        return repo;
+      },
+    ],
+    [
+      "unconfigured branch, several remotes",
+      () => {
+        const repo = makeRepo();
+        git(repo, ["remote", "add", "origin", makeBare()]);
+        git(repo, ["remote", "add", "fork", makeBare()]);
+        return repo;
+      },
+    ],
+    ["no remotes", () => makeRepo()],
+    [
+      "a push remote carrying a newline beside a valid upstream",
+      () => {
+        const repo = makeRepo();
+        git(repo, ["remote", "add", "origin", makeBare()]);
+        git(repo, ["config", "branch.topic.remote", "origin"]);
+        git(repo, ["config", "branch.topic.merge", "refs/heads/develop"]);
+        git(repo, ["config", "branch.topic.pushRemote", "bad\nname"]);
+        return repo;
+      },
+    ],
+  ];
+
+  for (const [name, build] of fixtures) {
+    it(name, async () => {
+      const repo = build();
+      const client = hermeticClient(repo);
+      const remotes = (await client.getRemotes()).map((r) => r.name);
+
+      const [push, upstream] = await Promise.all([
+        resolveGitPushDestination(client, "topic"),
+        resolveGitUpstream(client, "topic"),
+      ]);
+      const combined = await resolveGitPushAndUpstream(client, "topic", remotes);
+
+      expect(combined).toEqual({ push, upstream });
+      if (name.startsWith("a push remote carrying a newline")) {
+        expect(combined.upstream).toMatchObject({ status: "resolved" });
+      }
+    });
+  }
+
+  it("reads the refs once and never lists remotes itself", async () => {
+    const calls: string[] = [];
+    const combined = await resolveGitPushAndUpstream(
+      {
+        raw: async (args: readonly string[]) => {
+          calls.push(args[0]!);
+          return `refs/heads/topic\u0000origin\u0000refs/remotes/origin/topic\u0000refs/remotes/origin/topic\u0000origin\n`;
+        },
+        getRemotes: async () => {
+          calls.push("remote");
+          return [];
+        },
+      } as unknown as Parameters<typeof resolveGitPushAndUpstream>[0],
+      "topic",
+      ["origin"]
+    );
+
+    expect(calls).toEqual(["for-each-ref"]);
+    expect(combined.push.status).toBe("resolved");
+    expect(combined.upstream.status).toBe("resolved");
   });
 });

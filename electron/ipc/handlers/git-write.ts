@@ -28,7 +28,11 @@ import {
   createAuthenticatedGit,
   buildContinueEnv,
 } from "../../utils/hardenedGit.js";
-import { getPerFileDiffStats, invalidateStagingDiffStatCache } from "../../utils/git.js";
+import {
+  getPerFileDiffStats,
+  invalidateStagingDiffStatCache,
+  resolveHeadOidFromGitDir,
+} from "../../utils/git.js";
 import {
   resolveExistingBaseCompareTarget,
   type ExistingBaseCompareTarget,
@@ -62,6 +66,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { GitOperationError } from "../../utils/errorTypes.js";
 import {
   resolveGitPushDestination,
+  resolveGitPushAndUpstream,
   resolveGitUpstream,
   formatGitPushDestination,
   describeUnresolvedPushDestination,
@@ -1549,12 +1554,20 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     // mode), so this adds at most two batched git invocations per refresh.
     // Untracked entries don't appear in numstat output and keep insertions/
     // deletions = null (renderer omits the churn span in that case).
-    let headOid = "";
-    try {
-      headOid = (await git.revparse(["HEAD"])).trim();
-    } catch {
-      // No HEAD (unborn branch / empty repo) — staged numstat would also throw;
-      // skip churn entirely below.
+    //
+    // The git dir serves both the HEAD OID here and the operation-state
+    // sentinels below, read from the filesystem rather than spawned. The OID
+    // is still sampled after the status spawn, as the rev-parse it replaces
+    // was; any shape the filesystem read can't prove falls back to it.
+    const gitDir = await resolveGitDir(git, cwd).catch(() => null);
+    let headOid = (gitDir ? await resolveHeadOidFromGitDir(gitDir) : null) ?? "";
+    if (!headOid) {
+      try {
+        headOid = (await git.revparse(["HEAD"])).trim();
+      } catch {
+        // No HEAD (unborn branch / empty repo) — staged numstat would also
+        // throw; skip churn entirely below.
+      }
     }
 
     const stagedPaths = staged.map((entry) => entry.path);
@@ -1562,9 +1575,15 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       .filter((entry) => entry.status !== "untracked")
       .map((entry) => entry.path);
 
-    const [stagedStats, unstagedStats] = await Promise.all([
+    const [stagedStats, unstagedStats, remoteNames] = await Promise.all([
       getPerFileDiffStats(git, cwd, headOid, stagedPaths, "staged"),
       getPerFileDiffStats(git, cwd, headOid, unstagedTrackedPaths, "unstaged"),
+      // Listed once and handed to the destination resolver below, which would
+      // otherwise list them again for the push side and the pull side each.
+      git.getRemotes().then(
+        (remotes) => remotes.map((r) => r.name),
+        () => [] as string[]
+      ),
     ]);
 
     for (const entry of staged) {
@@ -1589,13 +1608,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       currentBranch = null;
     }
 
-    let hasRemote = false;
-    try {
-      const remotes = await git.getRemotes();
-      hasRemote = remotes.length > 0;
-    } catch {
-      // no remotes
-    }
+    const hasRemote = remoteNames.length > 0;
 
     // Best-effort: this is a general status read, so an unresolvable
     // destination degrades to `null` here rather than failing the whole status.
@@ -1604,10 +1617,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let pushDestination: StagingStatus["pushDestination"] = null;
     let pullSource: StagingStatus["pullSource"] = null;
     if (hasRemote && currentBranch) {
-      const [push, pull] = await Promise.all([
-        resolveGitPushDestination(git, currentBranch).catch(() => null),
-        resolveGitUpstream(git, currentBranch).catch(() => null),
-      ]);
+      const resolved = await resolveGitPushAndUpstream(git, currentBranch, remoteNames).catch(
+        () => null
+      );
+      const push = resolved?.push;
+      const pull = resolved?.upstream;
       if (push?.status === "resolved") {
         pushDestination = { remote: push.destination.remote, branch: push.destination.branch };
       }
@@ -1633,15 +1647,17 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let rebaseStep: number | null = null;
     let rebaseTotalSteps: number | null = null;
     let rebaseSequence: RebaseSequence | null = null;
-    try {
-      const gitDir = await resolveGitDir(git, cwd);
-      const detected = await detectRepoOperationState(gitDir, conflicted.length > 0);
-      repoState = detected.state;
-      rebaseStep = detected.rebaseStep;
-      rebaseTotalSteps = detected.rebaseTotalSteps;
-      rebaseSequence = detected.rebaseSequence;
-    } catch {
-      // If git-dir resolution fails, fall back to CLEAN/DIRTY from index alone.
+    // An unresolved git dir falls back to CLEAN/DIRTY from the index alone.
+    if (gitDir) {
+      try {
+        const detected = await detectRepoOperationState(gitDir, conflicted.length > 0);
+        repoState = detected.state;
+        rebaseStep = detected.rebaseStep;
+        rebaseTotalSteps = detected.rebaseTotalSteps;
+        rebaseSequence = detected.rebaseSequence;
+      } catch {
+        // Same fallback when the sentinel reads fail.
+      }
     }
 
     return {

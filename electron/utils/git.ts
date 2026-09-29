@@ -8,7 +8,7 @@ import { logWarn, logError } from "./logger.js";
 import { Cache } from "./cache.js";
 import { createHardenedGit, createWslHardenedGit } from "./hardenedGit.js";
 import type { WslGitInvocation } from "./hardenedGit.js";
-import { getGitDir } from "./gitUtils.js";
+import { getGitDir, hasGitLocationEnvOverride } from "./gitUtils.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
@@ -567,6 +567,12 @@ async function resolvePackedRef(commonDir: string, refName: string): Promise<str
 async function resolveHeadOidFromFs(cwd: string): Promise<string | null> {
   const gitDir = await getGitDir(cwd, { cache: true, logErrors: false });
   if (!gitDir) return null;
+  return resolveHeadOidFromGitDir(gitDir);
+}
+
+/** {@link resolveHeadOidFromFs} for a caller that has already resolved the git dir. */
+export async function resolveHeadOidFromGitDir(gitDir: string): Promise<string | null> {
+  if (hasGitLocationEnvOverride()) return null;
   let head: string;
   try {
     head = (await fs.readFile(resolve(gitDir, "HEAD"), "utf-8")).trim();
