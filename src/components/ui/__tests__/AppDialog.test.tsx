@@ -8,8 +8,9 @@ import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 import { handleDockEscapeKeyDown } from "@/components/Layout/dockPopoverGuard";
+import { DockPopoverList } from "@/components/Layout/dockStatusPill";
 import {
-  setDockPopoverOpen,
+  registerDockPopoverLayer,
   _resetForTests as _resetDockPopoverForTests,
 } from "@/lib/dockPopoverLayer";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
@@ -1577,6 +1578,14 @@ describe("AppDialog layering over a dock popover", () => {
     return Array.from(el.classList).find((c) => c.startsWith("z-["));
   }
 
+  function showPopover(): () => void {
+    let release: () => void = () => {};
+    act(() => {
+      release = registerDockPopoverLayer();
+    });
+    return () => act(() => release());
+  }
+
   function renderDialogAt(zIndex?: "modal" | "nested") {
     const { unmount } = render(
       <AppDialog isOpen onClose={() => {}} {...(zIndex ? { zIndex } : {})}>
@@ -1599,13 +1608,13 @@ describe("AppDialog layering over a dock popover", () => {
   });
 
   it("clears the popover for a dialog that asked for no particular tier", () => {
-    act(() => setDockPopoverOpen(true));
+    showPopover();
 
     expect(renderDialogAt()).toBe(renderDialogAt("nested"));
   });
 
   it("promotes a destructive confirm, the case that must never be unreadable", () => {
-    act(() => setDockPopoverOpen(true));
+    showPopover();
     const { unmount } = render(
       <AppDialog isOpen onClose={() => {}} variant="destructive">
         <span>body</span>
@@ -1617,28 +1626,58 @@ describe("AppDialog layering over a dock popover", () => {
   });
 
   it("re-layers an already-open dialog when the popover appears underneath it", () => {
-    const { rerender } = render(
+    render(
       <AppDialog isOpen onClose={() => {}}>
         <span>body</span>
       </AppDialog>
     );
     const before = tierOf(screen.getByRole("dialog"));
 
-    act(() => setDockPopoverOpen(true));
-    rerender(
-      <AppDialog isOpen onClose={() => {}}>
-        <span>body</span>
-      </AppDialog>
-    );
+    showPopover();
 
     expect(tierOf(screen.getByRole("dialog"))).not.toBe(before);
   });
 
+  it("clears a status-pill popover for as long as its list is on screen (#13081)", () => {
+    // The kill confirm opened from a Waiting row: the popover stays open
+    // behind it, and the confirm must paint above it.
+    const modal = renderDialogAt("modal");
+    const nested = renderDialogAt("nested");
+    const popover = render(<DockPopoverList>row</DockPopoverList>);
+    render(
+      <AppDialog isOpen onClose={() => {}} variant="destructive">
+        <span>Kill terminal?</span>
+      </AppDialog>
+    );
+    const confirm = screen.getByRole("alertdialog");
+    expect(tierOf(confirm)).toBe(nested);
+
+    popover.unmount();
+
+    expect(tierOf(confirm)).toBe(modal);
+  });
+
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])("clears a list mounted in the same commit, %s the dialog", (_order, listFirst) => {
+    const nested = renderDialogAt("nested");
+    const list = <DockPopoverList key="list">row</DockPopoverList>;
+    const dialog = (
+      <AppDialog key="dialog" isOpen onClose={() => {}}>
+        <span>body</span>
+      </AppDialog>
+    );
+    render(<>{listFirst ? [list, dialog] : [dialog, list]}</>);
+
+    expect(tierOf(screen.getByRole("dialog"))).toBe(nested);
+  });
+
   it("drops back once the popover closes", () => {
-    act(() => setDockPopoverOpen(true));
+    const hide = showPopover();
     const promoted = renderDialogAt();
 
-    act(() => setDockPopoverOpen(false));
+    hide();
 
     expect(renderDialogAt()).not.toBe(promoted);
   });

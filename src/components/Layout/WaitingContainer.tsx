@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -287,7 +288,12 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
             if (killConfirmId !== null) e.preventDefault();
           }}
           onEscapeKeyDown={(e) => {
-            if (killConfirmId !== null) e.preventDefault();
+            if (killConfirmId === null) return;
+            e.preventDefault();
+            // Blocking alone left Escape closing nothing: AppDialog's backstop
+            // stands down while this popover is open unless the keypress is
+            // handed to the focused dialog.
+            handleDockEscapeKeyDown(e, null);
           }}
         >
           <div className="flex flex-col">

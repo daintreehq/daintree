@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { AgentState } from "@/types";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 
@@ -149,6 +150,13 @@ vi.mock("@/components/ui/popover", () => ({
   },
 }));
 
+const markEscapeYieldedMock = vi.fn();
+
+vi.mock("@/lib/dialogEscapeBackstop", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/dialogEscapeBackstop")>()),
+  markEscapeYieldedToDialog: (event: unknown) => markEscapeYieldedMock(event),
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
@@ -208,6 +216,7 @@ function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
 }
 
 beforeEach(() => {
+  markEscapeYieldedMock.mockReset();
   watchPanelMock.mockReset();
   unwatchPanelMock.mockReset();
   removePanelMock.mockReset();
@@ -224,6 +233,13 @@ beforeEach(() => {
   mockBackgroundedTerminals = new Map();
   mockWatchedPanels = new Set();
 });
+
+/** Where the real kill confirm holds focus: inside a backstop-managed dialog. */
+function focusInsideBackstopDialog() {
+  const dialog = screen.getByTestId("kill-confirm-dialog");
+  dialog.setAttribute(ESCAPE_BACKSTOP_DIALOG_ATTR, "");
+  within(dialog).getByRole("button", { name: "Cancel" }).focus();
+}
 
 describe("BackgroundContainer", () => {
   it("stays mounted but hidden when there are no backgrounded terminals", () => {
@@ -463,6 +479,7 @@ describe("BackgroundContainer", () => {
       popoverHandlers.onInteractOutside?.({ preventDefault });
       popoverHandlers.onEscapeKeyDown?.({ preventDefault });
       expect(preventDefault).not.toHaveBeenCalled();
+      expect(markEscapeYieldedMock).not.toHaveBeenCalled();
     });
 
     it("prevents dismiss when the kill confirm dialog is open", () => {
@@ -471,6 +488,8 @@ describe("BackgroundContainer", () => {
       // Open kill confirm to enter the guarded state.
       fireEvent.click(screen.getByTestId("bg-kill-button"));
       expect(screen.getByTestId("kill-confirm-dialog")).toBeTruthy();
+
+      focusInsideBackstopDialog();
 
       const pointer = { preventDefault: vi.fn() };
       const interact = { preventDefault: vi.fn() };
@@ -481,7 +500,27 @@ describe("BackgroundContainer", () => {
 
       expect(pointer.preventDefault).toHaveBeenCalledTimes(1);
       expect(interact.preventDefault).toHaveBeenCalledTimes(1);
-      expect(escape.preventDefault).toHaveBeenCalledTimes(1);
+      expect(escape.preventDefault).toHaveBeenCalled();
+      // Handed on to the confirm's backstop, or Escape closes nothing (#13081).
+      expect(markEscapeYieldedMock).toHaveBeenCalledWith(escape);
+    });
+
+    it("keeps Escape from a surface it cannot hand the keypress to", () => {
+      // Something above the confirm that the backstop does not manage: the
+      // yield would close the confirm underneath it instead.
+      mockTerminals = [makeTerminal({ id: "t1" })];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByTestId("bg-kill-button"));
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      outside.focus();
+
+      const escape = { preventDefault: vi.fn() };
+      popoverHandlers.onEscapeKeyDown?.(escape);
+
+      expect(escape.preventDefault).toHaveBeenCalled();
+      expect(markEscapeYieldedMock).not.toHaveBeenCalled();
+      outside.remove();
     });
   });
 

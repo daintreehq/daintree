@@ -10,6 +10,7 @@ import { renderHook, act } from "@testing-library/react";
 import { useOpenDockPopoverId, useDockPopoverLayerSync } from "../useOpenDockPopoverId";
 import {
   getDockPopoverOpen,
+  registerDockPopoverLayer,
   _resetForTests as _resetDockPopoverForTests,
 } from "@/lib/dockPopoverLayer";
 import { usePanelStore } from "@/store/panelStore";
@@ -155,6 +156,30 @@ describe("useDockPopoverLayerSync", () => {
     // that no longer exists.
     unmount();
 
+    expect(getDockPopoverOpen()).toBe(false);
+  });
+
+  it("leaves a status-pill popover's signal up when the docked one closes", () => {
+    renderHook(() => useDockPopoverLayerSync());
+    const releasePill = registerDockPopoverLayer();
+
+    act(() => {
+      usePanelStore.setState({ activeDockTerminalId: null });
+    });
+
+    expect(getDockPopoverOpen()).toBe(true);
+    releasePill();
+    expect(getDockPopoverOpen()).toBe(false);
+  });
+
+  it("leaves a status-pill popover's signal up when the view's publisher unmounts", () => {
+    const { unmount } = renderHook(() => useDockPopoverLayerSync());
+    const releasePill = registerDockPopoverLayer();
+
+    unmount();
+
+    expect(getDockPopoverOpen()).toBe(true);
+    releasePill();
     expect(getDockPopoverOpen()).toBe(false);
   });
 });
