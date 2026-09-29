@@ -311,7 +311,8 @@ export async function performSwitch(
             ? "View never painted: cached project view renderer gone during warm paint gate"
             : "View never painted: cached project view parked after warm paint gate timeout",
           context: { phase: "paint", projectId, waitedMs },
-          previousProjectId,
+          // Only name the previous project when it is actually back on screen.
+          previousProjectId: restoredView ? previousProjectId : null,
         });
         if (!host.disposed && !host.win.isDestroyed()) {
           reportSwitchFailure(unpaintedError, request?.requesterWebContentsId, restoredView);
