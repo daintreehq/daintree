@@ -14,11 +14,16 @@
  *
  * `src/components/ui/floatingSurface.ts` holds the floating-card chrome.
  *
- * Flagged: bare `shadow` and `inset-shadow`, and every step of Tailwind's stock
- * scale for both.
+ * Flagged: bare `shadow` and `inset-shadow`, every step of Tailwind's stock
+ * scale for both, and an arbitrary box shadow that reads no custom property
+ * (`shadow-[0_2px_8px_rgba(0,0,0,.3)]`), which hardcodes its colour just as
+ * the stock scale does.
  *
- * Not flagged: `shadow-none`, arbitrary values (`shadow-[...]`, `shadow-(...)`),
- * the repo's own named shadows, and shadow colour utilities (`shadow-tint/10`).
+ * Not flagged: `shadow-none`, arbitrary shadows that read a token
+ * (`shadow-[var(--theme-shadow-floating)]`, `shadow-(--my-shadow)`), the repo's
+ * own named shadows, shadow colour utilities (`shadow-tint/10`), and arbitrary
+ * `inset-shadow-[...]`, which this repo uses for a white top-edge bevel rather
+ * than a shadow.
  *
  * Opt out with:
  *   // eslint-disable-next-line component-contract/no-raw-shadow -- <reason>
@@ -39,6 +44,8 @@ export default {
     },
     schema: [],
     messages: {
+      hardcoded:
+        "`{{token}}` hardcodes its shadow colour, so it will not follow the theme. Read a theme token instead: `shadow-[var(--theme-shadow-floating)]` and its siblings. Genuine exceptions opt out with `// eslint-disable-next-line component-contract/no-raw-shadow -- <reason>`.",
       stock:
         "`{{token}}` is Tailwind's stock black shadow, so light themes lose their cool-slate shadow source. Use a theme token: `shadow-[var(--theme-shadow-ambient)]`, `shadow-[var(--theme-shadow-floating)]`, `shadow-[var(--theme-shadow-dialog)]` or `shadow-[var(--shadow-inset)]`. Genuine exceptions opt out with `// eslint-disable-next-line component-contract/no-raw-shadow -- <reason>`.",
     },
@@ -51,6 +58,11 @@ export default {
         const base = normalizeToken(token).base.replace(/\/[^/]*$/, "");
         if (STOCK.test(base)) {
           context.report({ node, messageId: "stock", data: { token: base } });
+        } else if (base.startsWith("shadow-[")) {
+          const body = base.slice("shadow-[".length, -1);
+          if (!body.includes("var(") && !body.startsWith("--")) {
+            context.report({ node, messageId: "hardcoded", data: { token: base } });
+          }
         }
       }
     });

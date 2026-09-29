@@ -29,8 +29,12 @@ describe("no-raw-shadow", () => {
         code: 'const a = <div className="shadow-tint/10" />;',
       },
       {
-        name: "arbitrary values are someone else's decision",
-        code: 'const a = <div className="inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] shadow-(--my-shadow)" />;',
+        name: "arbitrary shadows that read a token",
+        code: 'const a = <div className="shadow-(--my-shadow) shadow-[--my-shadow] shadow-[0_0_15px_rgb(from_var(--theme-accent-primary)_r_g_b/0.3)]" />;',
+      },
+      {
+        name: "an inset bevel highlight",
+        code: 'const a = <div className="inset-shadow-[0_1px_0_rgba(255,255,255,0.15)]" />;',
       },
       {
         name: "a drop-shadow filter is not a box shadow",
@@ -86,6 +90,11 @@ describe("no-raw-shadow", () => {
         name: "a class-string constant",
         code: 'const CARD_SURFACE_CLASS = "border shadow-md";',
         errors: [{ messageId: "stock", data: { token: "shadow-md" } }],
+      },
+      {
+        name: "an arbitrary shadow with a literal colour",
+        code: 'const a = <div className="hover:shadow-[0_2px_8px_rgba(0,0,0,0.3)]" />;',
+        errors: [{ messageId: "hardcoded", data: { token: "shadow-[0_2px_8px_rgba(0,0,0,0.3)]" } }],
       },
       {
         name: "inside cn()",
