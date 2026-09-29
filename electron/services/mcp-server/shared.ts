@@ -187,6 +187,12 @@ export const MAX_PORT_RETRIES = 10;
 export const MCP_SSE_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
+ * Cadence of the SSE comment heartbeat on an open `/sse` stream. Well inside
+ * undici's 300 s body timeout, which is what Claude Code's client applies.
+ */
+export const MCP_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+
+/**
  * Lifetime of a renderer-approved session-tier elevation (the tier-mismatch
  * banner's "Set project default", via {@link minimumPermittingTier}). After
  * this window the session silently decays back to its pre-elevation baseline
