@@ -581,6 +581,9 @@ function getProjectOpenErrorMessage(error: unknown, directoryPath?: string): str
     }
     const failure = getProjectOpenFailure(error.code, directoryPath);
     if (failure) return failure.message;
+    // Main-authored copy, e.g. a switch the paint gate cancelled (#13035) —
+    // the technical `message` would otherwise reach the toast below.
+    if (error.userMessage?.trim()) return error.userMessage;
   }
 
   const message = formatErrorMessage(error, "");
