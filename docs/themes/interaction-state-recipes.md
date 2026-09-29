@@ -165,6 +165,42 @@ Pinned by `src/components/Layout/__tests__/dockFamily.contract.test.ts` and the 
 
 ---
 
+### Popover Header
+
+**Role:** The strip across the top of any popover that has a title: the dock status popovers, the pane-header chip popovers (subagents, notices), the Codex session finder, recent tool calls, PR checks. Also the rules for the chips that open them and the small controls inside them.
+
+```tsx
+<div className={POPOVER_HEADER_CLASS}>
+  <span id={headingId} className={POPOVER_TITLE_CLASS}>
+    Codex sessions in this folder
+  </span>
+  <Button
+    variant="ghost"
+    size="icon-xs"
+    className={POPOVER_HEADER_ACTION_CLASS}
+    aria-label="Refresh sessions"
+  >
+    …
+  </Button>
+</div>
+```
+
+**Usage:** All from `src/components/ui/popoverHeader.ts`. `DOCK_POPOVER_HEADER_CLASS` and `DOCK_POPOVER_ROW_HOVER_CLASS` are the same constants under the dock's names.
+
+- **Title strip** — `px-3 py-2`, `border-b border-divider`, no fill: the popover is the surface. The title is `text-xs font-medium` in secondary ink, because the list below is the content; a qualifier beside or under it is `POPOVER_HEADER_META_CLASS`. The popover takes `aria-labelledby` pointing at the title. A popover whose first line is a computed verdict rather than a name (PR checks: "2 checks failing") keeps the strip but gives the verdict primary ink, since it is the answer the reader opened it for.
+- **Field strip** — a strip that holds a field (a search, the project name) keeps `p-3` so the field has room, and shares only the divider. The forge dropdowns' search strip, the worktree filter, the project identity editor and the event filters all do this. It is not a title strip, so it never takes the title padding.
+- **Palette search strip** — the palette family's header (`AppPaletteDialog.Header`, and `FleetPickerContent`, which mounts in both the palette and the fleet popover) keeps the palette's `border-border-strong`, as does the Cmd+K HUD. That family has its own recipe and is not a popover header.
+- **Rules** inside a popover (header, footer, section breaks) are `border-divider`. Not `border-[var(--border-divider)]`, not `border-border-default`.
+- **Header actions** — an icon button in the strip is a ghost `icon-xs` Button with `POPOVER_HEADER_ACTION_CLASS`, which trims it into the strip's height and sits its 14px glyph on the strip's inset. A busy refresh stays focusable (`aria-disabled`, the spin is the busy state).
+- **Row hover** — `POPOVER_ROW_HOVER_CLASS`, the [List Row Hover](#list-row-hover) step. A row band that already rests on `overlay-subtle` (the fleet picker's worktree header) hovers to `overlay-hover`, one step up. Never a `tint/[…]` hover.
+- **Empty and loading** — an empty list is `EmptyState scale="popover"`; a loading list is a `Skeleton` in the rows' own shape, never a spinner and a sentence.
+- **Chip triggers** — a pane-header chip that opens a popover adds `HEADER_CHIP_TRIGGER_CLASS` (`src/components/Terminal/terminalHeaderChip.ts`): hover and open lift the fill to `overlay-medium`, one step over the chip's `overlay-soft` rest. A neutral chip's ink also steps to primary on hover; a toned chip (waiting, warning) keeps its tone. Open is read from `aria-expanded`, because a chip that is also a tooltip trigger carries the tooltip's `data-state`.
+- **Small icon buttons** in and around these popovers are ghost `icon-xs` Buttons with a 14px glyph (`[&_svg]:size-3.5`); an X that dismisses a row is `DismissButton`. Where the host clips (pane header, a popover's scroller), ring inside with `focus-visible:-outline-offset-2`.
+
+Pinned by `src/components/ui/__tests__/popoverHeaders.contract.test.ts`.
+
+---
+
 ### Highlighted Row
 
 **Role:** The one row a surface is on right now: the row in a palette, picker, autocomplete, menu or select that Enter (or a click) will act on; the selected record in a list-detail browser; the page a navigation list is showing (the settings sidebar, global and project). One mark for all of them, so a user learns it once.
@@ -474,6 +510,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
 | Dock Chip | `dockChipStyles.ts` (`DockedTerminalItem`, `DockedTabGroup`, `DockedNonPtyPanelItem`) | Neutral open lift shared with the status pills, 12px state glyph |
 | Dock Status Popover | `dockStatusPill.tsx` (`DockPopoverList`, Waiting/Background/Status/Trash) | Shared header, scroll-shadowed list, row hover, one-Tab-stop keyboard list |
+| Popover Header | `ui/popoverHeader.ts` (subagent, notify, Codex sessions, recent calls, dock popovers) | Divider strip with secondary title, ghost `icon-xs` actions, chip triggers that lift on hover and open |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |
 | Document Tab | `ui/document-tab.tsx` (`TabButton`, `PortalToolbar`, `HelpSessionTabs`) | Accent underline on a lifted fill, one close control, manual activation |
 | Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |

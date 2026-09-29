@@ -6,6 +6,7 @@ import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { cn } from "@/lib/utils";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -480,8 +481,9 @@ export function HelpSessionTabs({
       {onOpenSession && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={canOpenSession ? onOpenSession : undefined}
               // `aria-disabled`, not `disabled`. A truly disabled button is removed from
               // the tab order and stops firing pointer events, which takes its tooltip
@@ -489,18 +491,15 @@ export function HelpSessionTabs({
               // the one state that could not explain it.
               aria-disabled={!canOpenSession || undefined}
               className={cn(
-                "w-6 h-6 inline-flex items-center justify-center shrink-0",
-                "rounded-[var(--radius-sm)] text-text-secondary",
-                "transition-colors duration-150 ease-out",
-                canOpenSession
-                  ? "hover:text-text-primary hover:bg-overlay-subtle"
-                  : ARIA_DISABLED_CLASSES,
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                "shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2",
+                ARIA_DISABLED_CLASSES,
+                // Hover stays live for the tooltip, but lifts nothing it can't do.
+                "aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary aria-disabled:active:scale-100"
               )}
               aria-label="New session"
             >
-              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
+              <Plus aria-hidden="true" />
+            </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
             {canOpenSession

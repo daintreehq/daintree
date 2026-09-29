@@ -644,8 +644,13 @@ describe("NotificationCenterEntry roving focus props", () => {
     for (const label of [/^Dismiss /, /^Options for /]) {
       const control = screen.getByLabelText(label);
       for (let el: HTMLElement | null = control; el && el !== row; el = el.parentElement) {
-        expect(el.className).not.toMatch(/pointer-events-none/);
-        expect(el.className).not.toMatch(/(?:group-)?hover:pointer-events-auto/);
+        // The Button primitive's `[&_svg]:` (the glyph, not the control) and
+        // `disabled:` (a real disabled state) rules gate nothing on hover.
+        const own = el.className
+          .split(/\s+/)
+          .filter((c) => !c.startsWith("[&_") && !c.startsWith("disabled:"));
+        expect(own.join(" ")).not.toMatch(/pointer-events-none/);
+        expect(own.join(" ")).not.toMatch(/(?:group-)?hover:pointer-events-auto/);
       }
     }
   });

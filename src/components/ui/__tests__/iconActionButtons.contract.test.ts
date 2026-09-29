@@ -39,9 +39,8 @@ const SURVIVORS: Record<string, string> = {
   "src/components/DevPreview/ConsolePanel.tsx": "dev-preview console chrome",
   "src/components/Diagnostics/DiagnosticsDock.tsx": "diagnostics dock chrome",
   "src/components/Diagnostics/ProblemsContent.tsx": "diagnostics dock chrome",
-  // Row and ribbon families whose dismiss shares one class with the menu,
-  // exit and disarm controls beside it; changing the X alone would split them.
-  "src/components/Notifications/NotificationCenterEntry.tsx": "ROW_CONTROL_CLASS row family",
+  // A ribbon family whose dismiss shares one class with the exit and disarm
+  // controls beside it; changing the X alone would split them.
   "src/components/Fleet/FleetArmingRibbon.tsx": "FLEET_RIBBON_ICON_BUTTON_CLASS ribbon family",
   // A round remove control inside a suggestion chip, paired with its add.
   "src/components/Settings/VoiceInputSettingsTab.tsx": "suggestion chip",

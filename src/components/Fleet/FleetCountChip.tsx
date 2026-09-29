@@ -23,6 +23,7 @@ import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
+import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 
 interface FleetCountChipProps {
   armedCount: number;
@@ -248,7 +249,10 @@ export function FleetCountChip({
                     // mousedown and mouseup.
                     <li
                       key={id}
-                      className="flex items-center gap-2 rounded-[var(--radius-md)] hover:bg-tint/[0.08]"
+                      className={cn(
+                        "flex items-center gap-2 rounded-[var(--radius-md)]",
+                        POPOVER_ROW_HOVER_CLASS
+                      )}
                     >
                       <button
                         type="button"
@@ -309,7 +313,7 @@ export function FleetCountChip({
                 })
               )}
             </ul>
-            <div className="mt-1 border-t border-border-default/50 pt-1">
+            <div className="mt-1 border-t border-divider pt-1">
               <Button
                 variant="ghost"
                 size="sm"

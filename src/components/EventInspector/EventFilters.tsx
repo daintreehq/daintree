@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Check, ListFilter } from "lucide-react";
@@ -262,7 +263,12 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
           </div>
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
             {Object.keys(groupedTypes).length === 0 ? (
-              <p className="px-1 pb-1 text-xs text-text-secondary">No events captured yet</p>
+              <EmptyState
+                variant="zero-data"
+                scale="popover"
+                title="No events captured yet"
+                className="py-6"
+              />
             ) : null}
             {Object.entries(groupedTypes).map(([category, types]) => (
               <div key={category}>
