@@ -27,6 +27,8 @@ import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { logError } from "@/utils/logger";
+import type { SafeBootResult } from "@/lib/bootPromise";
+import { inferKind } from "@shared/utils/inferPanelKind";
 
 import { serializePtyPanel } from "./terminal/serializer";
 import { createTerminalDefaults } from "./terminal/defaults";
@@ -98,6 +100,50 @@ const LazyFileBrowserPane = lazyWithPreload(
   () => import("./file-browser/FileBrowserPane"),
   (m) => m.FileBrowserPane
 );
+
+const FIRST_RENDER_PANE_PRELOADERS: Partial<Record<BuiltInPanelKind, () => Promise<unknown>>> = {
+  browser: LazyBrowserPane.preload,
+  "dev-preview": LazyDevPreviewPane.preload,
+  review: LazyReviewPane.preload,
+  file: LazyFilePane.preload,
+  diff: LazyDiffPane.preload,
+  "file-browser": LazyFileBrowserPane.preload,
+};
+
+/**
+ * Start fetching the pane chunks for the panel kinds a restored session is
+ * about to render. Called from the entry shell the moment the `app:boot`
+ * payload lands — well before App mounts and hydration mounts the panes — so a
+ * restored file/diff/browser pane loads in parallel with the App chunk instead
+ * of being discovered after hydration. Only kinds flagged `firstRenderRestore`
+ * are warmed; unknown and plugin kinds are skipped. Failures are swallowed: the
+ * pane's own lazy boundary retries the import and reports the error.
+ */
+export function preloadRestoredPanes(kinds: Iterable<string | undefined>): void {
+  const seen = new Set<string>();
+  for (const kind of kinds) {
+    if (!kind || seen.has(kind)) continue;
+    seen.add(kind);
+    if (!isBuiltInPanelKind(kind) || getPanelKindConfig(kind)?.firstRenderRestore !== true) {
+      continue;
+    }
+    FIRST_RENDER_PANE_PRELOADERS[kind]?.().catch(() => {});
+  }
+}
+
+/**
+ * {@link preloadRestoredPanes} for the `app:boot` payload. Kinds are normalized
+ * the way panel restore does (`inferKind`), so a legacy snapshot with a missing
+ * or renamed kind warms the pane it will actually restore as. A failed boot
+ * warms nothing — hydration's live fallback leaves those panes to their lazy
+ * boundaries.
+ */
+export function preloadRestoredPanesFromBoot(boot: SafeBootResult): void {
+  if (!boot.ok) return;
+  const terminals = boot.result.appState?.terminals ?? [];
+  const projectId = boot.result.workspaceId ?? boot.result.project?.id ?? null;
+  preloadRestoredPanes(terminals.map((t) => inferKind(t, projectId)));
+}
 
 /**
  * Warm the pane chunks a user reaches for most (file browser, review, diff,

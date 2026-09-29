@@ -9,7 +9,7 @@ import "./lib/trustedTypesPolicy";
 // module comment for ordering semantics (#8820).
 import "./lib/bootIpcEager";
 
-import { initBuiltInPanelKinds } from "./panels/registry";
+import { initBuiltInPanelKinds, preloadRestoredPanesFromBoot } from "./panels/registry";
 initBuiltInPanelKinds();
 
 import { StrictMode } from "react";
@@ -39,6 +39,7 @@ import {
 import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
+import { getSafeBootPromise } from "./lib/bootPromise";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
@@ -105,6 +106,12 @@ async function bootstrap() {
   // without it the store stays null and the orchestrator's availability
   // subscription never gets a chance to reconcile (see issue #5158).
   void useAgentSettingsStore.getState().initialize();
+
+  // The restored session's pane chunks are not preloaded from index.html (that
+  // would charge every boot for every pane kind); warm just the kinds this
+  // session restores as soon as the boot payload names them, in parallel with
+  // the App chunk below.
+  void getSafeBootPromise().then(preloadRestoredPanesFromBoot);
 
   const { default: App } = await import("./App");
 

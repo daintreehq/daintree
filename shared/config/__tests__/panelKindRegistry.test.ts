@@ -524,16 +524,14 @@ describe("getFirstRenderPreloadSeeds", () => {
     clearPanelKindRegistry();
   });
 
-  it("is the panel seeds plus the app root, without dropping or duplicating any seed", () => {
-    const panelSeeds = getFirstRenderSeeds();
+  it("is the app root alone — restored panel chunks are warmed from the boot payload", () => {
     const preloadSeeds = getFirstRenderPreloadSeeds();
-    // Superset relationship: every panel seed survives, and exactly one extra
-    // entry (the app root) is added — so the preload/budget closure can't silently
-    // drop a panel chunk or balloon beyond the root.
-    expect(preloadSeeds).toEqual(expect.arrayContaining(panelSeeds));
-    expect(preloadSeeds).toContain(FIRST_RENDER_ROOT_SEED);
-    expect(preloadSeeds).toHaveLength(panelSeeds.length + 1);
-    expect(new Set(preloadSeeds).size).toBe(preloadSeeds.length);
+    // Every boot pays for the static preload set, so no session-dependent panel
+    // chunk may ride in it; the renderer preloads only the restored kinds.
+    expect(preloadSeeds).toEqual([FIRST_RENDER_ROOT_SEED]);
+    for (const panelSeed of getFirstRenderSeeds()) {
+      expect(preloadSeeds).not.toContain(panelSeed);
+    }
   });
 
   it("does not leak the app root back into the registry's own seed contract", () => {

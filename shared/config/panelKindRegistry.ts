@@ -128,10 +128,12 @@ export interface PanelKindConfig {
   /** Whether this panel kind should keep its runtime alive across project switches */
   keepAliveOnProjectSwitch?: boolean;
   /**
-   * Whether this panel kind's lazy chunk loads on the first-render path — i.e.
-   * a persisted panel of this kind restores synchronously from session state,
-   * pulling its `React.lazy()` chunk into the first-paint download. Drives the
-   * first-render chunk budget seed list (see `getFirstRenderSeeds`).
+   * Whether a persisted panel of this kind restores synchronously from session
+   * state, so its `React.lazy()` chunk is needed on the first-render path of a
+   * session that contains one. The entry shell warms exactly these chunks for
+   * the kinds named in the `app:boot` payload (`preloadRestoredPanes`); they are
+   * deliberately not in the static `<link rel="modulepreload">` set, which every
+   * boot pays for whether or not the session restores the kind.
    */
   firstRenderRestore?: boolean;
   /**
@@ -919,17 +921,22 @@ export function getFirstRenderSeeds(): string[] {
 export const FIRST_RENDER_ROOT_SEED = "src/App.tsx";
 
 /**
- * The full first-render seed set: the app root plus every `firstRenderRestore`
- * panel chunk. BOTH consumers of the first-render closure read this single
- * accessor — the `<link rel="modulepreload">` injection and the build-time seed
- * artifact the budget gate measures — so the preloaded set and the gated set are
- * derived from the same seeds and cannot drift (#9771). Kept separate from
- * {@link getFirstRenderSeeds} so that function stays the registry's own contract.
+ * The static first-render seed set: the chunks every cold boot needs whatever
+ * the restored session contains — today just the app root. BOTH consumers of
+ * the first-render closure read this single accessor — the
+ * `<link rel="modulepreload">` injection and the build-time seed artifact the
+ * budget gate measures — so the preloaded set and the gated set are derived from
+ * the same seeds and cannot drift (#9771).
+ *
+ * The `firstRenderRestore` panel chunks ({@link getFirstRenderSeeds}) are not
+ * part of it: preloading all of them from the HTML charged every boot ~245 KB
+ * gzip of file/diff/file-browser code most sessions never render. The renderer
+ * warms only the kinds the boot payload actually restores instead.
  *
  * @returns Root-relative source paths matching Vite manifest keys
  */
 export function getFirstRenderPreloadSeeds(): string[] {
-  return [FIRST_RENDER_ROOT_SEED, ...getFirstRenderSeeds()];
+  return [FIRST_RENDER_ROOT_SEED];
 }
 
 /**
