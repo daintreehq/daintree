@@ -40,7 +40,11 @@ vi.mock("fs", async () => {
   };
 });
 
-import { TopologyWatcher, type TopologyWatcherHost } from "../TopologyWatcher.js";
+import {
+  TopologyWatcher,
+  isTopologyEventPath,
+  type TopologyWatcherHost,
+} from "../TopologyWatcher.js";
 
 type FakeMonitor = Pick<WorktreeMonitor, "isMainWorktree">;
 
@@ -132,6 +136,108 @@ describe("TopologyWatcher", () => {
 
         expect(host.discoverAndSyncWorktrees).not.toHaveBeenCalled();
 
+        await vi.advanceTimersByTimeAsync(350);
+
+        expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("ignores a batch of in-worktree churn that changes no topology", async () => {
+      vi.useFakeTimers();
+      try {
+        watcher.startWatcher();
+        await vi.runAllTimersAsync();
+
+        parcelWatcherCallbacks[0]!(null, [
+          { type: "update", path: "/test/root/.git/worktrees/wt-1/index" },
+          { type: "create", path: "/test/root/.git/worktrees/wt-1/index.lock" },
+          { type: "update", path: "/test/root/.git/worktrees/wt-1/logs/HEAD" },
+          { type: "update", path: "/test/root/.git/worktrees/wt-1/COMMIT_EDITMSG" },
+        ]);
+        await vi.advanceTimersByTimeAsync(350);
+
+        expect(host.discoverAndSyncWorktrees).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["locked", "gitdir", "HEAD"])(
+      "reconciles when a worktree's %s file changes amid churn",
+      async (file) => {
+        vi.useFakeTimers();
+        try {
+          watcher.startWatcher();
+          await vi.runAllTimersAsync();
+
+          parcelWatcherCallbacks[0]!(null, [
+            { type: "update", path: "/test/root/.git/worktrees/wt-1/index" },
+            { type: "create", path: `/test/root/.git/worktrees/wt-1/${file}` },
+          ]);
+          await vi.advanceTimersByTimeAsync(350);
+
+          expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    );
+
+    it("still reconciles on an empty or errored batch", async () => {
+      vi.useFakeTimers();
+      try {
+        watcher.startWatcher();
+        await vi.runAllTimersAsync();
+
+        parcelWatcherCallbacks[0]!(new Error("boom"), [
+          { type: "update", path: "/test/root/.git/worktrees/wt-1/index" },
+        ]);
+        await vi.advanceTimersByTimeAsync(350);
+        expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1000);
+        parcelWatcherCallbacks[0]!(null, []);
+        await vi.advanceTimersByTimeAsync(350);
+        expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the pending debounce deadline when churn follows a real event", async () => {
+      vi.useFakeTimers();
+      try {
+        watcher.startWatcher();
+        await vi.runAllTimersAsync();
+
+        parcelWatcherCallbacks[0]!(null, [
+          { type: "delete", path: "/test/root/.git/worktrees/gone" },
+        ]);
+        await vi.advanceTimersByTimeAsync(20);
+        parcelWatcherCallbacks[0]!(null, [
+          { type: "update", path: "/test/root/.git/worktrees/wt-1/index" },
+        ]);
+        await vi.advanceTimersByTimeAsync(6);
+
+        expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not let a pending app-owned entry swallow an errored batch's churn", async () => {
+      vi.useFakeTimers();
+      try {
+        watcher.startWatcher();
+        await vi.runAllTimersAsync();
+        watcher.markPendingCreate("mine");
+
+        parcelWatcherCallbacks[0]!(new Error("overflow"), [
+          { type: "create", path: "/test/root/.git/worktrees/mine" },
+          { type: "update", path: "/test/root/.git/worktrees/mine/index" },
+        ]);
         await vi.advanceTimersByTimeAsync(350);
 
         expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
@@ -654,5 +760,30 @@ describe("TopologyWatcher", () => {
 
       expect(host.setActiveWorktree).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("isTopologyEventPath", () => {
+  const roots = ["/repo/.git/worktrees", "/private/repo/.git/worktrees"];
+
+  it.each([
+    ["/repo/.git/worktrees", true],
+    ["/repo/.git/worktrees/wt-1", true],
+    ["/private/repo/.git/worktrees/wt-1", true],
+    ["/repo/.git/worktrees/wt-1/locked", true],
+    ["/repo/.git/worktrees/wt-1/gitdir", true],
+    ["/repo/.git/worktrees/wt-1/HEAD", true],
+    ["/private/repo/.git/worktrees/wt-1/HEAD", true],
+    ["/repo/.git/worktrees/wt-1/index", false],
+    ["/repo/.git/worktrees/wt-1/commondir", true],
+    ["/repo/.git/worktrees/wt-1/config.worktree", true],
+    ["/repo/.git/worktrees/wt-1/reftable/tables.list", true],
+    ["/repo/.git/worktrees/wt-1/HEAD.lock", false],
+    ["/repo/.git/worktrees/wt-1/logs/HEAD", false],
+    ["/repo/.git/worktrees/wt-1/refs/bisect/bad", false],
+    ["/elsewhere/index", true],
+    ["/repo/.git/worktrees-other/wt-1/index", true],
+  ])("%s -> %s", (path, expected) => {
+    expect(isTopologyEventPath(roots, path)).toBe(expected);
   });
 });
