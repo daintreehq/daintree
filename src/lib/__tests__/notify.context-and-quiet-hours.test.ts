@@ -15,6 +15,7 @@ import {
   _resetActiveContextAccessorsForTest,
   _resetPendingSuppressedForTest,
 } from "../notify";
+import { UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS } from "../undoToast";
 import { useNotificationStore } from "../../store/notificationStore";
 import { useNotificationHistoryStore } from "../../store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "../../store/notificationSettingsStore";
@@ -733,6 +734,66 @@ describe("notify()", () => {
       const entries = useNotificationHistoryStore.getState().entries;
       expect(entries).toHaveLength(1);
       expect(entries[0]!.seenAsToast).toBe(false);
+      vi.useRealTimers();
+    });
+  });
+
+  describe("Undo toasts during quiet hours", () => {
+    const undoToast = (overrides: Record<string, unknown> = {}) =>
+      notify({
+        type: "success",
+        message: "Note deleted",
+        priority: "high",
+        transient: true,
+        duration: UNDO_TOAST_DURATION_MS,
+        action: { label: UNDO_ACTION_LABEL, onClick: vi.fn() },
+        ...overrides,
+      });
+
+    beforeEach(() => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      _setQuietUntil(Date.now() + 60_000);
+    });
+
+    it("still shows a toast whose action is Undo", () => {
+      undoToast();
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+
+    it("finds the Undo among several actions too", () => {
+      undoToast({
+        action: undefined,
+        actions: [
+          { label: "Open", onClick: vi.fn() },
+          { label: UNDO_ACTION_LABEL, onClick: vi.fn() },
+        ],
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+
+    it("lets a caller opt an Undo toast out with urgent: false", () => {
+      undoToast({ urgent: false });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+
+    it("still holds back a toast with any other action", () => {
+      undoToast({ action: { label: "Open", onClick: vi.fn() } });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+
+    it("survives scheduled quiet hours, not just the startup quiet period", () => {
+      _setQuietUntil(0);
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 8 * 60,
+        quietHoursWeekdays: [],
+      });
+      expect(isScheduledQuietHours()).toBe(true);
+      undoToast();
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
       vi.useRealTimers();
     });
   });

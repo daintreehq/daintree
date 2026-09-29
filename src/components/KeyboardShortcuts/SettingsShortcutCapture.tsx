@@ -11,6 +11,7 @@ import {
 } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { logError, logWarn } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -475,7 +476,7 @@ export function SettingsShortcutCapture({
       notify({
         type: "success",
         message: `Unbound ${conflict.description || conflict.actionId}`,
-        duration: 5000,
+        duration: UNDO_TOAST_DURATION_MS,
         priority: "high",
         // Time-bound Undo (5s) — must surface even during quiet hours, otherwise
         // the user has no path to recover from an accidental unbind.

@@ -19,6 +19,7 @@ import { worktreeClient, forgeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { notify } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -862,7 +863,7 @@ export function NewWorktreeDialog({
               // notify() defaults action-bearing toasts to duration 0, but the
               // Undo here is an optional, time-limited affordance — not a reason
               // to keep the confirmation on screen until manually dismissed.
-              duration: 5_000,
+              duration: UNDO_TOAST_DURATION_MS,
               action: {
                 label: "Undo",
                 onClick: undoOnClick,
