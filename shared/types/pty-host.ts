@@ -1076,6 +1076,11 @@ export interface PtyHostTerminalInfo {
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
   /**
+   * The process has exited. Narrower than `!hasPty`, which also folds in a kill
+   * still waiting on its exit — the host's project stats count those.
+   */
+  isExited?: boolean;
+  /**
    * Grid the live PTY holds, read off the node-pty handle when the query was
    * served (#11718). Absent when the handle is gone or unreadable — restore
    * builds a reconnected pane's xterm on this, so an unknown must never be
