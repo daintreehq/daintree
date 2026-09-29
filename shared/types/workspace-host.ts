@@ -439,6 +439,12 @@ export interface WorkspaceFetchResult {
    */
   hasRemote?: boolean;
   /**
+   * Oldest success timestamp among the remotes the call planned that settled
+   * on a success (fetched now or reused); absent when none did. The
+   * background fetch cadence anchors its next timer to it.
+   */
+  freshSince?: number;
+  /**
    * True when a NON-primary remote of the same call failed. The rest of this
    * result speaks only for the primary remote — deliberately, because an
    * auxiliary success must never vouch for the counts the card renders. That

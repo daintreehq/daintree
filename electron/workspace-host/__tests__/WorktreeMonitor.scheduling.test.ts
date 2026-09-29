@@ -238,6 +238,25 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("forwards the cadence run's freshness window to onScheduleFetch", async () => {
+      const onScheduleFetch = vi.fn().mockResolvedValue(undefined);
+      const callbacks = makeCallbacks({ onScheduleFetch });
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(6_000);
+      onScheduleFetch.mockClear();
+      // Past the longest background cadence delay.
+      await vi.advanceTimersByTimeAsync(6.5 * 60_000);
+
+      expect(onScheduleFetch).toHaveBeenCalledTimes(1);
+      const [id, isCurrent, force, prune, maxAgeMs] = onScheduleFetch.mock.calls[0]!;
+      expect([id, isCurrent, force, prune]).toEqual([TEST_WORKTREE.id, false, false, undefined]);
+      expect(typeof maxAgeMs).toBe("number");
+
+      monitor.stop();
+    });
+
     it("clears the fetch timer in stop()", async () => {
       const onScheduleFetch = vi.fn().mockResolvedValue(undefined);
       const callbacks = makeCallbacks({ onScheduleFetch });
