@@ -528,13 +528,15 @@ describe("ProjectViewManager — efficiency freeze", () => {
     manager.dispose(); // remove the bus listener so it doesn't leak into later tests
   });
 
-  it("wakes a frozen view on spawn-result reseed when its agent is now active", async () => {
+  it("wakes a frozen view on spawn-result lookup when its agent is now active", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
     const captured: Record<string, (...a: unknown[]) => void> = {};
     let agentState = "idle";
     const ptyClient = {
       getAllTerminalsAsync: vi.fn(async () => [{ id: "t1", projectId: "proj-a", agentState }]),
+      getTerminalAsync: vi.fn(async (id: string) => ({ id, projectId: "proj-a", agentState })),
+      getTerminalProjectId: vi.fn(() => "proj-a"),
       on: vi.fn((evt: string, h: (...a: unknown[]) => void) => {
         captured[evt] = h;
       }),
@@ -548,12 +550,13 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
     vi.mocked(unfreezeWebContents).mockClear();
 
-    // Agent became active after the freeze; a spawn-result triggers a reseed
-    // that now sees it, and the reseed's unfreezeActiveAgentViews() wakes it.
+    // Agent became active after the freeze; the spawn-result lookup sees it,
+    // and its unfreezeActiveAgentViews() pass wakes the view.
     agentState = "working";
-    captured["spawn-result"]?.();
-    await vi.advanceTimersByTimeAsync(0); // flush the async seed()
+    captured["spawn-result"]?.("t1", { success: true, id: "t1" });
+    await vi.advanceTimersByTimeAsync(0); // flush the async lookup
 
+    expect(ptyClient.getTerminalAsync).toHaveBeenCalledWith("t1");
     expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
     manager.dispose();
   });
