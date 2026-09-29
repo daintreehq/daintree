@@ -45,7 +45,8 @@ export function CustomPresetChrome({
   const renameInputRef = useRef<HTMLInputElement>(null);
   // Enter and Escape unmount the input that has focus. Hand focus back to the
   // rename button then — but not after an ordinary blur, where the user already
-  // put focus somewhere else on purpose.
+  // put focus somewhere else on purpose. Set, it also marks the edit settled, so
+  // the blur the unmount brings can't commit a cancel or commit twice.
   const restoreFocusRef = useRef(false);
   const errorId = useId();
   // Select-all on entry, like every inline rename: a new name usually replaces
@@ -86,7 +87,9 @@ export function CustomPresetChrome({
                 className="w-auto min-w-0 flex-1 text-sm font-medium"
                 value={editName}
                 onChange={(e) => onEditNameChange(e.target.value)}
-                onBlur={() => void onCommitEdit()}
+                onBlur={() => {
+                  if (!restoreFocusRef.current) void onCommitEdit();
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     // An Enter that confirms an IME composition is text entry.

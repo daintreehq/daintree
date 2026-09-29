@@ -33,6 +33,7 @@ import {
   FormSection,
 } from "@/components/Worktree/views";
 import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
+import { getAgentConfig } from "@/config/agents";
 import { cn } from "@/lib/utils";
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
@@ -89,7 +90,7 @@ const TERMINAL_TYPES: RecipeTerminalType[] = [
   "dev-preview",
 ];
 
-const TYPE_LABELS: Record<RecipeTerminalType, string> = {
+const TYPE_LABELS: Partial<Record<RecipeTerminalType, string>> = {
   terminal: "Terminal",
   claude: "Claude",
   gemini: "Gemini",
@@ -97,6 +98,19 @@ const TYPE_LABELS: Record<RecipeTerminalType, string> = {
   opencode: "OpenCode",
   "dev-preview": "Dev server",
 };
+
+/**
+ * The editable types, plus the terminal's own when a captured recipe carries an
+ * agent the editor doesn't offer — a Select shows nothing for a value with no
+ * item, so dropping it would blank the field and invite a silent retype.
+ */
+function terminalTypeOptions(current: RecipeTerminalType): RecipeTerminalType[] {
+  return TERMINAL_TYPES.includes(current) ? TERMINAL_TYPES : [...TERMINAL_TYPES, current];
+}
+
+function terminalTypeLabel(type: RecipeTerminalType): string {
+  return TYPE_LABELS[type] ?? getAgentConfig(type)?.name ?? type;
+}
 
 const FAILURE_PRESERVE_CAPTION = "Failures always preserve terminal for debugging";
 
@@ -372,7 +386,9 @@ export function RecipeEditor({
     return (
       <FormRow label="After exit" htmlFor={id} hint={hint(helpId, FAILURE_PRESERVE_CAPTION)}>
         <Select
-          value={terminal.exitBehavior || defaultValue}
+          // `normalizeExitBehavior`, not the raw field: a QuickRun capture can
+          // carry "restart", which has no item here and would blank the trigger.
+          value={normalizeExitBehavior(terminal) || defaultValue}
           onValueChange={(value) =>
             handleTerminalChange(index, "exitBehavior", value === defaultValue ? "" : value)
           }
@@ -563,9 +579,9 @@ export function RecipeEditor({
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {TERMINAL_TYPES.map((type) => (
+                            {terminalTypeOptions(terminal.type).map((type) => (
                               <SelectItem key={type} value={type}>
-                                {TYPE_LABELS[type]}
+                                {terminalTypeLabel(type)}
                               </SelectItem>
                             ))}
                           </SelectContent>

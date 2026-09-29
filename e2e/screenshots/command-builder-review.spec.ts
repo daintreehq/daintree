@@ -25,6 +25,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
 import path from "path";
 import { startPreviewServer, stubViteHmrClient } from "../helpers/previewHarness";
+import { chooseSelectOption } from "../helpers/select";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_COMMAND_BUILDER;
 const OUT_DIR = process.env.DAINTREE_SHOT_DIR ?? "";
@@ -122,7 +123,7 @@ async function executed(page: Page): Promise<void> {
 
 /** The wizard walked to its last step with the first checkbox ticked and the second keyboard-focused. */
 async function wizardToLastStep(page: Page): Promise<void> {
-  await dialog(page).getByRole("combobox").selectOption("canary");
+  await chooseSelectOption(dialog(page).getByRole("combobox"), /^Canary/);
   await dialog(page).getByRole("textbox").fill("spring-cleanup");
   await primary(page).click();
   await dialog(page).getByRole("spinbutton").fill("25");
@@ -204,7 +205,7 @@ test("Command builder — states and themes", async ({ page }) => {
     await load(page, `${t}&fixture=wizard`);
     written.push(await snap(page, `09-wizard-step1--${theme}.png`, 2));
 
-    await dialog(page).getByRole("combobox").selectOption("canary");
+    await chooseSelectOption(dialog(page).getByRole("combobox"), /^Canary/);
     await dialog(page).getByRole("textbox").fill("spring-cleanup");
     await primary(page).click();
     await dialog(page).getByRole("spinbutton").fill("400");

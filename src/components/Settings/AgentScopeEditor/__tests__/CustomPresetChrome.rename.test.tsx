@@ -47,18 +47,35 @@ describe("custom preset rename", () => {
     expect(props.onCommitEdit).not.toHaveBeenCalled();
   });
 
-  it("commits on Enter and on blur, and cancels on Escape", () => {
+  it("commits on an ordinary blur", () => {
+    const { props } = renderChrome();
+    fireEvent.blur(screen.getByTestId("preset-edit-input"));
+    expect(props.onCommitEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits once for Enter, however the field is blurred after it", () => {
     const { props } = renderChrome();
     const input = screen.getByTestId("preset-edit-input");
-
     fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
     expect(props.onCommitEdit).toHaveBeenCalledTimes(1);
+  });
 
+  it("commits nothing for Escape, including from the blur after it", () => {
+    const { props } = renderChrome();
+    const input = screen.getByTestId("preset-edit-input");
+    fireEvent.keyDown(input, { key: "Escape" });
+    fireEvent.blur(input);
+    expect(props.onCancelEdit).toHaveBeenCalledTimes(1);
+    expect(props.onCommitEdit).not.toHaveBeenCalled();
+  });
+
+  it("stays editable and commits again on blur when Enter's name is refused", () => {
+    const { props } = renderChrome({ onCommitEdit: vi.fn(() => false) });
+    const input = screen.getByTestId("preset-edit-input");
+    fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.blur(input);
     expect(props.onCommitEdit).toHaveBeenCalledTimes(2);
-
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(props.onCancelEdit).toHaveBeenCalledTimes(1);
   });
 
   it("returns focus to the rename button after Escape", () => {

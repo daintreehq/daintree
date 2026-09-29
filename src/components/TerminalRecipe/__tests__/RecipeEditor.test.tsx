@@ -93,6 +93,21 @@ describe("RecipeEditor", () => {
     }
   });
 
+  // A select shows nothing for a value it has no item for, so every stored
+  // value a recipe can carry has to land on a named choice.
+  it("names the stored type and exit behaviour of a captured terminal", () => {
+    renderEditor({
+      ...RECIPE,
+      terminals: [
+        { type: "terminal", title: "Loop", command: "npm run w", exitBehavior: "restart", env: {} },
+        { type: "no-such-agent", title: "Other", env: {} },
+      ],
+    });
+    for (const id of ["terminal-exit-behavior-0", "terminal-type-1"]) {
+      expect(document.getElementById(id)?.textContent?.trim(), id).toBeTruthy();
+    }
+  });
+
   it("names each terminal card as a group, with a remove button that says which", () => {
     renderEditor(RECIPE);
     const groups = screen
