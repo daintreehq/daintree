@@ -9,6 +9,10 @@ import { fileSearchCacheInvalidator } from "./fileSearchCacheInvalidation.js";
 import { projectSwitchStatusTiming } from "../ProjectSwitchStatusTiming.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent, WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
+import {
+  applyWorktreeTick,
+  worktreeTickMatches,
+} from "../../../shared/utils/worktreeSnapshotTick.js";
 
 export type EmitFn = (event: string | symbol, ...args: unknown[]) => boolean;
 
@@ -47,6 +51,13 @@ export class WorkspaceHostEventRouter {
   private pruneRetainedToastKeys = new Set<string>();
 
   private pendingSysWorktreeUpdates = new Map<string, WorktreeSnapshot>();
+  // Last full snapshot per worktree for each host run, so a `worktree-tick`
+  // can be expanded back into the `worktree-update` every consumer below
+  // expects. Held by reference, like the sys-bus queue above.
+  private lastWorktreeSnapshots = new WeakMap<
+    ProcessEntry,
+    { epoch: string; byId: Map<string, WorktreeSnapshot> }
+  >();
   private sysWorktreeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
@@ -63,10 +74,48 @@ export class WorkspaceHostEventRouter {
     this.forgeCredentialChangeAt.set(providerId, Date.now());
   }
 
+  private lastWorktreeSnapshotsFor(
+    entry: ProcessEntry,
+    epoch: string
+  ): Map<string, WorktreeSnapshot> {
+    let record = this.lastWorktreeSnapshots.get(entry);
+    // A new epoch is a new host run whose monitors start from full snapshots.
+    if (!record || record.epoch !== epoch) {
+      record = { epoch, byId: new Map() };
+      this.lastWorktreeSnapshots.set(entry, record);
+    }
+    return record.byId;
+  }
+
   routeHostEvent(entry: ProcessEntry, event: WorkspaceHostEvent): void {
     switch (event.type) {
+      case "worktree-tick": {
+        const base = this.lastWorktreeSnapshotsFor(entry, event.epoch).get(event.tick.worktreeId);
+        if (!base || !worktreeTickMatches(base, event.tick)) break;
+        this.routeHostEvent(entry, {
+          type: "worktree-update",
+          worktree: applyWorktreeTick(base, event.tick),
+          epoch: event.epoch,
+          seq: event.seq,
+        });
+        break;
+      }
+
       case "worktree-update": {
         const worktree = event.worktree;
+        const bases = this.lastWorktreeSnapshotsFor(entry, event.epoch);
+        const base = bases.get(worktree.id);
+        // A retired monitor can still land a late snapshot after its
+        // replacement's; it must not become the base the replacement's ticks
+        // are checked against.
+        if (
+          !base ||
+          base.generation === undefined ||
+          worktree.generation === undefined ||
+          worktree.generation >= base.generation
+        ) {
+          bases.set(worktree.id, worktree);
+        }
         if (worktree.path) {
           this.worktreePathToProject.set(path.resolve(worktree.path), entry.projectPath);
         }
@@ -149,6 +198,7 @@ export class WorkspaceHostEventRouter {
       }
 
       case "worktree-removed":
+        this.lastWorktreeSnapshots.get(entry)?.byId.delete(event.worktreeId);
         sendToEntryWindows(entry, CHANNELS.WORKTREE_REMOVE, {
           worktreeId: event.worktreeId,
         });

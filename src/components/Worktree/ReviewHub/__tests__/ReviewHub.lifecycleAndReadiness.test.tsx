@@ -370,11 +370,13 @@ describe("ReviewHub", () => {
     ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
-    onUpdateMock.mockImplementation((_type: string, callback: (data: unknown) => void) => {
+    onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
       // The component subscribes to the per-view worktree port; tests keep
       // driving it with a plain WorktreeState by wrapping it in the port
       // event envelope here.
-      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
+      if (type === "worktree-update") {
+        capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
+      }
       return mockUnsubscribe;
     });
 

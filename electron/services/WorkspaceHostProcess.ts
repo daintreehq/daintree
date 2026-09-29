@@ -1286,6 +1286,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       // `lifecycle-setup-error` (router calls notifyError) were both dropped
       // here before #10778, so their downstream router cases never fired.
       case "worktree-update":
+      case "worktree-tick":
       case "worktree-removed":
       case "worktree-activated":
       case "pr-detected":
