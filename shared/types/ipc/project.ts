@@ -266,7 +266,7 @@ export interface ProjectStatusEntry extends AssistantPresenceEntry {
    * Waiting agents whose `waitingReason` is `"error"` — settled after a blocking
    * failure, where input may not unblock them. A subset of
    * {@link ProjectStatusEntry.waitingAgentCount}, never additional to it: the
-   * switcher reports "needs input" for the remainder and "blocked" for these,
+   * switcher reports "waiting" for the remainder and "blocked" for these,
    * so double-counting would overstate both.
    */
   blockedAgentCount: number;

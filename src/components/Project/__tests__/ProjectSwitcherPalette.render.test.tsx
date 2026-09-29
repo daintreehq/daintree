@@ -238,14 +238,14 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
       />
     );
     // A project that needs the user outranks one that is merely busy.
-    expect(screen.getByText("3 need input")).toBeTruthy();
+    expect(screen.getByText("3 waiting")).toBeTruthy();
   });
 
   it("singularises a lone waiting agent", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 1 })]} />
     );
-    expect(screen.getByText("1 needs input")).toBeTruthy();
+    expect(screen.getByText("1 waiting")).toBeTruthy();
   });
 
   it("ages the oldest wait", () => {
@@ -260,7 +260,7 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
         ]}
       />
     );
-    expect(screen.getByText("2 need input")).toBeTruthy();
+    expect(screen.getByText("2 waiting")).toBeTruthy();
   });
 
   it("reports blocked agents alongside the plain waits, not instead of them", () => {
@@ -272,7 +272,7 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     );
     // An agent stopped on an error is a different ask than one at a prompt, but
     // the two still waiting must not vanish behind it.
-    expect(screen.getByText("2 need input · 1 blocked")).toBeTruthy();
+    expect(screen.getByText("2 waiting · 1 blocked")).toBeTruthy();
   });
 
   it("reports running agents as a count rather than a sentence", () => {
@@ -511,7 +511,7 @@ describe("ProjectSwitcherPalette liveness axis", () => {
 
     // Purely additive: the tier that won the line is unchanged, so a row that
     // gained the count did not lose anything to it.
-    const demand = (row: HTMLElement) => within(row).getByText("1 needs input");
+    const demand = (row: HTMLElement) => within(row).getByText("1 waiting");
     expect(demand(churning).textContent).toBe(demand(stalled).textContent);
     expect(demand(churning).className).toBe(demand(stalled).className);
   });
@@ -532,10 +532,10 @@ describe("ProjectSwitcherPalette liveness axis", () => {
     // and it carries its own hue, because greying it made it read as an
     // afterthought rather than as the answer.
     const count = within(churning).getByTestId("workspace-running-count");
-    const demand = within(churning).getByText("1 needs input");
+    const demand = within(churning).getByText("1 waiting");
     expect(count.compareDocumentPosition(demand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(count.className).not.toBe(demand.className);
-    expect(count.textContent).not.toContain("need input");
+    expect(count.textContent).not.toContain("waiting");
   });
 
   it("keeps the assistant's phrase out of the hue a launched run wears", () => {
@@ -657,7 +657,7 @@ describe("ProjectSwitcherPalette liveness axis", () => {
     render(<ProjectSwitcherPalette {...baseProps} results={[]} scratchResults={[busyScratch]} />);
 
     const row = screen.getByRole("option", { name: /Spike.*2 agents running/s });
-    expect(within(row).getByText("1 needs input")).toBeTruthy();
+    expect(within(row).getByText("1 waiting")).toBeTruthy();
     expect(shareOf(row)).not.toBeNull();
   });
 
@@ -691,7 +691,7 @@ describe("ProjectSwitcherPalette liveness axis", () => {
     );
 
     const row = screen.getByRole("option", { name: /Spike.*2 agents running/s });
-    expect(within(row).getByText("1 needs input")).toBeTruthy();
+    expect(within(row).getByText("1 waiting")).toBeTruthy();
     expect(shareOf(row)).not.toBeNull();
   });
 });
@@ -755,7 +755,7 @@ describe("ProjectSwitcherPalette status conveyance", () => {
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 2 })]} />
     );
 
-    expect(screen.getByText("2 need input")).toBeTruthy();
+    expect(screen.getByText("2 waiting")).toBeTruthy();
     expect(screen.queryByLabelText("Agents waiting")).toBeNull();
     expect(screen.queryByLabelText("Idle")).toBeNull();
   });
@@ -1534,13 +1534,13 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
   it("states agent activity on a ranked scratch row", () => {
     render(<ProjectSwitcherPalette {...rankedProps({ waitingAgentCount: 2 })} />);
 
-    expect(screen.getByText("2 need input")).toBeTruthy();
+    expect(screen.getByText("2 waiting")).toBeTruthy();
   });
 
   it("states agent activity on a pinned scratch row", () => {
     render(<ProjectSwitcherPalette {...browseProps({ waitingAgentCount: 2 })} />);
 
-    expect(screen.getByText("2 need input")).toBeTruthy();
+    expect(screen.getByText("2 waiting")).toBeTruthy();
   });
 
   // In the ranked list a scratch sits among projects with no section header to
@@ -1647,13 +1647,13 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
         />
       );
 
-      expect(screen.getByText("waiting 1m")).toBeTruthy();
+      expect(screen.getByText("for 1m")).toBeTruthy();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
       });
 
-      expect(screen.getByText("waiting 2m")).toBeTruthy();
+      expect(screen.getByText("for 2m")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }

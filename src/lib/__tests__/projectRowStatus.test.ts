@@ -94,7 +94,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("2 need input · 1 blocked");
+    expect(demandLine(status)).toBe("2 waiting · 1 blocked");
     expect(status.tone).toBe("blocked");
   });
 
@@ -110,7 +110,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("1 needs input · 1 blocked · oldest 42m");
+    expect(demandLine(status)).toBe("1 waiting · 1 blocked · oldest 42m");
   });
 
   it("clamps a blocked count that exceeds the waits it is drawn from", () => {
@@ -126,7 +126,7 @@ describe("getProjectRowStatus", () => {
   it("ranks a wait above work in progress", () => {
     const status = getProjectRowStatus(project({ waitingAgentCount: 1, activeAgentCount: 4 }), NOW);
 
-    expect(demandLine(status)).toBe("1 needs input");
+    expect(demandLine(status)).toBe("1 waiting");
     expect(status.tone).toBe("waiting");
   });
 
@@ -136,7 +136,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("3 need input · oldest 42m");
+    expect(demandLine(status)).toBe("3 waiting · oldest 42m");
   });
 
   it("drops the 'oldest' qualifier when only one agent waits", () => {
@@ -145,13 +145,13 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("1 needs input · waiting 7m");
+    expect(demandLine(status)).toBe("1 waiting · for 7m");
   });
 
   it("omits the age when no wait timestamp arrived", () => {
     const status = getProjectRowStatus(project({ waitingAgentCount: 2 }), NOW);
 
-    expect(demandLine(status)).toBe("2 need input");
+    expect(demandLine(status)).toBe("2 waiting");
   });
 
   it("reads a fresh unseen completion as just finished", () => {
@@ -600,7 +600,7 @@ describe("getScratchRowStatus", () => {
       NOW
     );
 
-    expect(status.text).toContain("needs input");
+    expect(status.text).toContain("1 waiting");
     expect(status.tone).toBe("waiting");
   });
 });
@@ -846,7 +846,7 @@ describe("assistant presence status lines (#11806)", () => {
       NOW
     );
 
-    expect(status.text).toContain("need input");
+    expect(status.text).toContain("2 waiting");
   });
 
   it("reports a working assistant rather than the snooze beneath it", () => {

@@ -491,7 +491,7 @@ function RowStatusLine({ status }: { status: ProjectRowStatus }) {
            * The visible dot is hidden from assistive tech and a comma stands in
            * for it, because the tokens are adjacent inline elements with no
            * whitespace between them: without this the row's accessible name
-           * runs together as "2 agents running1 needs inputwaiting 10m".
+           * runs together as "2 agents running1 waitingfor 10m".
            */}
           {index > 0 && (
             <>
