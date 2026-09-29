@@ -21,10 +21,9 @@ const inFlightWorktreeChanges = new Map<
   { promise: Promise<WorktreeChanges>; signal: AbortSignal | undefined }
 >();
 
-// Oversized-repo warnings fire once per cwd and re-arm only when a later fetch
+// Oversized-repo warning fires once per cwd and re-arms only when a later fetch
 // measures the count back under the cap. Not cleared on cache invalidation:
-// watcher events invalidate constantly on exactly the repos that trip these.
-const warnedLargeNumstat = new Set<string>();
+// watcher events invalidate constantly on exactly the repos that trip it.
 const warnedLargeUntracked = new Set<string>();
 
 export function invalidateWorktreeCache(cwd: string): void {
@@ -39,20 +38,50 @@ export interface DiffStat {
 }
 
 // Per-file diff stat cache: skips redundant `git diff --numstat` work for files
-// whose (HEAD OID, path, mtime, size) tuple is unchanged since last refresh.
-// HEAD OID participates in the key, so commits/resets/checkouts self-invalidate.
+// whose (HEAD OID, status code, path, mtime, size) tuple is unchanged since last
+// refresh. HEAD OID participates in the key, so commits/resets/checkouts
+// self-invalidate; the porcelain XY code catches index-only moves that leave
+// the file itself untouched (`git rm --cached` turns a modification into a
+// deletion). With those in the key no TTL is needed — a timed expiry would only
+// re-spawn the diff for an answer that cannot have changed. LRU maxSize bounds
+// memory.
 const PER_FILE_DIFF_STAT_CACHE = new Cache<string, DiffStat>({
   maxSize: 2000,
-  defaultTTL: 300_000,
+  defaultTTL: Number.POSITIVE_INFINITY,
 });
+
+// Budget for pathspec characters per `git diff` spawn. Windows caps the whole
+// command line at 32,767 chars, and the hardened `-c` config plus the binary
+// path take a few KB of that.
+const NUMSTAT_ARGV_CHAR_BUDGET = 16_000;
+
+function batchPathsForArgv(paths: string[]): string[][] {
+  const batches: string[][] = [];
+  let current: string[] = [];
+  let chars = 0;
+  for (const path of paths) {
+    // +3: separating space plus quotes Windows may add around the argument.
+    const cost = path.length + 3;
+    if (current.length > 0 && chars + cost > NUMSTAT_ARGV_CHAR_BUDGET) {
+      batches.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(path);
+    chars += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
 
 function makeFileStatCacheKey(
   headOid: string,
+  statusCode: string,
   absolutePath: string,
   mtimeMs: number,
   size: number
 ): string {
-  return `${headOid}:${absolutePath}:${mtimeMs}:${size}`;
+  return `${headOid}:${statusCode}:${absolutePath}:${mtimeMs}:${size}`;
 }
 
 // Untracked-file line counts are a pure function of file content, so the key
@@ -67,7 +96,7 @@ function makeUntrackedLineCountCacheKey(
 }
 
 // Test-only: clear the per-file diff stat cache between cases. Production code
-// relies on (HEAD OID, mtime, size) self-invalidation and TTL eviction.
+// relies on (HEAD OID, mtime, size) self-invalidation and LRU eviction.
 export function __clearPerFileDiffStatCacheForTesting(): void {
   PER_FILE_DIFF_STAT_CACHE.clear();
 }
@@ -102,7 +131,7 @@ export function capCommitBody(body: string): string {
 
 const LAST_COMMIT_LOG_CACHE = new Cache<string, string>({
   maxSize: 100,
-  defaultTTL: 300_000,
+  defaultTTL: Number.POSITIVE_INFINITY,
 });
 
 export function __clearLastCommitLogCacheForTesting(): void {
@@ -578,18 +607,49 @@ export interface GetWorktreeChangesOptions {
   signal?: AbortSignal;
 }
 
+// One SimpleGit per (cancellation owner, route). Construction runs a
+// synchronous `fs.statSync` on the baseDir, which on a stalled mount blocks the
+// whole host loop; polling callers pass their monitor's long-lived signal, so
+// reusing the instance takes that off every pass. Keyed on the signal because
+// the abort plugin is bound at construction: a stopped-then-restarted monitor
+// gets a fresh signal and so a fresh instance, and the old entries go with the
+// dead signal. The per-pass `fs.stat(cwd)` still classifies a removed worktree
+// before any spawn.
+const GIT_FOR_CHANGES_BY_SIGNAL = new WeakMap<AbortSignal, Map<string, SimpleGit>>();
+
 async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Promise<SimpleGit> {
+  const signal = opts.signal;
   if (opts.wsl) {
+    const key = `wsl:${opts.wsl.distro}:${opts.wsl.uncPath}`;
+    const cached = signal ? GIT_FOR_CHANGES_BY_SIGNAL.get(signal)?.get(key) : undefined;
+    if (cached) return cached;
     try {
       // `await` so a rejected factory promise lands in this catch and falls
       // back, matching the previous synchronous-throw behaviour.
-      return await createWslHardenedGit(opts.wsl, opts.signal);
+      const git = await createWslHardenedGit(opts.wsl, signal);
+      if (signal) cacheGitForChanges(signal, key, git);
+      return git;
     } catch {
       // Fall back to native git if the WSL invocation is rejected (e.g. wrong
       // platform, missing distro). Polling continues using the slower path.
+      // The fallback is not cached under the WSL key, so each pass retries.
     }
   }
-  return createHardenedGit(cwd, opts.signal);
+  const key = `native:${cwd}`;
+  const cached = signal ? GIT_FOR_CHANGES_BY_SIGNAL.get(signal)?.get(key) : undefined;
+  if (cached) return cached;
+  const git = await createHardenedGit(cwd, signal);
+  if (signal) cacheGitForChanges(signal, key, git);
+  return git;
+}
+
+function cacheGitForChanges(signal: AbortSignal, key: string, git: SimpleGit): void {
+  let bySignal = GIT_FOR_CHANGES_BY_SIGNAL.get(signal);
+  if (!bySignal) {
+    bySignal = new Map();
+    GIT_FOR_CHANGES_BY_SIGNAL.set(signal, bySignal);
+  }
+  bySignal.set(key, git);
 }
 
 export async function getWorktreeChangesWithStats(
@@ -624,7 +684,6 @@ export async function getWorktreeChangesWithStats(
   }
 
   const fetchPromise = (async () => {
-    const MAX_FILES_FOR_NUMSTAT = 100;
     const MAX_UNTRACKED_FILES = 200;
     // stat instead of access: the (dev, ino) pair doubles as the validity
     // check for the static-info cache below. Error mapping is unchanged.
@@ -694,14 +753,23 @@ export async function getWorktreeChangesWithStats(
       // miss we spawn the log and store the result; empty-repo paths yield
       // headOid="" and are not cached (always spawn).
       const cachedLog = headOid ? LAST_COMMIT_LOG_CACHE.get(headOid) : undefined;
+      let logSucceeded = false;
       const logOutput =
         cachedLog !== undefined
           ? cachedLog
-          : await git.raw(["log", "-1", LAST_COMMIT_LOG_FORMAT]).catch(() => "");
+          : await git.raw(["log", "-1", LAST_COMMIT_LOG_FORMAT]).then(
+              (output) => {
+                logSucceeded = true;
+                return output;
+              },
+              () => ""
+            );
       // The fallback above also swallows a cancellation; an empty log from a
       // killed child must not sit in the cache as this commit's answer.
       options.signal?.throwIfAborted();
-      if (headOid && cachedLog === undefined) {
+      // Only a real answer is cached: the cache never expires, so a transient
+      // failure stored here would blank this commit's metadata until eviction.
+      if (headOid && logSucceeded) {
         LAST_COMMIT_LOG_CACHE.set(headOid, logOutput);
       }
 
@@ -728,8 +796,7 @@ export async function getWorktreeChangesWithStats(
       }
 
       // Deduplicate: a partially-staged file appears in both `modified` and
-      // `staged`, and double-counting wastes the 100-file budget reserved for
-      // the per-file cache fast path.
+      // `staged`; double-counting would stat and diff the same path twice.
       const trackedChangedFiles = [
         ...new Set([
           ...status.modified,
@@ -739,9 +806,6 @@ export async function getWorktreeChangesWithStats(
           ...status.staged,
         ]),
       ];
-      if (trackedChangedFiles.length <= MAX_FILES_FOR_NUMSTAT) {
-        warnedLargeNumstat.delete(cwd);
-      }
       if (status.not_added.length <= MAX_UNTRACKED_FILES) {
         warnedLargeUntracked.delete(cwd);
       }
@@ -749,18 +813,20 @@ export async function getWorktreeChangesWithStats(
       // Early stat pass: gather (mtimeMs, size) for each tracked file so we can
       // probe the per-file cache before shelling out to `git diff`. Stat failures
       // (e.g. deleted files) fall through to the cache-miss path, matching prior
-      // behaviour.
-      const useScopedDiff =
-        trackedChangedFiles.length > 0 &&
-        trackedChangedFiles.length <= MAX_FILES_FOR_NUMSTAT &&
-        headOid !== "";
+      // behaviour. Runs at any changeset size: a large agent refactor is exactly
+      // the case where re-diffing every file on every pass hurts most.
+      const useScopedDiff = trackedChangedFiles.length > 0 && headOid !== "";
 
       const cacheMissPaths: string[] = [];
       const hitStats = new Map<string, DiffStat>();
       const fileMetaByRel = new Map<
         string,
-        { absolutePath: string; mtimeMs: number; size: number }
+        { absolutePath: string; statusCode: string; mtimeMs: number; size: number }
       >();
+      const statusCodeByRel = new Map<string, string>();
+      for (const file of status.files ?? []) {
+        statusCodeByRel.set(file.path, `${file.index}${file.working_dir}`);
+      }
       const absPathToMeta = new Map<string, { mtimeMs: number; size: number }>();
 
       if (useScopedDiff) {
@@ -777,10 +843,11 @@ export async function getWorktreeChangesWithStats(
           const absolutePath = resolve(gitRoot, rel);
           const mtimeMs = result.value.mtimeMs;
           const size = result.value.size;
-          fileMetaByRel.set(rel, { absolutePath, mtimeMs, size });
+          const statusCode = statusCodeByRel.get(rel) ?? "";
+          fileMetaByRel.set(rel, { absolutePath, statusCode, mtimeMs, size });
           absPathToMeta.set(absolutePath, { mtimeMs, size });
           const cached = PER_FILE_DIFF_STAT_CACHE.get(
-            makeFileStatCacheKey(headOid, absolutePath, mtimeMs, size)
+            makeFileStatCacheKey(headOid, statusCode, absolutePath, mtimeMs, size)
           );
           if (cached) {
             hitStats.set(absolutePath, cached);
@@ -792,64 +859,50 @@ export async function getWorktreeChangesWithStats(
         for (const rel of trackedChangedFiles) cacheMissPaths.push(rel);
       }
 
+      // Paths ride argv, so a large miss set is split to stay under the
+      // platform command-line limit (Windows: 32,767 chars including git's own
+      // `-c` hardening). Only paths whose batch succeeded are cached — a
+      // failed batch must never be remembered as 0/0.
       let diffOutput = "";
-      let diffSucceeded = false;
-
-      try {
-        if (cacheMissPaths.length === 0) {
-          diffOutput = "";
-          diffSucceeded = true;
-        } else if (trackedChangedFiles.length > MAX_FILES_FOR_NUMSTAT) {
-          // Escape hatch: skip per-file caching and run an unscoped numstat over
-          // the first 100 files to keep argv length bounded.
-          const limitedFiles = trackedChangedFiles.slice(0, MAX_FILES_FOR_NUMSTAT);
-          diffOutput = await git.diff([
+      const diffedPaths: string[] = [];
+      for (const batch of batchPathsForArgv(cacheMissPaths)) {
+        try {
+          diffOutput += await git.diff([
             "--no-ext-diff",
             "--no-renames",
             "--numstat",
             "HEAD",
             "--",
-            ...limitedFiles,
+            ...batch,
           ]);
-          if (!warnedLargeNumstat.has(cwd)) {
-            warnedLargeNumstat.add(cwd);
-            logWarn("Large changeset detected; limiting numstat to first 100 files", {
-              cwd,
-              totalFiles: trackedChangedFiles.length,
-              limitedTo: MAX_FILES_FOR_NUMSTAT,
-            });
-          }
-        } else {
-          diffOutput = await git.diff([
-            "--no-ext-diff",
-            "--no-renames",
-            "--numstat",
-            "HEAD",
-            "--",
-            ...cacheMissPaths,
-          ]);
-          diffSucceeded = true;
+          for (const rel of batch) diffedPaths.push(rel);
+        } catch (error) {
+          if (options.signal?.aborted) throw error;
+          logWarn("Failed to read numstat diff; continuing without line stats", {
+            cwd,
+            message: (error as Error).message,
+          });
+          // The same failure (no HEAD, broken index) would repeat per batch.
+          break;
         }
-      } catch (error) {
-        if (options.signal?.aborted) throw error;
-        logWarn("Failed to read numstat diff; continuing without line stats", {
-          cwd,
-          message: (error as Error).message,
-        });
       }
 
       const diffStats = parseNumstat(diffOutput, gitRoot);
 
-      // Populate per-file cache with newly-computed stats from cache-miss files
-      // (only when the diff itself succeeded — never cache failure outcomes).
-      if (useScopedDiff && diffSucceeded) {
-        for (const rel of cacheMissPaths) {
+      if (useScopedDiff) {
+        for (const rel of diffedPaths) {
           const meta = fileMetaByRel.get(rel);
           if (!meta) continue;
           const stats = diffStats.get(meta.absolutePath);
           if (!stats) continue;
           PER_FILE_DIFF_STAT_CACHE.set(
-            makeFileStatCacheKey(headOid, meta.absolutePath, meta.mtimeMs, meta.size),
+            makeFileStatCacheKey(
+              headOid,
+              meta.statusCode,
+              meta.absolutePath,
+              meta.mtimeMs,
+              meta.size
+            ),
             stats
           );
         }
@@ -867,6 +920,8 @@ export async function getWorktreeChangesWithStats(
       const countFileLines = async (filePath: string): Promise<number | null> => {
         try {
           const stats = await fs.stat(filePath);
+          // Reused by the mtime pass below instead of a second stat.
+          absPathToMeta.set(filePath, { mtimeMs: stats.mtimeMs, size: stats.size });
           const MAX_FILE_SIZE = 10 * 1024 * 1024;
           if (stats.size > MAX_FILE_SIZE) {
             return null;
@@ -1052,6 +1107,18 @@ export async function getWorktreeChangesWithStats(
       // Cancelled by the caller: expected, not a git failure worth logging.
       if (options.signal?.aborted) {
         throw error;
+      }
+
+      // A spawn into a directory removed after the stat above also reports
+      // `spawn git ENOENT`; tell it apart from a missing binary by looking.
+      if (isMissingGitExecutableError(error)) {
+        const cwdGone = await fs.stat(cwd).then(
+          () => false,
+          (statError: NodeJS.ErrnoException) => statError.code === "ENOENT"
+        );
+        if (cwdGone) {
+          throw new WorktreeRemovedError(cwd, error instanceof Error ? error : undefined);
+        }
       }
 
       const errorMessage = formatErrorMessage(error, "Git worktree changes failed");
