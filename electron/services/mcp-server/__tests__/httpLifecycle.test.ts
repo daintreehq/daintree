@@ -36,7 +36,7 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { HttpLifecycle, sessionCredentialDigest } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
-import { minimumPermittingTier } from "../shared.js";
+import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { ResourceOwnershipLedger } from "../resourceOwnership.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
@@ -2071,6 +2071,100 @@ describe("HttpLifecycle", () => {
       }
       return handleRequest;
     }
+
+    describe("SSE heartbeat (#12994)", () => {
+      const KEEPALIVE = ": keepalive\n\n";
+
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      function keepalives(res: ReturnType<typeof recordingRes>): number {
+        return res.write.mock.calls.filter(([chunk]) => chunk === KEEPALIVE).length;
+      }
+
+      it("writes a comment line on the idle stream at every interval", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        expect(streamRes.write.mock.calls[0]?.[0]).toMatch(/^event: endpoint\n/);
+        expect(keepalives(streamRes)).toBe(0);
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS);
+        expect(keepalives(streamRes)).toBe(1);
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 20);
+        expect(keepalives(streamRes)).toBe(21);
+      });
+
+      it("keeps the session alive past undici's 300 s body timeout without touching its idle timer", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const resetIdleTimer = vi.spyOn(deps.sessionStore, "resetIdleTimer");
+        const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        const { idleTimer } = deps.sessionStore.sessions.get(sessionId)!;
+
+        vi.advanceTimersByTime(6 * 60 * 1000);
+
+        expect(keepalives(streamRes)).toBeGreaterThan(0);
+        expect(resetIdleTimer).not.toHaveBeenCalled();
+        expect(deps.sessionStore.sessions.get(sessionId)?.idleTimer).toBe(idleTimer);
+      });
+
+      it("stops when the client drops the stream", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        streamRes.emit("close");
+        expect(deps.sessionStore.sessions.has(sessionId)).toBe(false);
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 4);
+        expect(keepalives(streamRes)).toBe(0);
+      });
+
+      it("stops when the server closes the transport", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        await deps.sessionStore.sessions.get(sessionId)!.transport.close();
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 4);
+        expect(keepalives(streamRes)).toBe(0);
+      });
+
+      it("stops quietly when a write throws", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        streamRes.write.mockImplementation(() => {
+          throw new Error("write after end");
+        });
+
+        expect(() => vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS)).not.toThrow();
+        const attempts = streamRes.write.mock.calls.length;
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 4);
+        expect(streamRes.write.mock.calls.length).toBe(attempts);
+      });
+
+      it("never writes to a response that has already ended", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        (streamRes as unknown as { writableEnded: boolean }).writableEnded = true;
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 4);
+        expect(keepalives(streamRes)).toBe(0);
+      });
+    });
 
     describe("SSE /messages", () => {
       it("binds the session to its creator at handshake", async () => {
