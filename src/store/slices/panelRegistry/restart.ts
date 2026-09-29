@@ -543,8 +543,10 @@ export const createRestartActions = (
             effectiveAgentId,
             resolveKeepDecorations(runtimeForEnv.settings.effectiveEntry)
           );
-        if (nextAgentLaunchFlags && nextAgentLaunchFlags.length > 0) {
-          nextAgentLaunchFlags = reconcileFlags(nextAgentLaunchFlags);
+        // A caller-only snapshot is still a captured configuration: its empty
+        // settings-derived part gets the tokens the fresh command replays too.
+        if ((nextAgentLaunchFlags?.length ?? 0) > 0 || callerLaunchFlags.length > 0) {
+          nextAgentLaunchFlags = reconcileFlags(nextAgentLaunchFlags ?? []);
           resumeFlags = nextAgentLaunchFlags;
         } else {
           const injectedFromEmpty = reconcileFlags([]);
@@ -802,6 +804,13 @@ export const createRestartActions = (
           // restart falls through to the default shell.
           command: isDemotedAgent ? undefined : durableCommand,
           agentLaunchFlags: isAgent ? nextAgentLaunchFlags : t.agentLaunchFlags,
+          // Only the ownership the split trusted: a tail it rejected must not
+          // later claim settings-derived tokens that happen to end the list.
+          callerLaunchFlags: isAgent
+            ? callerLaunchFlags.length > 0
+              ? callerLaunchFlags
+              : undefined
+            : t.callerLaunchFlags,
           agentPresetId: nextAgentPresetId,
           agentPresetColor: nextAgentPresetColor,
           originalPresetId: nextOriginalPresetId,
@@ -1319,6 +1328,7 @@ export const createRestartActions = (
       isUsingFallback: terminal.isUsingFallback,
       fallbackChainIndex: terminal.fallbackChainIndex,
       agentLaunchFlags: terminal.agentLaunchFlags,
+      callerLaunchFlags: terminal.callerLaunchFlags,
       conversationCwd: terminal.conversationCwd,
     };
 
@@ -1424,6 +1434,7 @@ export const createRestartActions = (
           isUsingFallback: true,
           fallbackChainIndex: nextChainIndex,
           agentLaunchFlags: nextLaunchFlags,
+          callerLaunchFlags: callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
           agentSessionId: undefined,
           // The fallback starts a new conversation where the pane runs.
           conversationCwd: undefined,

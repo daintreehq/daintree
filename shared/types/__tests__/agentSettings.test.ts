@@ -975,6 +975,26 @@ describe("reconcileBypassFlags", () => {
       ).toEqual(["-c", "approval_policy=never", "-c", "model_reasoning_effort=high"]);
     });
 
+    // Another reconciler can rewrite part of a custom bypass (here the inline
+    // pass drops `--no-alt-screen`); the rest must still be recognised.
+    it("still recognises a bypass whose other option another reconciler removed", () => {
+      const mixed = "-c approval_policy=never --no-alt-screen";
+      const normalised = ["-c", "approval_policy=never", "-c", "model_reasoning_effort=high"];
+      expect(reconcileBypassFlags(normalised, "codex", false, mixed)).toEqual([
+        "-c",
+        "model_reasoning_effort=high",
+      ]);
+      const on = reconcileBypassFlags(normalised, "codex", true, mixed);
+      expect(on).toEqual([
+        "-c",
+        "approval_policy=never",
+        "--no-alt-screen",
+        "-c",
+        "model_reasoning_effort=high",
+      ]);
+      expect(reconcileBypassFlags(on, "codex", true, mixed)).toEqual(on);
+    });
+
     it("does not strip a lone token that is only part of the sequence", () => {
       const flags = ["-c", "model_reasoning_effort=high", "approval_policy=never"];
       expect(reconcileBypassFlags(flags, "codex", false, customBypass)).toEqual(flags);

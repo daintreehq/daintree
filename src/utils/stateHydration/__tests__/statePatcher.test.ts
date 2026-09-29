@@ -232,6 +232,37 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.cwd).toBe("/project");
   });
 
+  // #13046: Main doesn't track caller ownership, so the snapshot's is kept only
+  // while the live flag list still ends with it.
+  it("keeps the snapshot's caller flags while the live flags still end with them", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", agentLaunchFlags: ["--live", "--effort", "high"] },
+      {
+        id: "t1",
+        location: "grid",
+        agentLaunchFlags: ["--saved", "--effort", "high"],
+        callerLaunchFlags: ["--effort", "high"],
+      },
+      "/p"
+    );
+    expect(result.agentLaunchFlags).toEqual(["--live", "--effort", "high"]);
+    expect(result.callerLaunchFlags).toEqual(["--effort", "high"]);
+  });
+
+  it("drops the snapshot's caller flags when the live flags diverged", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", agentLaunchFlags: ["--effort", "high", "--live"] },
+      {
+        id: "t1",
+        location: "grid",
+        agentLaunchFlags: ["--effort", "high"],
+        callerLaunchFlags: ["--effort", "high"],
+      },
+      "/p"
+    );
+    expect(result.callerLaunchFlags).toBeUndefined();
+  });
+
   it("falls back to saved.launchAgentId when backend record lost it", () => {
     // Mirrors buildArgsForReconnectedFallback's saved-agentId recovery so a
     // PTY-host restart that wiped backend.launchAgentId doesn't strip the panel's
@@ -1761,6 +1792,33 @@ describe("buildArgsForRespawn", () => {
     expect(flags[flags.indexOf("model_reasoning_effort=high") - 1]).toBe("-c");
     expect(buildResumeCommandMock.mock.lastCall?.[2]?.slice(-2)).toEqual(caller);
     expect(result.callerLaunchFlags).toEqual(caller);
+  });
+
+  it("keeps a caller's `-c` override paired while a custom `-c` bypass is on", () => {
+    const caller = ["-c", "model_reasoning_effort=high"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "codex",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["-c", "approval_policy=never", ...caller],
+        callerLaunchFlags: caller,
+      },
+      "agent",
+      "/p",
+      {
+        agents: { codex: { dangerousEnabled: true, dangerousArgs: "-c approval_policy=never" } },
+      },
+      false,
+      undefined
+    );
+    const flags = result.agentLaunchFlags ?? [];
+    expect(flags.slice(-2)).toEqual(caller);
+    expect(flags.filter((flag) => flag === "approval_policy=never")).toHaveLength(1);
+    expect(flags[flags.indexOf("approval_policy=never") - 1]).toBe("-c");
   });
 
   // Regression: the inverse — when the preset still resolves, everything is preserved.

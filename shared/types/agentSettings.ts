@@ -453,6 +453,22 @@ export function resolveEffectiveBypass(
   return !!globalSkipPermissions && isAgentBypassSupported(agentId);
 }
 
+/** Splits args into options, each paired with the non-option value after it. */
+function optionGroups(tokens: readonly string[]): string[][] {
+  const groups: string[][] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] as string;
+    const next = tokens[index + 1];
+    if (token.startsWith("-") && next !== undefined && !next.startsWith("-")) {
+      groups.push([token, next]);
+      index += 1;
+    } else {
+      groups.push([token]);
+    }
+  }
+  return groups;
+}
+
 /**
  * Reconciles a persisted `agentLaunchFlags` snapshot against the current
  * effective bypass setting (#10432, the "resume trap").
@@ -473,10 +489,12 @@ export function resolveEffectiveBypass(
  * canonical token (no `DEFAULT_DANGEROUS_ARGS` entry and no `dangerousArgs`)
  * fall through the empty-strip-set guard below and are left untouched.
  *
- * Each bypass arg set is matched as a whole contiguous sequence, never token
- * by token: a custom Codex bypass like `-c approval_policy=never` shares its
- * `-c` with every other config override in the list, and stripping that `-c`
- * alone would orphan the value that followed it (#13046).
+ * Bypass args are matched one option group at a time — an option together with
+ * the value that follows it — never token by token: a custom Codex bypass like
+ * `-c approval_policy=never` shares its `-c` with every other config override
+ * in the list, and stripping that `-c` alone would orphan the value that
+ * followed it (#13046). Groups rather than the whole sequence, so a bypass
+ * whose other half another reconciler already rewrote is still recognised.
  *
  * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
  *   `entry.dangerousArgs`); falls back to `DEFAULT_DANGEROUS_ARGS[agentId]`.
@@ -491,30 +509,28 @@ export function reconcileBypassFlags(
   // Strip both the resolved args and the registry default: a snapshot may have
   // been captured before the user customized `dangerousArgs`, so cleaning only
   // the current value could leave a stale default flag behind.
-  const sequences: string[][] = [];
+  const groups: string[][] = [];
   for (const source of [resolved, DEFAULT_DANGEROUS_ARGS[agentId]]) {
-    const tokens = source?.trim().split(/\s+/).filter(Boolean) ?? [];
-    if (tokens.length > 0 && !sequences.some((seq) => seq.join(" ") === tokens.join(" "))) {
-      sequences.push(tokens);
+    for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {
+      if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
     }
   }
-  if (sequences.length === 0) return [...flags];
-  // Longest first, so a multi-token custom sequence wins over a default that
-  // happens to be one of its tokens.
-  sequences.sort((a, b) => b.length - a.length);
+  if (groups.length === 0) return [...flags];
+  // Longest first, so an option/value pair wins over a lone token of its own.
+  groups.sort((a, b) => b.length - a.length);
   // A standing instruction is free text that can equal a bypass token, and
   // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
   // either half would orphan the other — a lone value becomes the first-turn
   // prompt — so both are left alone.
   const instruction = systemPromptArgPositions(flags, agentId);
   const matchLengthAt = (index: number): number => {
-    for (const seq of sequences) {
+    for (const group of groups) {
       if (
-        seq.every(
+        group.every(
           (token, offset) => flags[index + offset] === token && !instruction.has(index + offset)
         )
       ) {
-        return seq.length;
+        return group.length;
       }
     }
     return 0;

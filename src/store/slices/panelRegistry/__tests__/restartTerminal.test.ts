@@ -6,6 +6,7 @@ const mockKill = vi.fn().mockResolvedValue(undefined);
 const mockGracefulKill = vi.fn().mockResolvedValue(null);
 const getMergedPresetMock = vi.hoisted(() => vi.fn().mockReturnValue(undefined));
 const buildAgentLaunchFlagsMock = vi.hoisted(() => vi.fn().mockReturnValue([]));
+const reconcileBypassFlagsMock = vi.hoisted(() => vi.fn((flags: readonly string[]) => [...flags]));
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -105,7 +106,7 @@ vi.mock("@shared/types", async () => {
     // Identity reconcile keeps persisted flags verbatim so these dispatch-path
     // tests stay focused on restart wiring rather than bypass reconciliation
     // (#10432, covered by agentSettings.test.ts and statePatcher.test.ts).
-    reconcileBypassFlags: (flags: readonly string[]) => [...flags],
+    reconcileBypassFlags: (flags: readonly string[]) => reconcileBypassFlagsMock(flags),
     resolveEffectiveBypass: () => false,
   };
 });
@@ -1705,5 +1706,45 @@ describe("restartTerminal keeps the caller's own launch flags", () => {
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.agentLaunchFlags).toEqual(["--rebuilt", ...caller]);
     expect(payload.command).toBe("claude --effort high");
+  });
+
+  // A caller-only snapshot is still a captured configuration: its (empty)
+  // settings-derived part is reconciled, so a now-wanted bypass is injected
+  // into the fresh launch rather than skipped.
+  it("reconciles the empty settings-derived part of a caller-only snapshot", async () => {
+    reconcileBypassFlagsMock.mockImplementationOnce((flags: readonly string[]) => [
+      ...flags,
+      "--bypass",
+    ]);
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentLaunchFlags: caller,
+      callerLaunchFlags: caller,
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([]);
+    expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--bypass", ...caller]);
+  });
+
+  it("clears caller ownership the stored flags no longer end with", async () => {
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentLaunchFlags: ["--effort", "high", "--persisted-flag"],
+      callerLaunchFlags: caller,
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    expect(panel).toMatchObject({ agentLaunchFlags: ["--effort", "high", "--persisted-flag"] });
+    expect(
+      panel && "callerLaunchFlags" in panel ? panel.callerLaunchFlags : undefined
+    ).toBeUndefined();
   });
 });
