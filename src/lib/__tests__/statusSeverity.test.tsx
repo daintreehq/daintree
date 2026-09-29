@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { SEVERITY_VISUAL, SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
+import {
+  SEVERITY_GLYPH,
+  SEVERITY_VISUAL,
+  SeverityMark,
+  type StatusSeverity,
+} from "@/lib/statusSeverity";
+import { SEVERITY_ICON } from "@/components/Terminal/InlineStatusBanner";
 
 const LEVELS: StatusSeverity[] = ["success", "error", "warning", "info"];
 
@@ -11,6 +17,15 @@ describe("SEVERITY_VISUAL", () => {
     // would be indistinguishable exactly where the palette has already gone.
     const icons = LEVELS.map((level) => SEVERITY_VISUAL[level].Icon);
     expect(new Set(icons).size).toBe(LEVELS.length);
+  });
+
+  it("draws from the one glyph table the banners, toasts and callouts share", () => {
+    // Log rows, pane banners and the toast for the same event must wear one
+    // mark, so neither table may keep a private copy of the shapes.
+    for (const level of LEVELS) {
+      expect(SEVERITY_VISUAL[level].Icon).toBe(SEVERITY_GLYPH[level]);
+      expect(SEVERITY_ICON[level]).toBe(SEVERITY_GLYPH[level]);
+    }
   });
 
   it("tones every level with a text colour, so it strokes in currentColor", () => {

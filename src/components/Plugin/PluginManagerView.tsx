@@ -2,15 +2,13 @@ import {
   Package,
   FilePlus,
   Link2,
-  Info,
   Download,
-  AlertCircle,
   AlertTriangle,
   ChevronDown,
   ChevronLeft,
   RefreshCw,
 } from "lucide-react";
-import { Callout } from "@/components/ui/Callout";
+import { Callout, CALLOUT_ICON, CALLOUT_ICON_TONE, calloutVariants } from "@/components/ui/Callout";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
@@ -70,6 +68,9 @@ import { FilterChip } from "@/components/ui/FilterChip";
 import { pluralize } from "@/lib/pluralize";
 
 const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
+
+// The attention strip is an error callout that is also a button.
+const FailedGlyph = CALLOUT_ICON.error;
 
 // How long the result count waits for typing to pause before it is announced.
 // Announcing every intermediate count queues a sentence per keystroke.
@@ -881,28 +882,30 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   // than stranding the keyboard on document.body.
                   searchInputRef.current?.focus();
                 }}
-                // Hover moves the border, not the fill: the danger text only
-                // just clears 4.5:1 on the resting tint, and a deeper hover tint
-                // dropped the screen's most urgent line below it.
-                className="w-full flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20 text-left transition-colors hover:border-status-danger/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                // Hover moves the border, not the fill: the words sit on the
+                // neutral ramp over the resting tint, and a deeper hover tint
+                // would eat into their contrast.
+                className={cn(
+                  calloutVariants({ severity: "error", size: "compact" }),
+                  "w-full items-center text-left transition-colors hover:border-status-danger/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                )}
               >
-                <AlertCircle
-                  className="w-3.5 h-3.5 text-status-danger shrink-0"
+                <FailedGlyph
+                  className={cn("w-3.5 h-3.5 shrink-0", CALLOUT_ICON_TONE.error)}
                   aria-hidden="true"
                 />
-                <span className="text-2xs text-status-danger min-w-0 flex-1">
+                <span className="text-2xs text-text-primary min-w-0 flex-1">
                   {pluralize(brokenCount, "plugin needs attention", "plugins need attention")}
                 </span>
-                <span className="text-2xs text-status-danger underline underline-offset-2 shrink-0">
+                <span className="text-2xs text-text-secondary underline underline-offset-2 shrink-0">
                   Show
                 </span>
               </button>
             )}
             {pm.notice && (
-              <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default">
-                <Info className="w-3.5 h-3.5 text-text-secondary shrink-0 mt-0.5" />
-                <p className="text-2xs text-text-secondary">{pm.notice}</p>
-              </div>
+              <Callout severity="neutral" size="compact">
+                <p>{pm.notice}</p>
+              </Callout>
             )}
             {/* Suppressed while a dialog is showing the same error inside
                 itself — otherwise the message renders twice, once of them

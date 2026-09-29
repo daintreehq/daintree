@@ -1,6 +1,16 @@
 import { useCallback, useState, useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
-import { Eye, EyeOff, Plus, X, Check, AlertCircle, ExternalLink, ChevronRight } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Plus,
+  X,
+  Check,
+  XCircle,
+  ExternalLink,
+  ChevronRight,
+  CheckCircle2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -832,7 +842,7 @@ function ApiKeyRow({
   const statusLine =
     status.kind === "saved" ? (
       <>
-        <Check
+        <CheckCircle2
           className={cn(
             "w-3.5 h-3.5 shrink-0",
             // Green only for a key the provider actually accepted.
@@ -846,7 +856,7 @@ function ApiKeyRow({
       </>
     ) : status.kind === "invalid" ? (
       <>
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
         {status.message}
       </>
     ) : status.kind === "removed" ? (
@@ -856,12 +866,12 @@ function ApiKeyRow({
       </>
     ) : status.kind === "remove-failed" ? (
       <>
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
         Couldn't remove the key. It's still saved, so you can try again.
       </>
     ) : status.kind === "save-failed" ? (
       <>
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
         Couldn't save the key. It's still in the field, so you can try Save again.
       </>
     ) : null;

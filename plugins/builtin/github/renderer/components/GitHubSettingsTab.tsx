@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Check, FlaskConical, ExternalLink, Import } from "lucide-react";
+import { Check, FlaskConical, ExternalLink, Import, CheckCircle2 } from "lucide-react";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
@@ -258,7 +258,7 @@ export function GitHubSettingsTab() {
   const tokenStatus =
     validationResult === "success" ? (
       <span className="flex items-center gap-1">
-        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <CheckCircle2 className="w-3 h-3 shrink-0" aria-hidden="true" />
         Checked and saved
       </span>
     ) : validationResult === "test-success" ? (

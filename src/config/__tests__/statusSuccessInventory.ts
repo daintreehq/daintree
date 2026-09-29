@@ -354,20 +354,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result carried by a success notification on the grid bar",
     },
   ],
-  "src/components/Terminal/MissingCliGate.tsx": [
-    {
-      category: "transient",
-      signature: "border-status-success/20 bg-status-success/10",
-      expectedOccurrences: 2,
-      rationale: "CLI-now-available banner; the gate stops rendering once it is seen",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "CLI-now-available banner; the gate stops rendering once it is seen",
-    },
-  ],
   "src/components/Worktree/CrossWorktreeDiff.tsx": [
     {
       category: "domain",
@@ -530,6 +516,21 @@ export const STATUS_SUCCESS_INVENTORY = {
       anchor: "↑{ahead}",
       expectedOccurrences: 1,
       rationale: "Ahead-arrow count against the upstream, as the sidebar card paints it",
+    },
+  ],
+  "src/components/ui/Callout.tsx": [
+    {
+      category: "outcome",
+      signature: "border-status-success/20 bg-status-success/10",
+      expectedOccurrences: 2,
+      rationale:
+        "The success tone of the shared callout primitive, for a result that just happened (a CLI detected on re-check)",
+    },
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale: "Glyph of the callout primitive's success tone, beside the result it reports",
     },
   ],
   "src/components/ui/ReEntrySummary.tsx": [

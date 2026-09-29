@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, CircleAlert } from "lucide-react";
+import { XCircle, CheckCircle2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -493,10 +493,10 @@ export function ImportConfigDialog() {
           >
             {/* Neutral, not success-green: a finished side step, not the outcome. */}
             {exportNote && !exportNote.failed && (
-              <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             )}
             {exportNote?.failed && (
-              <CircleAlert className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
+              <XCircle className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
             )}
             {exportNote?.text ?? "Save the current values before importing"}
           </p>

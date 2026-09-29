@@ -3,7 +3,7 @@ import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
   CheckCircle2,
-  CircleAlert,
+  XCircle,
   FolderInput,
   FolderSearch,
   HelpCircle,
@@ -629,7 +629,7 @@ function RelocationPreviewSection({
               key={`${blocker.reason}-${i}`}
               className="flex items-start gap-1.5 text-xs text-text-primary"
             >
-              <CircleAlert
+              <XCircle
                 className="mt-px h-3.5 w-3.5 shrink-0 text-status-error"
                 aria-hidden="true"
               />

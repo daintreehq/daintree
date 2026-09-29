@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { InlineError } from "@/components/ui/field";
-import { CheckCircle, AlertCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
+import { CheckCircle2, XCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
@@ -203,9 +203,9 @@ export function EditorIntegrationTab() {
       className="flex min-w-0 items-center gap-2 text-xs text-text-secondary"
     >
       {d.available ? (
-        <CheckCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Found" />
+        <CheckCircle2 className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Found" />
       ) : (
-        <AlertCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Not found" />
+        <XCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Not found" />
       )}
       <span
         className={cn(
@@ -328,7 +328,7 @@ export function EditorIntegrationTab() {
                       data-editor-missing=""
                       className="flex min-w-0 items-start gap-2 text-xs text-text-secondary"
                     >
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+                      <XCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
                       <span>
                         Not found: {missingEditors.map((d) => EDITOR_LABELS[d.id]).join(", ")}
                       </span>
@@ -435,7 +435,7 @@ export function EditorIntegrationTab() {
               <InlineError>{saveError}</InlineError>
             ) : testResult === "ok" ? (
               <span className="flex items-center gap-1">
-                <CheckCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Open requested
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Open requested
               </span>
             ) : testResult === "error" ? (
               <InlineError>Failed to open</InlineError>

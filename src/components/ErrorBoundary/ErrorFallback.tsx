@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Check, Copy, TriangleAlert } from "lucide-react";
+import { Check, Copy, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
@@ -158,7 +158,7 @@ export function ErrorFallback({
             isFullscreen ? "size-12" : isComponent ? "hidden size-8 @xs:flex" : "size-10"
           )}
         >
-          <TriangleAlert
+          <XCircle
             className={cn(
               "text-status-error",
               isFullscreen ? "size-6" : isComponent ? "size-4" : "size-5"

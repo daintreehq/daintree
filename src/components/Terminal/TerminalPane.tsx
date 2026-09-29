@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Plug, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
+import { AlertTriangle, Plug, RotateCcw, Hourglass, Folders } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -1520,7 +1520,6 @@ function TerminalPaneComponent({
 
       <BannerSlot visible={!suppressBackendDependent && showForceResumeStall}>
         <InlineStatusBanner
-          icon={OctagonAlert}
           severity="error"
           title="Terminal output stalled"
           description="Output keeps backing up faster than it can render. Reset the queue to recover."

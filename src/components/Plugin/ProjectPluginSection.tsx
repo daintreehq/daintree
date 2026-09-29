@@ -1,4 +1,4 @@
-import { AlertCircle, Package, RotateCw } from "lucide-react";
+import { AlertTriangle, Package, RotateCw, XCircle } from "lucide-react";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
@@ -102,7 +102,11 @@ function ProjectPluginRow({
                     failed ? "text-status-danger" : "text-status-warning"
                   )}
                 >
-                  <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  {failed ? (
+                    <XCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  )}
                   <span className="truncate">{failed ? "Error" : "Id clash"}</span>
                 </span>
               ) : (
@@ -226,7 +230,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             {plugin.state !== "active" && <Badge size="xs">{STATE_BADGE[plugin.state]}</Badge>}
             {plugin.loadError && (
               <Badge size="xs" tone="error">
-                <AlertCircle aria-hidden="true" />
+                <XCircle aria-hidden="true" />
                 Error
               </Badge>
             )}

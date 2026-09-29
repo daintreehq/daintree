@@ -54,7 +54,7 @@ export {
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
   NotebookPen, // a terminal's Scratchpad — throwaway notes kept beside that one pane
-  OctagonAlert, // a pane's CPU or memory in its red band — beside the neutral reading, so the number keeps its contrast and the band survives forced colors
+  OctagonAlert, // a severe caution that has not failed: a pane's CPU or memory in its red band, a Why slow? alert, a dangerous plugin capability, a destructive consequence — never a failure (that is XCircle), so the band survives forced colors as its own shape
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts

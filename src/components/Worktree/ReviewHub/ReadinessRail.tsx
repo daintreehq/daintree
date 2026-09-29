@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, CircleAlert, Info } from "lucide-react";
+import { ChevronDown, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import type {
   ReviewReadinessCta,
   ReviewReadinessItem,
@@ -23,16 +24,17 @@ const LEVEL_LABEL = {
  * Severity carries a distinct SHAPE, not just a hue. A `background-color` dot is
  * erased wholesale by `forced-colors: active`; a Lucide glyph strokes in
  * `currentColor` and survives it, which is also what the house rule in
- * `worktreeCIStatus.ts` asks for (terminal states get an icon).
+ * `worktreeCIStatus.ts` asks for (terminal states get an icon). The shapes are
+ * the app's `SEVERITY_GLYPH`, so a blocker here is the toast's failure mark.
  */
-const SEVERITY: Record<ReviewReadinessSeverity, { Icon: typeof CircleAlert; toneClass: string }> = {
-  blocker: { Icon: CircleAlert, toneClass: "text-status-error" },
-  warning: { Icon: AlertTriangle, toneClass: "text-status-warning" },
+const SEVERITY: Record<ReviewReadinessSeverity, { Icon: LucideIcon; toneClass: string }> = {
+  blocker: { Icon: SEVERITY_GLYPH.error, toneClass: "text-status-error" },
+  warning: { Icon: SEVERITY_GLYPH.warning, toneClass: "text-status-warning" },
   // `secondary`, not `muted`: with the level word sr-only the glyph is the only visual
   // severity carrier, so it owes the 3:1 non-text floor. `text-muted` is guarded at 3.5
   // for light themes ONLY (`shared/theme/contrast.ts`) and runs ~2.2:1 on dark built-ins;
   // `text-secondary` holds 3.0 against every display surface.
-  info: { Icon: Info, toneClass: "text-text-secondary" },
+  info: { Icon: SEVERITY_GLYPH.info, toneClass: "text-text-secondary" },
 };
 
 const GLYPH_CLASS = "w-3.5 h-3.5 shrink-0";

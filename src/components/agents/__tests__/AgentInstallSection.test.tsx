@@ -42,7 +42,8 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
-vi.mock("lucide-react", () => ({
+vi.mock("lucide-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("lucide-react")>()),
   RefreshCw: () => <span />,
   ExternalLink: () => <span />,
   TriangleAlert: () => <span />,

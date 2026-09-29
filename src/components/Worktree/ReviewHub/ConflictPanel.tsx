@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
 import { UI_EXIT_DURATION } from "@/lib/animationUtils";
 import {
-  CircleAlert,
+  XCircle,
   Check,
   ChevronRight,
   CircleDashed,
@@ -613,7 +613,7 @@ export function ConflictPanel({
                   }}
                   className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-sm text-xs hover:bg-overlay-subtle transition-colors"
                 >
-                  <CircleAlert className="w-3 h-3 shrink-0 text-status-error" aria-hidden />
+                  <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden />
                   <TruncatedTooltip
                     content={`${file.path} (${conflictKindLabel(file.label, isRebase)})`}
                   >

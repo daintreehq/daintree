@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Spinner } from "@/components/ui/Spinner";
-import { Globe, CircleAlert } from "lucide-react";
+import { Globe, XCircle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
@@ -64,7 +64,7 @@ export function DevServerIndicator({ session }: DevServerIndicatorProps) {
             aria-label="Dev server error"
             className="inline-flex items-center text-status-error shrink-0"
           >
-            <CircleAlert className="w-3 h-3 shrink-0" aria-hidden="true" />
+            <XCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
           </span>
         </TooltipTrigger>
         <TooltipContent side="top">{session.error?.message ?? "Dev server error"}</TooltipContent>

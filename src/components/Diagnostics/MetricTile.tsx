@@ -1,4 +1,4 @@
-import { CircleAlert, TriangleAlert } from "lucide-react";
+import { OctagonAlert, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type MetricTone = "default" | "warn" | "alert";
@@ -23,7 +23,7 @@ interface MetricTileProps {
  * text ramp, because status-coloured text drops below 4.5:1 on most themes.
  */
 export function MetricTile({ label, value, unit, tone = "default", hint }: MetricTileProps) {
-  const Glyph = tone === "alert" ? CircleAlert : tone === "warn" ? TriangleAlert : null;
+  const Glyph = tone === "alert" ? OctagonAlert : tone === "warn" ? TriangleAlert : null;
   return (
     <div
       data-tone={tone}

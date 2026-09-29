@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { TriangleAlert } from "lucide-react";
+import { XCircle } from "lucide-react";
 import { buildPluginViewDiagnostics } from "@/components/Plugin/buildPluginViewDiagnostics";
 import { Button } from "@/components/ui/button";
 import { StackLines } from "@/components/ErrorBoundary/StackLines";
@@ -137,7 +137,7 @@ export function PluginViewDiagnosticsFallback({
           aria-hidden="true"
           className="flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-lg)] bg-overlay-subtle"
         >
-          <TriangleAlert className="size-4 text-status-error" />
+          <XCircle className="size-4 text-status-error" />
         </div>
         <div className="flex min-w-0 flex-col gap-1">
           <h2

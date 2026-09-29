@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowUpCircle, RotateCw } from "lucide-react";
+import { XCircle, ArrowUpCircle, RotateCw } from "lucide-react";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
 
 /**
@@ -13,20 +13,20 @@ import type { LoadedPluginInfo } from "@shared/types/plugin";
  */
 export type PluginSignal = {
   label: string;
-  icon: typeof AlertCircle;
+  icon: typeof XCircle;
   /** Tailwind text colour for the whole signal. */
   tone: string;
 };
 
 export function pluginSignalFor(plugin: LoadedPluginInfo): PluginSignal | null {
   if (plugin.blocklisted === true) {
-    return { label: "Blocked", icon: AlertCircle, tone: "text-status-danger" };
+    return { label: "Blocked", icon: XCircle, tone: "text-status-danger" };
   }
   // A load failure outranks the user's own off switch: "I turned this off" and
   // "this could not start" have completely different recoveries, and only the
   // second one is a surprise.
   if (plugin.loadError) {
-    return { label: "Failed to load", icon: AlertCircle, tone: "text-status-danger" };
+    return { label: "Failed to load", icon: XCircle, tone: "text-status-danger" };
   }
   // Ahead of `disabled` deliberately: a pending restart means the switch the
   // user just flipped has NOT taken effect yet. Reporting a plain "Off" for a

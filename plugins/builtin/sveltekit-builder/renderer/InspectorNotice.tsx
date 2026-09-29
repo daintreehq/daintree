@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Info, X, XCircle } from "lucide-react";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 
 export type NoticeTone = "info" | "warning" | "error";
 
@@ -48,7 +49,7 @@ export function InspectorNotice({
    */
   density?: "default" | "compact";
 }) {
-  const Icon = tone === "error" ? XCircle : tone === "warning" ? AlertTriangle : Info;
+  const Icon = SEVERITY_GLYPH[tone];
   return (
     <div
       role={role}

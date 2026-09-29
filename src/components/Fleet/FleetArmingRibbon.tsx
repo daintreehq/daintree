@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
-  AlertCircle,
+  XCircle,
   AlertTriangle,
   CheckSquare,
   Clock,
@@ -140,7 +140,7 @@ function FleetRunStatusLine({
                 about; the words stay on a text token because the danger
                 colour sits under 4.5:1 on the amber fill. */}
             {segment.tone === "error" && (
-              <AlertCircle
+              <XCircle
                 className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
                 aria-hidden="true"
               />
@@ -693,7 +693,7 @@ export function FleetArmingRibbon(): ReactElement | null {
                   {progressFailed > 0 && (
                     <span className="font-medium text-text-primary">
                       {" · "}
-                      <AlertCircle
+                      <XCircle
                         className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
                         aria-hidden="true"
                       />
