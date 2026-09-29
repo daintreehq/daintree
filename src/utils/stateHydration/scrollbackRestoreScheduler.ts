@@ -21,6 +21,16 @@ function classifySchedulerError(error: unknown): TerminalScrollbackRestoreError 
 // them on re-submit.
 const lastBatchTaskMap = new Map<string, TerminalRestoreTask>();
 
+// A retry task is only actionable while its terminal exists; drop it when the
+// instance is destroyed so failed restores for closed panels don't accumulate.
+let unsubDestroyed: (() => void) | null = null;
+function ensureDestroyedListener(): void {
+  if (unsubDestroyed) return;
+  unsubDestroyed = terminalInstanceService.addInstanceDestroyedListener((id) => {
+    lastBatchTaskMap.delete(id);
+  });
+}
+
 function notifyRestoreListeners(): void {
   terminalInstanceService.notifyScrollbackRestoreListeners();
 }
@@ -34,6 +44,7 @@ export function scheduleScrollbackRestore(
     const managed = terminalInstanceService.get(task.terminalId);
     if (!managed || managed.scrollbackRestoreState !== "none") continue;
 
+    ensureDestroyedListener();
     lastBatchTaskMap.set(task.terminalId, task);
     managed.scrollbackRestoreState = "pending";
     scheduledAny = true;

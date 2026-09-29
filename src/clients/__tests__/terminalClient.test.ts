@@ -215,6 +215,33 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
+  it("drops in-flight chunks for a killed id instead of re-creating its early buffer", async () => {
+    const port = acquirePort();
+    port.postMessage({ type: "data", id: "term-dead", data: "before", bytes: 6 });
+    await new Promise((r) => setTimeout(r, 30));
+
+    void terminalClient.kill("term-dead");
+    port.postMessage({ type: "data", id: "term-dead", data: "late", bytes: 4 });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const received: string[] = [];
+    terminalClient.onData("term-dead", (d) => {
+      received.push(typeof d === "string" ? d : "bin");
+    });
+    expect(received).toEqual([]);
+
+    // Once revived, the id buffers again as normal.
+    void terminalClient.kill("term-revived");
+    await terminalClient.spawn({ id: "term-revived" } as never);
+    port.postMessage({ type: "data", id: "term-revived", data: "fresh", bytes: 5 });
+    await new Promise((r) => setTimeout(r, 30));
+    const revived: string[] = [];
+    terminalClient.onData("term-revived", (d) => {
+      revived.push(typeof d === "string" ? d : "bin");
+    });
+    expect(revived).toEqual(["fresh"]);
+  });
+
   it("evicts the OLDEST early-buffered chunks when the byte cap is exceeded", () => {
     const port = acquirePort();
 

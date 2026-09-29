@@ -10,6 +10,7 @@ const fetchAndRestoreMock = vi.fn();
 const getMock = vi.fn();
 const notifyRestoreSettledWaitersMock = vi.fn();
 const notifyScrollbackRestoreListenersMock = vi.fn();
+const destroyedListeners = new Set<(id: string) => void>();
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
@@ -17,6 +18,10 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     fetchAndRestore: (id: string) => fetchAndRestoreMock(id),
     notifyRestoreSettledWaiters: (id: string) => notifyRestoreSettledWaitersMock(id),
     notifyScrollbackRestoreListeners: () => notifyScrollbackRestoreListenersMock(),
+    addInstanceDestroyedListener: (cb: (id: string) => void) => {
+      destroyedListeners.add(cb);
+      return () => destroyedListeners.delete(cb);
+    },
   },
 }));
 
@@ -415,6 +420,24 @@ describe("retryFailedScrollbackRestoreBatch", () => {
     // Successful restore drops the captured task — a spurious retry must no-op.
     await getScheduledDoRestore(0)();
     expect(managed.scrollbackRestoreState).toBe("done");
+
+    scheduleBackgroundFetchAndRestoreMock.mockClear();
+    retryFailedScrollbackRestoreBatch(["t1"]);
+    expect(clearScrollbackRestoreErrorMock).not.toHaveBeenCalled();
+    expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
+  });
+
+  it("drops the retry task of a failed restore when its terminal is destroyed", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    fetchAndRestoreMock.mockImplementation(async () => {
+      managed.lastScrollbackRestoreError = { type: "error", message: "boom", timestamp: 1 };
+    });
+
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "a", location: "grid" }], () => true);
+    await getScheduledDoRestore(0)();
+
+    for (const cb of [...destroyedListeners]) cb("t1");
 
     scheduleBackgroundFetchAndRestoreMock.mockClear();
     retryFailedScrollbackRestoreBatch(["t1"]);
