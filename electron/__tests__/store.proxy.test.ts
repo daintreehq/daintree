@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import Conf from "conf";
 
 vi.mock("electron-store", async () => {
   const conf = await import("conf");
@@ -15,6 +16,22 @@ import {
   _resetStoreInstance,
   _peekStoreInstance,
 } from "../store.js";
+
+function initializeStoreForComparison(cwd: string) {
+  // The unproxied conf path the proxy's write-through must match byte for byte.
+  return new Conf({ defaults: { _schemaVersion: 0 }, cwd, configFileMode: 0o600 } as never) as {
+    set(key: string, value: unknown): void;
+    get(key: string): unknown;
+  };
+}
+
+function findStoreDescriptor(proto: object | null): PropertyDescriptor | undefined {
+  for (let p = proto; p; p = Object.getPrototypeOf(p)) {
+    const d = Object.getOwnPropertyDescriptor(p, "store");
+    if (d) return d;
+  }
+  return undefined;
+}
 
 describe("store Proxy", () => {
   let tempDir: string;
@@ -85,14 +102,131 @@ describe("store Proxy", () => {
       expect(store.get("_schemaVersion" as never)).toBe(0);
     });
 
-    it("invalidates on set() so the next read re-snapshots the file", () => {
+    it("writes set() through to the snapshot instead of re-reading the file", () => {
       initializeStore(testOptions(tempDir));
       expect(store.get("_schemaVersion" as never)).toBe(0);
       const configPath = path.join(tempDir, "config.json");
-      fs.writeFileSync(configPath, JSON.stringify({ _schemaVersion: 42, other: 1 }), "utf8");
+      const readSpy = vi.spyOn(fs, "readFileSync");
       store.set("other" as never, 2 as never);
-      expect(store.get("_schemaVersion" as never)).toBe(42);
       expect(store.get("other" as never)).toBe(2);
+      expect(store.get("_schemaVersion" as never)).toBe(0);
+      const configReads = readSpy.mock.calls.filter(([p]) => p === configPath).length;
+      readSpy.mockRestore();
+      // Only conf's __internal__ preservation read inside the store setter.
+      expect(configReads).toBeLessThanOrEqual(1);
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({
+        _schemaVersion: 0,
+        other: 2,
+      });
+    });
+
+    it("writes the same bytes conf's own set() would", () => {
+      const confDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-store-proxy-conf-"));
+      try {
+        initializeStore(testOptions(tempDir));
+        const direct = initializeStoreForComparison(confDir);
+        const ops: [string, unknown][] = [
+          ["appState", { sidebarWidth: 300, terminals: [{ id: "a" }], at: new Date(0) }],
+          ["nested.inner.value", 7],
+          ["nested.inner.other", { deep: [1, 2] }],
+          ["prim", 1],
+          ["prim.child", "replaces a primitive"],
+          ["list", [1, 2]],
+          ["list.0", "numeric segment falls back to conf"],
+          ["list.named", "array intermediate falls back to conf"],
+          ["nullable", null],
+          ["nullable.child", "replaces a null"],
+          ["dropped", { toJSON: () => undefined }],
+          ["kept", { inner: { toJSON: () => undefined }, n: Number.NaN }],
+          ["keyed", { toJSON: (key: string) => `serialized under ${key}` }],
+          ["protoHolder", JSON.parse('{"__proto__":{"x":1},"y":2}')],
+          ["protoHolder.b", "copying keeps an own __proto__ key"],
+          ["nested.inner.value", 8],
+        ];
+        for (const [key, value] of ops) {
+          store.set(key as never, value as never);
+          direct.set(key, value);
+          expect(store.get(key as never)).toEqual(direct.get(key));
+          expect(fs.readFileSync(path.join(tempDir, "config.json"), "utf8")).toBe(
+            fs.readFileSync(path.join(confDir, "config.json"), "utf8")
+          );
+        }
+        invalidateStoreValueCache();
+        for (const key of ["appState", "nested", "prim", "list", "nullable", "kept", "keyed"]) {
+          expect(store.get(key as never)).toEqual(direct.get(key));
+        }
+      } finally {
+        fs.rmSync(confDir, { recursive: true, force: true });
+      }
+    });
+
+    it("caches a JSON copy so the caller's object cannot alias the snapshot", () => {
+      initializeStore(testOptions(tempDir));
+      const value = { list: [1], when: new Date(0) };
+      store.set("obj" as never, value as never);
+      value.list.push(2);
+      expect(store.get("obj" as never)).toEqual({ list: [1], when: new Date(0).toISOString() });
+    });
+
+    it("keeps a nested write made by a change listener", () => {
+      initializeStore(testOptions(tempDir));
+      const instance = _peekStoreInstance() as unknown as {
+        onDidChange(key: string, cb: () => void): () => void;
+      };
+      let fired = false;
+      const off = instance.onDidChange("a", () => {
+        if (fired) return;
+        fired = true;
+        store.set("b" as never, 2 as never);
+      });
+      store.set("a" as never, 1 as never);
+      off();
+      expect(store.get("b" as never)).toBe(2);
+      store.set("c" as never, 3 as never);
+      const onDisk = JSON.parse(fs.readFileSync(path.join(tempDir, "config.json"), "utf8"));
+      expect(onDisk).toMatchObject({ a: 1, b: 2, c: 3 });
+    });
+
+    it("invalidates on appendToArray() so a later set() cannot drop the append", () => {
+      initializeStore(testOptions(tempDir));
+      store.set("list" as never, [] as never);
+      store.appendToArray("list" as never, 1 as never);
+      expect(store.get("list" as never)).toEqual([1]);
+      store.set("other" as never, 2 as never);
+      const onDisk = JSON.parse(fs.readFileSync(path.join(tempDir, "config.json"), "utf8"));
+      expect(onDisk.list).toEqual([1]);
+    });
+
+    it("drops the snapshot when the write fails, so the next read reflects disk", () => {
+      initializeStore(testOptions(tempDir));
+      store.set("k" as never, 1 as never);
+      const instance = _peekStoreInstance() as unknown as Record<string, unknown>;
+      const proto = Object.getPrototypeOf(instance) as object;
+      const descriptor = findStoreDescriptor(proto)!;
+      Object.defineProperty(instance, "store", {
+        configurable: true,
+        get: descriptor.get,
+        set() {
+          throw new Error("disk full");
+        },
+      });
+      try {
+        expect(() => store.set("k" as never, 2 as never)).toThrow("disk full");
+      } finally {
+        delete instance.store;
+      }
+      expect(store.get("k" as never)).toBe(1);
+    });
+
+    it("rejects values conf rejects, without touching the snapshot", () => {
+      initializeStore(testOptions(tempDir));
+      store.set("k" as never, 1 as never);
+      expect(() => store.set("k" as never, undefined as never)).toThrow(TypeError);
+      expect(() => store.set("__internal__" as never, 1 as never)).toThrow(TypeError);
+      const cyclic: Record<string, unknown> = {};
+      cyclic.self = cyclic;
+      expect(() => store.set("k" as never, cyclic as never)).toThrow(TypeError);
+      expect(store.get("k" as never)).toBe(1);
     });
 
     it("invalidates on delete()", () => {

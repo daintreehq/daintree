@@ -1105,14 +1105,19 @@ let storeInstance: Store<StoreSchema> | undefined;
  * In-memory snapshot of the on-disk store. electron-store v11 (conf) has no
  * cache of its own — every `get()` re-reads and re-parses config.json from
  * disk. The proxy below populates this snapshot lazily on the first read and
- * serves all subsequent reads from memory, invalidating synchronously BEFORE
- * any mutation is delegated (main is single-threaded, so a pre-write snapshot
- * can never be served after the write — cf. the agentSettingsClient
- * write-window precedent). Only the main process writes config.json (the
- * pty-host and workspace-host subprocesses never import this module), so no
- * cross-process invalidation channel is needed.
+ * serves all subsequent reads from memory. Plain `set(key, value)` calls are
+ * written through (the snapshot is replaced with the one conf just wrote);
+ * every other mutation invalidates synchronously BEFORE it is delegated (main
+ * is single-threaded, so a pre-write snapshot can never be served after the
+ * write — cf. the agentSettingsClient write-window precedent). Only the main
+ * process writes config.json (the pty-host and workspace-host subprocesses
+ * never import this module), so no cross-process invalidation channel is
+ * needed.
  */
 let storeValueCache: Record<string, unknown> | null = null;
+// Bumped by every mutation, so a write-through set can tell whether a nested
+// write (from a synchronous change listener) superseded its snapshot.
+let storeMutationEpoch = 0;
 
 /**
  * Drop the cached store snapshot. The proxy invalidates automatically for all
@@ -1121,6 +1126,7 @@ let storeValueCache: Record<string, unknown> | null = null;
  * restore-from-backup file swap) and for tests.
  */
 export function invalidateStoreValueCache(): void {
+  storeMutationEpoch++;
   storeValueCache = null;
 }
 
@@ -1134,6 +1140,55 @@ function getCachedValue(snapshot: Record<string, unknown>, key: string): unknown
     node = (node as Record<string, unknown>)[part];
   }
   return node;
+}
+
+const WRITE_THROUGH_SEGMENT = /^[A-Za-z_$][\w$]*$/;
+const WRITE_THROUGH_EXCLUDED = new Set(["__internal__", "__proto__", "prototype", "constructor"]);
+
+/**
+ * Path segments for a `set(key, value)` the proxy can apply to its snapshot
+ * with the same result as conf's dot-prop `setProperty`, or null to fall back
+ * to conf. Only plain identifier segments qualify: escapes, bracket indices,
+ * numeric (array-coercing) segments, reserved keys and object-form sets keep
+ * conf's own parsing, and invalid values keep conf's own errors.
+ */
+function writeThroughSegments(key: unknown, value: unknown): string[] | null {
+  if (typeof key !== "string") return null;
+  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+    return null;
+  }
+  const segments = key.split(".");
+  for (const segment of segments) {
+    if (!WRITE_THROUGH_SEGMENT.test(segment) || WRITE_THROUGH_EXCLUDED.has(segment)) return null;
+  }
+  return segments;
+}
+
+/**
+ * Copy-on-write walk mirroring dot-prop's `setProperty` for identifier
+ * segments: objects along the path are copied (own properties only, prototype
+ * kept) so the previous snapshot is never mutated, and a missing or primitive
+ * intermediate becomes a fresh object. Returns the new root and the object
+ * that receives the leaf, or null to let conf handle a path through an array
+ * (whose named properties JSON drops) or an inherited property.
+ */
+function copyPathForSet(
+  base: Record<string, unknown>,
+  segments: string[]
+): { root: Record<string, unknown>; parent: Record<string, unknown> } | null {
+  const copy = (node: object): Record<string, unknown> =>
+    Object.setPrototypeOf(Object.fromEntries(Object.entries(node)), Object.getPrototypeOf(node));
+  const root = copy(base);
+  let parent = root;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const existing = parent[segments[i]];
+    if (Array.isArray(existing)) return null;
+    if (existing !== undefined && !Object.hasOwn(parent, segments[i])) return null;
+    const child = existing !== null && typeof existing === "object" ? copy(existing) : {};
+    parent[segments[i]] = child;
+    parent = child;
+  }
+  return { root, parent };
 }
 
 /**
@@ -1308,13 +1363,14 @@ export function writeWslGitMap(
 
 /**
  * Methods that mutate the backing file. The proxy nulls the value cache
- * before delegating so a same-tick read after a write always re-snapshots.
+ * before delegating (or, for a write-through `set`, replaces it with the
+ * written snapshot) so a same-tick read after a write never sees stale data.
  * Every production write goes through this proxy — it is the module's only
  * exported handle — so proxy-level invalidation is the primary (and
  * sufficient) path; `invalidateStoreValueCache()` covers the lone file-swap
  * bypass in MigrationRunner.
  */
-const STORE_MUTATING_METHODS = new Set(["set", "delete", "clear", "reset"]);
+const STORE_MUTATING_METHODS = new Set(["set", "delete", "clear", "reset", "appendToArray"]);
 
 export const store = new Proxy({} as Store<StoreSchema>, {
   get(_target, prop) {
@@ -1339,8 +1395,45 @@ export const store = new Proxy({} as Store<StoreSchema>, {
           : resolved;
       };
     }
+    if (prop === "set" && instance.path !== "") {
+      // conf's own set() reads + parses config.json twice (the `store` getter,
+      // then the setter's __internal__ preservation read), and nulling the
+      // snapshot made the next get() read it a third time. Build the next
+      // snapshot from the cached one and hand it to conf's public `store`
+      // setter, which keeps conf's validate / atomic write / change event.
+      // The value is cached as its JSON round-trip so the snapshot matches the
+      // bytes on disk and the caller keeps no alias into it.
+      return (...args: unknown[]) => {
+        const segments = args.length === 2 ? writeThroughSegments(args[0], args[1]) : null;
+        const target = segments
+          ? copyPathForSet(
+              storeValueCache ?? (instance.store as unknown as Record<string, unknown>),
+              segments
+            )
+          : null;
+        if (!segments || !target) {
+          storeMutationEpoch++;
+          storeValueCache = null;
+          return bound(...args);
+        }
+        // Serialize under the leaf key so a toJSON(key) sees what conf's
+        // whole-store serialize passes it; a toJSON() returning undefined
+        // leaves the key out on disk, so it is left out of the snapshot too.
+        const leaf = segments[segments.length - 1];
+        const wrapped = JSON.parse(JSON.stringify({ [leaf]: args[1] })) as Record<string, unknown>;
+        if (Object.hasOwn(wrapped, leaf)) target.parent[leaf] = wrapped[leaf];
+        else delete target.parent[leaf];
+        const epoch = ++storeMutationEpoch;
+        storeValueCache = null;
+        (instance as unknown as { store: Record<string, unknown> }).store = target.root;
+        // A change listener that wrote re-entrantly already published a newer snapshot.
+        if (epoch === storeMutationEpoch) storeValueCache = target.root;
+        return undefined;
+      };
+    }
     if (STORE_MUTATING_METHODS.has(prop as string)) {
       return (...args: unknown[]) => {
+        storeMutationEpoch++;
         storeValueCache = null;
         return bound(...args);
       };
@@ -1348,6 +1441,7 @@ export const store = new Proxy({} as Store<StoreSchema>, {
     return bound;
   },
   set(_target, prop, value) {
+    storeMutationEpoch++;
     storeValueCache = null;
     const instance = getOrLazyInitInstance();
     return Reflect.set(instance as object, prop, value, instance);
