@@ -58,8 +58,9 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "watchdog:disabled": "external",
   "watchdog:active": "external",
 
-  // Terminal observability (relayed from TypedEventBus via PtyEventsBridge)
-  "terminal:reliability-metric": "bus",
+  // Sent project-scoped by the terminal event handlers; only the owning
+  // project's stall watchdog consumes it.
+  "terminal:reliability-metric": "external",
   // Flow-control status reaches the renderer exclusively through the
   // dedicated project-scoped CHANNELS.TERMINAL_STATUS channel; nothing
   // subscribes to the bus relay, which fanned every backpressure transition

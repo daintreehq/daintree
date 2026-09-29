@@ -42,6 +42,7 @@ let mockResourceEnabled = false;
 let mockResourceState: Record<string, unknown> | null = null;
 
 vi.mock("@/store/resourceMonitoringStore", () => ({
+  isSettledResourceState: () => false,
   useResourceMonitoringStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
       enabled: mockResourceEnabled,
