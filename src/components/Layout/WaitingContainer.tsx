@@ -18,7 +18,7 @@ import {
   WAITING_REASON_BADGE_LABEL,
   waitingHeadline,
 } from "@shared/utils/waitingReasonDisplay";
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useWorktreeNames } from "@/hooks/useWorktrees";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
@@ -83,7 +83,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
       trackTerminalFocus: state.trackTerminalFocus,
     }))
   );
-  const { worktreeMap } = useWorktrees();
+  const worktreeNames = useWorktreeNames();
   const focusHandoff = useDockPopoverFocusHandoff();
 
   const displayItems = useMemo((): WaitingDisplayItem[] => {
@@ -314,7 +314,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
                             key={item.group.id}
                             group={item.group}
                             waitingTerminals={item.waitingTerminals}
-                            worktreeMap={worktreeMap}
+                            worktreeNames={worktreeNames}
                             showWorktree={showWorktree}
                             onActivate={handleActivate}
                             onKill={(id) => setKillConfirmId(id)}
@@ -323,7 +323,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
                       }
                       const worktreeName =
                         showWorktree && item.terminal.worktreeId
-                          ? worktreeMap.get(item.terminal.worktreeId)?.name
+                          ? worktreeNames.get(item.terminal.worktreeId)
                           : undefined;
                       return (
                         <WaitingSingleItem
@@ -484,7 +484,7 @@ function WaitingSingleItem({
 interface WaitingGroupItemProps {
   group: TabGroup;
   waitingTerminals: PtyPanelData[];
-  worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
+  worktreeNames: ReadonlyMap<string, string>;
   showWorktree: boolean;
   onActivate: (terminal: PtyPanelData, groupId: string | null) => void;
   onKill: (terminalId: string) => void;
@@ -493,7 +493,7 @@ interface WaitingGroupItemProps {
 function WaitingGroupItem({
   group,
   waitingTerminals,
-  worktreeMap,
+  worktreeNames,
   showWorktree,
   onActivate,
   onKill,
@@ -502,7 +502,7 @@ function WaitingGroupItem({
   const tabCount = waitingTerminals.length;
   const groupWorktreeId = group.worktreeId ?? waitingTerminals[0]?.worktreeId;
   const groupWorktreeName =
-    showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
+    showWorktree && groupWorktreeId ? worktreeNames.get(groupWorktreeId) : undefined;
   const headerId = useId();
 
   return (
@@ -554,7 +554,7 @@ function WaitingGroupItem({
               groupId={group.id}
               worktreeName={
                 showWorktree && terminal.worktreeId
-                  ? worktreeMap.get(terminal.worktreeId)?.name
+                  ? worktreeNames.get(terminal.worktreeId)
                   : undefined
               }
               showWorktreeInline={false}

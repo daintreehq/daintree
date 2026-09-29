@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { WorktreeSnapshot, WorktreeState } from "@shared/types";
 import { compareWorktreeNames } from "@/lib/worktreeFilters";
 import { isValidPastTimestamp } from "@/utils/timestamps";
@@ -126,4 +127,19 @@ export function useWorktrees(options?: { enabled?: boolean }): UseWorktreesRetur
 export function useWorktree(worktreeId: string): WorktreeState | null {
   const snap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
   return snap ? normalizeSnapshot(snap) : null;
+}
+
+function selectWorktreeNames(state: { worktrees: Map<string, WorktreeSnapshot> }) {
+  const names = new Map<string, string>();
+  for (const [id, snap] of state.worktrees) names.set(id, snap.name);
+  return names;
+}
+
+/**
+ * Worktree id → display name, for surfaces that only label rows with a
+ * worktree's name. Shallow-compared, so git-status and activity updates — which
+ * replace a snapshot without renaming it — do not re-render the consumer.
+ */
+export function useWorktreeNames(): ReadonlyMap<string, string> {
+  return useWorktreeStore(useShallow(selectWorktreeNames));
 }

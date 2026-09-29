@@ -27,7 +27,7 @@ const dndMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({ worktreeMap: new Map() }),
+  useWorktreeNames: () => new Map(),
 }));
 
 vi.mock("@/components/ui/popover", () => ({
