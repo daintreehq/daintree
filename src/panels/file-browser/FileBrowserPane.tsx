@@ -720,6 +720,12 @@ export function FileBrowserPane({
   // what re-runs the viewer's classification effect, so a media file stuck in
   // `status: "error"` remounts its preview on Refresh instead of staying dead.
   const viewerRevision = `${changeTick ?? 0}:${surfaceRefreshNonce}`;
+  // What moved behind that revision, so the viewer can tell a write to its own
+  // file's directory from one anywhere else in the worktree.
+  const viewerChangeSignal = useMemo(
+    () => ({ tick: changeTick, gitTick: gitChangeTick, changedDirs }),
+    [changeTick, gitChangeTick, changedDirs]
+  );
 
   // Takes the state it is moving TO rather than flipping what it finds: the
   // view-options menu renders a checkbox whose `onCheckedChange` already knows
@@ -1396,6 +1402,7 @@ export function FileBrowserPane({
               fileName={selectedFileName}
               relativePath={isSelectedReadableFile ? (selectedPath ?? null) : null}
               revision={viewerRevision}
+              changeSignal={viewerChangeSignal}
               // Handed over separately from `revision` rather than pulled back
               // out of it: the PDF frame may only re-navigate on the explicit
               // half of that pair, and a merged string can't say which half
