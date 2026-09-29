@@ -879,7 +879,163 @@ function isSamePresence(
   return key(a) === key(b);
 }
 
-export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
+interface SearchableProjectContext {
+  currentProjectId: string | undefined;
+  displayPathById: ReadonlyMap<string, string>;
+  presenceByProjectId: {
+    otherWindows: ReadonlyMap<string, ProjectPresenceState>;
+    thisWindow: ReadonlySet<string>;
+  };
+  /**
+   * One `now` for a whole build keeps every row's effective score on the same
+   * clock. Ordering between untouched projects is invariant as time passes (all
+   * scores decay by the same factor), so computing at build time rather than on
+   * a tick is exact, not an approximation.
+   */
+  frecencyNow: number;
+}
+
+function toSearchableProject(
+  p: Project,
+  stats: ProjectStatusMap[string] | undefined,
+  context: SearchableProjectContext
+): SearchableProject {
+  const isActive = p.id === context.currentProjectId;
+  const isMissing = p.status === "missing";
+  const hasProcesses = (stats?.processCount ?? 0) > 0;
+  // A scratch switch clears the project pointer without demoting or
+  // broadcasting the row it left, so the pre-scratch project reaches us still
+  // marked "active" while nothing is active. Untreated it is neither active
+  // nor background — main makes the same repair on its next read once the
+  // canonical pointer is null (#11085). View-relative by design: a project
+  // another window owns isn't this view's either.
+  const isStaleActive = !isActive && p.status === "active";
+  const isBackground =
+    p.status === "background" || isStaleActive || (!isActive && !isMissing && hasProcesses);
+
+  const project: SearchableProject = {
+    id: p.id,
+    name: p.name,
+    path: p.path,
+    emoji: p.emoji || "🌲",
+    color: p.color,
+    lastOpened: p.lastOpened ?? 0,
+    status: p.status,
+    autoParkedAt: p.autoParkedAt,
+    // Passed through as-is. Coercing an absent count to 0 here would turn
+    // "not computed yet" into "restores nothing" — the one distinction the
+    // dot depends on.
+    resumableAgentCount: p.resumableAgentCount,
+    isActive,
+    isBackground,
+    isMissing,
+    isPinned: p.pinned ?? false,
+    openInOtherWindow: isActive ? undefined : context.presenceByProjectId.otherWindows.get(p.id),
+    isOpenInThisWindow: context.presenceByProjectId.thisWindow.has(p.id),
+    frecencyScore: decayFrecencyScore(
+      p.frecencyScore ?? FRECENCY_COLD_START,
+      p.lastAccessedAt ?? 0,
+      context.frecencyNow
+    ),
+    activeAgentCount: stats?.activeAgentCount ?? 0,
+    waitingAgentCount: stats?.waitingAgentCount ?? 0,
+    blockedAgentCount: stats?.blockedAgentCount ?? 0,
+    oldestWaitingSince: stats?.oldestWaitingSince,
+    completedAgentCount: stats?.completedAgentCount ?? 0,
+    unacknowledgedCompletedAgentCount: stats?.unacknowledgedCompletedAgentCount ?? 0,
+    oldestUnacknowledgedCompletionAt: stats?.oldestUnacknowledgedCompletionAt,
+    latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
+    latestCompletionAt: stats?.latestCompletionAt,
+    latestWorkingSince: stats?.latestWorkingSince,
+    snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
+    nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
+    processCount: stats?.processCount ?? 0,
+    assistantState: stats?.assistantState,
+    assistantWaitingReason: stats?.assistantWaitingReason,
+    assistantStateSince: stats?.assistantStateSince,
+    displayPath: context.displayPathById.get(p.id) ?? p.path,
+    section: "other",
+  };
+  project.section = sectionForProject(project);
+  return project;
+}
+
+function buildSearchableProjects(
+  projects: Project[],
+  stats: ProjectStatusMap,
+  context: SearchableProjectContext
+): SearchableProject[] {
+  return projects.map((p) => toSearchableProject(p, stats[p.id], context));
+}
+
+function sortBrowseOrder(
+  projects: SearchableProject[],
+  sortMode: OtherProjectsSortMode
+): SearchableProject[] {
+  return [...projects].sort((a, b) => {
+    if (a.section !== b.section) {
+      return PROJECT_SECTION_ORDER.indexOf(a.section) - PROJECT_SECTION_ORDER.indexOf(b.section);
+    }
+    return compareWithinSection(a, b, sortMode);
+  });
+}
+
+function buildScratchResults(
+  scratches: Scratch[],
+  currentScratchId: string | undefined,
+  projectStats: ProjectStatusMap
+): SearchableScratch[] {
+  const list: SearchableScratch[] = scratches.map((s: Scratch) => {
+    // Scratch terminals carry the scratch id as their `projectId`, so the one
+    // status map covers both kinds and the join is the same lookup projects
+    // do (#11518).
+    const stats = projectStats[s.id];
+    return {
+      id: s.id,
+      name: s.name,
+      path: s.path,
+      createdAt: s.createdAt,
+      lastOpened: s.lastOpened,
+      // Passed through as-is, never `?? 0`: coercing an absent count to 0
+      // here would turn "not computed yet" into "restores nothing".
+      resumableAgentCount: s.resumableAgentCount,
+      isActive: currentScratchId === s.id,
+      activeAgentCount: stats?.activeAgentCount ?? 0,
+      waitingAgentCount: stats?.waitingAgentCount ?? 0,
+      blockedAgentCount: stats?.blockedAgentCount ?? 0,
+      oldestWaitingSince: stats?.oldestWaitingSince,
+      completedAgentCount: stats?.completedAgentCount ?? 0,
+      unacknowledgedCompletedAgentCount: stats?.unacknowledgedCompletedAgentCount ?? 0,
+      oldestUnacknowledgedCompletionAt: stats?.oldestUnacknowledgedCompletionAt,
+      latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
+      latestCompletionAt: stats?.latestCompletionAt,
+      snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
+      nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
+      processCount: stats?.processCount ?? 0,
+      // A scratch can host an assistant too — the session is provisioned
+      // against an opaque workspace id — so it gets the same status line. It
+      // never gets a band: scratches live in the pinned section regardless.
+      assistantState: stats?.assistantState,
+      assistantWaitingReason: stats?.assistantWaitingReason,
+      assistantStateSince: stats?.assistantStateSince,
+    };
+  });
+  list.sort((a, b) => b.lastOpened - a.lastOpened);
+  return list;
+}
+
+export interface UseProjectSwitcherPaletteOptions {
+  /**
+   * Keep the stats-derived fields live while the palette is closed. Only a
+   * caller that renders them from a closed palette — a trigger badge — needs
+   * this; see `projectStats` below for why it is off by default.
+   */
+  liveStatsWhileClosed?: boolean;
+}
+
+export function useProjectSwitcherPalette({
+  liveStatsWhileClosed = false,
+}: UseProjectSwitcherPaletteOptions = {}): UseProjectSwitcherPaletteReturn {
   const modalIsOpen = usePaletteStore((state) => state.activePaletteId === "project-switcher");
   const [dropdownIsOpen, setDropdownIsOpen] = useState(false);
   const [mode, setMode] = useState<ProjectSwitcherMode>("modal");
@@ -929,7 +1085,23 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const closeProject = useProjectStore((state) => state.closeProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const openRelocation = useProjectRelocationStore((state) => state.open);
-  const projectStats = useProjectStatsStore((state) => state.stats);
+  // Held while closed. The app root owns this hook and hands its result to the
+  // unmemoized shell, and main pushes a fresh map on every agent state change —
+  // subscribing while closed re-rendered the whole window per push to update
+  // rows nobody could see. Opening reads the store again in the same render,
+  // and every closed-state path that acts on a project's counts (the open-time
+  // freeze, sleep and remove confirms) reads the store directly instead.
+  //
+  // Held rather than emptied so a closing palette's exit animation keeps the
+  // rows it was showing; the snapshot is retaken at the close.
+  const isStatsLive = isOpen || liveStatsWhileClosed;
+  const [heldStats, setHeldStats] = useState(() => useProjectStatsStore.getState().stats);
+  const [wasStatsLive, setWasStatsLive] = useState(isStatsLive);
+  if (wasStatsLive !== isStatsLive) {
+    setWasStatsLive(isStatsLive);
+    if (!isStatsLive) setHeldStats(useProjectStatsStore.getState().stats);
+  }
+  const projectStats = useProjectStatsStore((state) => (isStatsLive ? state.stats : heldStats));
 
   const { copy: copyToClipboard } = useCopyWithFeedback({ announcement: false });
 
@@ -1083,74 +1255,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const displayPathById = useMemo(() => buildDisplayPaths(projects), [projects]);
 
-  const searchableProjects = useMemo<SearchableProject[]>(() => {
-    // One `now` for the whole build keeps every row's effective score on the
-    // same clock. Ordering between untouched projects is invariant as time
-    // passes (all scores decay by the same factor), so computing at build time
-    // rather than on a tick is exact, not an approximation.
-    const frecencyNow = Date.now();
-    return projects.map((p) => {
-      const stats = projectStats[p.id];
-      const isActive = p.id === currentProject?.id;
-      const isMissing = p.status === "missing";
-      const hasProcesses = (stats?.processCount ?? 0) > 0;
-      // A scratch switch clears the project pointer without demoting or
-      // broadcasting the row it left, so the pre-scratch project reaches us still
-      // marked "active" while nothing is active. Untreated it is neither active
-      // nor background — main makes the same repair on its next read once the
-      // canonical pointer is null (#11085). View-relative by design: a project
-      // another window owns isn't this view's either.
-      const isStaleActive = !isActive && p.status === "active";
-      const isBackground =
-        p.status === "background" || isStaleActive || (!isActive && !isMissing && hasProcesses);
-
-      const project: SearchableProject = {
-        id: p.id,
-        name: p.name,
-        path: p.path,
-        emoji: p.emoji || "🌲",
-        color: p.color,
-        lastOpened: p.lastOpened ?? 0,
-        status: p.status,
-        autoParkedAt: p.autoParkedAt,
-        // Passed through as-is. Coercing an absent count to 0 here would turn
-        // "not computed yet" into "restores nothing" — the one distinction the
-        // dot depends on.
-        resumableAgentCount: p.resumableAgentCount,
-        isActive,
-        isBackground,
-        isMissing,
-        isPinned: p.pinned ?? false,
-        openInOtherWindow: isActive ? undefined : presenceByProjectId.otherWindows.get(p.id),
-        isOpenInThisWindow: presenceByProjectId.thisWindow.has(p.id),
-        frecencyScore: decayFrecencyScore(
-          p.frecencyScore ?? FRECENCY_COLD_START,
-          p.lastAccessedAt ?? 0,
-          frecencyNow
-        ),
-        activeAgentCount: stats?.activeAgentCount ?? 0,
-        waitingAgentCount: stats?.waitingAgentCount ?? 0,
-        blockedAgentCount: stats?.blockedAgentCount ?? 0,
-        oldestWaitingSince: stats?.oldestWaitingSince,
-        completedAgentCount: stats?.completedAgentCount ?? 0,
-        unacknowledgedCompletedAgentCount: stats?.unacknowledgedCompletedAgentCount ?? 0,
-        oldestUnacknowledgedCompletionAt: stats?.oldestUnacknowledgedCompletionAt,
-        latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
-        latestCompletionAt: stats?.latestCompletionAt,
-        latestWorkingSince: stats?.latestWorkingSince,
-        snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
-        nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
-        processCount: stats?.processCount ?? 0,
-        assistantState: stats?.assistantState,
-        assistantWaitingReason: stats?.assistantWaitingReason,
-        assistantStateSince: stats?.assistantStateSince,
-        displayPath: displayPathById.get(p.id) ?? p.path,
-        section: "other",
-      };
-      project.section = sectionForProject(project);
-      return project;
-    });
-  }, [projects, projectStats, currentProject?.id, displayPathById, presenceByProjectId]);
+  const searchableProjects = useMemo<SearchableProject[]>(
+    () =>
+      buildSearchableProjects(projects, projectStats, {
+        currentProjectId: currentProject?.id,
+        displayPathById,
+        presenceByProjectId,
+        frecencyNow: Date.now(),
+      }),
+    [projects, projectStats, currentProject?.id, displayPathById, presenceByProjectId]
+  );
 
   useEffect(() => {
     if (!isOpen || searchableProjects.length === 0) return;
@@ -1187,14 +1301,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const otherProjectsSortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
   const collapsedBands = usePreferencesStore((state) => state.projectSwitcherCollapsedBands);
 
-  const liveBrowseOrder = useMemo<SearchableProject[]>(() => {
-    return [...searchableProjects].sort((a, b) => {
-      if (a.section !== b.section) {
-        return PROJECT_SECTION_ORDER.indexOf(a.section) - PROJECT_SECTION_ORDER.indexOf(b.section);
-      }
-      return compareWithinSection(a, b, otherProjectsSortMode);
-    });
-  }, [searchableProjects, otherProjectsSortMode]);
+  const liveBrowseOrder = useMemo<SearchableProject[]>(
+    () => sortBrowseOrder(searchableProjects, otherProjectsSortMode),
+    [searchableProjects, otherProjectsSortMode]
+  );
 
   // Layout is frozen for the lifetime of an open palette; content stays live.
   //
@@ -1321,7 +1431,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // the one part of the list still re-banding on every stats push, so the freeze
   // the palette advertises would hold for the session's original rows only.
   useEffect(() => {
-    if (!frozenLayout) return;
+    // Closed, the rows carry held stats; a session that skipped `close()` (the
+    // palette store handed the slot to another palette) must not fold an
+    // arrival in at a band cut from them. Reopening re-runs this live.
+    if (!frozenLayout || !isOpen) return;
 
     // A provisional freeze is a placeholder. Once no row is still a guess,
     // recapture the whole layout so bands AND within-band order come from
@@ -1365,7 +1478,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // and folds this arrival into its pending regroup.
       return { ...previous, order, sections };
     });
-  }, [liveBrowseOrder, frozenLayout, projectStats, captureLayout]);
+  }, [liveBrowseOrder, frozenLayout, projectStats, captureLayout, isOpen]);
 
   const browseOrdered = useMemo<SearchableProject[]>(() => {
     const frozen = frozenLayout;
@@ -1406,45 +1519,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // Recency order, which is what the pinned browse section renders. Search takes
   // this same list but re-ranks it against the query (#11466), so it has to be
   // built before `results` rather than beside the other scratch callbacks below.
-  const scratchResults = useMemo<SearchableScratch[]>(() => {
-    const list: SearchableScratch[] = scratches.map((s: Scratch) => {
-      // Scratch terminals carry the scratch id as their `projectId`, so the one
-      // status map covers both kinds and the join is the same lookup projects
-      // do (#11518).
-      const stats = projectStats[s.id];
-      return {
-        id: s.id,
-        name: s.name,
-        path: s.path,
-        createdAt: s.createdAt,
-        lastOpened: s.lastOpened,
-        // Passed through as-is, never `?? 0`: coercing an absent count to 0
-        // here would turn "not computed yet" into "restores nothing".
-        resumableAgentCount: s.resumableAgentCount,
-        isActive: currentScratch?.id === s.id,
-        activeAgentCount: stats?.activeAgentCount ?? 0,
-        waitingAgentCount: stats?.waitingAgentCount ?? 0,
-        blockedAgentCount: stats?.blockedAgentCount ?? 0,
-        oldestWaitingSince: stats?.oldestWaitingSince,
-        completedAgentCount: stats?.completedAgentCount ?? 0,
-        unacknowledgedCompletedAgentCount: stats?.unacknowledgedCompletedAgentCount ?? 0,
-        oldestUnacknowledgedCompletionAt: stats?.oldestUnacknowledgedCompletionAt,
-        latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
-        latestCompletionAt: stats?.latestCompletionAt,
-        snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
-        nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
-        processCount: stats?.processCount ?? 0,
-        // A scratch can host an assistant too — the session is provisioned
-        // against an opaque workspace id — so it gets the same status line. It
-        // never gets a band: scratches live in the pinned section regardless.
-        assistantState: stats?.assistantState,
-        assistantWaitingReason: stats?.assistantWaitingReason,
-        assistantStateSince: stats?.assistantStateSince,
-      };
-    });
-    list.sort((a, b) => b.lastOpened - a.lastOpened);
-    return list;
-  }, [scratches, currentScratch?.id, projectStats]);
+  const scratchResults = useMemo<SearchableScratch[]>(
+    () => buildScratchResults(scratches, currentScratch?.id, projectStats),
+    [scratches, currentScratch?.id, projectStats]
+  );
 
   // The search freeze's counterpart to the browse regroup above, over search's
   // own set of rows rather than browse's.
@@ -1465,7 +1543,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // gap instead would leave that row tracking every push, which is the whole
   // thing this freeze exists to stop.
   useEffect(() => {
-    if (!frozenSearchActivity) return;
+    // Held stats while closed, as the browse fold above.
+    if (!frozenSearchActivity || !isOpen) return;
 
     if (frozenSearchActivity.isProvisional) {
       const { total, unkeyed } = countSearchRowsAwaitingStats(
@@ -1515,6 +1594,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     projectStats,
     frozenSearchActivity,
     captureSearchActivity,
+    isOpen,
   ]);
 
   /**
@@ -1666,6 +1746,26 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setDropdownIsOpen(true);
       }
       setQuery("");
+      // A closed palette renders against held stats, so the freeze is cut from
+      // the store's current map rather than this render's rows.
+      const stats = useProjectStatsStore.getState().stats;
+      const liveProjects =
+        stats === projectStats
+          ? searchableProjects
+          : buildSearchableProjects(projects, stats, {
+              currentProjectId: currentProject?.id,
+              displayPathById,
+              presenceByProjectId,
+              frecencyNow: Date.now(),
+            });
+      const liveOrder =
+        liveProjects === searchableProjects
+          ? liveBrowseOrder
+          : sortBrowseOrder(liveProjects, otherProjectsSortMode);
+      const liveScratches =
+        stats === projectStats
+          ? scratchResults
+          : buildScratchResults(scratches, currentScratch?.id, stats);
       // Freeze the layout for this open session. Taken from the live order,
       // not `browseOrdered`, which is still holding the previous session's
       // frozen shape at this point.
@@ -1677,22 +1777,18 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // looking at. Active and unavailable rows are banded without stats, so
       // they say nothing about hydration; pinned rows do, since attention
       // outranks a pin.
-      const statsSensitive = liveBrowseOrder.filter(isStatsSensitive);
+      const statsSensitive = liveOrder.filter(isStatsSensitive);
       const isProvisional =
         statsSensitive.length > 0 &&
-        statsSensitive.every((project) => projectStats[project.id] === undefined);
-      setFrozenLayout(captureLayout(liveBrowseOrder, isProvisional));
+        statsSensitive.every((project) => stats[project.id] === undefined);
+      setFrozenLayout(captureLayout(liveOrder, isProvisional));
       // Its own verdict, over its own rows: search ranks scratches and the
       // active row too, so browse's answer does not cover the set it froze.
-      const searchRows = countSearchRowsAwaitingStats(
-        searchableProjects,
-        scratchResults,
-        projectStats
-      );
+      const searchRows = countSearchRowsAwaitingStats(liveProjects, liveScratches, stats);
       setFrozenSearchActivity(
         captureSearchActivity(
-          searchableProjects,
-          scratchResults,
+          liveProjects,
+          liveScratches,
           // No rows counts as provisional, unlike browse's check. Loading the
           // workspace lists is itself async and retried, so a palette opened
           // during boot can capture nothing at all — and calling that snapshot
@@ -1716,9 +1812,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // can see. With every band folded there is nothing to preselect, and
       // `null` is the honest answer — arrows and Enter both no-op on an empty
       // list rather than committing something offscreen.
-      const selectable = liveBrowseOrder.filter(
-        (project) => collapsedBands[project.section] !== true
-      );
+      const selectable = liveOrder.filter((project) => collapsedBands[project.section] !== true);
       const initial =
         selectable.find((project) => !project.isActive && !project.isMissing) ??
         selectable.find((project) => !project.isActive) ??
@@ -1726,12 +1820,19 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       setSelectedRowId(initial?.id ?? null);
     },
     [
-      liveBrowseOrder,
-      captureLayout,
       projectStats,
-      captureSearchActivity,
       searchableProjects,
+      projects,
+      currentProject?.id,
+      displayPathById,
+      presenceByProjectId,
+      liveBrowseOrder,
+      otherProjectsSortMode,
       scratchResults,
+      scratches,
+      currentScratch?.id,
+      captureLayout,
+      captureSearchActivity,
       collapsedBands,
     ]
   );
@@ -2063,16 +2164,42 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [stopConfirmProjectId, closeActiveProject, closeProject]);
 
+  // The row as the store has it now. Sleep and remove are reachable from the
+  // toolbar pill with the palette closed, where `searchableProjects` carries
+  // held stats, and both confirms preview the counts they would stop.
+  const findLiveProject = useCallback(
+    (projectId: string): SearchableProject | undefined => {
+      const stats = useProjectStatsStore.getState().stats;
+      if (stats === projectStats) return searchableProjects.find((p) => p.id === projectId);
+      const project = projects.find((p) => p.id === projectId);
+      if (!project) return undefined;
+      return toSearchableProject(project, stats[projectId], {
+        currentProjectId: currentProject?.id,
+        displayPathById,
+        presenceByProjectId,
+        frecencyNow: Date.now(),
+      });
+    },
+    [
+      projectStats,
+      searchableProjects,
+      projects,
+      currentProject?.id,
+      displayPathById,
+      presenceByProjectId,
+    ]
+  );
+
   const removeProjectFromList = useCallback(
     async (projectId: string) => {
-      const project = searchableProjects.find((p) => p.id === projectId);
+      const project = findLiveProject(projectId);
       if (!project) return;
 
       if (removeConfirmProject) return;
 
       setRemoveConfirmProject(project);
     },
-    [searchableProjects, removeConfirmProject]
+    [findLiveProject, removeConfirmProject]
   );
 
   const doSleepProject = useCallback(
@@ -2111,7 +2238,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const sleepProject = useCallback(
     async (projectId: string) => {
-      const project = searchableProjects.find((p) => p.id === projectId);
+      const project = findLiveProject(projectId);
       if (!project) return;
 
       close();
@@ -2136,7 +2263,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         await doSleepProject(projectId);
       }
     },
-    [searchableProjects, close, doSleepProject]
+    [findLiveProject, close, doSleepProject]
   );
 
   const confirmSleep = useCallback(async () => {
