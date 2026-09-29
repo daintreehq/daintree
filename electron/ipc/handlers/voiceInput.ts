@@ -393,7 +393,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         // them post-hoc to \n\n / "." / \n etc., gated on the session-
         // snapshotted paragraphing strategy.
         const processedText =
-          settings.paragraphingStrategy === "spoken-command"
+          settings.paragraphingStrategy === "spoken-command" &&
+          normalizeVoiceLanguage(settings.language) === "en"
             ? applyDictationCommands(rawText)
             : rawText;
 

@@ -256,6 +256,22 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it.each([
+    ["a number", 42],
+    ["an object", { code: "en" }],
+    ["blank", "  "],
+  ])("falls back to language=en when the stored language is %s", async (_label, language) => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start({
+      ...BASE_SETTINGS,
+      deepgramApiKey: "dg-abc",
+      language,
+    } as unknown as typeof BASE_SETTINGS);
+    await Promise.resolve();
+    expect(new URL(latestInstance().url).searchParams.get("language")).toBe("en");
+    provider.stop();
+  });
+
   // ── Keyterm URL injection ─────────────────────────────────────────────────
 
   it("appends one repeated keyterm= param per term (not comma-joined)", async () => {

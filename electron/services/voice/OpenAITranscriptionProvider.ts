@@ -19,6 +19,7 @@ import {
 import {
   normalizeVoiceLanguage,
   VOICE_LANGUAGE_AUTO,
+  VOICE_LANGUAGES,
   voiceLanguageName,
 } from "../../../shared/config/voiceLanguages.js";
 
@@ -490,9 +491,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       const autoLanguage = language === VOICE_LANGUAGE_AUTO;
       // `languages` is a bias hint, not a constraint, so a fixed language also
       // gets an explicit directive in the transcription prompt. Auto omits both.
-      const languageDirective = autoLanguage
-        ? ""
-        : `Transcribe in ${voiceLanguageName(language)}. Do not translate.`;
+      // Unknown (malformed) codes get no directive, which also keeps its length bounded.
+      const languageDirective =
+        autoLanguage || !VOICE_LANGUAGES.some((l) => l.code === language)
+          ? ""
+          : `Transcribe in ${voiceLanguageName(language)}. Do not translate.`;
       const keytermPrompt = formatKeytermPrompt(
         keywords,
         MAX_PROMPT_CHARS - (languageDirective ? languageDirective.length + 1 : 0)

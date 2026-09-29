@@ -437,6 +437,16 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
+  it("sends no directive for an unknown language code, keeping the prompt bounded", async () => {
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, language: "x".repeat(380) });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+    expect(readTranscription(socket)).not.toHaveProperty("prompt");
+    service.stop();
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace-only", "   "],

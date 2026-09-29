@@ -1,6 +1,9 @@
 import WebSocket from "ws";
 import type { VoiceInputError, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
-import { isAutoVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
+import {
+  normalizeVoiceLanguage,
+  VOICE_LANGUAGE_AUTO,
+} from "../../../shared/config/voiceLanguages.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import {
@@ -76,11 +79,10 @@ function buildUrl(settings: VoiceInputSettings): string {
     sample_rate: "24000",
     endpointing: "300",
   });
-  if (settings.language) {
-    // Streaming has no `detect_language` (prerecorded only); Nova-3's
-    // `multi` is the live multilingual mode.
-    params.set("language", isAutoVoiceLanguage(settings.language) ? "multi" : settings.language);
-  }
+  // Streaming has no `detect_language` (prerecorded only); Nova-3's `multi` is
+  // the live multilingual mode.
+  const language = normalizeVoiceLanguage(settings.language);
+  params.set("language", language === VOICE_LANGUAGE_AUTO ? "multi" : language);
   // Nova-3 keyterms are repeated `keyterm=` params — one per term. A comma-
   // joined value would be treated as a single literal phrase, not a list.
   // (NOT the legacy `keywords` param, which 400s the upgrade on nova-3.)

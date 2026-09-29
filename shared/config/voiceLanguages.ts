@@ -20,10 +20,6 @@ export function normalizeVoiceLanguage(value: unknown): string {
   return trimmed || "en";
 }
 
-export function isAutoVoiceLanguage(value: unknown): boolean {
-  return normalizeVoiceLanguage(value) === VOICE_LANGUAGE_AUTO;
-}
-
 export function voiceLanguageName(code: string): string {
   return VOICE_LANGUAGES.find((l) => l.code === code)?.label ?? code;
 }
