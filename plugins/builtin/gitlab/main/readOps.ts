@@ -236,6 +236,7 @@ query DaintreeMRsForBranches($fullPath: ID!, $branches: [String!]) {
         closedAt
         author { username avatarUrl }
         headPipeline { status }
+        detailedMergeStatus
       }
     }
   }

@@ -694,7 +694,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // tools name the context-menu path a user hands a terminal over by.
   // 114_150 → 114_200 for #13045, measured at 114_174 B: the same launch and
   // preset prose as the external ceiling above.
-  const MAX_COHORT_PAYLOAD_BYTES = 114_200;
+  // 114_200 → 114_250 for #13070, measured at 114_205 B: the undescribed
+  // `mergeState` field on the forge PR and linked-PR results.
+  const MAX_COHORT_PAYLOAD_BYTES = 114_250;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

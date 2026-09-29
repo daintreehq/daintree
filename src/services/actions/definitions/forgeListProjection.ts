@@ -34,6 +34,7 @@ const SummaryLinkedPRSchema = z.object({
   state: z.string(),
   url: z.string(),
   ciStatus: z.string().optional(),
+  mergeState: z.string().optional(),
 });
 
 export const ForgeIssueSummarySchema = z.object({
@@ -69,6 +70,7 @@ export const ForgePRSummarySchema = z.object({
    */
   reviewDecision: z.string().nullable().optional(),
   ciStatus: z.string().optional(),
+  mergeState: z.string().optional(),
   commentCount: z.number().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
@@ -135,6 +137,7 @@ export function projectIssueSummary(issue: Issue): ForgeIssueSummary {
             state: issue.linkedPR.state,
             url: issue.linkedPR.url,
             ...(issue.linkedPR.ciStatus ? { ciStatus: issue.linkedPR.ciStatus } : {}),
+            ...(issue.linkedPR.mergeState ? { mergeState: issue.linkedPR.mergeState } : {}),
           },
         }
       : {}),
@@ -158,6 +161,7 @@ export function projectPRSummary(pr: PR): ForgePRSummary {
     headRef: pr.headRef,
     ...(pr.reviewDecision !== undefined ? { reviewDecision: pr.reviewDecision } : {}),
     ...(pr.ciStatus ? { ciStatus: pr.ciStatus } : {}),
+    ...(pr.mergeState ? { mergeState: pr.mergeState } : {}),
     ...(pr.commentCount !== undefined ? { commentCount: pr.commentCount } : {}),
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,

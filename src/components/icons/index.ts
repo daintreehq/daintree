@@ -41,6 +41,7 @@ export {
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   Gauge, // git that could run faster on this worktree — the suggestion to route a WSL checkout's git through WSL
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
+  GitMergeConflict, // a PR whose branch the forge reports as conflicting with its base — takes the CI glyph's place, since the conflict has to be resolved first
   GitPullRequest, // forge provider / code-host plugin category
   History, // resume closed session / session history
   Hourglass, // an environment reporting it is still coming up (starting, provisioning) — a shape beside the neutral status word, so the word keeps its contrast

@@ -11,6 +11,7 @@ import type {
   NormalizedReviewDecision,
   NormalizedReviewState,
   PR,
+  PRMergeState,
   PullRequestReview,
 } from "../../../../shared/types/forge.js";
 import type {
@@ -126,11 +127,15 @@ export function extractLinkedPR(timelineItems: unknown): LinkedPRInfo | undefine
     const state: LinkedPRInfo["state"] =
       prData.merged === true ? "MERGED" : rawState === "CLOSED" ? "CLOSED" : "OPEN";
 
+    const mergeStateStatus =
+      typeof prData.mergeStateStatus === "string" ? prData.mergeStateStatus : undefined;
+
     prs.push({
       number,
       state,
       url,
       ...(typeof prData.updatedAt === "string" ? { updatedAt: prData.updatedAt } : {}),
+      ...(mergeStateStatus ? { mergeStateStatus } : {}),
     });
   }
 
@@ -155,11 +160,13 @@ function compareLinkedPRFreshness(a: LinkedPRInfo, b: LinkedPRInfo): number {
 function toLinkedPRSummary(linked: LinkedPRInfo | undefined): LinkedPRSummary | undefined {
   if (!linked) return undefined;
   const ciStatus = mapListCIStatus(linked.ciStatus);
+  const mergeState = mapMergeStateStatus(linked.mergeStateStatus);
   return {
     number: linked.number,
     state: normalizePRState(linked.state, linked.state === "MERGED"),
     url: linked.url,
     ...(ciStatus ? { ciStatus } : {}),
+    ...(mergeState ? { mergeState } : {}),
   };
 }
 
@@ -293,6 +300,7 @@ export function restToForgePR(raw: Record<string, unknown>): PR {
   const base = raw.base as { ref?: unknown } | undefined;
   const head = raw.head as { ref?: unknown } | undefined;
   const mergeable = typeof raw.mergeable === "boolean" ? raw.mergeable : null;
+  const mergeState = mapMergeStateStatus(raw.mergeable_state);
   return {
     number: raw.number as number,
     title: typeof raw.title === "string" ? raw.title : "",
@@ -306,6 +314,7 @@ export function restToForgePR(raw: Record<string, unknown>): PR {
     baseRef: typeof base?.ref === "string" ? base.ref : "",
     headRef: typeof head?.ref === "string" ? head.ref : "",
     mergeable,
+    ...(mergeState ? { mergeState } : {}),
     createdAt: isoToMs(raw.created_at ?? raw.updated_at),
     updatedAt: isoToMs(raw.updated_at),
     closedAt: isoToMsOrNull(raw.closed_at),
@@ -383,6 +392,7 @@ export function toForgePR(node: Record<string, unknown>): PR {
   );
   const comments = node.comments as { totalCount?: unknown } | undefined;
   const commentCount = typeof comments?.totalCount === "number" ? comments.totalCount : undefined;
+  const mergeState = mapMergeStateStatus(node.mergeStateStatus);
   return {
     number: node.number as number,
     title: (node.title as string) ?? "",
@@ -399,6 +409,7 @@ export function toForgePR(node: Record<string, unknown>): PR {
     reviewDecision: node.reviewDecision as NormalizedReviewDecision | undefined,
     ...(commentCount !== undefined ? { commentCount } : {}),
     ...(ciStatus ? { ciStatus } : {}),
+    ...(mergeState ? { mergeState } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
@@ -417,6 +428,16 @@ function mapListCIStatus(raw: GitHubPRCIStatus | undefined): CIStatusState | und
   if (raw === "FAILURE" || raw === "ERROR") return "failure";
   if (raw === "PENDING" || raw === "EXPECTED") return "pending";
   return undefined;
+}
+
+/**
+ * GitHub merge state (GraphQL `mergeStateStatus`, REST `mergeable_state`) →
+ * forge {@link PRMergeState}. Only `DIRTY` is an observation worth carrying;
+ * `UNKNOWN` means GitHub hasn't computed it yet, so it stays absent rather than
+ * reading as clean.
+ */
+export function mapMergeStateStatus(raw: unknown): PRMergeState | undefined {
+  return typeof raw === "string" && raw.toUpperCase() === "DIRTY" ? "conflicts" : undefined;
 }
 
 function gitHubUserToForgeUser(user: GitHubUser): ForgeUser {
@@ -460,6 +481,7 @@ export function gitHubPRToForgePR(item: GitHubPR): PR {
   const updatedAt = isoToMs(item.updatedAt);
   const merged = item.state === "MERGED";
   const ciStatus = mapListCIStatus(item.ciStatus);
+  const mergeState = mapMergeStateStatus(item.mergeStateStatus);
   return {
     number: item.number,
     title: item.title,
@@ -476,6 +498,7 @@ export function gitHubPRToForgePR(item: GitHubPR): PR {
     reviewDecision: item.reviewDecision,
     ...(item.commentCount !== undefined ? { commentCount: item.commentCount } : {}),
     ...(ciStatus ? { ciStatus } : {}),
+    ...(mergeState ? { mergeState } : {}),
     createdAt: updatedAt,
     updatedAt,
     rawData: item,

@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { extractLinkedPR, toForgeIssue } from "../mappers.js";
-import { LIST_ISSUES_QUERY, SEARCH_QUERY, GET_ISSUE_QUERY } from "../GitHubQueries.js";
+import {
+  extractLinkedPR,
+  gitHubIssueToForgeIssue,
+  gitHubPRToForgePR,
+  mapMergeStateStatus,
+  restToForgePR,
+  toForgeIssue,
+  toForgePR,
+} from "../mappers.js";
+import {
+  LIST_ISSUES_QUERY,
+  SEARCH_QUERY,
+  GET_ISSUE_QUERY,
+  GET_PR_QUERY,
+  REPO_STATS_AND_PAGE_QUERY,
+  buildBatchBranchPRQuery,
+  buildBatchIssuesQuery,
+  buildBatchPRsQuery,
+} from "../GitHubQueries.js";
+import type { GitHubIssue, GitHubPR } from "../../shared/types.js";
 
 const crossReferenced = (pr: Record<string, unknown>) => ({ source: pr });
 const connected = (pr: Record<string, unknown>) => ({ subject: pr });
@@ -137,5 +155,171 @@ describe("queries feeding toForgeIssue project the linked-PR timeline", () => {
     expect(query).toContain("timelineItems");
     expect(query).toContain("CROSS_REFERENCED_EVENT");
     expect(query).toContain("ConnectedEvent");
+  });
+});
+
+describe("mapMergeStateStatus", () => {
+  it("reports conflicts for DIRTY in either casing", () => {
+    expect(mapMergeStateStatus("DIRTY")).toBe("conflicts");
+    expect(mapMergeStateStatus("dirty")).toBe("conflicts");
+  });
+
+  it.each([
+    ["UNKNOWN"],
+    ["CLEAN"],
+    ["BLOCKED"],
+    ["BEHIND"],
+    ["UNSTABLE"],
+    [null],
+    [undefined],
+    [7],
+  ])("reports nothing for %s — not computed or not a conflict is never read as clean", (raw) => {
+    expect(mapMergeStateStatus(raw)).toBeUndefined();
+  });
+});
+
+describe("PR mappers carry the merge-conflict observation", () => {
+  const graphqlNode = (extra: Record<string, unknown> = {}) => ({
+    number: 13049,
+    title: "t",
+    bodyText: "",
+    url: "https://fake.test/pull/13049",
+    state: "OPEN",
+    updatedAt: "2026-09-01T00:00:00Z",
+    ...extra,
+  });
+
+  it("toForgePR maps DIRTY to conflicts", () => {
+    expect(toForgePR(graphqlNode({ mergeStateStatus: "DIRTY" })).mergeState).toBe("conflicts");
+  });
+
+  it("toForgePR omits the key while GitHub is still computing", () => {
+    const pr = toForgePR(graphqlNode({ mergeStateStatus: "UNKNOWN" }));
+    expect("mergeState" in pr).toBe(false);
+  });
+
+  it("toForgePR keeps the CI roll-up alongside the conflict", () => {
+    const pr = toForgePR(
+      graphqlNode({
+        mergeStateStatus: "DIRTY",
+        commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] },
+      })
+    );
+    expect(pr.mergeState).toBe("conflicts");
+    expect(pr.ciStatus).toBe("failure");
+  });
+
+  it("restToForgePR reads REST's lower-case mergeable_state", () => {
+    const raw = { number: 1, state: "open", mergeable: false, mergeable_state: "dirty" };
+    expect(restToForgePR(raw).mergeState).toBe("conflicts");
+    expect("mergeState" in restToForgePR({ ...raw, mergeable_state: "unknown" })).toBe(false);
+  });
+
+  const legacyPR = (extra: Partial<GitHubPR> = {}): GitHubPR => ({
+    number: 13049,
+    title: "t",
+    url: "https://fake.test/pull/13049",
+    state: "OPEN",
+    isDraft: false,
+    updatedAt: "2026-09-01T00:00:00Z",
+    author: { login: "a", avatarUrl: "" },
+    ...extra,
+  });
+
+  it("gitHubPRToForgePR carries the stats-page merge state through", () => {
+    expect(gitHubPRToForgePR(legacyPR({ mergeStateStatus: "DIRTY" })).mergeState).toBe("conflicts");
+    expect("mergeState" in gitHubPRToForgePR(legacyPR({ mergeStateStatus: "UNKNOWN" }))).toBe(
+      false
+    );
+  });
+});
+
+describe("linked PRs carry the merge-conflict observation", () => {
+  it.each([
+    ["CrossReferencedEvent.source", crossReferenced],
+    ["ConnectedEvent.subject", connected],
+  ])("toForgeIssue reads it from %s", (_label, wrap) => {
+    const issue = toForgeIssue({
+      number: 1,
+      title: "t",
+      url: "u",
+      state: "OPEN",
+      updatedAt: "2026-09-01T00:00:00Z",
+      timelineItems: {
+        nodes: [wrap({ number: 2, url: "u2", state: "OPEN", mergeStateStatus: "DIRTY" })],
+      },
+    });
+    expect(issue.linkedPR).toEqual({
+      number: 2,
+      state: "open",
+      url: "u2",
+      mergeState: "conflicts",
+    });
+  });
+
+  it("gitHubIssueToForgeIssue carries it from the legacy linked PR", () => {
+    const item: GitHubIssue = {
+      number: 1,
+      title: "t",
+      url: "u",
+      state: "OPEN",
+      updatedAt: "2026-09-01T00:00:00Z",
+      author: { login: "a", avatarUrl: "" },
+      assignees: [],
+      commentCount: 0,
+      linkedPR: { number: 2, state: "OPEN", url: "u2", mergeStateStatus: "DIRTY" },
+    };
+    expect(gitHubIssueToForgeIssue(item).linkedPR?.mergeState).toBe("conflicts");
+  });
+
+  it("omits the key when the linked PR's state is not a conflict", () => {
+    const linked = extractLinkedPR({
+      nodes: [
+        crossReferenced({ number: 2, url: "u2", state: "OPEN", mergeStateStatus: "UNKNOWN" }),
+      ],
+    });
+    const issue = gitHubIssueToForgeIssue({
+      number: 1,
+      title: "t",
+      url: "u",
+      state: "OPEN",
+      updatedAt: "2026-09-01T00:00:00Z",
+      author: { login: "a", avatarUrl: "" },
+      assignees: [],
+      commentCount: 0,
+      linkedPR: linked,
+    });
+    expect(issue.linkedPR && "mergeState" in issue.linkedPR).toBe(false);
+  });
+});
+
+/**
+ * Every PR selection a contract mapper reads has to project `mergeStateStatus`,
+ * or the conflict glyph shows on some paths and silently not on others.
+ * Checked per fragment: a query-wide `toContain` would pass on one fragment
+ * while its sibling drops the field.
+ */
+describe("queries feeding the PR mappers project mergeStateStatus", () => {
+  const pullRequestFragments = (query: string) =>
+    [...query.matchAll(/\.\.\. on PullRequest \{([^{}]*)/g)].map((m) => m[1]!);
+
+  it.each([
+    ["REPO_STATS_AND_PAGE_QUERY", REPO_STATS_AND_PAGE_QUERY],
+    ["LIST_ISSUES_QUERY", LIST_ISSUES_QUERY],
+    ["SEARCH_QUERY", SEARCH_QUERY],
+    ["GET_ISSUE_QUERY", GET_ISSUE_QUERY],
+    ["buildBatchIssuesQuery", buildBatchIssuesQuery("o", "r", [1])],
+  ])("%s selects it in every PullRequest fragment", (_name, query) => {
+    const fragments = pullRequestFragments(query);
+    expect(fragments.length).toBeGreaterThan(0);
+    for (const fragment of fragments) expect(fragment).toContain("mergeStateStatus");
+  });
+
+  it.each([
+    ["GET_PR_QUERY", GET_PR_QUERY],
+    ["buildBatchBranchPRQuery", buildBatchBranchPRQuery("o", "r", ["b"])],
+    ["buildBatchPRsQuery", buildBatchPRsQuery("o", "r", [1])],
+  ])("%s selects it on the PR node", (_name, query) => {
+    expect(query).toContain("mergeStateStatus");
   });
 });
