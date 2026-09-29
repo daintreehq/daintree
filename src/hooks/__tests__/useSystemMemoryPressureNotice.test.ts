@@ -196,7 +196,7 @@ describe("useSystemMemoryPressureNotice", () => {
     removeNotificationMock.mockReset();
     eventsOnMock.mockReset();
     dispatchMock.mockReset();
-    dispatchMock.mockResolvedValue({ ok: true, result: {} });
+    dispatchMock.mockResolvedValue({ ok: true, result: { launched: true } });
     setEligible();
     viewWorkspaceId = null;
     projectState = { projects: [], currentProject: null };
@@ -339,9 +339,12 @@ describe("useSystemMemoryPressureNotice", () => {
     expect(removeNotificationMock).toHaveBeenCalledWith("notice-1");
   });
 
-  it("keeps the bar when the launch is refused", async () => {
+  it.each([
+    ["the dispatch is refused", { ok: false, error: { code: "EXECUTION_ERROR", message: "x" } }],
+    ["the launcher declines", { ok: true, result: { launched: false } }],
+  ])("keeps the bar when %s", async (_label, result) => {
     setEligible();
-    dispatchMock.mockResolvedValue({ ok: false, error: { code: "EXECUTION_ERROR", message: "x" } });
+    dispatchMock.mockResolvedValue(result);
     await mountAndCapture();
     act(() => captured!(DEGRADED));
     const [action] = notifyMock.mock.calls[0]![0].actions;
@@ -351,6 +354,36 @@ describe("useSystemMemoryPressureNotice", () => {
     });
 
     expect(removeNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("never removes a later episode's bar when a launch outlives its own", async () => {
+    setEligible();
+    let resolveLaunch!: (value: unknown) => void;
+    dispatchMock.mockReturnValueOnce(new Promise((resolve) => (resolveLaunch = resolve)));
+    notifyMock
+      .mockReturnValueOnce("notice-1")
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce("notice-2");
+    await mountAndCapture();
+    act(() => captured!(DEGRADED));
+    const [action] = notifyMock.mock.calls[0]![0].actions;
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = action.onClick();
+    });
+    act(() => captured!(NORMAL));
+    act(() => captured!(DEGRADED));
+    removeNotificationMock.mockClear();
+    await act(async () => {
+      resolveLaunch({ ok: true, result: { launched: true } });
+      await pending;
+    });
+
+    expect(removeNotificationMock).not.toHaveBeenCalled();
+    // The second episode still owns its bar, so its recovery clears it.
+    act(() => captured!(NORMAL));
+    expect(removeNotificationMock).toHaveBeenCalledWith("notice-2");
   });
 
   it("ignores a repeated degraded edge for the same episode", async () => {

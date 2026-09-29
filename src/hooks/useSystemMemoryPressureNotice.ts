@@ -137,12 +137,21 @@ function buildDiagnosisAction(payload: SystemMemoryPressurePayload): Notificatio
     onClick: async () => {
       if (launching) return;
       launching = true;
+      // Captured now: recovery and a new episode can both land mid-launch.
+      const clickedNoticeId = noticeId;
       try {
-        const result = await actionService.dispatch("agent.launch", args, { source: "user" });
+        const result = await actionService.dispatch<{ launched: boolean }>("agent.launch", args, {
+          source: "user",
+        });
         // The bar stays until recovery otherwise, so each click would start
         // another agent. The inbox row keeps its normal lifecycle.
-        if (result.ok && noticeId) {
-          useNotificationStore.getState().removeNotification(noticeId);
+        if (
+          result.ok &&
+          result.result?.launched &&
+          clickedNoticeId &&
+          noticeId === clickedNoticeId
+        ) {
+          useNotificationStore.getState().removeNotification(clickedNoticeId);
           noticeId = "";
         }
       } finally {
