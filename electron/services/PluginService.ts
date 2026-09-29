@@ -1397,6 +1397,10 @@ export class PluginService {
     // Built-ins load first so user plugins with a colliding manifest.name are
     // rejected by the duplicate guard in loadPlugin() — built-in wins.
     const builtinDir = this.builtinPluginsRoot ?? this.getBuiltinDir();
+    // One snapshot per contribution channel for the whole scan rather than one
+    // per plugin: the parallel loads each settle on their own fs callback, so
+    // per-tick coalescing alone could not merge them.
+    const releaseBroadcasts = this.broadcaster.holdBroadcasts();
     try {
       const builtinLoaded = builtinDir
         ? await this.loadFromDir(builtinDir, { isBuiltin: true })
@@ -1410,6 +1414,7 @@ export class PluginService {
       const sideloadLoaded = this.sideloadPluginsRoot
         ? await this.loadFromDir(this.sideloadPluginsRoot, { isBuiltin: true })
         : 0;
+      releaseBroadcasts();
       console.log(
         `[PluginService] Loaded ${builtinLoaded} built-in plugin(s) from ${builtinDir ?? "<unresolved>"}, ${userLoaded} user plugin(s) from ${this.pluginsRoot}, and ${sideloadLoaded} sideloaded plugin(s) from ${this.sideloadPluginsRoot ?? "<none>"}`
       );
@@ -1422,6 +1427,7 @@ export class PluginService {
       // user dir): a retry would re-run the built-in scan and trigger
       // "already registered, overwriting" warnings from the contribution
       // registries.
+      releaseBroadcasts();
       this.initialized = true;
     }
   }
@@ -2473,7 +2479,7 @@ export class PluginService {
       // `Command "{id}" has no handler` toast.
     }
     if (registered) {
-      this.broadcaster.broadcastPluginActions();
+      this.broadcaster.schedulePluginActionsBroadcast();
     }
   }
 
@@ -3082,6 +3088,9 @@ export class PluginService {
     if (existing) return existing;
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return;
+    // A project plugin can activate while the startup scan still holds
+    // contribution broadcasts; what it dispatches must find them published.
+    this.broadcaster.interruptHolds();
 
     const promise = this._doActivate(pluginId).then(
       () => {
@@ -6748,7 +6757,7 @@ export class PluginService {
     }
     owners.add(descriptor.id);
 
-    this.broadcaster.broadcastPluginActions();
+    this.broadcaster.schedulePluginActionsBroadcast();
   }
 
   /** Remove a single plugin-registered action. Silent no-op if unknown. */
@@ -6767,7 +6776,7 @@ export class PluginService {
       if (owners.size === 0) this.pluginActionOwners.delete(pluginId);
     }
 
-    this.broadcaster.broadcastPluginActions();
+    this.broadcaster.schedulePluginActionsBroadcast();
   }
 
   /** Bulk cleanup when a plugin is unloaded. Emits a single broadcast. */
@@ -6784,7 +6793,7 @@ export class PluginService {
     }
     this.pluginActionOwners.delete(pluginId);
 
-    this.broadcaster.broadcastPluginActions();
+    this.broadcaster.schedulePluginActionsBroadcast();
   }
 
   /**
@@ -6810,7 +6819,7 @@ export class PluginService {
       changed = true;
     }
     if (owners.size === 0) this.pluginActionOwners.delete(pluginId);
-    if (changed) this.broadcaster.broadcastPluginActions();
+    if (changed) this.broadcaster.schedulePluginActionsBroadcast();
   }
 
   /** Flattened snapshot of all plugin-registered actions (for renderer pull-on-mount). */

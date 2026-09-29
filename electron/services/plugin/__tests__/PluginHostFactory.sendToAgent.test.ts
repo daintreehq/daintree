@@ -84,7 +84,7 @@ function makeHarness(
     actionValidators: new Map(),
     pluginBadges: new Map(),
     pluginFsWatchers: new Map(),
-    broadcaster: { broadcastPluginActions: vi.fn() },
+    broadcaster: { schedulePluginActionsBroadcast: vi.fn() },
     panelLifecycleBroker: { subscribe: vi.fn(() => () => {}) },
     dispatcher: { sendAgentsListToRenderer },
     promptDispatcher: { requestPrompt },

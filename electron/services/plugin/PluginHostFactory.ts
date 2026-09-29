@@ -966,7 +966,7 @@ export function createHost(
       }
       owners.add(namespacedId);
 
-      deps.broadcaster.broadcastPluginActions();
+      deps.broadcaster.schedulePluginActionsBroadcast();
       // All registry mutation above is synchronous (sync throws still surface
       // at the call site during activate()); only the return value is async.
       return Promise.resolve();

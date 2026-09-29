@@ -362,3 +362,25 @@ describe("contributes.fileEditors (#12323)", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("cached manifest schema", () => {
+  it("returns one schema per origin", () => {
+    expect(getPluginManifestSchema("user")).toBe(schema);
+    expect(getPluginManifestSchema(false)).toBe(schema);
+    expect(getPluginManifestSchema(true)).toBe(getPluginManifestSchema("builtin"));
+    expect(getPluginManifestSchema("project")).not.toBe(schema);
+  });
+
+  it("never shares defaulted contribution arrays between parses", () => {
+    const parse = () => {
+      const result = schema.safeParse({ name: "acme.bare", version: "1.0.0" });
+      if (!result.success) throw new Error(result.error.message);
+      return result.data;
+    };
+    const first = parse();
+    const second = parse();
+    expect(second.contributes).not.toBe(first.contributes);
+    expect(second.contributes.panels).not.toBe(first.contributes.panels);
+    expect(second.contributes.surfaces).not.toBe(first.contributes.surfaces);
+  });
+});

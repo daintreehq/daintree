@@ -297,6 +297,20 @@ export class PluginContributionBroadcaster {
    * and keeps no preference to sweep, so every snapshot replaces wholesale.
    */
   private toursBroadcastPending = false;
+  /**
+   * Same coalescing rationale as {@link panelKindsBroadcastPending}. A plugin's
+   * `activate()` typically calls `host.registerAction` many times in one
+   * synchronous run; broadcasting per call sent N growing snapshots — each
+   * carrying every descriptor's `inputSchema` — to every renderer.
+   */
+  private pluginActionsBroadcastPending = false;
+  /**
+   * Drains parked by {@link holdBroadcasts}, in schedule order. `null` while
+   * nothing is held. Each drain's `*Pending` flag stays set while it is parked,
+   * so repeat schedules during the hold coalesce into the one parked drain.
+   */
+  private heldDrains: Array<() => void> | null = null;
+  private holdDepth = 0;
 
   constructor(deps: PluginContributionBroadcasterDeps) {
     this.deps = deps;
@@ -401,10 +415,64 @@ export class PluginContributionBroadcaster {
     });
   }
 
+  /**
+   * Park every scheduled drain until the returned release runs, then send each
+   * once. Startup loads plugins in parallel and each finishes on its own fs
+   * callback, so per-tick coalescing still sent one full snapshot per plugin
+   * per channel. The drains read the registries when they finally run, so the
+   * renderer ends on the same state; `complete` keeps its OR-accumulation. The
+   * release is idempotent, and holds nest.
+   */
+  holdBroadcasts(): () => void {
+    this.holdDepth++;
+    this.heldDrains ??= [];
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (this.holdDepth > 0) this.holdDepth--;
+      if (this.holdDepth === 0) this.flushHeldDrains();
+    };
+  }
+
+  /**
+   * End every hold now. A plugin activating mid-scan can dispatch into the
+   * renderer straight away (open its own panel, run its own action), and the
+   * renderer must already hold the snapshots that name those contributions.
+   * Outstanding release functions become no-ops.
+   */
+  interruptHolds(): void {
+    this.holdDepth = 0;
+    this.flushHeldDrains();
+  }
+
+  private flushHeldDrains(): void {
+    const drains = this.heldDrains;
+    this.heldDrains = null;
+    if (drains) for (const drain of drains) queueMicrotask(drain);
+  }
+
+  private defer(drain: () => void): void {
+    if (this.heldDrains) this.heldDrains.push(drain);
+    else queueMicrotask(drain);
+  }
+
   broadcastPluginActions(): void {
     this.emitScoped("plugin:actions-changed", (projectId) => ({
       actions: forProject(this.deps.listPluginActions(), (a) => a.pluginId, projectId),
     }));
+  }
+
+  /** Coalesce action registry mutations into one snapshot per tick. */
+  schedulePluginActionsBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.pluginActionsBroadcastPending) return;
+    this.pluginActionsBroadcastPending = true;
+    this.defer(() => {
+      this.pluginActionsBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.broadcastPluginActions();
+    });
   }
 
   /**
@@ -418,7 +486,7 @@ export class PluginContributionBroadcaster {
     if (this.deps.isDisposed()) return;
     if (this.panelKindsBroadcastPending) return;
     this.panelKindsBroadcastPending = true;
-    queueMicrotask(() => {
+    this.defer(() => {
       this.panelKindsBroadcastPending = false;
       // Disposal between scheduling and the microtask draining must not leak
       // a phantom broadcast — particularly important for test isolation where
@@ -445,7 +513,7 @@ export class PluginContributionBroadcaster {
     if (complete) this.toolbarButtonsBroadcastComplete = true;
     if (this.toolbarButtonsBroadcastPending) return;
     this.toolbarButtonsBroadcastPending = true;
-    queueMicrotask(() => {
+    this.defer(() => {
       this.toolbarButtonsBroadcastPending = false;
       const complete = this.toolbarButtonsBroadcastComplete && !this.deps.isReplacingPlugin();
       // Cleared only when it was actually published: a `complete` suppressed
@@ -469,7 +537,7 @@ export class PluginContributionBroadcaster {
     if (complete) this.keybindingsBroadcastComplete = true;
     if (this.keybindingsBroadcastPending) return;
     this.keybindingsBroadcastPending = true;
-    queueMicrotask(() => {
+    this.defer(() => {
       const isComplete = this.keybindingsBroadcastComplete && !this.deps.isReplacingPlugin();
       this.keybindingsBroadcastPending = false;
       if (isComplete) this.keybindingsBroadcastComplete = false;
@@ -490,7 +558,7 @@ export class PluginContributionBroadcaster {
     if (complete) this.contextMenuItemsBroadcastComplete = true;
     if (this.contextMenuItemsBroadcastPending) return;
     this.contextMenuItemsBroadcastPending = true;
-    queueMicrotask(() => {
+    this.defer(() => {
       this.contextMenuItemsBroadcastPending = false;
       const drained = this.contextMenuItemsBroadcastComplete && !this.deps.isReplacingPlugin();
       if (drained) this.contextMenuItemsBroadcastComplete = false;
@@ -516,7 +584,7 @@ export class PluginContributionBroadcaster {
     if (complete) this.agentsBroadcastComplete = true;
     if (this.agentsBroadcastPending) return;
     this.agentsBroadcastPending = true;
-    queueMicrotask(() => {
+    this.defer(() => {
       this.agentsBroadcastPending = false;
       const drained = this.agentsBroadcastComplete && !this.deps.isReplacingPlugin();
       if (drained) this.agentsBroadcastComplete = false;
@@ -542,7 +610,7 @@ export class PluginContributionBroadcaster {
     if (complete) this.recipesBroadcastComplete = true;
     if (this.recipesBroadcastPending) return;
     this.recipesBroadcastPending = true;
-    queueMicrotask(() => {
+    this.defer(() => {
       this.recipesBroadcastPending = false;
       const drained = this.recipesBroadcastComplete && !this.deps.isReplacingPlugin();
       if (drained) this.recipesBroadcastComplete = false;
@@ -563,7 +631,7 @@ export class PluginContributionBroadcaster {
     if (this.deps.isDisposed()) return;
     if (this.toursBroadcastPending) return;
     this.toursBroadcastPending = true;
-    queueMicrotask(() => {
+    this.defer(() => {
       this.toursBroadcastPending = false;
       if (this.deps.isDisposed()) return;
       this.emitScoped("plugin:tours-changed", (projectId) => ({
