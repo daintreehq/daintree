@@ -65,6 +65,8 @@ let mockToolbarState: ToolbarState = makeToolbarState();
 let mockAgentSettings: AgentSettings | null = null;
 
 function clearStoreMocks() {
+  setStateMock.mockClear();
+  mockNotify.mockClear();
   setLeftButtonsMock.mockClear();
   setRightButtonsMock.mockClear();
   moveButtonMock.mockClear();
@@ -83,9 +85,13 @@ function clearStoreMocks() {
 vi.mock("@/store", () => ({
   useToolbarPreferencesStore: Object.assign(
     (selector: (s: ToolbarState) => unknown) => selector(mockToolbarState),
-    { getState: () => mockToolbarState }
+    { getState: () => mockToolbarState, setState: (patch: unknown) => setStateMock(patch) }
   ),
 }));
+
+const setStateMock = vi.fn();
+const mockNotify = vi.fn();
+vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: (
@@ -113,34 +119,6 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: (
     selector: (s: { availability: Record<string, string> | undefined }) => unknown
   ) => selector({ availability: mockAvailability.value }),
-}));
-
-// The real dialog frame pulls in the app's hook barrel, which this suite's module
-// mocks can't satisfy; a stand-in keeps the reset flow observable.
-vi.mock("@/components/ui/ConfirmDialog", () => ({
-  ConfirmDialog: ({
-    isOpen,
-    title,
-    confirmLabel,
-    onConfirm,
-    onClose,
-  }: {
-    isOpen: boolean;
-    title: string;
-    confirmLabel: string;
-    onConfirm: () => void;
-    onClose: () => void;
-  }) =>
-    isOpen ? (
-      <div role="alertdialog" aria-label={title}>
-        <button type="button" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="button" onClick={onConfirm}>
-          {confirmLabel}
-        </button>
-      </div>
-    ) : null,
 }));
 
 vi.mock("@shared/config/agentIds", () => {
@@ -1476,20 +1454,30 @@ describe("ToolbarSettingsTab — reset", () => {
     mockAgentSettings = null;
   });
 
-  it("asks before resetting, and resets only on confirm", () => {
+  it("resets at once and offers an Undo that puts the old layout back", () => {
     const { getByRole, queryByRole } = render(<ToolbarSettingsTab />);
+    const { layout, launcher } = mockToolbarState;
     fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
-    expect(resetMock).not.toHaveBeenCalled();
 
-    const confirm = getByRole("alertdialog", { name: "Reset toolbar?" });
-    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
-    expect(resetMock).not.toHaveBeenCalled();
     expect(queryByRole("alertdialog")).toBeNull();
-
-    fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
-    fireEvent.click(
-      within(getByRole("alertdialog")).getByRole("button", { name: "Reset toolbar" })
-    );
     expect(resetMock).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    const payload = mockNotify.mock.calls[0]![0] as {
+      action: { label: string; onClick: () => void };
+    };
+    expect(payload.action.label).toBe("Undo");
+    payload.action.onClick();
+    expect(setStateMock).toHaveBeenCalledWith({ layout, launcher });
+  });
+
+  it("leaves a layout changed again since the reset alone on Undo", () => {
+    const { getByRole } = render(<ToolbarSettingsTab />);
+    const { launcher } = mockToolbarState;
+    fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
+    const payload = mockNotify.mock.calls[0]![0] as { action: { onClick: () => void } };
+
+    mockToolbarState = { ...mockToolbarState, layout: { ...mockToolbarState.layout } };
+    payload.action.onClick();
+    expect(setStateMock).toHaveBeenCalledWith({ launcher });
   });
 });

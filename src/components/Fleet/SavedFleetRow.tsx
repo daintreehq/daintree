@@ -34,7 +34,7 @@ export function SavedFleetRow({
       }
       aria-disabled={isEmptyRule || undefined}
       // One action per menu row, like every other menu in the app: recall.
-      // Delete/Backspace is the accelerator to the same confirm the manage
+      // Delete/Backspace is the accelerator to the same delete the manage
       // dialog offers as a button — not advertised on an inert row.
       aria-keyshortcuts={isEmptyRule ? undefined : "Delete"}
       title={scope.name}
@@ -44,7 +44,7 @@ export function SavedFleetRow({
           return;
         }
         // A stale snapshot can't be recalled, and deleting it is the one thing
-        // it's still for — so selecting it opens the delete confirm rather than
+        // it's still for — so selecting it deletes it (with Undo) rather than
         // sitting there disabled.
         if (isStale) {
           onRequestDelete(scope.id);
@@ -84,7 +84,7 @@ export function SavedFleetRow({
           {formatSavedFleetCount(scope, count)}
         </span>
         {/* Says out loud what selecting this row now does. */}
-        {isStale && <span className="text-2xs text-text-secondary">Delete…</span>}
+        {isStale && <span className="text-2xs text-text-secondary">Delete</span>}
       </span>
     </DropdownMenuItem>
   );

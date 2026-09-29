@@ -32,6 +32,7 @@ vi.hoisted(() => {
 });
 
 import { usePortalStore } from "../portalStore";
+import { positionOf } from "@/lib/undoToast";
 import { useUIStore } from "../uiStore";
 import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH, PORTAL_DEFAULT_WIDTH } from "@shared/types";
 
@@ -723,5 +724,62 @@ describe("portalStore persistence migration", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("portalStore restoreLink", () => {
+  beforeEach(() => {
+    usePortalStore.getState().reset();
+  });
+
+  const add = (title: string) =>
+    usePortalStore.getState().addLink({
+      title,
+      url: `https://${title}.test`,
+      icon: "globe",
+      type: "user",
+      enabled: true,
+    });
+
+  it("undoes removeLink exactly: same id, same place, same order", () => {
+    add("a");
+    add("b");
+    const before = usePortalStore.getState().links;
+    const removed = before.find((l) => l.title === "a")!;
+    const position = positionOf(before, removed.id);
+
+    usePortalStore.getState().removeLink(removed.id);
+    usePortalStore.getState().restoreLink(removed, position);
+
+    expect(usePortalStore.getState().links).toEqual(before);
+  });
+
+  it("restores the original order whichever of two removals is undone first", () => {
+    add("a");
+    add("b");
+    add("c");
+    const before = usePortalStore.getState().links;
+    const [a, b] = ["a", "b"].map((t) => before.find((l) => l.title === t)!);
+    for (const undoOrder of [
+      [a, b],
+      [b, a],
+    ]) {
+      const positions = new Map<string, ReturnType<typeof positionOf>>();
+      for (const link of [a!, b!]) {
+        positions.set(link.id, positionOf(usePortalStore.getState().links, link.id));
+        usePortalStore.getState().removeLink(link.id);
+      }
+      for (const link of undoOrder) {
+        usePortalStore.getState().restoreLink(link!, positions.get(link!.id)!);
+      }
+      expect(usePortalStore.getState().links.map((l) => l.id)).toEqual(before.map((l) => l.id));
+    }
+  });
+
+  it("does nothing when the link is already back", () => {
+    add("a");
+    const before = usePortalStore.getState().links;
+    usePortalStore.getState().restoreLink(before.at(-1)!, positionOf(before, before[0]!.id));
+    expect(usePortalStore.getState().links).toEqual(before);
   });
 });

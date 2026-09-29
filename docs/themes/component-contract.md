@@ -12,6 +12,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | --- | --- |
 | `AppDialog` | Any modal. It is the shared dialog frame — chrome, focus trap, dismissal and escape handling — and what surfaces like the worktree overview are built on. |
 | `ConfirmDialog` | Any destructive confirmation. Pass `typedNameTarget` for a D3 catastrophic action to make the user type the target's name; see [destructive-action-safeguards.md](../architecture/destructive-action-safeguards.md) for the tiers. The `danger: "confirm"` marker lives on the action definition, not on this component. |
+| `notify` with an `Undo` action | A small change the app can put back exactly: act at once, then offer Undo on a toast rather than a `ConfirmDialog`. Use `UNDO_TOAST_DURATION_MS` from `src/lib/undoToast.ts`; `notify()` makes an Undo toast urgent by default so quiet hours can't swallow it. See [Confirm or undo](../architecture/destructive-action-safeguards.md#confirm-or-undo). |
 | `SearchablePalette`, `AppPaletteDialog`, `AppPalettePopover` | Anything list-and-filter. The palette family owns the arrow-key model, the active-descendant cursor and hover/keyboard reconciliation. |
 | `popover`, `fixed-dropdown`, `dropdown-menu`, `context-menu`, `select`, `tooltip` | Layered surfaces. `fixed-dropdown` is the one that survives overlay-count races on cold start. |
 | `button` | Any button. Its variant table is the accent budget in code — pick a variant rather than restyling a `ghost`. |
