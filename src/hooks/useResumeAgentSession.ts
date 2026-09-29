@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { usePanelStore } from "@/store/panelStore";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { resumeSessionIntoPanel } from "@/services/agentResume";
@@ -29,23 +29,24 @@ import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
  *     so the resumed terminal is actually visible. This is the human surface's
  *     policy: an agent-dispatched resume deliberately does not move the view.
  *
- * What stays here is what only a human surface needs: the reactive worktree map
- * (per-view store) and turning a failure into a toast.
+ * What stays here is what only a human surface needs: the per-view worktree
+ * store and turning a failure into a toast.
  *
  *  3. **Directory-coupled resume** — the CLI locates a conversation from the
  *     launch cwd (#4781), so the target is resolved from the session's OWN
  *     recorded cwd/worktree via {@link resolveResumeLaunchTarget}, not whatever
  *     worktree happens to be active.
  *
- * The live worktree map is read reactively; everything else is read via
- * `getState()` at call time so the callback stays stable across unrelated
- * re-renders.
+ * Everything, the worktree map included, is read via `getState()` at call time
+ * so the callback keeps one identity across worktree status ticks — it is
+ * handed to the app root's modal host.
  */
 export function useResumeAgentSession() {
-  const worktrees = useWorktreeStore((state) => state.worktrees);
+  const worktreeStore = useWorktreeStoreApi();
 
   return useCallback(
     async (session: AgentSessionRecord): Promise<void> => {
+      const worktrees = worktreeStore.getState().worktrees;
       const selection = useWorktreeSelectionStore.getState();
       const activeWorktreeId = selection.activeWorktreeId;
       const currentProject = useProjectStore.getState().currentProject;
@@ -101,6 +102,6 @@ export function useResumeAgentSession() {
         });
       }
     },
-    [worktrees]
+    [worktreeStore]
   );
 }

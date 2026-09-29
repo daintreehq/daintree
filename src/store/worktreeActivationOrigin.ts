@@ -44,6 +44,10 @@ export function consumeHostAppliedActivation(worktreeId: string): boolean {
   return matched;
 }
 
+export function hasHostAppliedActivation(): boolean {
+  return hostAppliedWorktreeId !== null;
+}
+
 export function clearHostAppliedActivation(): void {
   hostAppliedWorktreeId = null;
 }
