@@ -16,6 +16,8 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import * as notifyLib from "@/lib/notify";
 import { NotificationCenter } from "../NotificationCenter";
 import { useProjectStore } from "@/store/projectStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isMac } from "@/lib/platform";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -135,6 +137,7 @@ beforeEach(() => {
     lastNotificationCenterClosedAt: 0,
   });
   worktreeStoreMock.worktrees.clear();
+  usePanelStore.setState({ panelsById: {}, focusedId: null } as never);
   dispatchMock.mockClear();
   getMock.mockReturnValue(null);
   vi.mocked(notifyLib.muteForDuration).mockClear();
@@ -1433,9 +1436,22 @@ describe("NotificationCenter — Group by context toggle", () => {
 
     render(<NotificationCenter open onClose={vi.fn()} />);
 
-    // No worktree mock entry → falls through to raw worktreeId for disambiguation.
+    // No worktree mock entry → the id's last segment still tells sections
+    // apart, but it is marked unavailable rather than passed off as live.
     const header = screen.getByTestId("context-section-header");
     expect(header.textContent).toContain("wt-unknown");
+    expect(screen.getByTestId("context-section-unavailable")).toBeTruthy();
+  });
+
+  it("does not mark a worktree this view still has as unavailable", () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    worktreeStoreMock.worktrees.set("wt-live", { worktreeId: "wt-live", name: "feature-live" });
+    setEntries([makeEntry({ message: "Live", context: { worktreeId: "wt-live" } })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    expect(screen.getByTestId("context-section-header").textContent).toContain("feature-live");
+    expect(screen.queryByTestId("context-section-unavailable")).toBeNull();
   });
 
   it("names an entry with no project or worktree as the app's own, in the header and on the row", () => {
@@ -2450,7 +2466,62 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(getRows(container)[1]?.getAttribute("tabindex")).toBe("0");
   });
 
-  it("dispatches the focused row's primary action on Enter", async () => {
+  it("goes to the focused row's source on Enter, never its primary action", async () => {
+    getMock.mockReturnValue({ enabled: true });
+    usePanelStore.setState({
+      panelsById: { "pane-1": { id: "pane-1", kind: "terminal", location: "grid" } },
+      focusedId: null,
+    } as never);
+    useUIStore.setState({ notificationCenterOpen: true });
+    setEntries([
+      makeEntry({
+        id: "a",
+        message: "Has action",
+        context: { panelId: "pane-1" },
+        actions: [{ actionId: "test.retry", label: "Retry", actionArgs: { x: 1 } }],
+      }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const row = getRows(container)[0]!;
+
+    act(() => {
+      row.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Enter" });
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-1" });
+    expect(dispatchMock).not.toHaveBeenCalledWith("test.retry", expect.anything());
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
+  it("does nothing on Enter when the row's source is gone", async () => {
+    getMock.mockReturnValue({ enabled: true });
+    setEntries([
+      makeEntry({
+        id: "a",
+        message: "Stale",
+        context: { panelId: "gone" },
+        actions: [{ actionId: "test.retry", label: "Retry" }],
+      }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const row = getRows(container)[0]!;
+
+    act(() => {
+      row.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Enter" });
+    });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the focused row's primary action on Mod+Enter", async () => {
     getMock.mockReturnValue({ enabled: true });
     setEntries([
       makeEntry({
@@ -2460,20 +2531,20 @@ describe("NotificationCenter — keyboard navigation", () => {
       }),
     ]);
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-    const list = container.querySelector('[role="list"]') as HTMLElement;
+    const row = getRows(container)[0]!;
 
     act(() => {
-      getRows(container)[0]?.focus();
+      row.focus();
     });
 
     await act(async () => {
-      fireEvent.keyDown(list, { key: "Enter" });
+      fireEvent.keyDown(row, { key: "Enter", metaKey: isMac(), ctrlKey: !isMac() });
     });
 
     expect(dispatchMock).toHaveBeenCalledWith("test.action", { x: 1 });
   });
 
-  it("does not dispatch on Enter when the action is unavailable", async () => {
+  it("does not dispatch on Mod+Enter when the action is unavailable", async () => {
     getMock.mockReturnValue({ enabled: false });
     setEntries([
       makeEntry({
@@ -2483,14 +2554,14 @@ describe("NotificationCenter — keyboard navigation", () => {
       }),
     ]);
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-    const list = container.querySelector('[role="list"]') as HTMLElement;
+    const row = getRows(container)[0]!;
 
     act(() => {
-      getRows(container)[0]?.focus();
+      row.focus();
     });
 
     await act(async () => {
-      fireEvent.keyDown(list, { key: "Enter" });
+      fireEvent.keyDown(row, { key: "Enter", metaKey: isMac(), ctrlKey: !isMac() });
     });
 
     expect(dispatchMock).not.toHaveBeenCalled();

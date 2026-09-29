@@ -1,4 +1,6 @@
 import { useProjectStore } from "@/store/projectStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import {
@@ -7,6 +9,11 @@ import {
   formatNotificationSource,
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
+import {
+  isOtherProjectContext,
+  resolveNotificationDestination,
+  type NotificationDestination,
+} from "@/lib/notificationDestination";
 
 type NotificationContext = NotificationHistoryEntry["context"];
 
@@ -33,4 +40,56 @@ export function useNotificationSource(context: NotificationContext): string {
       worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined
     ) ?? APP_SOURCE_LABEL
   );
+}
+
+/**
+ * Whether this view still has the worktree: present in its inventory and not
+ * one of the deleted worktrees whose terminals outlived them.
+ */
+export function useIsWorktreeLive(worktreeId: string | undefined): boolean {
+  const inView = useWorktreeStoreOptional<boolean>(
+    (s) => (worktreeId ? s.worktrees.has(worktreeId) : false),
+    false
+  );
+  const deleted = useWorktreeSelectionStore((s) =>
+    worktreeId ? s.deletedWorktrees.has(worktreeId) : false
+  );
+  return inView && !deleted;
+}
+
+/**
+ * A section's worktree that this view no longer has. Only claimed for the
+ * current project: another project's worktrees were never here to lose.
+ */
+export function useIsWorktreeUnavailable(
+  worktreeId: string | undefined,
+  projectId: string | undefined
+): boolean {
+  const live = useIsWorktreeLive(worktreeId);
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  if (!worktreeId || live) return false;
+  return !isOtherProjectContext({ projectId }, currentProjectId);
+}
+
+/**
+ * The row's destination as it stands now, re-derived whenever the panel is
+ * trashed or restored or the worktree comes or goes. Click time re-reads it
+ * live (see notificationNavigation.ts) rather than trusting this render.
+ */
+export function useNotificationDestination(context: NotificationContext): NotificationDestination {
+  const panelId = context?.panelId;
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  const panelLocation = usePanelStore((s) =>
+    panelId ? s.panelsById[panelId]?.location : undefined
+  );
+  const panelWorktreeId = usePanelStore((s) =>
+    panelId ? s.panelsById[panelId]?.worktreeId : undefined
+  );
+  const worktreeLive = useIsWorktreeLive(context?.worktreeId);
+  return resolveNotificationDestination(context, {
+    currentProjectId,
+    panelLocation,
+    panelWorktreeId,
+    worktreeLive,
+  });
 }

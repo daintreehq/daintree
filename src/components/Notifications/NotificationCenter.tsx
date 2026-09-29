@@ -71,6 +71,9 @@ import {
   UNKNOWN_PROJECT_LABEL,
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
+import { isMac } from "@/lib/platform";
+import { useIsWorktreeUnavailable } from "./notificationSource";
+import { goToNotificationSource } from "./notificationNavigation";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
@@ -154,6 +157,8 @@ interface FlatRow {
   correlationId: string | undefined;
   entryId: string;
   primaryAction: NotificationAction | undefined;
+  /** The displayed entry's address — what Enter goes to, like a click. */
+  context: NotificationHistoryEntry["context"];
 }
 
 function buildFlatRow(group: ThreadGroup): FlatRow {
@@ -165,6 +170,7 @@ function buildFlatRow(group: ThreadGroup): FlatRow {
     correlationId: group.correlationId,
     entryId: latest.id,
     primaryAction: latest.actions?.[0],
+    context: latest.context,
   };
 }
 
@@ -816,9 +822,20 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         }
         case "Enter": {
           const row = flatRows[activeIndex];
-          if (!row || !row.primaryAction) return;
+          if (!row || e.repeat || e.shiftKey || e.altKey) return;
+          // Enter goes where a click goes. The primary action can be a side
+          // effect (Retry, Restore), so it moves to Mod+Enter rather than
+          // firing on the key everyone presses to open a list item.
+          const mod = isMac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+          if (mod) {
+            if (!row.primaryAction) return;
+            e.preventDefault();
+            dispatchPrimaryAction(row);
+            return;
+          }
+          if (e.metaKey || e.ctrlKey) return;
           e.preventDefault();
-          dispatchPrimaryAction(row);
+          void goToNotificationSource(row.context);
           return;
         }
         default:
@@ -1975,12 +1992,18 @@ function ContextSectionHeader({
   // 64-character hash as the heading of any section from a project this view
   // hasn't loaded.
   const project = projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined);
+  // A worktree this project view no longer has keeps its name, since the
+  // records under it stay readable, but is not passed off as a live one.
+  const worktreeUnavailable = useIsWorktreeUnavailable(worktreeId, projectId);
   const resolvedWorktree = worktreeId
     ? worktreeName?.trim() || worktreeNameFromId(worktreeId)
     : undefined;
   // A main worktree is named after its folder, usually the project's own name.
   const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
-  const label = [project, worktree].filter(Boolean).join(" · ") || APP_SOURCE_LABEL;
+  const label =
+    [project, worktree, worktree && worktreeUnavailable ? "unavailable" : undefined]
+      .filter(Boolean)
+      .join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
   return (
     // Sticky, so the place a row belongs to stays on screen while you read
@@ -2017,6 +2040,14 @@ function ContextSectionHeader({
               </span>
             ) : null}
             {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
+            {worktree && worktreeUnavailable ? (
+              <span
+                data-testid="context-section-unavailable"
+                className="shrink-0 pl-1 text-text-secondary"
+              >
+                · unavailable
+              </span>
+            ) : null}
             {!project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
           </span>
           {/* Beside the name it counts, not beside the button — at the far end
