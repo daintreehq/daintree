@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join as pathJoin } from "path";
 
@@ -187,7 +187,9 @@ describe("filesystem fast path (no subprocess)", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(pathJoin(tmpdir(), "daintree-gitdir-fastpath-"));
+    // Real path: macOS's tmpdir is itself a symlink, and a relative gitdir
+    // pointer under a symlinked path is deliberately left to the subprocess.
+    root = realpathSync(mkdtempSync(pathJoin(tmpdir(), "daintree-gitdir-fastpath-")));
   });
 
   afterEach(() => {

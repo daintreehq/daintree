@@ -132,6 +132,71 @@ describe("PluginHostGit", () => {
     expect(status.files).toEqual([]);
   });
 
+  describe("status read sharing", () => {
+    function deferredProvider() {
+      const pending: Array<(changes: WorktreeChanges) => void> = [];
+      const provider = vi.fn(
+        (_worktreePath: string) => new Promise<WorktreeChanges>((resolve) => pending.push(resolve))
+      );
+      return { provider, settleAll: () => pending.splice(0).forEach((r) => r(emptyChanges)) };
+    }
+
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+    it("reads for different worktrees run independently", async () => {
+      const { provider, settleAll } = deferredProvider();
+      const a = new PluginHostGit("a", async () => fakeGit().git, provider);
+
+      const first = [a.status("/wt"), a.status("/other")];
+      await flush();
+      expect(provider.mock.calls.map((c) => c[0])).toEqual(["/wt", "/other"]);
+      settleAll();
+      await Promise.all(first);
+    });
+
+    it("callers arriving while a read runs share one read that starts after it", async () => {
+      const { provider, settleAll } = deferredProvider();
+      const a = new PluginHostGit("a", async () => fakeGit().git, provider);
+      const b = new PluginHostGit("b", async () => fakeGit().git, provider);
+
+      const running = a.status("/wt");
+      await flush();
+      const late = [a.status("/wt"), b.status("/wt"), b.status("/wt")];
+      await flush();
+      // None of the late callers may join the read already in flight: it could
+      // predate a write the caller made just before asking.
+      expect(provider).toHaveBeenCalledTimes(1);
+
+      settleAll();
+      await running;
+      await flush();
+      expect(provider).toHaveBeenCalledTimes(2);
+
+      settleAll();
+      await Promise.all(late);
+      expect(provider).toHaveBeenCalledTimes(2);
+    });
+
+    it("a call after an earlier one settled reads afresh", async () => {
+      const provider = vi.fn(async () => emptyChanges);
+      const host = new PluginHostGit("p", async () => fakeGit().git, provider);
+      await host.status("/wt");
+      await host.status("/wt");
+      expect(provider).toHaveBeenCalledTimes(2);
+    });
+
+    it("a failed read is not shared with the next call", async () => {
+      const provider = vi
+        .fn<(p: string) => Promise<WorktreeChanges>>()
+        .mockRejectedValueOnce(new Error("boom"))
+        .mockResolvedValue(emptyChanges);
+      const host = new PluginHostGit("p", async () => fakeGit().git, provider);
+      await expect(host.status("/wt")).rejects.toThrow("boom");
+      await expect(host.status("/wt")).resolves.toMatchObject({ changedFileCount: 0 });
+      expect(provider).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe("AbortSignal", () => {
     it("commit does NOT create the commit when the signal aborts during the staged-diff", async () => {
       // The destructive-mutation regression: an abort that fires while the

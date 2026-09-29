@@ -3,6 +3,7 @@ import path from "node:path";
 import type { SimpleGit } from "simple-git";
 import type { RebaseSequence, RepoState } from "../../../shared/types/git.js";
 import { OPERATION_SENTINEL_NAMES } from "../../utils/gitRepoOperationState.js";
+import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
 import { readRebaseSequence } from "../../utils/parseRebaseTodo.js";
 
 export interface RepoOperationState {
@@ -40,7 +41,11 @@ async function readRebaseProgress(
   return { step: toInt(stepRaw), total: toInt(totalRaw) };
 }
 
+// Uncached on purpose: the sentinel checks below must look at the git dir the
+// worktree has now, and the filesystem read is cheaper than a spawn anyway.
 export async function resolveGitDir(git: SimpleGit, cwd: string): Promise<string> {
+  const fromFs = await resolveGitDirFromFs(cwd);
+  if (fromFs !== null) return fromFs;
   const raw = (await git.revparse(["--git-dir"])).trim();
   return path.isAbsolute(raw) ? raw : path.resolve(cwd, raw);
 }
