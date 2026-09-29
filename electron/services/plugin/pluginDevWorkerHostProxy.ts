@@ -29,6 +29,7 @@ import type {
   PluginQuickPickOptions,
   PluginHostCallOptions,
   PluginTypedIpcHandler,
+  PluginHandlerOptions,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
   PluginWorktreesResult,
@@ -72,6 +73,16 @@ import type {
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import {
+  PLUGIN_INVOKE_MAX_RESULT_BYTES,
+  PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
+} from "../../../shared/config/pluginBudgets.js";
+import {
+  PluginPayloadTooLargeError,
+  assertPayloadWithinLimit,
+  estimatePayloadBytes,
+} from "./pluginPayloadLimits.js";
+import { resolveInvokeTimeoutMs } from "./pluginInvokeDeadline.js";
 import { errorWithFields } from "./pluginHostErrorFields.js";
 import { openPluginDatabase } from "./pluginDatabase.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
@@ -144,6 +155,12 @@ export class PluginDevWorkerHostProxy {
    * so a main-side `invoke-cancel` reaches the plugin's `execute`. */
   private readonly mcpInvokeAborts = new Map<string, AbortController>();
   /**
+   * Non-MCP invokes still running, and whether main has since cancelled each
+   * (its deadline passed). A cancelled invoke's handler cannot be interrupted,
+   * but its result is no longer awaited, so it is never cloned back to main.
+   */
+  private readonly runningInvokes = new Map<string, { cancelled: boolean }>();
+  /**
    * Manifest command handlers (#12274), keyed by the file URL of the module
    * main resolved. Holds the in-flight IMPORT promise, not the settled handler,
    * so concurrent first dispatches of the same command share one import instead
@@ -214,6 +231,8 @@ export class PluginDevWorkerHostProxy {
         const controller = this.mcpInvokeAborts.get(msg.requestId);
         this.mcpInvokeAborts.delete(msg.requestId);
         controller?.abort();
+        const running = this.runningInvokes.get(msg.requestId);
+        if (running) running.cancelled = true;
         return true;
       }
       case "subscription-event": {
@@ -307,6 +326,54 @@ export class PluginDevWorkerHostProxy {
   private async handleInvoke(
     msg: Exclude<Extract<PluginHostToWorkerMessage, { type: "invoke" }>, { kind: "mcp-tool" }>
   ): Promise<void> {
+    const running = { cancelled: false };
+    this.runningInvokes.set(msg.requestId, running);
+    // What a plugin:invoke result is named after; decoration results are not
+    // plugin:invoke results and keep their own budget.
+    const capTarget =
+      msg.kind === "handler"
+        ? msg.channel
+        : msg.kind === "file-decoration-method"
+          ? null
+          : msg.namespacedId;
+    const settle = (
+      outcome: { ok: true; result: unknown } | { ok: false; error: string }
+    ): void => {
+      this.runningInvokes.delete(msg.requestId);
+      if (running.cancelled) return;
+      // Refused here, before the clone across the port, rather than only by
+      // main's re-check after it has already paid for it.
+      if (
+        outcome.ok &&
+        capTarget !== null &&
+        estimatePayloadBytes(outcome.result, PLUGIN_INVOKE_MAX_RESULT_BYTES) >
+          PLUGIN_INVOKE_MAX_RESULT_BYTES
+      ) {
+        outcome = {
+          ok: false,
+          error: new PluginPayloadTooLargeError(
+            this.pluginId,
+            `result of "${capTarget}"`,
+            PLUGIN_INVOKE_MAX_RESULT_BYTES
+          ).message,
+        };
+      }
+      if (outcome.ok) {
+        this.post({
+          type: "invoke-result",
+          requestId: msg.requestId,
+          ok: true,
+          result: outcome.result,
+        });
+      } else {
+        this.post({
+          type: "invoke-result",
+          requestId: msg.requestId,
+          ok: false,
+          error: outcome.error,
+        });
+      }
+    };
     try {
       if (msg.kind === "action") {
         const handler = this.actionHandlers.get(msg.namespacedId);
@@ -314,7 +381,7 @@ export class PluginDevWorkerHostProxy {
           throw new Error(`No action handler registered for "${msg.namespacedId}"`);
         }
         const result = await handler(msg.args);
-        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        settle({ ok: true, result });
         return;
       }
       if (msg.kind === "command") {
@@ -338,7 +405,7 @@ export class PluginDevWorkerHostProxy {
           appendHandlerHint(err, actionHandlerArityHint(handler, err));
           throw err;
         }
-        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        settle({ ok: true, result });
         return;
       }
       if (msg.kind === "file-decoration-method") {
@@ -351,7 +418,7 @@ export class PluginDevWorkerHostProxy {
         }
         const [scope, paths] = msg.args as [string, string[]];
         const result = await impl.provideDecorations(scope, paths);
-        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        settle({ ok: true, result });
         return;
       }
       // kind === "handler"
@@ -360,14 +427,9 @@ export class PluginDevWorkerHostProxy {
         throw new Error(`No handler registered for channel "${msg.channel}"`);
       }
       const result = await this.invokeIpcHandler(entry, msg.ctx, msg.args);
-      this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+      settle({ ok: true, result });
     } catch (err) {
-      this.post({
-        type: "invoke-result",
-        requestId: msg.requestId,
-        ok: false,
-        error: formatErrorMessage(err, "invocation failed"),
-      });
+      settle({ ok: false, error: formatErrorMessage(err, "invocation failed") });
     }
   }
 
@@ -535,6 +597,20 @@ export class PluginDevWorkerHostProxy {
     });
   }
 
+  /**
+   * Refuse an oversize push before it is cloned across the parent port, so the
+   * plugin sees the failure on the call that caused it rather than as a log
+   * line in main, which applies the same cap again on arrival.
+   */
+  private assertPushWithinLimit(channel: string, payload: unknown): void {
+    assertPayloadWithinLimit(
+      this.pluginId,
+      `push payload on "${channel}"`,
+      payload,
+      PLUGIN_PUSH_MAX_PAYLOAD_BYTES
+    );
+  }
+
   private notify(method: PluginHostNotifyMethod, params: unknown, registrationKey?: string): void {
     if (this.disposed) return;
     this.post({ type: "host-notify", method, params, registrationKey });
@@ -630,37 +706,60 @@ export class PluginDevWorkerHostProxy {
           | PluginChannelSchema<unknown, unknown>
           | PluginIpcHandler
           | PluginTypedIpcHandler<unknown, unknown>,
-        typedHandler?: PluginTypedIpcHandler<unknown, unknown>
+        typedHandlerOrOptions?: PluginTypedIpcHandler<unknown, unknown> | PluginHandlerOptions,
+        typedOptions?: PluginHandlerOptions
       ) => {
         this.assertActivationOpen("registerHandler");
         if (typeof channel !== "string" || channel.length === 0) {
           throw new Error(`Plugin "${this.pluginId}" registerHandler: channel must be a string`);
         }
-        if (typedHandler !== undefined) {
+        // A function in third position is the typed overload by definition. Short
+        // of that, a function in second position is the legacy overload, whose
+        // optional third argument is the options bag.
+        const isLegacy =
+          typeof typedHandlerOrOptions !== "function" && typeof schemaOrHandler === "function";
+        const options = isLegacy
+          ? (typedHandlerOrOptions as PluginHandlerOptions | undefined)
+          : typedOptions;
+        const rawTimeoutMs: unknown = options?.timeoutMs;
+        // Validated here too so a bad value throws at the author's call site,
+        // not as a deferred register-error.
+        resolveInvokeTimeoutMs(this.pluginId, channel, rawTimeoutMs);
+        const timeoutMs = rawTimeoutMs as number | undefined;
+        if (!isLegacy) {
+          const typedHandler = typedHandlerOrOptions;
           if (!isChannelSchema(schemaOrHandler)) {
             throw new Error(
               `Plugin "${this.pluginId}" registerHandler: second argument must be a channel schema { args, result } when a typed handler is provided`
             );
           }
+          if (typeof typedHandler !== "function") {
+            throw new Error(
+              `Plugin "${this.pluginId}" registerHandler: handler must be a function`
+            );
+          }
           const schema = schemaOrHandler;
-          this.ipcHandlers.set(channel, { handler: typedHandler, schema });
+          this.ipcHandlers.set(channel, {
+            handler: typedHandler as PluginTypedIpcHandler<unknown, unknown>,
+            schema,
+          });
           this.notify(
             "registerHandler",
             {
               channel,
               hasSchema: true,
               requires: schema.requires ? [...schema.requires] : undefined,
+              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             },
             `handler:${channel}`
           );
         } else {
-          if (typeof schemaOrHandler !== "function") {
-            throw new Error(
-              `Plugin "${this.pluginId}" registerHandler: handler must be a function`
-            );
-          }
           this.ipcHandlers.set(channel, { handler: schemaOrHandler as PluginIpcHandler });
-          this.notify("registerHandler", { channel, hasSchema: false }, `handler:${channel}`);
+          this.notify(
+            "registerHandler",
+            { channel, hasSchema: false, ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
+            `handler:${channel}`
+          );
         }
         return Promise.resolve();
       }) as PluginHostApi["registerHandler"],
@@ -671,6 +770,7 @@ export class PluginDevWorkerHostProxy {
             `Plugin broadcast channel must be a string without colons: ${String(channel)}`
           );
         }
+        this.assertPushWithinLimit(channel, payload);
         this.notify("broadcastToRenderer", { channel, payload });
         return Promise.resolve();
       },
@@ -699,6 +799,11 @@ export class PluginDevWorkerHostProxy {
         // Forward panelId verbatim (including `undefined`/`null`) — the real
         // main-side host wraps the envelope and resolves the broadcast-vs-target
         // routing. Structured clone over the parent-port preserves `undefined`.
+        try {
+          this.assertPushWithinLimit(channel, payload);
+        } catch (err) {
+          return Promise.reject(err);
+        }
         this.notify("postToPanel", { channel, payload, panelId });
         return Promise.resolve();
       },

@@ -1,5 +1,6 @@
 import { vi, type Mock } from "vitest";
 import path from "path";
+import { PLUGIN_PUSH_BATCH_CHANNEL, type PluginPushBatchEntry } from "../pluginPushProtocol.js";
 
 /**
  * A two-project fixture for the confused-deputy suite: two registered projects
@@ -115,10 +116,31 @@ export function projectRootOf(projectId: string): string {
  * One call answers both halves of a confused-deputy assertion: who got it, and
  * — because every view in the fixture is scanned — who did not.
  */
+/**
+ * Did this send carry `channel`? Plugin pushes travel inside batch messages,
+ * so a batch counts for every channel among its entries.
+ */
+function sendCarries(call: unknown[], channel: string): boolean {
+  if (call[0] === channel) return true;
+  if (call[0] !== PLUGIN_PUSH_BATCH_CHANNEL || !Array.isArray(call[1])) return false;
+  return (call[1] as PluginPushBatchEntry[]).some((entry) => entry[0] === channel);
+}
+
+/**
+ * How a suite delivers plugin pushes the batcher is still holding. Injected
+ * rather than imported: the batcher reaches `webContentsRegistry`, whose mock
+ * factory imports this harness, so a static import would deadlock the mocks.
+ */
+let flushPendingPushes: () => void = () => {};
+export function setPendingPushFlusher(flush: () => void): void {
+  flushPendingPushes = flush;
+}
+
 export function recipientIdsOf(channel: string): number[] {
+  flushPendingPushes();
   const ids: number[] = [];
   for (const record of views.values()) {
-    if (record.webContents.send.mock.calls.some((call) => call[0] === channel)) {
+    if (record.webContents.send.mock.calls.some((call) => sendCarries(call, channel))) {
       ids.push(record.webContents.id);
     }
   }

@@ -263,6 +263,9 @@ import {
 } from "./plugin/PluginTourRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
+import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
+import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
+import { routePluginPush } from "./plugin/pluginPushBatcher.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo, PluginRequiredSettingsStatus } from "../../shared/types/plugin.js";
@@ -3744,13 +3747,19 @@ export class PluginService {
           // A bound plugin's process output reaches only its own project's
           // views; an unbound one deliberately reaches all of them, as its
           // panels can live in any project.
-          const channel = `plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`;
-          const projectId = this.hostBindings.get(pluginId)?.projectId ?? null;
-          if (projectId === null) {
-            broadcastToRenderer(channel, { panelId, payload: event });
-            return;
-          }
-          broadcastToProjectRenderers(projectId, channel, { panelId, payload: event });
+          //
+          // Routed through the same per-renderer batcher as postToPanel, so a
+          // process's output and the plugin's own pushes on this transport keep
+          // one FIFO order per renderer. Host-generated chunks are not capped.
+          routePluginPush({
+            pluginId,
+            projectId: this.hostBindings.get(pluginId)?.projectId ?? null,
+            channel: `plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`,
+            panelId,
+            payload: event,
+            bytes: estimatePayloadBytes(event),
+            locatePanel: (target, owner) => this.panelLifecycleBroker.pushTargetsFor(target, owner),
+          });
         },
         ptySpawner: (config, context) =>
           this.getPluginPtyTransport().spawn(context.id, context.generation, {
@@ -4543,6 +4552,14 @@ export class PluginService {
         markAuditedHandlerFailure(err);
         throw err;
       }
+      // Size-checked before the success audit: an oversize result is a failed
+      // dispatch, which the outer plugin:invoke catch records.
+      assertPayloadWithinLimit(
+        pluginId,
+        `result of "${channel}"`,
+        actionResult,
+        PLUGIN_INVOKE_MAX_RESULT_BYTES
+      );
       // Audit the success path too (#10517). A plugin calling its own
       // registered action handler from its view must leave the same durable
       // trail on success as on failure — otherwise a benign-looking action can
@@ -4639,6 +4656,12 @@ export class PluginService {
       }
       finalResult = parsedResult.data;
     }
+    assertPayloadWithinLimit(
+      pluginId,
+      `result of "${channel}"`,
+      finalResult,
+      PLUGIN_INVOKE_MAX_RESULT_BYTES
+    );
 
     // Audit the success path too (#10517). The catch above records IPC-handler
     // failures; without this, a plugin invoking its own registered handler via

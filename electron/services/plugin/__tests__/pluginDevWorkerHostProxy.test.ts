@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
+import {
+  PLUGIN_INVOKE_MAX_RESULT_BYTES,
+  PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
+} from "../../../../shared/config/pluginBudgets.js";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -1230,5 +1234,123 @@ describe("PluginDevWorkerHostProxy reloadPanel (#12610)", () => {
     const promise = proxy.host.reloadPanel("p1");
     proxy.dispose();
     await expect(promise).resolves.toBe("unavailable");
+  });
+});
+
+describe("PluginDevWorkerHostProxy transport limits", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const schema = {
+    args: { safeParse: (v: unknown) => ({ success: true, data: v }) },
+    result: { safeParse: (v: unknown) => ({ success: true, data: v }) },
+  } as any;
+
+  it("forwards a legacy handler's timeoutMs to main", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("slow", () => null, { timeoutMs: 0 });
+    expect(sent.find((m) => m.method === "registerHandler")).toMatchObject({
+      params: { channel: "slow", hasSchema: false, timeoutMs: 0 },
+    });
+  });
+
+  it("forwards a typed handler's timeoutMs to main", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("typed", schema, () => null, { timeoutMs: 30_000 });
+    expect(sent.find((m) => m.method === "registerHandler")).toMatchObject({
+      params: { channel: "typed", hasSchema: true, timeoutMs: 30_000 },
+    });
+  });
+
+  it("omits timeoutMs when the handler declares none", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("plain", () => null);
+    const params = sent.find((m) => m.method === "registerHandler").params;
+    expect("timeoutMs" in params).toBe(false);
+  });
+
+  it("throws at the call site for an invalid timeoutMs", () => {
+    const { proxy, sent } = makeProxy();
+    expect(() => proxy.host.registerHandler("bad", () => null, { timeoutMs: -5 })).toThrow(
+      /timeoutMs must be a number/
+    );
+    expect(sent.some((m) => m.method === "registerHandler")).toBe(false);
+  });
+
+  it("rejects an oversize postToPanel payload before it crosses the port", async () => {
+    const { proxy, sent } = makeProxy();
+    const huge = "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES + 1);
+    await expect(proxy.host.postToPanel("tick", huge, "panel-a")).rejects.toThrow(
+      /^PLUGIN_PAYLOAD_TOO_LARGE: /
+    );
+    expect(sent.some((m) => m.method === "postToPanel")).toBe(false);
+  });
+
+  it("throws on an oversize broadcastToRenderer payload without notifying main", () => {
+    const { proxy, sent } = makeProxy();
+    const huge = { blob: "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES) };
+    expect(() => proxy.host.broadcastToRenderer("tick", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
+    expect(sent.some((m) => m.method === "broadcastToRenderer")).toBe(false);
+  });
+});
+
+describe("PluginDevWorkerHostProxy invoke results", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const ctx = { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.demo" };
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("refuses an oversize handler result in the worker, before it crosses the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("big", () => "x".repeat(PLUGIN_INVOKE_MAX_RESULT_BYTES + 1));
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i1",
+      kind: "handler",
+      channel: "big",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    const result = sent.find((m) => m.type === "invoke-result");
+    expect(result).toMatchObject({ requestId: "i1", ok: false });
+    expect(result.error).toMatch(/^PLUGIN_PAYLOAD_TOO_LARGE: .*result of "big"/);
+  });
+
+  it("posts nothing for an invoke main cancelled while it ran", async () => {
+    const { proxy, sent } = makeProxy();
+    let release: (value: string) => void = () => {};
+    await proxy.host.registerHandler("slow", () => new Promise((resolve) => (release = resolve)));
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i2",
+      kind: "handler",
+      channel: "slow",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    proxy.handleMessage({ type: "invoke-cancel", requestId: "i2" } as any);
+    release("late");
+    await tick();
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "i2")).toBe(false);
+  });
+
+  it("still answers an invoke that was not cancelled", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("fast", () => "ok");
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i3",
+      kind: "handler",
+      channel: "fast",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    expect(sent.find((m) => m.type === "invoke-result")).toMatchObject({
+      requestId: "i3",
+      ok: true,
+      result: "ok",
+    });
   });
 });

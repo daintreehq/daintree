@@ -14,6 +14,8 @@ vi.mock("../../../utils/logger.js", () => ({
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
+import { PluginInvokeTimeoutError, runWithInvokeDeadline } from "../pluginInvokeDeadline.js";
+import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
 import { databaseBackupApprovers } from "../pluginInternalApprovers.js";
 
 class FakeWorkerHost extends EventEmitter {
@@ -2368,5 +2370,67 @@ describe("sendToAgent cancelled from the worker after main has acted", () => {
     controller.abort();
 
     await expect(result).resolves.toEqual({ status: "cancelled" });
+  });
+});
+
+describe("PluginDevWorkerMainBridge handler invoke deadline", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
+
+  const ctx: PluginIpcContext = {
+    projectId: null,
+    worktreeId: null,
+    webContentsId: 1,
+    pluginId: "acme.demo",
+  };
+
+  it("forwards a declared timeoutMs to the host registration", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerHandler",
+      params: { channel: "slow", hasSchema: false, timeoutMs: 0 },
+    });
+    await flush();
+    expect(host.registerHandler).toHaveBeenCalledWith("slow", expect.any(Function), {
+      timeoutMs: 0,
+    });
+  });
+
+  it("cancels the worker invoke when the deadline's signal aborts", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerHandler",
+      params: { channel: "slow", hasSchema: false },
+    });
+    await flush();
+    const handler = host.registerHandler.mock.calls[0][1] as (
+      c: PluginIpcContext,
+      ...args: unknown[]
+    ) => Promise<unknown>;
+
+    vi.useFakeTimers();
+    // What the host's deadline wrapper does around a registered handler.
+    const pending = runWithInvokeDeadline("acme.demo", "slow", 100, ctx, (scoped) =>
+      handler(scoped, "arg")
+    ) as Promise<unknown>;
+    const outcome = pending.catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const invoke = workerHost.sent.find((m: any) => m.type === "invoke" && m.kind === "handler");
+    expect(invoke).toMatchObject({ channel: "slow", args: ["arg"], ctx });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await outcome).toBeInstanceOf(PluginInvokeTimeoutError);
+    expect(workerHost.sent).toContainEqual({ type: "invoke-cancel", requestId: invoke.requestId });
+
+    // A late result for the cancelled id has nothing left to settle.
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invoke.requestId,
+      ok: true,
+      result: "late",
+    });
   });
 });

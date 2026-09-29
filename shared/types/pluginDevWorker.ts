@@ -356,6 +356,8 @@ export interface RegisterHandlerParams {
   channel: string;
   hasSchema: boolean;
   requires?: string[];
+  /** The plugin's `options.timeoutMs`, forwarded verbatim; main validates it. */
+  timeoutMs?: number;
 }
 
 /** Params for `broadcastToRenderer` (`host-notify`). */

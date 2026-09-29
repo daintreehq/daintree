@@ -119,6 +119,8 @@ import type {
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
+import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
+import { assertPayloadWithinLimit } from "../../services/plugin/pluginPayloadLimits.js";
 import {
   getProjectForWebContents,
   getWindowForWebContents,
@@ -2154,6 +2156,14 @@ export function registerPluginHandlers(): () => void {
       }
 
       try {
+        // Before any dispatch work, so an oversize payload is never forwarded
+        // to a plugin worker (a second full structured clone).
+        assertPayloadWithinLimit(
+          pluginId,
+          `arguments to "${channel}"`,
+          args,
+          PLUGIN_INVOKE_MAX_ARGS_BYTES
+        );
         const service = await getPluginService();
         // No trustworthy window means no worktree — short-circuit rather than
         // query, so the invariant holds here regardless of what the service

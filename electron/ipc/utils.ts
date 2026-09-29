@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import { z } from "zod";
 import {
   getWindowForWebContents,
@@ -409,6 +409,17 @@ export function broadcastToProjectRenderers(
   ...args: unknown[]
 ): void {
   broadcastToProjectRenderersExcept(projectId, null, channel, ...args);
+}
+
+/**
+ * The live renderers {@link broadcastToProjectRenderers} would reach, for
+ * callers that deliver per renderer themselves (the plugin push batcher).
+ */
+export function getProjectRendererTargets(projectId: string | null): WebContents[] {
+  if (projectId !== null && hasRegisteredProjectViews()) {
+    return getWebContentsForProject(projectId);
+  }
+  return getAllAppWebContents().filter((wc) => !wc.isDestroyed());
 }
 
 /**

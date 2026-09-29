@@ -4,6 +4,7 @@ import path from "path";
 const ipcUtilsMock = vi.hoisted(() => ({
   broadcastToRenderer: vi.fn(),
   broadcastToProjectRenderers: vi.fn(),
+  getProjectRendererTargets: vi.fn((_projectId: string | null): unknown[] => []),
 }));
 const serviceRefsMock = vi.hoisted(() => ({
   getPtyClient: vi.fn((): unknown => null),
@@ -18,6 +19,7 @@ vi.mock("electron", () => ({
 vi.mock("../../../ipc/utils.js", () => ({
   broadcastToRenderer: ipcUtilsMock.broadcastToRenderer,
   broadcastToProjectRenderers: ipcUtilsMock.broadcastToProjectRenderers,
+  getProjectRendererTargets: ipcUtilsMock.getProjectRendererTargets,
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: serviceRefsMock.getPtyClient,
@@ -562,10 +564,13 @@ describe("createHost renderer pushes", () => {
 
     expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
     const targets = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((c) => c[0]);
-    expect(targets).toEqual([PROJECT_A, PROJECT_A, PROJECT_A]);
+    expect(targets).toEqual([PROJECT_A]);
     expect(ipcUtilsMock.broadcastToProjectRenderers.mock.calls[0][1]).toBe(
       CHANNELS.NOTIFICATION_SHOW_TOAST
     );
+    // Plugin pushes resolve their renderers through the batcher, same scope.
+    const pushScopes = ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0]);
+    expect(pushScopes).toEqual([PROJECT_A, PROJECT_A]);
   });
 
   it("still broadcasts app-wide when unbound", async () => {
@@ -576,7 +581,8 @@ describe("createHost renderer pushes", () => {
     await host.broadcastToRenderer("ping", { a: 1 });
 
     expect(ipcUtilsMock.broadcastToProjectRenderers).not.toHaveBeenCalled();
-    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(2);
+    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(1);
+    expect(ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0])).toEqual([null]);
   });
 });
 

@@ -76,6 +76,7 @@ import type {
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import { invokeSignalFor } from "./pluginInvokeDeadline.js";
 import { serializableErrorFields } from "./pluginHostErrorFields.js";
 import { approvePluginDatabaseBackup } from "./pluginInternalApprovers.js";
 
@@ -499,7 +500,9 @@ export class PluginDevWorkerMainBridge {
    * differ by orders of magnitude — a plugin action that runs a build or a
    * clone is not hung — so a blanket deadline would break working plugins to
    * catch a case the caller can bound better. Callers that DO have a budget
-   * already own one (`DECORATION_PROVIDER_TIMEOUT_MS` in ipc/handlers/plugin.ts).
+   * already own one (`DECORATION_PROVIDER_TIMEOUT_MS` in ipc/handlers/plugin.ts,
+   * and the per-channel `plugin:invoke` deadline the host wraps around every
+   * registered handler, which reaches here as the invoke's signal).
    * What was genuinely unbounded is a dead worker, and that is what this fixes.
    */
   private onWorkerExit = (code: number, expected: boolean): void => {
@@ -1131,9 +1134,15 @@ export class PluginDevWorkerMainBridge {
             );
           }
         }
+        // The deadline wrapper main installs around this handler hands its
+        // signal over beside the context; aborting it cancels the worker invoke.
         const handler = (ctx: PluginIpcContext, ...args: unknown[]) =>
-          this.invoke({ kind: "handler", channel: p.channel, ctx, args });
-        await this.host.registerHandler(p.channel, handler);
+          this.invoke({ kind: "handler", channel: p.channel, ctx, args }, invokeSignalFor(ctx));
+        if (p.timeoutMs !== undefined) {
+          await this.host.registerHandler(p.channel, handler, { timeoutMs: p.timeoutMs });
+        } else {
+          await this.host.registerHandler(p.channel, handler);
+        }
         return;
       }
       case "broadcastToRenderer": {

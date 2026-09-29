@@ -211,6 +211,24 @@ export class PluginPanelLifecycleBroker {
     return { kind: "missing" };
   }
 
+  /**
+   * Renderers that hold `panelId` for `pluginId` in any live phase, for routing
+   * a targeted push. Unlike {@link locate} this is not an authorization answer:
+   * a hidden or backgrounded view may still have subscribers, so every holder
+   * is returned. Any doubt about ownership returns nothing, which the caller
+   * treats as "fall back to its full broadcast scope".
+   */
+  pushTargetsFor(panelId: string, pluginId: string): number[] {
+    const sources: number[] = [];
+    for (const [sourceId, panels] of this.bySource) {
+      const event = panels.get(panelId);
+      if (!event) continue;
+      if (this.resolveOwner(event.panelKindId) !== pluginId) return [];
+      sources.push(sourceId);
+    }
+    return sources;
+  }
+
   /** Drop every listener a plugin registered (unload / worker teardown). */
   clearPlugin(pluginId: string): void {
     this.listeners.delete(pluginId);
