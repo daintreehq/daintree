@@ -51,20 +51,33 @@ interface CliResponse {
  * `result` (or reject with the `error.message`). Connection-level failures map
  * to {@link DaintreeUnavailableError} with a human-facing message.
  */
-export async function sendCliRequest(method: string, params?: unknown): Promise<unknown> {
+export async function sendCliRequest(
+  method: string,
+  params?: unknown,
+  options?: { signal?: AbortSignal }
+): Promise<unknown> {
+  const signal = options?.signal;
+  if (signal?.aborted) throw new Error("Request aborted");
   const { socketPath, token } = await resolveEndpoint();
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Request aborted"));
+      return;
+    }
     const socket = net.createConnection({ path: socketPath });
     let buffer = "";
     let settled = false;
 
+    const onAbort = (): void => finish(() => reject(new Error("Request aborted")));
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       socket.destroy();
       fn();
     };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     const timer = setTimeout(() => {
       finish(() => reject(new Error("Timed out waiting for Daintree to respond")));

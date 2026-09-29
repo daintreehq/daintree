@@ -30,6 +30,10 @@ import type {
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
+import type {
+  PluginPerfSnapshot,
+  PluginRendererMetricsReport,
+} from "../shared/types/pluginMetrics.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { PLUGIN_PUSH_BATCH_CHANNEL } from "./services/plugin/pluginPushProtocol.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -53,6 +57,7 @@ import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
 import { buildPluginCapabilityPreloadBindings } from "./ipc/handlers/pluginCapability.preload.js";
 import { buildPluginProcessPreloadBindings } from "./ipc/handlers/pluginProcess.preload.js";
+import { buildPluginMetricsPreloadBindings } from "./ipc/handlers/pluginMetrics.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
@@ -1095,6 +1100,30 @@ function _attachPluginPushBatchListener(): void {
       _pluginPushChannels.get(entry[0])?.handler(event, entry[1]);
     }
   });
+}
+
+// One main-side subscription per preload, however many listeners the page adds.
+const _perfSnapshotListeners = new Set<(snapshots: PluginPerfSnapshot[]) => void>();
+let _perfSnapshotDetach: (() => void) | null = null;
+
+function _onPerfSnapshotsChanged(callback: (snapshots: PluginPerfSnapshot[]) => void): () => void {
+  _perfSnapshotListeners.add(callback);
+  if (!_perfSnapshotDetach) {
+    _perfSnapshotDetach = _typedOn(CHANNELS.PLUGIN_PERF_SNAPSHOTS_CHANGED, (snapshots) => {
+      for (const listener of [..._perfSnapshotListeners]) listener(snapshots);
+    });
+    ipcRenderer.send(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE);
+  }
+  let removed = false;
+  return () => {
+    if (removed) return;
+    removed = true;
+    _perfSnapshotListeners.delete(callback);
+    if (_perfSnapshotListeners.size > 0 || !_perfSnapshotDetach) return;
+    _perfSnapshotDetach();
+    _perfSnapshotDetach = null;
+    ipcRenderer.send(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE);
+  };
 }
 
 function _pluginPushOn(
@@ -3322,6 +3351,17 @@ function buildElectronApi(): ElectronAPI {
 
     plugin: {
       ...buildPluginPreloadBindings(_unwrappingInvoke),
+      ...buildPluginMetricsPreloadBindings(_unwrappingInvoke),
+
+      // Fire-and-forget: renderer-side view cost observations, drained in batches.
+      reportViewMetrics: (reports: PluginRendererMetricsReport[]) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, reports);
+      },
+
+      // Pushed at most once a second, only while subscribed. Carries every
+      // tracked plugin's snapshot; read `getPerfSnapshots()` for the first one.
+      onPerfSnapshotsChanged: (callback: (snapshots: PluginPerfSnapshot[]) => void) =>
+        _onPerfSnapshotsChanged(callback),
 
       // Plugin-scoped bridge to the native filesystem path of a dropped File.
       // `webUtils.getPathForFile` must run in the preload (Electron 32 removed

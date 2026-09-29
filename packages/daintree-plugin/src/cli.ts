@@ -182,9 +182,10 @@ program
   .command("dev")
   .description("Start the hot-reload dev loop for the current plugin")
   .option("--skip-build", "skip the initial Vite build (the watcher still rebuilds on save)")
-  .action(async (opts: { skipBuild?: boolean }) => {
+  .option("--no-metrics", "don't print the plugin's performance measurements against budgets")
+  .action(async (opts: { skipBuild?: boolean; metrics?: boolean }) => {
     try {
-      await runDev({ skipBuild: opts.skipBuild });
+      await runDev({ skipBuild: opts.skipBuild, metrics: opts.metrics });
     } catch (err) {
       fail((err as Error).message);
     }

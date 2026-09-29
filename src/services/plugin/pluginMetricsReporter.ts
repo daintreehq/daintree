@@ -1,0 +1,104 @@
+import type { PluginRendererMetricsReport } from "@shared/types/pluginMetrics";
+import { pluginViewMetrics, type PluginViewMetrics } from "./pluginViewMetrics";
+
+/**
+ * Drains this renderer's plugin view observations to main in batches.
+ *
+ * Lazy by construction: nothing runs until the registry reports its first
+ * delta after a drain, so a project view with no plugin views open costs two
+ * idle listeners. The registry's early drain request (a buffer at 75% of its
+ * cap) and the page going hidden or away drain immediately, so a report is
+ * neither sampled nor lost with the page.
+ */
+
+/** Delay between the first delta after a drain and the drain itself. */
+export const REPORT_DRAIN_DELAY_MS = 2_000;
+
+type DrainRegistry = Pick<PluginViewMetrics, "subscribe" | "onDrainRequested" | "drainReports">;
+
+interface ListenerTarget {
+  addEventListener(type: string, listener: () => void): void;
+  removeEventListener(type: string, listener: () => void): void;
+}
+
+export interface PluginMetricsReporterOptions {
+  registry?: DrainRegistry;
+  send?: (reports: PluginRendererMetricsReport[]) => void;
+  /** Defaults to `document`; `null` opts out of visibility draining. */
+  target?: (ListenerTarget & { readonly visibilityState: string }) | null;
+  /** Defaults to `window`; `null` opts out of `pagehide` draining. */
+  pageTarget?: ListenerTarget | null;
+  setTimeout?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
+  queueMicrotask?: (fn: () => void) => void;
+}
+
+function defaultSend(reports: PluginRendererMetricsReport[]): void {
+  window.electron?.plugin?.reportViewMetrics?.(reports);
+}
+
+export function startPluginMetricsReporter(options: PluginMetricsReporterOptions = {}): () => void {
+  const registry = options.registry ?? pluginViewMetrics;
+  const send = options.send ?? defaultSend;
+  const doc = options.target === undefined ? globalThis.document : options.target;
+  const page = options.pageTarget === undefined ? globalThis.window : options.pageTarget;
+  const schedule = options.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
+  const cancel = options.clearTimeout ?? ((handle) => clearTimeout(handle));
+  const microtask = options.queueMicrotask ?? ((fn) => queueMicrotask(fn));
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let microtaskQueued = false;
+  let stopped = false;
+
+  const drain = (): void => {
+    if (timer !== null) {
+      cancel(timer);
+      timer = null;
+    }
+    if (stopped) return;
+    let reports: PluginRendererMetricsReport[];
+    try {
+      reports = registry.drainReports();
+    } catch {
+      return;
+    }
+    if (reports.length === 0) return;
+    try {
+      send(reports);
+    } catch {
+      // Main may be mid-teardown; the observations are best-effort.
+    }
+  };
+
+  const offSubscribe = registry.subscribe(() => {
+    if (timer !== null || stopped) return;
+    timer = schedule(drain, REPORT_DRAIN_DELAY_MS);
+  });
+
+  // Requested from inside the recording call (a React commit); leave that
+  // stack before draining.
+  const offDrainRequested = registry.onDrainRequested(() => {
+    if (microtaskQueued || stopped) return;
+    microtaskQueued = true;
+    microtask(() => {
+      microtaskQueued = false;
+      drain();
+    });
+  });
+
+  const onVisibilityChange = (): void => {
+    if (doc?.visibilityState === "hidden") drain();
+  };
+  doc?.addEventListener("visibilitychange", onVisibilityChange);
+  page?.addEventListener("pagehide", drain);
+
+  return () => {
+    // One last drain, so a monitor restart does not drop what was pending.
+    drain();
+    stopped = true;
+    offSubscribe();
+    offDrainRequested();
+    doc?.removeEventListener("visibilitychange", onVisibilityChange);
+    page?.removeEventListener("pagehide", drain);
+  };
+}

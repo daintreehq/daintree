@@ -2337,6 +2337,21 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onArchiveInstallIntent(
       callback: (intent: import("../plugin.js").PluginArchiveInstallIntent) => void
     ): () => void;
+    /**
+     * Fire-and-forget: hand main a batch of plugin view cost observations
+     * drained from this renderer's `pluginViewMetrics` registry. Main validates,
+     * clamps and drops reports for plugins it has not loaded.
+     */
+    reportViewMetrics(reports: import("../pluginMetrics.js").PluginRendererMetricsReport[]): void;
+    /**
+     * Subscribe to per-plugin perf snapshots, pushed at most once a second and
+     * only while at least one listener is attached (worker memory is sampled
+     * only then). Each push carries every tracked plugin; read
+     * `getPerfSnapshots()` for the initial state. Returns a cleanup.
+     */
+    onPerfSnapshotsChanged(
+      callback: (snapshots: import("../pluginMetrics.js").PluginPerfSnapshot[]) => void
+    ): () => void;
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {

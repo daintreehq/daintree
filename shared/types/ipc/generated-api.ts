@@ -576,6 +576,9 @@ export interface GeneratedElectronAPI {
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    getPerfSnapshots(
+      ...args: IpcInvokeMap["plugin:perf-snapshots-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:perf-snapshots-get"]["result"]>;
     getProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-list"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-list"]["result"]>;
