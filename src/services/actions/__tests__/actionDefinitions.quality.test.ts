@@ -481,7 +481,8 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // is that the user trims and saves the export, so a caller asked for logs to
   // share reaches for it instead of archiving the raw log folder.
   // 18_850 → 19_100 for #12980's hand-over path on the six hand-over tools,
-  // as for the external total above.
+  // as for the external total above: 37 B each on the 18_847 B last measured,
+  // 19_069 B.
   const MAX_COHORT_TOTAL_BYTES = 19_100;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
