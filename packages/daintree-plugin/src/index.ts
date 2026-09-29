@@ -14,6 +14,16 @@ export type {
   DoctorPluginReport,
   DoctorHostReport,
 } from "./commands/doctor.js";
+export { runLint, formatLintReport, formatFindingInline } from "./commands/lint.js";
+export type { LintCommandOptions, LintCommandResult } from "./commands/lint.js";
+export { LINT_RULES, lintPlugin } from "./lib/lint/index.js";
+export type {
+  LintFinding,
+  LintOptions,
+  LintResult,
+  LintRule,
+  LintSeverity,
+} from "./lib/lint/index.js";
 export { runSchema } from "./commands/schema.js";
 export type { SchemaOptions } from "./commands/schema.js";
 export { runPackage } from "./commands/package.js";
