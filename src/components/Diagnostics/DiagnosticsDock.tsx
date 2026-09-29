@@ -4,6 +4,8 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { TabErrorCount, UnderlineTabs } from "@/components/ui/UnderlineTabs";
 import {
   useDiagnosticsStore,
@@ -91,45 +93,16 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     setHeight(DIAGNOSTICS_DEFAULT_HEIGHT);
   }, [setHeight]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? RESIZE_STEP_LARGE : RESIZE_STEP;
-      switch (e.key) {
-        case "ArrowUp":
-          e.preventDefault();
-          setHeight(height + step);
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          setHeight(height - step);
-          break;
-        case "PageUp":
-          e.preventDefault();
-          setHeight(height + RESIZE_STEP_LARGE);
-          break;
-        case "PageDown":
-          e.preventDefault();
-          setHeight(height - RESIZE_STEP_LARGE);
-          break;
-        case "Home":
-          e.preventDefault();
-          setHeight(DIAGNOSTICS_MIN_HEIGHT);
-          break;
-        case "End":
-          e.preventDefault();
-          setHeight(maxHeight);
-          break;
-        case "Enter":
-        case " ":
-          e.preventDefault();
-          setHeight(DIAGNOSTICS_DEFAULT_HEIGHT);
-          break;
-        default:
-          return;
-      }
-    },
-    [height, maxHeight, setHeight]
-  );
+  const handleKeyDown = useSplitterKeys({
+    growKey: "ArrowUp",
+    value: height,
+    min: DIAGNOSTICS_MIN_HEIGHT,
+    max: maxHeight,
+    step: RESIZE_STEP,
+    largeStep: RESIZE_STEP_LARGE,
+    onChange: setHeight,
+    onReset: handleResetHeight,
+  });
 
   // Pointer and keyboard activation share one path, so promoting errors when
   // Problems opens can't depend on how the tab was reached.
@@ -317,34 +290,18 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       onFocusCapture={handleFocusCapture}
       onBlurCapture={handleBlurCapture}
     >
-      <div
-        className={cn(
-          "group h-3 cursor-ns-resize transition-colors flex items-center justify-center",
-          "outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-          // Hover styling is off while resizing, or it outranks the drag state.
-          isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
-        )}
+      <ResizeHandle
+        growKey="ArrowUp"
+        edge="inline"
+        label="Resize diagnostics dock"
+        value={height}
+        min={DIAGNOSTICS_MIN_HEIGHT}
+        max={maxHeight}
+        isResizing={isResizing}
         onMouseDown={handleResizeStart}
-        onDoubleClick={handleResetHeight}
         onKeyDown={handleKeyDown}
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Resize diagnostics dock (double-click to reset)"
-        aria-valuenow={Math.round(height)}
-        aria-valuemin={DIAGNOSTICS_MIN_HEIGHT}
-        aria-valuemax={Math.round(maxHeight)}
-        tabIndex={0}
-      >
-        <div
-          className={cn(
-            "w-10 rounded-full transition-[height] duration-150 delay-100",
-            // The focus outline is the accent; the grip stays neutral.
-            isResizing
-              ? "h-0.5 bg-text-primary/50"
-              : "h-px bg-text-primary/15 group-hover:h-0.5 group-hover:bg-text-primary/30 group-focus-visible:h-0.5 group-focus-visible:bg-text-primary/50"
-          )}
-        />
-      </div>
+        onReset={handleResetHeight}
+      />
 
       <div className="flex h-8 shrink-0 items-stretch justify-between border-b border-overlay bg-surface-sidebar/50 px-2">
         <UnderlineTabs

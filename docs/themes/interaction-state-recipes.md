@@ -302,6 +302,29 @@ A toggle keeps one name, and a glyph shows the state rather than the action: the
 
 ---
 
+### Resize Handle
+
+**Role:** Every draggable edge that resizes a region: sidebar, assistant panel, two-pane split, diagnostics dock, dev-preview tool drawer, dock popovers, portal, file tree, scratchpad. One primitive, `src/components/ui/ResizeHandle.tsx`, with the keyboard in `src/hooks/useSplitterKeys.ts`. Never hand-roll the markup; the contract test rejects a `role="separator"` outside the primitive.
+
+```tsx
+// track
+"outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";
+isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium";
+// grip: 32px long, 1px thick at rest, 2px on hover, focus and drag
+("bg-text-primary/20 group-hover/resize:bg-text-primary/35 group-focus-visible/resize:bg-text-primary/50"); // drag: /50
+("[.light_&]:bg-text-primary/25 [.light_&]:group-hover/resize:bg-text-primary/45 [.light_&]:group-focus-visible/resize:bg-text-primary/55"); // drag: /55
+```
+
+**Usage:**
+
+- **Target:** 12px across the drag axis. Edge handles (`edge="left" | "right"`) straddle the border as a `w-3` strip; a top handle (`edge="top"`) lines the inside of the edge as `h-3`; an in-flow horizontal splitter is an `h-3` row. The two-pane divider keeps the 6px track its grid template reserves and reaches 3px past each side with a `::before`, so its target is 12px too.
+- **Keyboard:** arrows step and Shift+arrow takes the large step, in the direction that grows the pane (`growKey`). Home and End jump to the pane's smallest and largest size. Enter and Space reset. Arrows on the other axis are left alone. A horizontal splitter also takes PageUp/PageDown as the large step; a vertical one has no direction for them and ignores them. `aria-keyshortcuts` is generated from the same table.
+- **Reset:** double-click, Enter or Space. The accessible name always ends "(double-click to reset)" — the primitive appends it, so a caller passes only "Resize sidebar".
+- **Ink:** the grip is neutral in every state, with each step raised on light themes where low-alpha ink fades into the near-white track. Hover styling is dropped while a drag is held, or the hover variant outranks the drag state and the two render identically.
+- **Focus:** one solid 2px inset accent outline on the track, on every handle, including those in regions that spend accent elsewhere (dev-preview drawer, dock popovers). A focused handle is the active element of its region, so its outline is that region's one accent mark; the neutral lift alone was invisible in forced-colors and failed WCAG 2.4.7.
+
+---
+
 ### Drag Handle During Sort
 
 **Role:** Visual feedback on a drag handle during an active sort/drag operation. Uses neutral elevation and scale — never accent.

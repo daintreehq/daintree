@@ -20,6 +20,8 @@ import {
 } from "@shared/types";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
@@ -334,39 +336,21 @@ export function PortalDock() {
     [width, setWidth]
   );
 
-  const handleResizeDoubleClick = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
+  const handleResetWidth = useCallback(() => {
     void actionService.dispatch("portal.resetWidth", undefined, { source: "user" });
   }, []);
 
-  // Right-anchored dock: ArrowLeft widens, ArrowRight narrows. Home/End and
-  // Shift+Arrow follow the WAI-ARIA APG window-splitter pattern (Home/End)
-  // plus the common IDE convention of a coarse step under Shift.
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? RESIZE_STEP_COARSE : RESIZE_STEP_FINE;
-      let nextWidth: number;
-      switch (e.key) {
-        case "ArrowLeft":
-          nextWidth = width + step;
-          break;
-        case "ArrowRight":
-          nextWidth = width - step;
-          break;
-        case "Home":
-          nextWidth = PORTAL_MIN_WIDTH;
-          break;
-        case "End":
-          nextWidth = PORTAL_MAX_WIDTH;
-          break;
-        default:
-          return;
-      }
-      e.preventDefault();
-      setWidth(Math.min(Math.max(nextWidth, PORTAL_MIN_WIDTH), PORTAL_MAX_WIDTH));
-    },
-    [width, setWidth]
-  );
+  // Right-anchored dock, so ArrowLeft widens it.
+  const handleKeyDown = useSplitterKeys({
+    growKey: "ArrowLeft",
+    value: width,
+    min: PORTAL_MIN_WIDTH,
+    max: PORTAL_MAX_WIDTH,
+    step: RESIZE_STEP_FINE,
+    largeStep: RESIZE_STEP_COARSE,
+    onChange: setWidth,
+    onReset: handleResetWidth,
+  });
 
   // One-time viewport clamp on mount. The zustand persist `merge` callback
   // can't safely read window.innerWidth — Electron's BrowserWindow boots with
@@ -440,35 +424,20 @@ export function PortalDock() {
           onBlur={handleDockBlur}
           tabIndex={-1}
         >
-          <div
-            role="separator"
-            aria-label="Resize portal panel"
-            aria-orientation="vertical"
+          <ResizeHandle
+            growKey="ArrowLeft"
+            edge="left"
+            label="Resize portal panel"
+            value={width}
+            min={PORTAL_MIN_WIDTH}
+            max={PORTAL_MAX_WIDTH}
+            isResizing={isResizing}
             aria-controls="portal-placeholder"
-            aria-valuenow={Math.round(width)}
-            aria-valuemin={PORTAL_MIN_WIDTH}
-            aria-valuemax={PORTAL_MAX_WIDTH}
-            tabIndex={0}
-            className={cn(
-              "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
-              "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-              // Hover styling is off while resizing, or it outranks the drag state.
-              isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
-            )}
+            className="z-50"
             onMouseDown={handleResizeStart}
-            onDoubleClick={handleResizeDoubleClick}
             onKeyDown={handleKeyDown}
-          >
-            <div
-              className={cn(
-                "h-8 rounded-full transition-[width] duration-150 delay-100",
-                // The focus outline is the accent; the grip stays neutral.
-                isResizing
-                  ? "w-0.5 bg-text-primary/50"
-                  : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
-              )}
-            />
-          </div>
+            onReset={handleResetWidth}
+          />
           <PortalToolbar
             tabs={tabs}
             activeTabId={activeTabId}

@@ -224,13 +224,13 @@ There is no dedicated `activity-failed` token — failure surfaces use `status-d
 
 ### Resize Handle
 
-The draggable separators with a grip (sidebar, two-pane split, file tree, Portal dock, diagnostics dock, dock popover, dev-preview drawer) share one vocabulary; the Assistant panel's handle is a gripless track with the same focus outline:
+Every draggable edge (sidebar, assistant panel, two-pane split, file tree, Portal dock, scratchpad, diagnostics dock, dock popover, dev-preview drawer) is the shared `ResizeHandle`, so they share one vocabulary:
 
 ```
-| (a 6–12px track holding a 1px rounded grip that widens to 2px on hover)
+| (a 12px target holding a 32px, 1px rounded grip that widens to 2px on hover, focus and drag)
 ```
 
-The grip is nearly invisible at rest (`bg-text-primary/20`), brightens on hover (`/35`) and again while dragging (`/50`). The diagnostics dock's horizontal grip runs a step lighter (`/15`, `/30`), and the two-pane split raises each step on light themes. Hover styling is dropped while a drag is held, otherwise the hover variant outranks the drag state and the two render identically. Keyboard focus is a solid inset `outline-accent-primary` outline on the track with the grip kept neutral, so focus carries exactly one accent mark and is the same outline the forced-colors override redraws. Handles whose region already spends its accent (dock popover, dev-preview drawer) signal focus with the neutral track lift and a brighter grip instead. Keys follow the window-splitter pattern: arrows step, and where a handle binds them, Home and End jump to its limits — never to a reset, which belongs to Enter, Space or double-click.
+The grip is nearly invisible at rest (`bg-text-primary/20`), brightens on hover (`/35`) and again on focus or while dragging (`/50`), each step raised on light themes. Hover styling is dropped while a drag is held, otherwise the hover variant outranks the drag state and the two render identically. Keyboard focus is a solid inset `outline-accent-primary` outline on the track with the grip kept neutral, so focus carries exactly one accent mark and is the same outline the forced-colors override redraws. Keys follow the window-splitter pattern: arrows step, Shift takes a bigger step, Home and End jump to the limits, and Enter, Space or double-click resets. The full recipe is in [interaction-state-recipes.md](./interaction-state-recipes.md#resize-handle).
 
 ---
 

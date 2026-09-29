@@ -73,9 +73,7 @@ const SWEEP_THEMES = (process.env.DAINTREE_SHOT_THEMES ?? ALL_THEMES.join(","))
   .filter(Boolean);
 
 const SIDEBAR = SEL.sidebar.aside;
-/** SEL.sidebar.resizeHandle matches the label exactly; the real one is
- *  "Resize sidebar (double-click to reset)". */
-const RESIZE_HANDLE = '[aria-label^="Resize sidebar"]';
+const RESIZE_HANDLE = SEL.sidebar.resizeHandle;
 /**
  * Radix keeps a closing popover mounted through its exit animation, and it
  * precedes the new one in DOM order — so a bare testid + `.first()` can

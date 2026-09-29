@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   useDockStore,
   POPOVER_DEFAULT_HEIGHT,
   POPOVER_MIN_HEIGHT,
   POPOVER_MAX_HEIGHT_RATIO,
 } from "@/store/dockStore";
+import { resolveSplitterKey } from "@/hooks/useSplitterKeys";
 
 const RESIZE_STEP = 10;
+const RESIZE_STEP_LARGE = 50;
 
 /**
  * Clamp a candidate height to the same window the store uses. Applied during
@@ -18,18 +20,27 @@ function clampHeight(height: number): number {
   return Math.min(Math.max(height, POPOVER_MIN_HEIGHT), max);
 }
 
+/** What `DockPopoverResizeHandle` passes through to the shared `ResizeHandle`. */
+// The announced ceiling follows the viewport, so a window grown while the popover
+// is open never reports a maximum the keys have already moved past.
+function subscribeViewport(onChange: () => void): () => void {
+  window.addEventListener("resize", onChange);
+  return () => window.removeEventListener("resize", onChange);
+}
+
+function readMaxHeight(): number {
+  return window.innerHeight * POPOVER_MAX_HEIGHT_RATIO;
+}
+
 export interface DockPopoverResizeHandleProps {
-  role: "separator";
-  "aria-orientation": "horizontal";
-  "aria-label": string;
-  "aria-valuenow": number;
-  "aria-valuemin": number;
-  "aria-valuemax": number;
-  tabIndex: number;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
   "data-testid": string;
   onMouseDown: (e: React.MouseEvent) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
-  onDoubleClick: () => void;
+  onReset: () => void;
 }
 
 export interface UseDockPopoverResizeResult {
@@ -138,40 +149,45 @@ export function useDockPopoverResize(onCommit?: () => void): UseDockPopoverResiz
     [popoverHeight, setPopoverHeight]
   );
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        commit(popoverHeight + RESIZE_STEP);
-      } else if (e.key === "ArrowDown") {
-        e.preventDefault();
-        commit(popoverHeight - RESIZE_STEP);
-      }
-    },
-    [popoverHeight, commit]
-  );
-
-  const handleDoubleClick = useCallback(() => {
+  const handleReset = useCallback(() => {
     commit(POPOVER_DEFAULT_HEIGHT);
   }, [commit]);
 
+  // The ceiling is read at keypress, not render: the viewport can grow without
+  // re-rendering the popover, and a stale ceiling would pin End below the real one.
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const result = resolveSplitterKey(e, {
+        growKey: "ArrowUp",
+        value: popoverHeight,
+        min: POPOVER_MIN_HEIGHT,
+        max: window.innerHeight * POPOVER_MAX_HEIGHT_RATIO,
+        step: RESIZE_STEP,
+        largeStep: RESIZE_STEP_LARGE,
+      });
+      if (!result) return;
+      e.preventDefault();
+      if (result.kind === "reset") handleReset();
+      else commit(result.value);
+    },
+    [popoverHeight, commit, handleReset]
+  );
+
   const height = draftHeight ?? popoverHeight;
+  const maxHeight = useSyncExternalStore(subscribeViewport, readMaxHeight);
 
   return {
     height,
     isResizing,
     handleProps: {
-      role: "separator",
-      "aria-orientation": "horizontal",
-      "aria-label": "Resize panel",
-      "aria-valuenow": Math.round(height),
-      "aria-valuemin": POPOVER_MIN_HEIGHT,
-      "aria-valuemax": Math.round(window.innerHeight * POPOVER_MAX_HEIGHT_RATIO),
-      tabIndex: 0,
+      label: "Resize docked panel",
+      value: height,
+      min: POPOVER_MIN_HEIGHT,
+      max: maxHeight,
       "data-testid": "dock-popover-resize-handle",
       onMouseDown: startResizing,
       onKeyDown: handleKeyDown,
-      onDoubleClick: handleDoubleClick,
+      onReset: handleReset,
     },
   };
 }

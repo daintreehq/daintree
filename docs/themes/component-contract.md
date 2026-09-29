@@ -23,6 +23,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `SurfaceHeader` | A panel or dialog header, at either density. |
 | `Kbd`, `ShortcutHint`, `HighlightedText`, `TruncatedTooltip` | Chrome details that already exist and are easy to reinvent slightly differently. |
 | `CopyButton`, `copyWithToast` | Anything that puts text on the clipboard. See [Copy feedback](#copy-feedback) for which one. |
+| `ResizeHandle` + `useSplitterKeys` | Any draggable edge between two regions. The primitive owns the 12px target, the grip, the focus outline, the ARIA and the "(double-click to reset)" label suffix; the hook owns the keyboard contract. You own the drag. `src/config/__tests__/resizeHandle.contract.test.ts` fails on any `role="separator"` rendered anywhere else. |
 
 New primitives belong in `src/components/ui/` only when a second caller appears. One-off composition stays with its feature.
 

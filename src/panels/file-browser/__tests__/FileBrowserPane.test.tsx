@@ -995,7 +995,9 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
   it("names the separator and points aria-controls at the resolvable tree column", () => {
     renderPane();
     // Query by the accessible role + name so a broken aria-label actually fails.
-    const handle = screen.getByRole("separator", { name: "Resize file tree" });
+    const handle = screen.getByRole("separator", {
+      name: "Resize file tree (double-click to reset)",
+    });
 
     expect(handle.getAttribute("aria-orientation")).toBe("vertical");
     expect(handle.getAttribute("aria-valuemin")).toBe(String(MIN_W));

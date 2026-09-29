@@ -12,6 +12,8 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { FolderGit2, FolderOpen, GitBranchPlus, RefreshCw, Ruler, Settings } from "lucide-react";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 
 interface SidebarProps {
   width: number;
@@ -32,6 +34,7 @@ interface SidebarProps {
 }
 
 const RESIZE_STEP = 10;
+const RESIZE_STEP_LARGE = 50;
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -112,27 +115,16 @@ export function Sidebar({
     onResize(DEFAULT_SIDEBAR_WIDTH);
   }, [onResize]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        onResize(width - RESIZE_STEP);
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        onResize(width + RESIZE_STEP);
-      } else if (e.key === "Home") {
-        e.preventDefault();
-        onResize(MIN_SIDEBAR_WIDTH);
-      } else if (e.key === "End") {
-        e.preventDefault();
-        onResize(MAX_SIDEBAR_WIDTH);
-      } else if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        handleResetWidth();
-      }
-    },
-    [width, onResize, handleResetWidth]
-  );
+  const handleKeyDown = useSplitterKeys({
+    growKey: "ArrowRight",
+    value: width,
+    min: MIN_SIDEBAR_WIDTH,
+    max: MAX_SIDEBAR_WIDTH,
+    step: RESIZE_STEP,
+    largeStep: RESIZE_STEP_LARGE,
+    onChange: onResize,
+    onReset: handleResetWidth,
+  });
 
   const resize = useCallback(
     (e: MouseEvent) => {
@@ -176,7 +168,10 @@ export function Sidebar({
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
             "sidebar-root",
-            "relative w-full h-full flex flex-col outline-hidden overflow-hidden",
+            // Clip, not hidden: the resize handle straddles the right edge, and a
+            // clip margin lets its outer half through to the wrapper's own 6px
+            // margin (#9864) instead of halving the 12px target.
+            "relative w-full h-full flex flex-col outline-hidden overflow-clip [overflow-clip-margin:6px]",
             "surface-chrome",
             "border-r border-divider",
             "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset",
@@ -187,36 +182,22 @@ export function Sidebar({
 
           <SidebarFooter projectId={projectId} />
 
-          <div
-            role="separator"
-            aria-label="Resize sidebar (double-click to reset)"
-            aria-orientation="vertical"
-            aria-valuenow={width}
-            aria-valuemin={MIN_SIDEBAR_WIDTH}
-            aria-valuemax={MAX_SIDEBAR_WIDTH}
+          <ResizeHandle
+            growKey="ArrowRight"
+            edge="right"
+            label="Resize sidebar"
+            value={width}
+            min={MIN_SIDEBAR_WIDTH}
+            max={MAX_SIDEBAR_WIDTH}
+            isResizing={isResizing}
             tabIndex={isVisible ? 0 : -1}
             aria-hidden={!isVisible ? "true" : undefined}
-            className={cn(
-              "group absolute top-0 -right-1.5 w-3 h-full cursor-col-resize flex items-center justify-center z-50",
-              "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-              // Hover styling is off while resizing, or it outranks the drag state.
-              isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
-            )}
+            className="z-50"
             onMouseDown={startResizing}
             onKeyDown={handleKeyDown}
-            onDoubleClick={handleResetWidth}
+            onReset={handleResetWidth}
             onContextMenu={(e) => e.stopPropagation()}
-          >
-            <div
-              className={cn(
-                "h-8 rounded-full transition-[width] duration-150 delay-100",
-                // The focus outline is the accent; the grip stays neutral.
-                isResizing
-                  ? "w-0.5 bg-text-primary/50"
-                  : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
-              )}
-            />
-          </div>
+          />
         </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>
