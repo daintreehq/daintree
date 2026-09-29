@@ -148,7 +148,18 @@ describe("files:read handler", () => {
 
     const result = await getReadHandler()({}, { path: file, rootPath: root });
 
-    expect(result).toEqual({ content: "hello world\n" });
+    expect(result).toEqual({ content: "hello world\n", pathIsCanonical: true });
+  });
+
+  it("does not call a hard-linked file canonical", async () => {
+    const content = Buffer.from("hello world\n", "utf-8");
+    fsMock.stat.mockResolvedValue({ size: content.length, nlink: 2 } as { size: number });
+    fsMock.open.mockResolvedValue(makeFileHandle(content));
+    registerFilesHandlers();
+
+    const result = await getReadHandler()({}, { path: file, rootPath: root });
+
+    expect(result.pathIsCanonical).toBe(false);
   });
 
   it("throws AppError(BINARY_FILE) before LFS detection when null bytes are present", async () => {
@@ -398,7 +409,9 @@ describe("files:read handler", () => {
 
     const result = await getReadHandler()({}, { path: linkedFile, rootPath: linkedRoot });
 
-    expect(result).toEqual({ content: "ok" });
+    // Readable through the link, but the watcher names writes under the real
+    // path, so the renderer must not scope its re-reads by this one.
+    expect(result).toEqual({ content: "ok", pathIsCanonical: false });
   });
 
   it("returns the readFile error (not the close error) when both reject", async () => {

@@ -51,4 +51,12 @@ export interface FileReadResult {
    * HTML. Absent otherwise (#11191).
    */
   htmlPreviewUrl?: string;
+  /**
+   * True when the requested path is already its own realpath — no symlinked
+   * directory anywhere along it — and the file has no other hard link. The worktree watcher reports writes under the
+   * real path, so only a canonical path can be matched against the directories
+   * a change tick names; anything else (false, or absent from an older main)
+   * has to re-read on every tick.
+   */
+  pathIsCanonical?: boolean;
 }

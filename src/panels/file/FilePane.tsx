@@ -82,6 +82,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useFileChangeCount } from "@/hooks/useFileChangeCount";
 import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -414,6 +415,26 @@ export function FilePane({
     )
   );
 
+  // What moved behind that tick, read off the same containing worktree, so a
+  // write elsewhere in it can skip the re-read (#12244's directories, applied
+  // to one file instead of a tree).
+  const gitChangeTick = useWorktreeStore(
+    useCallback(
+      (state): number | undefined =>
+        revealWorktreeId
+          ? state.worktrees.get(revealWorktreeId)?.worktreeChanges?.lastUpdated
+          : undefined,
+      [revealWorktreeId]
+    )
+  );
+  const changedDirs = useWorktreeStore(
+    useCallback(
+      (state) =>
+        revealWorktreeId ? state.workingTreeChangedDirsById.get(revealWorktreeId) : undefined,
+      [revealWorktreeId]
+    )
+  );
+
   // Scalar status, never the change entry: `changes` is rebuilt wholesale every
   // poll tick, so returning the object would re-render the pane on each tick —
   // the same Object.is bail-out `selectDiffFreshnessKey` relies on (#8635).
@@ -645,6 +666,9 @@ export function FilePane({
   // can tell an actual rewrite from a tick that changed nothing. Reset per
   // identity alongside the state above.
   const lastContentRef = useRef<string | null>(null);
+  // The file whose last read came back through its own realpath — the only
+  // spelling the watcher's directories can be matched against.
+  const [canonicalFilePath, setCanonicalFilePath] = useState<string | null>(null);
   useEffect(() => {
     lastGoodStateRef.current = null;
     lastContentRef.current = null;
@@ -765,14 +789,18 @@ export function FilePane({
         return;
       }
 
+      // Nothing may skip a tick on the strength of a read that is still being
+      // repeated: the answer this one brings back is the one that counts.
+      setCanonicalFilePath(null);
       filesClient
         .read({
           path: filePath,
           rootPath: effectiveRootPath,
           htmlPreview: isHtmlFilePath(filePath),
         })
-        .then(({ content: fileContent, htmlPreviewUrl: previewUrl }) => {
+        .then(({ content: fileContent, htmlPreviewUrl: previewUrl, pathIsCanonical }) => {
           if (requestRef.current !== requestId) return;
+          setCanonicalFilePath(pathIsCanonical === true ? filePath : null);
           // SVG is text on disk but a picture on screen: sanitize before it can
           // be inlined, and surface a sanitizer rejection as a load error
           // rather than silently rendering nothing.
@@ -786,6 +814,9 @@ export function FilePane({
               setErrorMessage(null);
               lastGoodStateRef.current = "svg";
             } else if (silent && lastGoodStateRef.current !== null) {
+              // Still a failed read, however the pane looks: keep taking every
+              // tick until one lands.
+              setCanonicalFilePath(null);
               // A background pass catching a half-written file mid-save reads
               // as a sanitizer rejection, so keep the last good drawing rather
               // than replacing it — the same bargain the text path's transient
@@ -845,6 +876,9 @@ export function FilePane({
           // in which case nothing else would ever settle it.
           const permanent =
             code === "NOT_FOUND" || code === "PERMISSION" || code === "OUTSIDE_ROOT";
+          // A swallowed failure still leaves the reset canonical flag above
+          // cleared, so every tick keeps retrying while the last good content
+          // stays on screen.
           if (silent && !permanent && lastGoodStateRef.current !== null) {
             setLoadState(lastGoodStateRef.current);
             return;
@@ -902,11 +936,31 @@ export function FilePane({
   // Identity travels with the tick so only a genuine disk write triggers this: a
   // path or root switch changes the tick too, but already has its own explicit
   // load, and firing here as well would read the same file twice.
+  //
+  // And only a tick that could have touched this file: every write anywhere in
+  // the worktree moves the tick, so without the changed-directory check each
+  // open pane re-reads on all of them. A failed read keeps taking every tick —
+  // that is how one that raced a half-written file recovers.
+  const fileChangeCount = useFileChangeCount(
+    changeTick,
+    useMemo(
+      () => ({ tick: worktreeChangeTick, gitTick: gitChangeTick, changedDirs }),
+      [worktreeChangeTick, gitChangeTick, changedDirs]
+    ),
+    relativeFilePath || null,
+    // Markdown opts out for the same reason it opts out of the bytes-changed
+    // gate: an embedded image elsewhere in the worktree is the change, and only
+    // a read bumps the cache token that refetches it.
+    !isMarkdown &&
+      canonicalFilePath !== null &&
+      canonicalFilePath === filePath &&
+      loadState !== "error"
+  );
   const lastChangeSignalRef = useRef({
     filePath,
     readRoot: effectiveRootPath,
     watchRoot: diffWorktreePath,
-    tick: changeTick,
+    tick: fileChangeCount,
     viewMode,
   });
   useEffect(() => {
@@ -915,7 +969,7 @@ export function FilePane({
       filePath,
       readRoot: effectiveRootPath,
       watchRoot: diffWorktreePath,
-      tick: changeTick,
+      tick: fileChangeCount,
       viewMode,
     };
     // Diff owns its own freshness — useDiffContent subscribes to the same store
@@ -934,9 +988,17 @@ export function FilePane({
     // A newly resolved worktree counts as a signal in its own right: whatever
     // happened to the file before anything was watching it is exactly what the
     // pane cannot otherwise know about.
-    if (previous.watchRoot === diffWorktreePath && previous.tick === changeTick) return;
+    if (previous.watchRoot === diffWorktreePath && previous.tick === fileChangeCount) return;
     loadFile("ambient");
-  }, [filePath, effectiveRootPath, diffWorktreePath, changeTick, viewMode, loadFile]);
+  }, [
+    filePath,
+    effectiveRootPath,
+    diffWorktreePath,
+    changeTick,
+    fileChangeCount,
+    viewMode,
+    loadFile,
+  ]);
 
   // Which surfaces a background re-read may replace. Images and inlined SVG join
   // "loaded" because both are cheap to re-request and show nothing but the file.

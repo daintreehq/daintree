@@ -145,6 +145,7 @@ const worktreeState = vi.hoisted(() => ({
   // snapshots rather than on them (#11330). Absent here, the pane's change-tick
   // selector would throw on `.get`.
   workingTreeChangedAtById: new Map<string, number>(),
+  workingTreeChangedDirsById: new Map<string, unknown>(),
 }));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: unknown) => unknown) => selector(worktreeState),
@@ -317,6 +318,7 @@ beforeEach(() => {
   useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
   worktreeState.worktrees.clear();
   worktreeState.workingTreeChangedAtById.clear();
+  worktreeState.workingTreeChangedDirsById.clear();
   externalChangeTickMock.mockReset();
   externalChangeTickMock.mockReturnValue(undefined);
   // Reset per test so a prior test's read call can't satisfy a later

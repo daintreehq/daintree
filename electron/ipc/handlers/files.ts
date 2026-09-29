@@ -219,7 +219,13 @@ export function registerFilesHandlers(): () => void {
         ? (buildHtmlPreviewUrl(realRoot, realFile) ?? undefined)
         : undefined;
 
-    return { content: buffer.toString("utf-8"), htmlPreviewUrl };
+    return {
+      content: buffer.toString("utf-8"),
+      htmlPreviewUrl,
+      // A hard-linked file has more than one real path, and a directory watch
+      // only reports the name it was written through.
+      pathIsCanonical: realFile === path.resolve(filePath) && !(stat.nlink > 1),
+    };
   };
 
   handlers.push(typedHandleValidated(CHANNELS.FILES_READ, FileReadPayloadSchema, handleRead));
