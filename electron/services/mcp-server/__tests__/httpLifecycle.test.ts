@@ -38,7 +38,7 @@ import { HttpLifecycle, sessionCredentialDigest } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
-import { ResourceOwnershipLedger } from "../resourceOwnership.js";
+import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
 import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 
@@ -3380,6 +3380,135 @@ describe("HttpLifecycle", () => {
         const sessionId = await openSse(lc, deps, PANE_AUTH);
 
         expect(deps.sessionStore.resourceOwnership.ownerOf(sessionId)).toBe(sessionId);
+      });
+    });
+
+    describe("help-bearer ownership principal (#12993)", () => {
+      const HELP_TOKEN = "help-token-9a2f";
+      const HELP_AUTH = `Bearer ${HELP_TOKEN}`;
+      const OTHER_HELP_TOKEN = "help-token-7b31";
+
+      function helpLifecycle(deps: HttpLifecycleDeps) {
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        lc.setHelpTokenValidator((token) =>
+          token === HELP_TOKEN || token === OTHER_HELP_TOKEN ? "core" : false
+        );
+        const helpSessions = new Map<string, string>([
+          [HELP_TOKEN, "help-session-1"],
+          [OTHER_HELP_TOKEN, "help-session-2"],
+        ]);
+        lc.setHelpSessionIdResolver((token) => helpSessions.get(token) ?? null);
+        (lc as unknown as { port: number }).port = 45454;
+        return { lc, helpSessions };
+      }
+
+      async function openSse(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const before = new Set(deps.sessionStore.sessions.keys());
+        const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        res.writeHead = vi.fn();
+        res.write = vi.fn(() => true);
+        res.end = vi.fn();
+        res.headersSent = false;
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(
+          {
+            method: "GET",
+            url: "/sse",
+            headers: { host: "127.0.0.1:45454", authorization: auth },
+          } as unknown as http.IncomingMessage,
+          res as unknown as http.ServerResponse
+        );
+        return Array.from(deps.sessionStore.sessions.keys()).find((id) => !before.has(id))!;
+      }
+
+      it("keeps a help session's records across a transport reconnect", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+        const first = await openSse(lc, deps, HELP_AUTH);
+        expect(ledger.isPrincipalOwner(ledger.ownerOf(first))).toBe(true);
+        ledger.record(ledger.ownerOf(first), [{ kind: "worktree", id: "/repo/wt-1" }]);
+
+        deps.sessionStore.sessions.get(first)!.transport.onclose?.();
+        const second = await openSse(lc, deps, HELP_AUTH);
+
+        expect(second).not.toBe(first);
+        expect(ledger.owns(ledger.ownerOf(second), "worktree", "/repo/wt-1")).toBe(true);
+      });
+
+      it("keeps them across a server drain, and drops them when the principal is revoked", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+        const first = await openSse(lc, deps, HELP_AUTH);
+        ledger.record(ledger.ownerOf(first), [{ kind: "worktree", id: "/repo/wt-1" }]);
+
+        ledger.clearAllSessions();
+        const second = await openSse(lc, deps, HELP_AUTH);
+        expect(ledger.owns(ledger.ownerOf(second), "worktree", "/repo/wt-1")).toBe(true);
+
+        ledger.revokePrincipal(helpOwnershipPrincipal("help-session-1"));
+        expect(ledger.owns(ledger.ownerOf(second), "worktree", "/repo/wt-1")).toBe(false);
+      });
+
+      it("gives a different help session none of another's records", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+        const mine = await openSse(lc, deps, HELP_AUTH);
+        ledger.record(ledger.ownerOf(mine), [{ kind: "worktree", id: "/repo/wt-1" }]);
+
+        const theirs = await openSse(lc, deps, `Bearer ${OTHER_HELP_TOKEN}`);
+
+        expect(ledger.ownerOf(theirs)).not.toBe(ledger.ownerOf(mine));
+        expect(ledger.owns(ledger.ownerOf(theirs), "worktree", "/repo/wt-1")).toBe(false);
+      });
+
+      it("binds the /mcp handshake to the help principal the same way", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        const bind = vi.spyOn(deps.sessionStore.resourceOwnership, "bindPrincipal");
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: HELP_AUTH }),
+          fakeRes(),
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(bind).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          helpOwnershipPrincipal("help-session-1")
+        );
+      });
+
+      it("prefers a pane principal when the bearer is a pane token", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        lc.setPaneOwnershipPrincipalResolver((token) => (token === HELP_TOKEN ? "pane-p" : null));
+        const bind = vi.spyOn(deps.sessionStore.resourceOwnership, "bindPrincipal");
+
+        await openSse(lc, deps, HELP_AUTH);
+
+        expect(bind).toHaveBeenCalledExactlyOnceWith(expect.any(String), "pane-p");
+      });
+
+      it("keeps a revoked help bearer and an api-key session session-scoped", async () => {
+        const deps = bindingDeps();
+        const { lc, helpSessions } = helpLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+
+        const apiKeySession = await openSse(lc, deps, "Bearer test-api-key");
+        expect(ledger.ownerOf(apiKeySession)).toBe(apiKeySession);
+
+        // Revoked between the auth gate and the handshake: the resolver no
+        // longer knows the token, so nothing binds.
+        helpSessions.delete(HELP_TOKEN);
+        const revoked = await openSse(lc, deps, HELP_AUTH);
+        expect(ledger.ownerOf(revoked)).toBe(revoked);
       });
     });
 

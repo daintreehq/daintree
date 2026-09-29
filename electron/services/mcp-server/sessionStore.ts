@@ -269,9 +269,9 @@ export class SessionStore {
    * Dropping the ownership records revokes *authority*, not the resources
    * (#11909). A disconnected client's terminals and worktrees stay exactly
    * where they are: the session ending is not a decision to destroy work the
-   * user can still see. A session a per-pane bearer authenticated only loses
-   * its binding here — its records belong to the bearer's principal and go
-   * when the bearer is revoked (#12487). `drain` clears the same ledger inline,
+   * user can still see. A session a per-pane or help-session bearer
+   * authenticated only loses its binding here — its records belong to the
+   * bearer's principal and go when the bearer is revoked (#12487, #12993). `drain` clears the same ledger inline,
    * alongside the maps it also clears without going through here.
    *
    * Callers must still revoke grants BEFORE calling this — the grant lifecycle

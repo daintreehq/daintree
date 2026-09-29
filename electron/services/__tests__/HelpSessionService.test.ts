@@ -1331,8 +1331,12 @@ describe("HelpSessionService", () => {
 
     // The bearer token is handed to McpServerService so it can drop the
     // session's tier/grants/pin immediately instead of leaving them for the
-    // 30-minute idle reaper.
-    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(result.token);
+    // 30-minute idle reaper, and the session id so it can revoke the ownership
+    // principal the help session's records are held under (#12993).
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(
+      result.token,
+      result.sessionId
+    );
   });
 
   it("tears down the MCP session even when a hibernation resume id is captured (#9151)", async () => {
@@ -1345,7 +1349,10 @@ describe("HelpSessionService", () => {
 
     // The live MCP session is orthogonal to transcript capture — it must be
     // dropped regardless of whether we preserved a resume id.
-    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(result.token);
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(
+      result.token,
+      result.sessionId
+    );
   });
 
   it("tears down the displaced session's MCP transport on same-project re-provision (#9151)", async () => {
@@ -1358,7 +1365,13 @@ describe("HelpSessionService", () => {
     const second = await service.provisionSession(provisionInput());
     if (!second) throw new Error("expected second provision");
 
-    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(first.token);
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(
+      first.token,
+      first.sessionId
+    );
+    // A successor is a new help session: its principal is never the one just
+    // revoked, so it inherits none of its predecessor's records (#12993).
+    expect(second.sessionId).not.toBe(first.sessionId);
   });
 
   it("revokeByWebContentsId drops the MCP session for each matched session (crash/eviction path, #9151)", async () => {
@@ -1381,8 +1394,11 @@ describe("HelpSessionService", () => {
 
     await service.revokeByWebContentsId(1);
 
-    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(a.token);
-    expect(mockMcpServerService.disconnectHelpBearer).not.toHaveBeenCalledWith(b.token);
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(a.token, a.sessionId);
+    expect(mockMcpServerService.disconnectHelpBearer).not.toHaveBeenCalledWith(
+      b.token,
+      b.sessionId
+    );
   });
 
   it("reuses the same per-project session dir across consecutive launches with a freshly rotated bearer", async () => {
@@ -1683,6 +1699,22 @@ describe("HelpSessionService", () => {
     // shared file, and not the lane file written moments before the probe.
     expect((await readSharedMcp(sessionPath)).mcpServers.daintree).toBeUndefined();
     await expect(fs.readdir(path.join(sessionPath, ".lanes"))).resolves.toEqual([]);
+  });
+
+  it("revokes the bearer's MCP session and ownership principal when the probe fails (#12993)", async () => {
+    // The probe connects with the bearer, so a session may already be bound to
+    // the help session's principal by the time it fails.
+    mockProbeMcpSseServer.mockRejectedValueOnce(new Error("SSE returned status 401"));
+
+    await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+      code: "MCP_PROBE_FAILED",
+    });
+
+    const token = mockProbeMcpSseServer.mock.calls[0]?.[1];
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledExactlyOnceWith(
+      token,
+      expect.any(String)
+    );
   });
 
   describe("single-backend invariant (#7509)", () => {
@@ -2211,7 +2243,7 @@ describe("HelpSessionService", () => {
       await service.sweepOrphanSessions(0);
 
       expect(service.validateToken(result.token)).toBe(false);
-      expect(onRevoked).toHaveBeenCalledWith(result.token);
+      expect(onRevoked).toHaveBeenCalledWith(result.token, result.sessionId);
       // No terminal was ever bound, so there's nothing to kill.
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
